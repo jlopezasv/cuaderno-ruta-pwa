@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="application-name" content="Cuaderno de Ruta" />
+  <meta name="description" content="La aplicación de los camioneros · EU 561/2006" />
+  <meta name="theme-color" content="#F59E0B" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Cuaderno Ruta" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- iOS icons — PNG obligatorio -->
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png" />
+
+  <!-- Android / general -->
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="96x96"  href="/icons/icon-96.png" />
+  <link rel="icon" type="image/png" sizes="32x32"  href="/icons/icon-96.png" />
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <title>Cuaderno de Ruta</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0F172A;
+      font-family: system-ui, -apple-system, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    #splash {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #0F172A;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      z-index: 9999;
+      transition: opacity 0.4s ease;
+    }
+    #splash.hidden { opacity: 0; pointer-events: none; }
+    #splash-icon { width: 80px; height: 80px; border-radius: 18px; }
+    #splash-title { color: #F59E0B; font-size: 18px; font-weight: 800; letter-spacing: 2px; }
+    #splash-sub { color: #475569; font-size: 12px; }
+    #root {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  </style>
+</head>
+<body>
+  <div id="splash">
+    <img id="splash-icon" src="/icons/icon-192.png" alt="Cuaderno de Ruta" />
+    <div id="splash-title">CUADERNO DE RUTA</div>
+    <div id="splash-sub">Cargando...</div>
+  </div>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+  <script>
+    window.__hideSplash = function() {
+      var s = document.getElementById('splash');
+      if (s) {
+        s.classList.add('hidden');
+        setTimeout(function() { if (s.parentNode) s.parentNode.removeChild(s); }, 500);
+      }
+    };
+    setTimeout(function() {
+      var s = document.getElementById('splash');
+      if (s) s.classList.add('hidden');
+    }, 10000);
+    window.addEventListener('error', function(e) {
+      var sub = document.getElementById('splash-sub');
+      if (sub) sub.textContent = 'Error: ' + (e.message || 'desconocido');
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      var sub = document.getElementById('splash-sub');
+      if (sub) sub.textContent = 'Error: ' + (e.reason || '');
+    });
+  </script>
+</body>
+</html>
