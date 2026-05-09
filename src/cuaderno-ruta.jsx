@@ -31,6 +31,14 @@ import {
   ESTADO_ICON,
   SERVICIO_ESTADOS_ACTIVOS,
 } from "./domain/fleet/serviceStatus";
+import {
+  STOP_COLOR,
+  STOP_ICON,
+  STOP_TIPOS_FORM,
+  STOP_TIPOS_CON_AUTOTACO,
+  STOP_TIPO_TO_FIN_EV,
+  STOP_TIPO_TO_INICIO_EV,
+} from "./domain/fleet/stopTypes";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -9786,7 +9794,6 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
   const card="#1E293B",bg="#0F172A",tx="#F1F5F9",su="#64748B";
   const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
-  const TIPOS=[{id:"carga",label:"Carga",icon:"📦"},{id:"descarga",label:"Descarga",icon:"📤"},{id:"parada_tecnica",label:"Parada técnica",icon:"🔧"},{id:"aduana",label:"Aduana",icon:"🛃"},{id:"pernocta",label:"Pernocta",icon:"🛏"}];
 
   function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:""}]);}
   function addStopAfter(i){
@@ -9896,7 +9903,7 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
                     <span style={{background:"#F59E0B",color:"#0F172A",borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</span>
                     <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
                       style={{background:bg,border:"1px solid #334155",borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
-                      {TIPOS.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+                      {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
                     </select>
                   </div>
                   <div style={{display:"flex",gap:3}}>
@@ -11570,8 +11577,6 @@ function ServiciosTimelineView({uid}){
   const[expandido,setExpandido]=useState({});
 
   const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
-  const TIPO_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
-  const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
 
   useEffect(()=>{
     if(!uid){setLoading(false);return;}
@@ -11721,7 +11726,7 @@ function ServiciosTimelineView({uid}){
                     <div style={{background:"#0D1420",border:"1.5px solid #1E293B",borderTop:"none",borderRadius:"0 0 12px 12px",padding:"8px 12px 12px"}}>
                       {svStops.map((stop,i)=>{
                         const evs=evidencias[stop.id]||[];
-                        const colorStop=TIPO_COLOR[stop.tipo]||"#06B6D4";
+                        const colorStop=STOP_COLOR[stop.tipo]||"#06B6D4";
                         const estadoIcon=stop.estado==="completado"?"✅":stop.estado==="llegado"?"📍":"○";
                         return(
                           <div key={stop.id} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:i<svStops.length-1?"1px solid #1E293B30":"none"}}>
@@ -11733,7 +11738,7 @@ function ServiciosTimelineView({uid}){
                               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                                 <div style={{flex:1,minWidth:0}}>
                                   <div style={{fontSize:13,fontWeight:700,color:stop.estado==="completado"?su:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                    {TIPO_ICON[stop.tipo]||"📍"} {stop.nombre}
+                                    {STOP_ICON[stop.tipo]||"📍"} {stop.nombre}
                                   </div>
                                   <div style={{fontSize:10,color:colorStop,fontWeight:600,marginTop:1}}>{stop.tipo.replace("_"," ").toUpperCase()}</div>
                                   {stop.notas&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>📝 {stop.notas}</div>}
@@ -11804,9 +11809,9 @@ function useServicioActivo(uid){
 
     // ── Registrar automáticamente en tacógrafo ──
     const stop=stops.find(s=>s.id===stopId);
-    if(stop&&uid&&["carga","descarga","parada_tecnica"].includes(stop.tipo)){
-      const tipoEv={carga:"inicio_carga",descarga:"inicio_descarga",parada_tecnica:"inicio_otros"}[stop.tipo];
-      const finEv={carga:"fin_carga",descarga:"fin_descarga",parada_tecnica:"fin_otros"}[stop.tipo];
+    if(stop&&uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
+      const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
+      const finEv=STOP_TIPO_TO_FIN_EV[stop.tipo];
       const llegada=stop.hora_llegada_real||now;
       const rows=[
         {id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:llegada,note:`Auto: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false},
@@ -11858,11 +11863,9 @@ function useGeoStop(query){
 function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
   const bg="#0F172A",tx="#F1F5F9",su="#64748B";
   const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"10px 12px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
-  const TIPOS=[{id:"carga",label:"Carga",icon:"📦"},{id:"descarga",label:"Descarga",icon:"📤"},{id:"parada_tecnica",label:"Parada técnica",icon:"🔧"},{id:"aduana",label:"Aduana",icon:"🛃"},{id:"pernocta",label:"Pernocta",icon:"🛏"}];
-  const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED"};
   const geoQuery=stop.direccion.trim()||stop.nombre.trim();
   const{result:geo,status:geoStatus}=useGeoStop(geoQuery);
-  const color=TIPO_COLOR[stop.tipo]||"#06B6D4";
+  const color=STOP_COLOR[stop.tipo]||"#06B6D4";
 
   useEffect(()=>{
     if(geo){onChange(index,"lat",geo.lat);onChange(index,"lon",geo.lon);}
@@ -11875,7 +11878,7 @@ function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           <span style={{background:"#F59E0B",color:"#0F172A",borderRadius:6,width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,flexShrink:0}}>{index+1}</span>
           <select value={stop.tipo} onChange={e=>onChange(index,"tipo",e.target.value)} style={{...iStyle,width:"auto",padding:"5px 8px",fontSize:13,color}}>
-            {TIPOS.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+            {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
           </select>
         </div>
         <div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -11915,8 +11918,6 @@ function CrearServicioModal({uid,onClose,onCreado}){
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
   const card="#1E293B",bg="#0F172A",tx="#F1F5F9",su="#64748B";
   const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
-  const TIPO_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏"};
-  const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED"};
 
   function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
   function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);}
@@ -12035,9 +12036,9 @@ function CrearServicioModal({uid,onClose,onCreado}){
               <div style={{fontSize:12,color:su}}>Salida: {new Date(fechaInicio).toLocaleString("es-ES",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
             </div>
             <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>{stops.length} PARADAS</div>
-            {stops.map((stop,i)=>{const color=TIPO_COLOR[stop.tipo]||"#06B6D4";return(
+            {stops.map((stop,i)=>{const color=STOP_COLOR[stop.tipo]||"#06B6D4";return(
               <div key={i} style={{background:"#0D1829",border:`1px solid ${stop.lat?"#22C55E30":"#334155"}`,borderRadius:12,padding:"11px 13px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
-                <span style={{fontSize:20,flexShrink:0}}>{TIPO_ICON[stop.tipo]||"📍"}</span>
+                <span style={{fontSize:20,flexShrink:0}}>{STOP_ICON[stop.tipo]||"📍"}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
                   {stop.direccion&&<div style={{fontSize:12,color:su,marginTop:2}}>{stop.direccion}</div>}
@@ -12112,8 +12113,6 @@ function ServicioDocsView({uid,showToast}){
   const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
   const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",qr:"📱",nota:"📝"};
   const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",qr:"#A78BFA",nota:"#64748B"};
-  const STOP_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
-  const STOP_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
 
   useEffect(()=>{
     if(!uid){setLoading(false);return;}
@@ -12241,14 +12240,12 @@ function ServicioDocsView({uid,showToast}){
 function BandaServicio({uid,showToast,onVerServicio}){
   const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,recargar}=useServicioActivo(uid);
   const su="#64748B";
-  const TIPO_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
-  const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
 
   if(loading||!servicio||servicio.estado==="completado")return null;
   const stopMostrar=stops.find(s=>s.estado==="llegado")||stops.find(s=>s.estado==="pendiente");
   if(!stopMostrar)return null;
   const estaEnParada=stopMostrar.estado==="llegado";
-  const color=TIPO_COLOR[stopMostrar.tipo]||"#06B6D4";
+  const color=STOP_COLOR[stopMostrar.tipo]||"#06B6D4";
 
   return(
     <div style={{margin:"10px 14px 0",background:estaEnParada?"#1A0E2E":"#0D1829",border:`1.5px solid ${estaEnParada?"#7C3AED50":"#1E3A5F"}`,borderRadius:14,overflow:"hidden"}}>
@@ -12264,7 +12261,7 @@ function BandaServicio({uid,showToast,onVerServicio}){
       </div>
       <div style={{padding:"10px 12px"}}>
         <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
-          <span style={{fontSize:28,flexShrink:0}}>{TIPO_ICON[stopMostrar.tipo]||"📍"}</span>
+          <span style={{fontSize:28,flexShrink:0}}>{STOP_ICON[stopMostrar.tipo]||"📍"}</span>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:15,fontWeight:800,color:"#F1F5F9",lineHeight:1.2}}>{stopMostrar.nombre}</div>
             <div style={{fontSize:11,color,marginTop:2,fontWeight:600}}>{estaEnParada?"📍 Has llegado":"🚛 Siguiente parada"} · Stop {stopMostrar.orden}/{stops.length}</div>
@@ -12475,8 +12472,6 @@ function TabServicio({uid,showToast}){
   const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
   const card="#1E293B",tx="#F1F5F9",su="#64748B";
-  const TIPO_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
-  const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
 
   if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando...</div>;
 
@@ -12515,13 +12510,13 @@ function TabServicio({uid,showToast}){
       <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>{stops.length} PARADAS</div>
       {stops.map((stop,i)=>(
         <div key={stop.id} style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:8,display:"flex",gap:12,alignItems:"center"}}>
-          <div style={{background:(TIPO_COLOR[stop.tipo]||"#06B6D4")+"20",borderRadius:10,width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{TIPO_ICON[stop.tipo]||"📍"}</div>
+          <div style={{background:(STOP_COLOR[stop.tipo]||"#06B6D4")+"20",borderRadius:10,width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{STOP_ICON[stop.tipo]||"📍"}</div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
             {stop.direccion&&<div style={{fontSize:12,color:su,marginTop:2}}>{stop.direccion}</div>}
             {stop.notas&&<div style={{fontSize:11,color:"#475569",marginTop:1}}>📝 {stop.notas}</div>}
             <div style={{display:"flex",gap:6,marginTop:3,alignItems:"center"}}>
-              <span style={{fontSize:12,color:TIPO_COLOR[stop.tipo]||"#06B6D4",fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
+              <span style={{fontSize:12,color:STOP_COLOR[stop.tipo]||"#06B6D4",fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
               {stop.lat&&<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 5px"}}>🗺 GPS</span>}
             </div>
           </div>
@@ -12560,13 +12555,13 @@ function TabServicio({uid,showToast}){
           {estaEnParada?"📍 EN PARADA — "+stopMostrar.tipo.replace("_"," ").toUpperCase():"🚛 SIGUIENTE PARADA"}
         </div>
         <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:16}}>
-          <div style={{fontSize:36}}>{TIPO_ICON[stopMostrar.tipo]||"📍"}</div>
+          <div style={{fontSize:36}}>{STOP_ICON[stopMostrar.tipo]||"📍"}</div>
           <div>
             <div style={{fontSize:20,fontWeight:800,color:tx,lineHeight:1.2}}>{stopMostrar.nombre}</div>
             {stopMostrar.direccion&&<div style={{fontSize:13,color:su,marginTop:4}}>{stopMostrar.direccion}</div>}
             {stopMostrar.notas&&<div style={{fontSize:12,color:"#475569",marginTop:3}}>📝 {stopMostrar.notas}</div>}
             <div style={{display:"flex",gap:6,marginTop:4,alignItems:"center"}}>
-              <span style={{fontSize:12,color:TIPO_COLOR[stopMostrar.tipo]||"#06B6D4",fontWeight:700}}>Stop {stopMostrar.orden}/{stops.length}</span>
+              <span style={{fontSize:12,color:STOP_COLOR[stopMostrar.tipo]||"#06B6D4",fontWeight:700}}>Stop {stopMostrar.orden}/{stops.length}</span>
               {stopMostrar.lat&&<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 5px"}}>🗺 GPS listo</span>}
             </div>
             {stopMostrar.hora_llegada_real&&<div style={{fontSize:12,color:su,marginTop:2}}>Llegada: {new Date(stopMostrar.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
