@@ -18,6 +18,12 @@ import {
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
 } from "./data/session";
+import {
+  loadLocalDb as loadDB,
+  saveLocalDb as saveDB,
+  loadLocalProfile as loadProf,
+  saveLocalProfile as saveProf,
+} from "./data/sync";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -447,28 +453,7 @@ function AuthScreen({ onAuth }) {
     </div>
   );
 }
-const DB_KEY="cuaderno_v7", PROF_KEY="cuaderno_prof_v1", KM_KEY="cuaderno_km_v1";
-
-// Migración: intentar cargar desde claves anteriores si v7 está vacío
-const OLD_KEYS=["cuaderno_v6","cuaderno_v5","cuaderno_v4","cuaderno_v3","cuaderno_v2","cuaderno_v1","cuaderno_db"];
-const loadDB=async()=>{
-  try{
-    const r=localStorage.getItem(DB_KEY);
-    if(r){const d=JSON.parse(r);if(d.entries?.length>0)return d;}
-    // Intentar migrar desde clave anterior
-    for(const oldKey of OLD_KEYS){
-      try{const old=localStorage.getItem(oldKey);
-        if(old){const d=JSON.parse(old);if(d.entries?.length>0){
-          localStorage.setItem(DB_KEY,old);
-          return d;
-        }}
-      }catch(_){}
-    }
-    return{entries:[],docs:[]};
-  }catch(_){return{entries:[],docs:[]};}
-};const saveDB=async d=>{try{localStorage.setItem(DB_KEY,JSON.stringify(d));}catch(_){}};
-const loadProf=async()=>{try{const r=localStorage.getItem(PROF_KEY);return r?JSON.parse(r):{};}catch(_){return{};}};
-const saveProf=async p=>{try{localStorage.setItem(PROF_KEY,JSON.stringify(p));}catch(_){}};
+const KM_KEY="cuaderno_km_v1";
 const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:""};
 
 const LIM={CONT:270,DAY:540,DAY_X:600,MAX_EXT:2,WEEK:3360,BIWEEK:5400,REST:660,REST_R:540,MAX_RED:3,WREST:2700,WREST_R:1440};
