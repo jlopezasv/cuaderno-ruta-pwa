@@ -50,3 +50,13 @@ export const saveLocalProfile = async (p) => {
     localStorage.setItem(PROF_KEY, JSON.stringify(p));
   } catch (_) {}
 };
+
+export const mergeRemoteWithLocalToday = ({ remoteEntries, remoteDocs, localEntries, toDate }) => {
+  const sbIds = new Set(remoteEntries.map((e) => String(e.id)));
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const localHoy = localEntries.filter((e) => toDate(e.ts) >= hoy && !sbIds.has(String(e.id)));
+  // Normalize all ts to Date
+  const norm = (e) => ({ ...e, ts: toDate(e.ts) });
+  return { entries: [...remoteEntries, ...localHoy].map(norm), docs: remoteDocs.map(norm) };
+};

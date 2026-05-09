@@ -23,6 +23,7 @@ import {
   saveLocalDb as saveDB,
   loadLocalProfile as loadProf,
   saveLocalProfile as saveProf,
+  mergeRemoteWithLocalToday,
 } from "./data/sync";
 
 // ─────────────────────────────────────────────────────────────
@@ -2000,12 +2001,12 @@ function AppInner(){
 
       // Merge: mantener entradas locales de HOY que aún no están en Supabase
       setDb(prev=>{
-        const sbIds=new Set(sbEntries.map(e=>String(e.id)));
-        const hoy=new Date();hoy.setHours(0,0,0,0);
-        const localHoy=prev.entries.filter(e=>toDate(e.ts)>=hoy&&!sbIds.has(String(e.id)));
-        // Normalize all ts to Date
-        const norm=e=>({...e,ts:toDate(e.ts)});
-        return {entries:[...sbEntries,...localHoy].map(norm),docs:docs.map(norm)};
+        return mergeRemoteWithLocalToday({
+          remoteEntries: sbEntries,
+          remoteDocs: docs,
+          localEntries: prev.entries,
+          toDate,
+        });
       });
     }catch(_){}finally{
       setTimeout(()=>{syncingRef.current=false;},500);
