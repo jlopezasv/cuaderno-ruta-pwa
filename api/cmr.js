@@ -65,6 +65,13 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
     });
 
     const data = await response.json();
+    if (!response.ok) {
+      return res.status(502).json({
+        ok: false,
+        error: data?.error?.message || data?.error || "CMR upstream error",
+        code: "CMR_UPSTREAM",
+      });
+    }
     const text = data.content?.[0]?.text || "";
 
     const clean = text.replace(/```json|```/g, "").trim();
