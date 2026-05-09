@@ -25,6 +25,12 @@ import {
   saveLocalProfile as saveProf,
   mergeRemoteWithLocalToday,
 } from "./data/sync";
+import {
+  ESTADO_COLOR,
+  ESTADO_LABEL,
+  ESTADO_ICON,
+  SERVICIO_ESTADOS_ACTIVOS,
+} from "./domain/fleet/serviceStatus";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -10160,8 +10166,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return{col:"#22C55E",icon:"🟢",label:"OK"};
   };
 
-  const ESTADO_COLOR={asignado:"#3B82F6",en_curso:"#F59E0B",completado:"#22C55E",cancelado:"#EF4444"};
-  const ESTADO_LABEL={asignado:"Asignado",en_curso:"En curso",completado:"Completado",cancelado:"Cancelado"};
   const TIPO_EV={cmr:"📄",foto:"📸",incidencia:"⚠️"};
   const TIPO_EV_COL={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444"};
 
@@ -11568,9 +11572,6 @@ function ServiciosTimelineView({uid}){
   const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
   const TIPO_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
   const TIPO_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
-  const ESTADO_COLOR={asignado:"#3B82F6",en_curso:"#F59E0B",completado:"#22C55E",cancelado:"#EF4444"};
-  const ESTADO_LABEL={asignado:"Asignado",en_curso:"En curso",completado:"Completado",cancelado:"Cancelado"};
-  const ESTADO_ICON={asignado:"📋",en_curso:"🚛",completado:"🏁",cancelado:"❌"};
 
   useEffect(()=>{
     if(!uid){setLoading(false);return;}
@@ -11609,7 +11610,7 @@ function ServiciosTimelineView({uid}){
   },[uid]);
 
   const filtrados=servicios.filter(sv=>{
-    if(filtro==="activos")return["asignado","en_curso"].includes(sv.estado);
+    if(filtro==="activos")return SERVICIO_ESTADOS_ACTIVOS.includes(sv.estado);
     if(filtro==="completados")return sv.estado==="completado";
     return true;
   });
@@ -11647,7 +11648,7 @@ function ServiciosTimelineView({uid}){
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,padding:"12px 14px"}}>
         {[
           {l:"Total",v:servicios.length,c:tx},
-          {l:"Activos",v:servicios.filter(s=>["asignado","en_curso"].includes(s.estado)).length,c:"#F59E0B"},
+          {l:"Activos",v:servicios.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)).length,c:"#F59E0B"},
           {l:"Completados",v:servicios.filter(s=>s.estado==="completado").length,c:"#22C55E"},
         ].map(({l,v,c})=>(
           <div key={l} style={{background:card,borderRadius:10,padding:"10px",textAlign:"center"}}>
@@ -12113,8 +12114,6 @@ function ServicioDocsView({uid,showToast}){
   const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",qr:"#A78BFA",nota:"#64748B"};
   const STOP_ICON={carga:"📦",descarga:"📤",parada_tecnica:"🔧",aduana:"🛃",pernocta:"🛏",parada:"📍"};
   const STOP_COLOR={carga:"#22C55E",descarga:"#F59E0B",parada_tecnica:"#64748B",aduana:"#A78BFA",pernocta:"#7C3AED",parada:"#06B6D4"};
-  const ESTADO_COLOR={asignado:"#3B82F6",en_curso:"#F59E0B",completado:"#22C55E",cancelado:"#EF4444"};
-  const ESTADO_LABEL={asignado:"Asignado",en_curso:"En curso",completado:"Completado",cancelado:"Cancelado"};
 
   useEffect(()=>{
     if(!uid){setLoading(false);return;}
@@ -12803,8 +12802,6 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 
   const activos=servicios.filter(s=>s.estado==="en_curso").length;
   const asignados=servicios.filter(s=>s.estado==="asignado").length;
-  const ESTADO_COLOR={asignado:"#3B82F6",en_curso:"#F59E0B",completado:"#22C55E"};
-  const ESTADO_LABEL={asignado:"Asignado",en_curso:"En curso",completado:"Completado"};
 
   return(
     <div style={{padding:"24px 24px 60px",maxWidth:1200,margin:"0 auto"}}>
