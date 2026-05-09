@@ -27,13 +27,35 @@ async function sendEmail(to, subject, html) {
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      ok: false,
+      error: "Method not allowed",
+      code: "ADMIN_METHOD_NOT_ALLOWED",
+    });
+  }
 
   const { action, email, nombre, tipo } = req.body || {};
+  if (!action) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing action",
+      code: "ADMIN_BAD_REQUEST",
+    });
+  }
 
   // ── Email bienvenida al usuario ──
   if (action === "bienvenida") {
+    if (!email || !nombre || !tipo) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing required fields for bienvenida",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+
     const esEmpresa = tipo === "empresa";
     const html = `
       <div style="font-family:sans-serif;max-width:520px;margin:0 auto;background:#0F172A;color:#F1F5F9;padding:32px;border-radius:16px">
@@ -79,24 +101,69 @@ export default async function handler(req, res) {
       </div>
     `;
 
-    // Email al usuario
-    await sendEmail(email, `Bienvenido a ${APP_NAME} 🚛`, html);
+    const userEmail = await sendEmail(email, `Bienvenido a ${APP_NAME} 🚛`, html);
+    if (!userEmail.ok) {
+      return res.status(500).json({
+        ok: false,
+        error: userEmail.error || "Failed to send bienvenida email",
+        code: "ADMIN_EMAIL_FAILED",
+      });
+    }
 
-    // Notificación al admin
-    await sendEmail(ADMIN_EMAIL, `Nuevo registro: ${nombre} (${tipo})`,
+    const adminEmail = await sendEmail(ADMIN_EMAIL, `Nuevo registro: ${nombre} (${tipo})`,
       `<p>Nuevo usuario registrado:</p><ul><li><b>Nombre:</b> ${nombre}</li><li><b>Email:</b> ${email}</li><li><b>Tipo:</b> ${tipo}</li></ul>`
     );
+    if (!adminEmail.ok) {
+      return res.status(500).json({
+        ok: false,
+        error: adminEmail.error || "Failed to notify admin",
+        code: "ADMIN_EMAIL_FAILED",
+      });
+    }
 
     return res.json({ ok: true });
   }
 
   // ── Notificación nueva empresa (legacy) ──
   if (action === "notify_nueva_empresa") {
-    await sendEmail(ADMIN_EMAIL, `Nueva empresa: ${nombre}`,
+    if (!email || !nombre) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing required fields for notify_nueva_empresa",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    const r = await sendEmail(ADMIN_EMAIL, `Nueva empresa: ${nombre}`,
       `<p>Nueva empresa registrada:</p><ul><li><b>Nombre:</b> ${nombre}</li><li><b>Email:</b> ${email}</li></ul>`
     );
+    if (!r.ok) {
+      return res.status(500).json({
+        ok: false,
+        error: r.error || "Failed to notify admin",
+        code: "ADMIN_EMAIL_FAILED",
+      });
+    }
     return res.json({ ok: true });
   }
 
-  return res.status(400).json({ error: "Unknown action" });
+  if (
+    action === "delete_user" ||
+    action === "delete_empresa" ||
+    action === "create_user" ||
+    action === "reset_password" ||
+    action === "invite_conductor" ||
+    action === "invite_conductor_solo"
+  ) {
+    return res.status(501).json({
+      ok: false,
+      error: `Action not implemented in PR-01: ${action}`,
+      code: "NOT_IMPLEMENTED",
+    });
+  }
+
+  return res.status(501).json({
+    ok: false,
+    error: `Unknown action: ${action}`,
+    code: "NOT_IMPLEMENTED",
+  });
 }
