@@ -39,7 +39,21 @@ import {
   STOP_TIPO_TO_FIN_EV,
   STOP_TIPO_TO_INICIO_EV,
 } from "./domain/fleet/stopTypes";
+import {
+  jornadaState,
+} from "./domain/journey/journeyStatus";
+import { createIsAvail } from "./domain/journey/availability";
+import { countCompletedStops, getCurrentStop } from "./domain/service/serviceStops";
+import {
+  DOCUMENT_TYPES,
+  countServiceDocuments,
+  getDocumentLabel,
+  groupDocumentsByStop,
+  isIncidentDocument,
+} from "./domain/service/serviceDocuments";
 import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
+import EmpresaLayout from "./layouts/EmpresaLayout";
+import { getConductorTabs } from "./navigation/conductorTabs";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -756,38 +770,7 @@ function useWidth(){const[w,setW]=useState(()=>typeof window!=="undefined"?windo
 
 function findActive(sorted){const open={};for(const e of sorted){const T=EV[e.type];if(!T)continue;if(T.kind==="open")open[e.type]=e;else if(T.kind==="close"&&T.pair)delete open[T.pair];}return Object.values(open).sort((a,b)=>+toDate(b.ts)-+toDate(a.ts))[0]||null;}
 function findDuration(sorted,ce){const T=EV[ce.type];if(!T||T.kind!=="close")return null;const before=sorted.filter(e=>e.ts<ce.ts||(toDate(e.ts).getTime()===ce.ts.getTime()&&e.id<ce.id));for(let i=before.length-1;i>=0;i--){const e=before[i];if(e.type===T.pair)return diffMin(e.ts,ce.ts);if(e.type===ce.type)return null;}return null;}
-function jornadaState(sorted){for(let i=sorted.length-1;i>=0;i--){const t=sorted[i].type;if(t==="inicio_jornada"||t==="continuar_jornada")return"open";if(t==="fin_jornada")return"closed";}return"none";}
-function isAvail(type,active,jState){
-  const T=EV[type];
-  if(!T)return false;
-  if(type==="art12")return true;
-  if(type==="continuar_jornada")return jState==="closed";
-  if(jState==="closed"||jState==="none")return type==="inicio_jornada";
-  if(T.kind==="solo")return true;
-  if(!active)return true;
-  const aT=EV[active.type];
-  if(!aT)return true;
-
-  // Si hay actividad abierta
-  if(aT.kind==="open"){
-    // Siempre se puede cerrar la actividad actual
-    if(type===aT.pair)return true;
-    // No se puede iniciar conducción si hay otra actividad abierta
-    if(type==="inicio_conduccion")return false;
-    // Si está conduciendo, solo puede cerrar o pausar
-    if(active.type==="inicio_conduccion"){
-      return["fin_conduccion","inicio_pausa","inicio_descanso"].includes(type);
-    }
-    // Si está en pausa/descanso, no puede iniciar otra actividad hasta cerrarla
-    if(["inicio_pausa","inicio_descanso"].includes(active.type)){
-      return type===aT.pair;
-    }
-    // Si está en disponible, carga, descarga, otros, ferry, pasajero, repostaje, inspección
-    // puede iniciar otras actividades del mismo grupo (cierre implícito)
-    return true;
-  }
-  return true;
-}
+const isAvail=createIsAvail(EV);
 
 function calcNorma(entries,now=new Date(),abroadNow=false){
   const sorted=[...entries].sort((a,b)=>+toDate(a.ts)-+toDate(b.ts));
@@ -2942,16 +2925,7 @@ function AppInner(){
       )}
 
       <nav style={s.nav}>
-        {[
-          ...(prof.tipo_cuenta!=="empresa"?[{id:"hoy",icon:"⊙",label:T("tabHoy")}]:[]),
-          ...(prof.tipo_cuenta!=="empresa"?[{id:"resumen",icon:"▦",label:T("tabResumen")}]:[]),
-          {id:"servicio", icon:"📦", label:"SERVICIO"},
-          {id:"ruta",     icon:"⊕",  label:"RUTA"},
-          ...(prof.tipo_cuenta!=="empresa"?[{id:"docs",icon:"⊟",label:T("tabDocs")}]:[]),
-          ...(rolEmpresa==="jefe"||(prof.tipo_cuenta==="empresa"&&!rolEmpresa)?[{id:"empresa",icon:"⊞",label:"FLOTA"}]:[]),
-          ...(getUserId()==="ca5dd314-2e37-4f08-86d7-09103cb8e510"?[{id:"admin",icon:"⚡",label:"ADMIN"}]:[]),
-          {id:"perfil",   icon:"◉",  label:T("tabPerfil")},
-        ].map(t=>(
+        {getConductorTabs({prof,rolEmpresa,uid:getUserId(),T}).map(t=>(
           <button key={t.id} onClick={()=>{setTab(t.id);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
               background:tab===t.id?"rgba(245,158,11,.08)":"transparent",
@@ -9894,12 +9868,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         const stopIds=(Array.isArray(stps)?stps:[]).map(s=>s.id).join(",");
         if(stopIds){
           const evs=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=created_at.desc`).then(r=>r.json());
-          const evMap={};
-          (Array.isArray(evs)?evs:[]).forEach(ev=>{
-            if(!evMap[ev.stop_id])evMap[ev.stop_id]=[];
-            evMap[ev.stop_id].push(ev);
-          });
-          setFlotaEvs(evMap);
+          setFlotaEvs(groupDocumentsByStop(evs));
         }
       }
     }catch(e){console.warn("loadFlotaServicios:",e);}
@@ -10179,8 +10148,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {flotaServicios.map(sv=>{
                 const svStops=flotaStops[sv.id]||[];
-                const completados=svStops.filter(s=>s.estado==="completado").length;
-                const stopActual=svStops.find(s=>s.estado==="llegado")||svStops.find(s=>s.estado==="pendiente");
+                const completados=countCompletedStops(svStops);
+                const stopActual=getCurrentStop(svStops);
                 const color=ESTADO_COLOR[sv.estado]||su;
                 const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
                 const normaC=conductor?.norma;
@@ -10329,7 +10298,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
                     {serviciosFiltrados.map(sv=>{
                       const svStops=flotaStops[sv.id]||[];
-                      const totalEvs=svStops.reduce((a,st)=>(flotaEvs[st.id]||[]).length+a,0);
+                      const totalEvs=countServiceDocuments(svStops,flotaEvs);
                       return <DocServicioColapsable key={sv.id} sv={sv} svStops={svStops} flotaEvs={flotaEvs} totalEvs={totalEvs} nombreConductor={nombreConductor} ESTADO_COLOR={ESTADO_COLOR} ESTADO_LABEL={ESTADO_LABEL} TIPO_EV={TIPO_EV} TIPO_EV_COL={TIPO_EV_COL} onVerEv={setVisorEv} bg={bg} card={card} tx={tx} su={su}/>;
                     })}
                   </div>
@@ -11444,12 +11413,7 @@ function ServiciosTimelineView({uid}){
           if(stopIds){
             const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=stop_id.asc,created_at.asc`);
             const evs=await evr.json();
-            const evMap={};
-            (Array.isArray(evs)?evs:[]).forEach(ev=>{
-              if(!evMap[ev.stop_id])evMap[ev.stop_id]=[];
-              evMap[ev.stop_id].push(ev);
-            });
-            setEvidencias(evMap);
+            setEvidencias(groupDocumentsByStop(evs));
           }
         }
       }catch(e){console.warn("ServiciosTimelineView:",e);}
@@ -11518,7 +11482,7 @@ function ServiciosTimelineView({uid}){
             </div>
             {porDia[dia].map(sv=>{
               const svStops=stops[sv.id]||[];
-              const completados=svStops.filter(s=>s.estado==="completado").length;
+              const completados=countCompletedStops(svStops);
               const totalEvs=svStops.reduce((a,st)=>(evidencias[st.id]||[]).length+a,0);
               const isOpen=expandido[sv.id];
               const color=ESTADO_COLOR[sv.estado]||su;
@@ -11639,7 +11603,7 @@ function useServicioActivo(uid){
     finally{setLoading(false);}
   },[uid]);
   useEffect(()=>{cargar();},[cargar]);
-  const completados=stops.filter(s=>s.estado==="completado").length;
+  const completados=countCompletedStops(stops);
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
     await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
@@ -11957,6 +11921,9 @@ function ServicioDocsView({uid,showToast}){
   const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
   const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",qr:"📱",nota:"📝"};
   const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",qr:"#A78BFA",nota:"#64748B"};
+  const TIPO_LABEL=Object.freeze(
+    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo.toUpperCase();return acc;},{})
+  );
 
   useEffect(()=>{
     if(!uid){setLoading(false);return;}
@@ -11975,8 +11942,7 @@ function ServicioDocsView({uid,showToast}){
           if(stopIds){
             const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=stop_id.asc,created_at.asc`);
             const evs=await evr.json();
-            const evMap={};(Array.isArray(evs)?evs:[]).forEach(ev=>{if(!evMap[ev.stop_id])evMap[ev.stop_id]=[];evMap[ev.stop_id].push(ev);});
-            setEvidencias(evMap);
+            setEvidencias(groupDocumentsByStop(evs));
           }
         }
       }catch(e){console.warn("ServicioDocsView:",e);}
@@ -12009,7 +11975,7 @@ function ServicioDocsView({uid,showToast}){
       )}
       {servicios.map(sv=>{
         const svStops=stops[sv.id]||[];
-        const totalEvs=svStops.reduce((a,st)=>(evidencias[st.id]||[]).length+a,0);
+        const totalEvs=countServiceDocuments(svStops,evidencias);
         return(
           <div key={sv.id} style={{marginBottom:16}}>
             <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8}}>
@@ -12055,9 +12021,9 @@ function ServicioDocsView({uid,showToast}){
                             <button key={ev.id} onClick={()=>setVisorEv(ev)} style={{background:"#1E293B",border:`1px solid ${TIPO_COLOR[ev.tipo]||"#334155"}30`,borderRadius:10,padding:"10px 12px",cursor:"pointer",display:"flex",gap:10,alignItems:"center",textAlign:"left",width:"100%"}}>
                               <span style={{fontSize:22,flexShrink:0}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
                               <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{ev.tipo==="cmr"&&ev.datos?.num_cmr?"CMR "+ev.datos.num_cmr:ev.tipo.toUpperCase()}</div>
+                                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
                                 {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:11,color:su,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
-                                {ev.tipo==="incidencia"&&ev.datos?.texto&&<div style={{fontSize:11,color:"#FCA5A5",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.texto}</div>}
+                                {isIncidentDocument(ev)&&ev.datos?.texto&&<div style={{fontSize:11,color:"#FCA5A5",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.texto}</div>}
                                 <div style={{fontSize:10,color:"#334155",marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
                               </div>
                               {ev.url&&<img src={ev.url} style={{width:40,height:40,objectFit:"cover",borderRadius:7,flexShrink:0}} alt="thumb"/>}
@@ -12086,7 +12052,7 @@ function BandaServicio({uid,showToast,onVerServicio}){
   const su="#64748B";
 
   if(loading||!servicio||servicio.estado==="completado")return null;
-  const stopMostrar=stops.find(s=>s.estado==="llegado")||stops.find(s=>s.estado==="pendiente");
+  const stopMostrar=getCurrentStop(stops);
   if(!stopMostrar)return null;
   const estaEnParada=stopMostrar.estado==="llegado";
   const color=STOP_COLOR[stopMostrar.tipo]||"#06B6D4";
@@ -12158,6 +12124,9 @@ function EvidenciasStop({stopId,showToast}){
   const CMR_FIELDS=[{k:"num_cmr",l:"Nº CMR"},{k:"fecha",l:"Fecha"},{k:"remitente",l:"Remitente"},{k:"destinatario",l:"Destinatario"},{k:"transportista",l:"Transportista"},{k:"lugar_carga",l:"Lugar de carga"},{k:"lugar_entrega",l:"Lugar de entrega"},{k:"mercancia",l:"Mercancía"},{k:"peso_kg",l:"Peso (kg)"},{k:"matricula",l:"Matrícula"},{k:"observaciones",l:"Observaciones"}];
   const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️"};
   const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444"};
+  const TIPO_LABEL=Object.freeze(
+    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo.toUpperCase();return acc;},{})
+  );
 
   useEffect(()=>{
     if(!stopId)return;
@@ -12223,7 +12192,7 @@ function EvidenciasStop({stopId,showToast}){
             <div key={ev.id} style={{background:card,borderRadius:10,padding:"10px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"center"}}>
               <span style={{fontSize:20}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{ev.tipo==="cmr"&&ev.datos?.num_cmr?"CMR "+ev.datos.num_cmr:ev.tipo.toUpperCase()}</div>
+                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
                 {ev.nota&&<div style={{fontSize:12,color:su,marginTop:2}}>{ev.nota}</div>}
                 {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:11,color:su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
                 <div style={{fontSize:11,color:"#334155",marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
@@ -12374,7 +12343,7 @@ function TabServicio({uid,showToast}){
     </div>
   );
 
-  const stopMostrar=stops.find(s=>s.estado==="llegado")||stops.find(s=>s.estado==="pendiente");
+  const stopMostrar=getCurrentStop(stops);
   if(!stopMostrar)return null;
   const estaEnParada=stopMostrar.estado==="llegado";
 
@@ -12456,156 +12425,6 @@ function TabServicio({uid,showToast}){
 }
 
 
-
-// ─────────────────────────────────────────────────────────────
-//  EMPRESA SHELL — layout separado para usuarios empresa
-// ─────────────────────────────────────────────────────────────
-function EmpresaShell(){
-  const[prof,setProf]=useState(PROF0);
-  const[tab,setTab]=useState("dashboard");
-  const[loaded,setLoaded]=useState(false);
-  const[toast,setToast]=useState("");
-  const[dark,setDark]=useState(()=>localStorage.getItem("dark")==="1");
-  const[isMobile,setIsMobile]=useState(()=>typeof window!=="undefined"&&window.innerWidth<768);
-
-  useEffect(()=>{
-    const fn=()=>setIsMobile(window.innerWidth<768);
-    window.addEventListener("resize",fn);
-    return()=>window.removeEventListener("resize",fn);
-  },[]);
-
-  const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-
-  // Cargar perfil
-  useEffect(()=>{
-    const uid=getUserId();
-    if(!uid){setLoaded(true);return;}
-    sbSelect("profiles",`id=eq.${uid}`).then(async rows=>{
-      if(rows.length){
-        const p=rows[0];
-        setProf(prev=>({...prev,
-          nombre:p.nombre||"",cif:p.cif||"",
-          direccion:p.direccion||"",telefono:p.telefono||"",
-          emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||"",
-          tipo_cuenta:p.tipo_cuenta||"empresa",lang:p.lang||"es",
-        }));
-      }
-      setLoaded(true);
-    }).catch(()=>setLoaded(true));
-  },[]);
-
-  function onSave(p){
-    const uid=getUserId();if(!uid)return;
-    setProf(p);
-    sbUpsert("profiles",[{
-      id:uid,nombre:p.nombre||null,cif:p.cif||null,
-      direccion:p.direccion||null,telefono:p.telefono||null,
-      email_empresa:p.emailEmpresa||null,cp:p.cp||null,ciudad:p.ciudad||null,
-      updated_at:new Date().toISOString(),
-    }]).catch(()=>{});
-  }
-
-  if(!loaded)return(
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0F172A"}}>
-      <div style={{fontSize:14,color:"#64748B"}}>⏳ Cargando...</div>
-    </div>
-  );
-
-  const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
-
-  const TABS=[
-    {id:"dashboard", icon:"⊙", label:"Dashboard"},
-    {id:"servicios", icon:"📦", label:"Servicios"},
-    {id:"conductores",icon:"👷",label:"Conductores"},
-    {id:"documentos",icon:"📄",label:"Documentos"},
-    {id:"config",    icon:"⚙️", label:"Config"},
-  ];
-
-  return(
-    <div style={{minHeight:"100vh",background:bg,display:"flex",flexDirection:"column"}}>
-
-      {/* ── TOP NAV (desktop) ── */}
-      {!isMobile&&<div style={{background:card,borderBottom:"1px solid #334155",padding:"0 20px",display:"flex",alignItems:"center",gap:0,position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.3)"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 0",marginRight:32,flexShrink:0}}>
-          <span style={{fontSize:22}}>🚛</span>
-          <div>
-            <div style={{fontSize:13,fontWeight:800,color:"#F59E0B",lineHeight:1}}>CUADERNO DE RUTA</div>
-            <div style={{fontSize:10,color:su,marginTop:1}}>Panel de empresa</div>
-          </div>
-        </div>
-        <div style={{display:"flex",flex:1,gap:0}}>
-          {TABS.map(t=>(
-            <button key={t.id} onClick={()=>setTab(t.id)}
-              style={{background:"transparent",border:"none",borderBottom:`3px solid ${tab===t.id?"#F59E0B":"transparent"}`,padding:"16px 18px 13px",fontSize:13,fontWeight:700,color:tab===t.id?"#F59E0B":su,cursor:"pointer",display:"flex",alignItems:"center",gap:6,transition:"all .15s",whiteSpace:"nowrap"}}>
-              <span style={{fontSize:15}}>{t.icon}</span>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:13,fontWeight:700,color:tx}}>{prof.nombre||"Empresa"}</div>
-            <div style={{fontSize:11,color:su}}>{prof.ciudad||"Panel empresa"}</div>
-          </div>
-          <div style={{width:36,height:36,borderRadius:"50%",background:"#F59E0B20",border:"2px solid #F59E0B40",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🏢</div>
-          <button onClick={()=>setTab("config")} style={{background:"transparent",border:"1px solid #334155",borderRadius:8,padding:"6px 10px",fontSize:12,color:su,cursor:"pointer"}}>⚙️</button>
-          <button onClick={async()=>{await sbSignOut();window.location.reload();}} style={{background:"#EF444420",border:"1px solid #EF444440",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:700,color:"#EF4444",cursor:"pointer"}}>Salir</button>
-        </div>
-      </div>}
-
-      {/* ── MOBILE HEADER ── */}
-      {isMobile&&<div style={{background:card,borderBottom:"1px solid #334155",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:20}}>🚛</span>
-          <div style={{fontSize:13,fontWeight:800,color:"#F59E0B"}}>CUADERNO DE RUTA</div>
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>setTab("config")} style={{background:"transparent",border:"1px solid #334155",borderRadius:8,padding:"5px 8px",fontSize:12,color:su,cursor:"pointer"}}>⚙️</button>
-          <button onClick={async()=>{await sbSignOut();window.location.reload();}} style={{background:"#EF444420",border:"1px solid #EF444440",borderRadius:8,padding:"5px 10px",fontSize:12,fontWeight:700,color:"#EF4444",cursor:"pointer"}}>Salir</button>
-        </div>
-      </div>}
-
-      {/* ── CONTENIDO ── */}
-      <div style={{flex:1,minHeight:0,paddingBottom:isMobile?64:0}}>
-
-        {/* DASHBOARD */}
-        {tab==="dashboard"&&<EmpresaDashboard prof={prof} showToast={showToast} onTabChange={setTab}/>}
-
-        {/* SERVICIOS */}
-        {tab==="servicios"&&<EmpresaPanelSeccion seccion="servicios" prof={prof} showToast={showToast}/>}
-
-        {/* CONDUCTORES */}
-        {tab==="conductores"&&<EmpresaPanelSeccion seccion="conductores" prof={prof} showToast={showToast}/>}
-
-        {/* DOCUMENTOS */}
-        {tab==="documentos"&&<EmpresaPanelSeccion seccion="documentos" prof={prof} showToast={showToast}/>}
-
-        {/* CONFIGURACIÓN */}
-        {tab==="config"&&(
-          <div style={{maxWidth:640,margin:"0 auto",padding:"24px 20px 80px"}}>
-            <div style={{fontSize:18,fontWeight:800,color:tx,marginBottom:4}}>⚙️ Configuración</div>
-            <div style={{fontSize:13,color:su,marginBottom:20}}>Datos de tu empresa</div>
-            <ProfView prof={prof} onSave={onSave} norma={{alerts:[]}} db={{entries:[]}} showToast={showToast}/>
-          </div>
-        )}
-      </div>
-
-      {/* ── BOTTOM NAV (móvil) ── */}
-      {isMobile&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:card,borderTop:"1px solid #334155",display:"flex",zIndex:100}}>
-        {TABS.filter(t=>t.id!=="config").map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)}
-            style={{flex:1,background:"transparent",border:"none",borderTop:`3px solid ${tab===t.id?"#F59E0B":"transparent"}`,padding:"8px 4px 6px",fontSize:10,fontWeight:700,color:tab===t.id?"#F59E0B":su,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-            <span style={{fontSize:18}}>{t.icon}</span>
-            {t.label.toUpperCase()}
-          </button>
-        ))}
-      </div>}
-
-      {/* Toast */}
-      {toast&&<div style={{position:"fixed",bottom:isMobile?72:24,left:"50%",transform:"translateX(-50%)",background:"#1E293B",color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:500,boxShadow:"0 4px 20px rgba(0,0,0,.4)",whiteSpace:"nowrap"}}>{toast}</div>}
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────
 //  EMPRESA DASHBOARD — pantalla principal empresa
@@ -12786,6 +12605,6 @@ export default function App(){
     </div>
   );
 
-  if(tipoCuenta==="empresa")return <ErrorBoundary><EmpresaShell/></ErrorBoundary>;
+  if(tipoCuenta==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView}/></ErrorBoundary>;
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }
