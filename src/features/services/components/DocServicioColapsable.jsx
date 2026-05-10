@@ -1,9 +1,17 @@
 import { useState } from "react";
+import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
+import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
+import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 
 export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConductor,ESTADO_COLOR,ESTADO_LABEL,TIPO_EV,TIPO_EV_COL,onVerEv,bg,card,tx,su}){
   const[abierto,setAbierto]=useState(false);
   const color=ESTADO_COLOR[sv.estado]||su;
   const stopsConEvs=svStops.filter(st=>(flotaEvs[st.id]||[]).length>0);
+  const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias:flotaEvs});
+  const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
+  const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:flotaEvs});
+  const attention=needsAttention({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity});
+  const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
 
   function descargarServicio(){
     const fecha=sv.fecha_inicio?new Date(sv.fecha_inicio).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}).replace(/\//g,"-"):"sin-fecha";
@@ -87,16 +95,28 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
   }
 
   return(
-    <div style={{background:card,borderRadius:14,overflow:"hidden",border:`1px solid ${abierto?color+"40":"#334155"}`}}>
+    <div style={{background:card,borderRadius:14,overflow:"hidden",border:`1px solid ${abierto?color+"40":"#334155"}`,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
       {/* Cabecera colapsable */}
       <button onClick={()=>setAbierto(o=>!o)}
         style={{width:"100%",background:"transparent",border:"none",padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,textAlign:"left"}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:14,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</div>
+          {attention&&(
+            <div style={{marginTop:6,marginBottom:2}}>
+              <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
+              {attentionReason&&<div style={{fontSize:9,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
+            </div>
+          )}
           <div style={{display:"flex",gap:8,marginTop:4,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:su}}>👷 {nombreConductor(sv.conductor_id)}</span>
             {sv.referencia&&<span style={{fontSize:11,color:"#F59E0B"}}>Ref: {sv.referencia}</span>}
             <span style={{background:color+"20",color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+              <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>
+                {operationalMeta.icon} {operationalMeta.label.toUpperCase()}
+              </span>
+              <span style={{fontSize:9,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
+            </div>
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>

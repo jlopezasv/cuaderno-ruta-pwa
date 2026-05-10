@@ -51,6 +51,10 @@ import {
   groupDocumentsByStop,
   isIncidentDocument,
 } from "./domain/service/serviceDocuments";
+import { getOperationalStatus, OPERATIONAL_STATUS_META } from "./domain/service/serviceOperationalStatus";
+import { getLastServiceActivity } from "./domain/service/serviceActivity";
+import { getAttentionReason, needsAttention } from "./domain/service/serviceAttention";
+import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { getConductorTabs } from "./navigation/conductorTabs";
@@ -10151,15 +10155,30 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 const completados=countCompletedStops(svStops);
                 const stopActual=getCurrentStop(svStops);
                 const color=ESTADO_COLOR[sv.estado]||su;
+                const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias:flotaEvs});
+                const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
+                const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:flotaEvs});
+                const attention=needsAttention({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity});
+                const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
                 const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
                 const normaC=conductor?.norma;
                 return(
-                  <div key={sv.id} style={{background:card,borderRadius:14,padding:"14px 16px",borderLeft:`4px solid ${color}`}}>
+                  <div key={sv.id} style={{background:card,borderRadius:14,padding:"14px 16px",borderLeft:`4px solid ${color}`,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:15,fontWeight:800,color:tx,marginBottom:2}}>{sv.origen} → {sv.destino}</div>
+                        {attention&&(
+                          <div style={{marginBottom:6}}>
+                            <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
+                            {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
+                          </div>
+                        )}
                         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:4}}>
                           <span style={{background:color+"20",color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
+                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+                            <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{operationalMeta.icon} {operationalMeta.label.toUpperCase()}</span>
+                            <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
+                          </div>
                           <span style={{fontSize:12,color:su}}>👷 {nombreConductor(sv.conductor_id)}</span>
                           {sv.referencia&&<span style={{fontSize:12,color:"#F59E0B"}}>Ref: {sv.referencia}</span>}
                         </div>
@@ -11486,6 +11505,11 @@ function ServiciosTimelineView({uid}){
               const totalEvs=svStops.reduce((a,st)=>(evidencias[st.id]||[]).length+a,0);
               const isOpen=expandido[sv.id];
               const color=ESTADO_COLOR[sv.estado]||su;
+              const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias});
+              const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
+              const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
+              const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
+              const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
               let duracion=null;
               if(sv.estado==="completado"&&sv.fecha_inicio){
                 const lastStop=svStops.filter(s=>s.hora_salida_real).sort((a,b)=>new Date(b.hora_salida_real)-new Date(a.hora_salida_real))[0];
@@ -11497,16 +11521,26 @@ function ServiciosTimelineView({uid}){
               return(
                 <div key={sv.id} style={{marginBottom:10}}>
                   <button onClick={()=>setExpandido(prev=>({...prev,[sv.id]:!prev[sv.id]}))}
-                    style={{width:"100%",background:card,border:`1.5px solid ${isOpen?color+"60":"#334155"}`,borderLeft:`4px solid ${color}`,borderRadius:14,padding:"14px 16px",cursor:"pointer",textAlign:"left",display:"block"}}>
+                    style={{width:"100%",background:card,border:`1.5px solid ${isOpen?color+"60":"#334155"}`,borderLeft:`4px solid ${color}`,borderRadius:14,padding:"14px 16px",cursor:"pointer",textAlign:"left",display:"block",boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                           <span style={{fontSize:16}}>{ESTADO_ICON[sv.estado]||"📋"}</span>
                           <span style={{fontSize:16,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</span>
                         </div>
+                        {attention&&(
+                          <div style={{marginBottom:6,textAlign:"left"}}>
+                            <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
+                            {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
+                          </div>
+                        )}
                         {sv.referencia&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {sv.referencia}</div>}
                         <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                           <span style={{background:color+"20",color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
+                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+                            <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{operationalMeta.icon} {operationalMeta.label.toUpperCase()}</span>
+                            <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
+                          </div>
                           <span style={{fontSize:11,color:su}}>{svStops.length} stops</span>
                           {totalEvs>0&&<span style={{fontSize:11,color:su}}>{totalEvs} docs</span>}
                           {duracion&&<span style={{fontSize:11,color:"#22C55E",fontWeight:600}}>⏱ {duracion}</span>}
@@ -11976,13 +12010,28 @@ function ServicioDocsView({uid,showToast}){
       {servicios.map(sv=>{
         const svStops=stops[sv.id]||[];
         const totalEvs=countServiceDocuments(svStops,evidencias);
+        const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias});
+        const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
+        const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
+        const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
+        const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
         return(
           <div key={sv.id} style={{marginBottom:16}}>
-            <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8}}>
+            <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
               <div style={{fontSize:16,fontWeight:800,color:tx,marginBottom:2}}>{sv.origen} → {sv.destino}</div>
+              {attention&&(
+                <div style={{marginBottom:6}}>
+                  <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
+                  {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
+                </div>
+              )}
               {sv.referencia&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {sv.referencia}</div>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+                  <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{operationalMeta.icon} {operationalMeta.label.toUpperCase()}</span>
+                  <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
+                </div>
                 <span style={{fontSize:11,color:su}}>{svStops.length} stops · {totalEvs} docs</span>
                 <span style={{fontSize:11,color:su}}>{new Date(sv.created_at).toLocaleDateString("es-ES",{day:"numeric",month:"short"})}</span>
               </div>
@@ -12284,7 +12333,32 @@ function EvidenciasStop({stopId,showToast}){
 function TabServicio({uid,showToast}){
   const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
+  const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const card="#1E293B",tx="#F1F5F9",su="#64748B";
+
+  useEffect(()=>{
+    if(!servicio?.id||!stops.length){
+      setEvidenciasByStop({});
+      return;
+    }
+    let cancelled=false;
+    (async()=>{
+      try{
+        const ids=stops.map(s=>s.id).filter(Boolean).join(",");
+        if(!ids){
+          if(!cancelled)setEvidenciasByStop({});
+          return;
+        }
+        const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${ids})&order=created_at.desc`);
+        const evs=await evr.json();
+        const grouped=groupDocumentsByStop(Array.isArray(evs)?evs:[]);
+        if(!cancelled)setEvidenciasByStop(grouped);
+      }catch(_){
+        if(!cancelled)setEvidenciasByStop({});
+      }
+    })();
+    return()=>{cancelled=true;};
+  },[servicio?.id,stops]);
 
   if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando...</div>;
 
@@ -12313,114 +12387,41 @@ function TabServicio({uid,showToast}){
   );
 
   if(servicio.estado==="asignado")return(
-    <div style={{padding:"16px 16px 80px"}}>
-      <div style={{background:card,borderRadius:16,padding:"18px",marginBottom:14}}>
-        <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:6}}>SERVICIO ASIGNADO</div>
-        <div style={{fontSize:22,fontWeight:800,color:tx,marginBottom:4}}>{servicio.origen} → {servicio.destino}</div>
-        {servicio.referencia&&<div style={{fontSize:13,color:"#F59E0B",fontWeight:600}}>Ref: {servicio.referencia}</div>}
-        {servicio.fecha_inicio&&<div style={{fontSize:12,color:su,marginTop:4}}>Salida: {new Date(servicio.fecha_inicio).toLocaleString("es-ES",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
-      </div>
-      <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>{stops.length} PARADAS</div>
-      {stops.map((stop,i)=>(
-        <div key={stop.id} style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:8,display:"flex",gap:12,alignItems:"center"}}>
-          <div style={{background:(STOP_COLOR[stop.tipo]||"#06B6D4")+"20",borderRadius:10,width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{STOP_ICON[stop.tipo]||"📍"}</div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
-            {stop.direccion&&<div style={{fontSize:12,color:su,marginTop:2}}>{stop.direccion}</div>}
-            {stop.notas&&<div style={{fontSize:11,color:"#475569",marginTop:1}}>📝 {stop.notas}</div>}
-            <div style={{display:"flex",gap:6,marginTop:3,alignItems:"center"}}>
-              <span style={{fontSize:12,color:STOP_COLOR[stop.tipo]||"#06B6D4",fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
-              {stop.lat&&<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 5px"}}>🗺 GPS</span>}
-            </div>
-          </div>
-          <div style={{fontSize:20,color:su,fontWeight:800}}>{i+1}</div>
-        </div>
-      ))}
-      <button onClick={()=>iniciarServicio(servicio.id).then(()=>showToast("▶ Servicio iniciado"))}
-        style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:14,padding:"17px",fontSize:18,fontWeight:800,cursor:"pointer",marginTop:8}}>
-        ▶ INICIAR SERVICIO
-      </button>
-    </div>
+    <ActiveServicePanel
+      mode="asignado"
+      servicio={servicio}
+      stops={stops}
+      completados={completados}
+      evidenciasByStop={evidenciasByStop}
+      showToast={showToast}
+      onIniciarServicio={iniciarServicio}
+      marcarLlegado={marcarLlegado}
+      marcarCompletado={marcarCompletado}
+      recargar={recargar}
+      EvidenciasStopComponent={EvidenciasStop}
+      card={card}
+      tx={tx}
+      su={su}
+    />
   );
 
-  const stopMostrar=getCurrentStop(stops);
-  if(!stopMostrar)return null;
-  const estaEnParada=stopMostrar.estado==="llegado";
-
   return(
-    <div style={{padding:"16px 16px 80px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <div>
-          <div style={{fontSize:11,color:su,fontWeight:700}}>SERVICIO EN CURSO</div>
-          <div style={{fontSize:16,fontWeight:800,color:tx}}>{servicio.origen} → {servicio.destino}</div>
-          {servicio.referencia&&<div style={{fontSize:12,color:"#F59E0B"}}>{servicio.referencia}</div>}
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{fontSize:22,fontWeight:800,color:"#F59E0B"}}>{completados}/{stops.length}</div>
-          <div style={{fontSize:11,color:su}}>stops</div>
-        </div>
-      </div>
-      <div style={{background:card,borderRadius:8,height:6,marginBottom:16,overflow:"hidden"}}>
-        <div style={{background:"#22C55E",height:"100%",width:`${stops.length?(completados/stops.length)*100:0}%`,borderRadius:8,transition:"width .5s ease"}}/>
-      </div>
-      <div style={{background:estaEnParada?"#7C3AED20":card,border:`2px solid ${estaEnParada?"#7C3AED":"#334155"}`,borderRadius:18,padding:"20px",marginBottom:14}}>
-        <div style={{fontSize:11,color:estaEnParada?"#A78BFA":su,fontWeight:700,marginBottom:8}}>
-          {estaEnParada?"📍 EN PARADA — "+stopMostrar.tipo.replace("_"," ").toUpperCase():"🚛 SIGUIENTE PARADA"}
-        </div>
-        <div style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:16}}>
-          <div style={{fontSize:36}}>{STOP_ICON[stopMostrar.tipo]||"📍"}</div>
-          <div>
-            <div style={{fontSize:20,fontWeight:800,color:tx,lineHeight:1.2}}>{stopMostrar.nombre}</div>
-            {stopMostrar.direccion&&<div style={{fontSize:13,color:su,marginTop:4}}>{stopMostrar.direccion}</div>}
-            {stopMostrar.notas&&<div style={{fontSize:12,color:"#475569",marginTop:3}}>📝 {stopMostrar.notas}</div>}
-            <div style={{display:"flex",gap:6,marginTop:4,alignItems:"center"}}>
-              <span style={{fontSize:12,color:STOP_COLOR[stopMostrar.tipo]||"#06B6D4",fontWeight:700}}>Stop {stopMostrar.orden}/{stops.length}</span>
-              {stopMostrar.lat&&<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 5px"}}>🗺 GPS listo</span>}
-            </div>
-            {stopMostrar.hora_llegada_real&&<div style={{fontSize:12,color:su,marginTop:2}}>Llegada: {new Date(stopMostrar.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
-          </div>
-        </div>
-        {!estaEnParada?(
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {(stopMostrar.lat&&stopMostrar.lon||stopMostrar.direccion)&&(
-              <a href={stopMostrar.lat?`https://maps.google.com/maps?daddr=${stopMostrar.lat},${stopMostrar.lon}`:`https://maps.google.com/maps?daddr=${encodeURIComponent(stopMostrar.direccion)}`}
-                target="_blank" rel="noopener noreferrer"
-                style={{display:"block",background:"#1E40AF",color:"white",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,textAlign:"center",textDecoration:"none"}}>
-                🗺 NAVEGAR {stopMostrar.lat?"(GPS preciso)":"(por dirección)"}
-              </a>
-            )}
-            <button onClick={()=>marcarLlegado(stopMostrar.id).then(()=>showToast("📍 Llegada registrada"))}
-              style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:12,padding:"15px",fontSize:16,fontWeight:800,cursor:"pointer"}}>
-              ✅ HE LLEGADO
-            </button>
-          </div>
-        ):(
-          <div>
-            <EvidenciasStop stopId={stopMostrar.id} showToast={showToast}/>
-            <button onClick={()=>marcarCompletado(stopMostrar.id).then(()=>{showToast("✅ Stop completado");recargar();})}
-              style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:12,padding:"15px",fontSize:16,fontWeight:800,cursor:"pointer",marginTop:14}}>
-              ✅ STOP COMPLETADO — SALIR
-            </button>
-          </div>
-        )}
-      </div>
-      <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>ITINERARIO</div>
-      {stops.map(stop=>{
-        const esActual=stop.id===stopMostrar.id;
-        const icono=stop.estado==="completado"?"✅":esActual?"▶":"○";
-        const colorTx=stop.estado==="completado"?"#22C55E":esActual?"#F59E0B":su;
-        return(
-          <div key={stop.id} style={{display:"flex",gap:12,alignItems:"center",padding:"10px 0",borderBottom:"1px solid #1E293B"}}>
-            <span style={{fontSize:16,width:20,textAlign:"center"}}>{icono}</span>
-            <span style={{fontSize:14,color:colorTx,fontWeight:esActual?700:400,flex:1}}>{stop.orden}. {stop.nombre}</span>
-            <div style={{display:"flex",gap:4,alignItems:"center",flexShrink:0}}>
-              {stop.lat&&<span style={{fontSize:9,color:"#22C55E"}}>🗺</span>}
-              <span style={{fontSize:12,color:su}}>{stop.hora_llegada_real?new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}):stop.estado==="pendiente"?"—":""}</span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <ActiveServicePanel
+      mode="en_curso"
+      servicio={servicio}
+      stops={stops}
+      completados={completados}
+      evidenciasByStop={evidenciasByStop}
+      showToast={showToast}
+      onIniciarServicio={iniciarServicio}
+      marcarLlegado={marcarLlegado}
+      marcarCompletado={marcarCompletado}
+      recargar={recargar}
+      EvidenciasStopComponent={EvidenciasStop}
+      card={card}
+      tx={tx}
+      su={su}
+    />
   );
 }
 
@@ -12503,17 +12504,38 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           </div>
           {servicios.filter(s=>s.estado==="en_curso").length===0?(
             <div style={{textAlign:"center",padding:"24px 0",color:su,fontSize:13}}>Sin servicios en curso ahora mismo</div>
-          ):servicios.filter(s=>s.estado==="en_curso").slice(0,5).map(sv=>(
-            <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #334155"}}>
+          ):servicios.filter(s=>s.estado==="en_curso").slice(0,5).map(sv=>{
+            const operationalStatus=getOperationalStatus({service:sv,stops:[],evidencias:[]});
+            const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
+            const lastActivity=getLastServiceActivity({service:sv,stops:[],evidencias:[]});
+            const attention=needsAttention({service:sv,stops:[],evidencias:[],lastActivity});
+            const attentionReason=attention?getAttentionReason({service:sv,stops:[],evidencias:[],lastActivity}):"";
+            return(
+            <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #334155",boxShadow:attention?"inset 3px 0 0 rgba(251, 146, 60, 0.55)":"none",paddingLeft:attention?6:0}}>
               <div style={{minWidth:0,flex:1}}>
                 <div style={{fontSize:13,fontWeight:700,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</div>
+                {attention&&(
+                  <div style={{marginTop:4}}>
+                    <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>⚠ Atención requerida</span>
+                    {attentionReason&&<div style={{fontSize:9,color:su,marginTop:2,lineHeight:1.3}}>{attentionReason}</div>}
+                  </div>
+                )}
                 {sv.referencia&&<div style={{fontSize:11,color:"#F59E0B",marginTop:1}}>Ref: {sv.referencia}</div>}
               </div>
-              <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700,flexShrink:0,marginLeft:10}}>
-                {ESTADO_LABEL[sv.estado]}
-              </span>
+              <div style={{display:"flex",alignItems:"flex-start",gap:6,flexShrink:0,marginLeft:10}}>
+                <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
+                  {ESTADO_LABEL[sv.estado]}
+                </span>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                  <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
+                    {operationalMeta.icon} {operationalMeta.label.toUpperCase()}
+                  </span>
+                  <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
+                </div>
+              </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Conductores */}
