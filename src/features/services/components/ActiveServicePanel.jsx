@@ -11,6 +11,11 @@ import { getAttentionReason, needsAttention } from "../../../domain/service/serv
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getServiceEta } from "../../../domain/service/serviceEta";
 import { getUnifiedTripPresentation } from "../../../domain/service/activeTripState";
+import {
+  getOperationalTripStartedAt,
+  stripServicioOperacionDisplay,
+} from "../../../domain/service/serviceOperacionMeta.js";
+import { getInicioOperacionMs, stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
 
 function flattenEvidencias(evidenciasByStop) {
   const out = [];
@@ -135,6 +140,8 @@ export function OperativaViajeBlock({
             onOpenViajeModal?.({
               destino: servicio?.destino?.trim() || "",
               origen: servicio?.origen?.trim() || "",
+              servicioId: servicio?.id,
+              referenciaActual: servicio?.referencia ?? null,
             })
           }
           style={{
@@ -243,11 +250,14 @@ export function ActiveServicePanel({
   viajeActivo = null,
   onOpenViajeModal,
   conductorNombre = "Conductor",
+  marcarInicioOperacion = async () => {},
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const estadoColor = ESTADO_COLOR[servicio.estado] || su;
   const [etaSlot, setEtaSlot] = useState(null);
   const [etaLoading, setEtaLoading] = useState(false);
+  const [confirmMuelle, setConfirmMuelle] = useState(null);
+  const viajeOpIniciado = !!getOperationalTripStartedAt(servicio);
   const presentation = useMemo(
     () =>
       getUnifiedTripPresentation({
@@ -272,6 +282,7 @@ export function ActiveServicePanel({
           stops,
           norma: norma ?? null,
           currentPosition: pos,
+          operationalTripStarted: viajeOpIniciado,
         });
         if (!cancelled) setEtaSlot(r);
       } catch {
@@ -300,9 +311,35 @@ export function ActiveServicePanel({
     servicio?.destino,
     servicio?.estado,
     servicio?.fecha_inicio,
+    servicio?.referencia,
     stops,
     norma,
+    viajeOpIniciado,
   ]);
+
+  useEffect(() => {
+    if (!viajeOpIniciado || servicio?.estado !== "en_curso") return;
+    const t = setInterval(() => {
+      if (typeof navigator !== "undefined" && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (p) => {
+            getServiceEta({
+              service: servicio,
+              stops,
+              norma: norma ?? null,
+              currentPosition: { lat: p.coords.latitude, lon: p.coords.longitude },
+              operationalTripStarted: true,
+            })
+              .then((r) => setEtaSlot(r))
+              .catch(() => {});
+          },
+          () => {},
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 },
+        );
+      }
+    }, 75000);
+    return () => clearInterval(t);
+  }, [viajeOpIniciado, servicio?.estado, servicio?.id, stops, norma, servicio?.referencia]);
 
   if (import.meta.env.DEV) {
     console.log("[AUDIT PR-22B] RENDER ActiveServicePanel", {
@@ -323,7 +360,7 @@ export function ActiveServicePanel({
             </div>
             <div style={{ fontSize: 13, color: su, marginBottom: 6 }}>
               <span style={{ color: "#94A3B8" }}>Cliente · </span>
-              <span style={{ color: tx, fontWeight: 600 }}>{servicio.referencia?.trim() || "—"}</span>
+              <span style={{ color: tx, fontWeight: 600 }}>{stripServicioOperacionDisplay(servicio.referencia) || "—"}</span>
             </div>
             <div style={{ fontSize: 13, color: su, marginBottom: 8 }}>
               <span style={{ color: "#94A3B8" }}>Conductor · </span>
@@ -337,6 +374,11 @@ export function ActiveServicePanel({
                 <span style={{ color: sig.operationalMeta.color }}>{sig.operationalMeta.icon}</span> {sig.operationalMeta.label} · {sig.lastActivity.label}
               </span>
             </div>
+            {!viajeOpIniciado && (
+              <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, lineHeight: 1.45, background: "rgba(245,158,11,0.08)", borderRadius: 10, padding: "8px 10px", border: "1px solid rgba(245,158,11,0.25)" }}>
+                Viaje operacional pendiente: pulsa <strong style={{ color: "#F59E0B" }}>Añadir destino al viaje</strong> cuando inicies la ruta principal (antes cuenta solo para tacógrafo personal).
+              </div>
+            )}
             <div style={{ fontSize: 12, color: su, marginBottom: 6 }}>
               Próxima parada ·{" "}
               <strong style={{ color: tx }}>{nextStop ? nextStop.nombre : "—"}</strong>
@@ -464,7 +506,7 @@ export function ActiveServicePanel({
           </div>
           <div style={{ fontSize: 13, color: su, marginBottom: 6 }}>
             <span style={{ color: "#94A3B8" }}>Cliente · </span>
-            <span style={{ color: tx, fontWeight: 600 }}>{servicio.referencia?.trim() || "—"}</span>
+            <span style={{ color: tx, fontWeight: 600 }}>{stripServicioOperacionDisplay(servicio.referencia) || "—"}</span>
           </div>
           <div style={{ fontSize: 13, color: su, marginBottom: 8 }}>
             <span style={{ color: "#94A3B8" }}>Conductor · </span>
@@ -478,6 +520,11 @@ export function ActiveServicePanel({
               <span style={{ color: sig.operationalMeta.color }}>{sig.operationalMeta.icon}</span> {sig.operationalMeta.label} · {sig.lastActivity.label}
             </span>
           </div>
+          {!viajeOpIniciado && (
+            <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 10, lineHeight: 1.45, background: "rgba(245,158,11,0.08)", borderRadius: 10, padding: "8px 10px", border: "1px solid rgba(245,158,11,0.25)" }}>
+              Viaje operacional pendiente: pulsa <strong style={{ color: "#F59E0B" }}>Añadir destino al viaje</strong> cuando inicies la ruta principal.
+            </div>
+          )}
           <div style={{ fontSize: 12, color: su, marginBottom: 6 }}>
             {estaEnParada ? "En parada · " : "Próxima parada · "}
             <strong style={{ color: tx }}>{stopMostrar.nombre}</strong>
@@ -530,9 +577,9 @@ export function ActiveServicePanel({
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 19, fontWeight: 900, color: tx, lineHeight: 1.2 }}>{stopMostrar.nombre}</div>
               {stopMostrar.direccion && <div style={{ fontSize: 13, color: su, marginTop: 6 }}>{stopMostrar.direccion}</div>}
-              {stopMostrar.notas && (
-                <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>📝 {stopMostrar.notas}</div>
-              )}
+              {stripOperacionMetaDisplay(stopMostrar.notas) ? (
+                <div style={{ fontSize: 12, color: "#475569", marginTop: 4 }}>📝 {stripOperacionMetaDisplay(stopMostrar.notas)}</div>
+              ) : null}
               <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, color: STOP_COLOR[stopMostrar.tipo] || "#06B6D4", fontWeight: 800 }}>
                   Stop {stopMostrar.orden}/{stops.length}
@@ -632,7 +679,8 @@ export function ActiveServicePanel({
                 </a>
               ) : null}
               <button
-                onClick={() => marcarLlegado(stopMostrar.id).then(() => showToast("📍 Llegada registrada"))}
+                type="button"
+                onClick={() => setConfirmMuelle({ kind: "entrada", stopId: stopMostrar.id })}
                 style={{
                   width: "100%",
                   background: "#22C55E",
@@ -645,19 +693,37 @@ export function ActiveServicePanel({
                   cursor: "pointer",
                 }}
               >
-                ✅ HE LLEGADO
+                📍 Entrada en muelle
               </button>
             </div>
           ) : (
             <div>
               <Ev stopId={stopMostrar.id} showToast={showToast} />
+              {!getInicioOperacionMs(stopMostrar) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    marcarInicioOperacion(stopMostrar.id).then(() => showToast("⚙ Inicio de operación registrado"))
+                  }
+                  style={{
+                    width: "100%",
+                    background: "#334155",
+                    color: "#E2E8F0",
+                    border: "1px solid #475569",
+                    borderRadius: 12,
+                    padding: "12px",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    marginBottom: 10,
+                  }}
+                >
+                  ⚙ Marcar inicio de operación
+                </button>
+              )}
               <button
-                onClick={() =>
-                  marcarCompletado(stopMostrar.id).then(() => {
-                    showToast("✅ Stop completado");
-                    recargar();
-                  })
-                }
+                type="button"
+                onClick={() => setConfirmMuelle({ kind: "salida", stopId: stopMostrar.id })}
                 style={{
                   width: "100%",
                   background: "#F59E0B",
@@ -668,15 +734,99 @@ export function ActiveServicePanel({
                   fontSize: 16,
                   fontWeight: 800,
                   cursor: "pointer",
-                  marginTop: 14,
+                  marginTop: 8,
                 }}
               >
-                ✅ STOP COMPLETADO — SALIR
+                🚪 Salida de muelle
               </button>
             </div>
           )}
         </CockpitSection>
       </CockpitShell>
+
+      {confirmMuelle && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.72)",
+            zIndex: 400,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => setConfirmMuelle(null)}
+        >
+          <div
+            role="dialog"
+            style={{
+              background: "#1c2738",
+              borderRadius: 16,
+              padding: "20px 18px",
+              maxWidth: 400,
+              width: "100%",
+              border: "1px solid rgba(51,65,85,0.85)",
+              boxShadow: "0 20px 50px rgba(0,0,0,.45)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, color: tx, marginBottom: 8 }}>
+              {confirmMuelle.kind === "entrada" ? "¿Confirmar entrada en muelle?" : "¿Confirmar salida de muelle?"}
+            </div>
+            <div style={{ fontSize: 13, color: su, lineHeight: 1.45, marginBottom: 18 }}>
+              {confirmMuelle.kind === "entrada"
+                ? "Se registrará la hora de entrada en el expediente operacional."
+                : "Se registrará la salida y, si corresponde, se avanzará la parada."}
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setConfirmMuelle(null)}
+                style={{
+                  flex: 1,
+                  background: "#334155",
+                  color: tx,
+                  border: "none",
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const { kind, stopId } = confirmMuelle;
+                  setConfirmMuelle(null);
+                  if (kind === "entrada") {
+                    marcarLlegado(stopId).then(() => showToast("📍 Entrada en muelle registrada"));
+                  } else {
+                    marcarCompletado(stopId).then(() => {
+                      showToast("✅ Salida de muelle registrada");
+                      recargar();
+                    });
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  background: confirmMuelle.kind === "entrada" ? "#22C55E" : "#F59E0B",
+                  color: confirmMuelle.kind === "entrada" ? "white" : "#0F172A",
+                  border: "none",
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ fontSize: 11, color: su, fontWeight: 800, marginTop: 20, marginBottom: 10, letterSpacing: 0.8 }}>
         ITINERARIO

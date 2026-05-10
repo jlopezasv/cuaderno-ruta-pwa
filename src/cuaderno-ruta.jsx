@@ -63,6 +63,13 @@ import {
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
+import {
+  mergeReferenciaOperacional,
+  getOperationalTripStartedAt,
+  getServicioOperacionMeta,
+  stripServicioOperacionDisplay,
+} from "./domain/service/serviceOperacionMeta.js";
+import { mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { getConductorTabs } from "./navigation/conductorTabs";
@@ -1768,6 +1775,8 @@ function AppInner(){
   },[]);
   const[modalViaje,setModalViaje]=useState(false);
   const[viajePrefill,setViajePrefill]=useState(null);
+  const viajePrefillRef=useRef(null);
+  useEffect(()=>{viajePrefillRef.current=viajePrefill;},[viajePrefill]);
   const[clock,setClock]=useState(new Date());
   const[dark,setDark]=useState(()=>localStorage.getItem("dark")==="1");
   const[modal,setModal]=useState(null);
@@ -2017,30 +2026,47 @@ function AppInner(){
   // Actualizar ref de jState para el efecto de geolocalización
   jStateRef.current=jState;
 
-  // Guardar posición cada 10 min solo con jornada abierta y servicio en ruta (en_curso)
+  /** Tracking empresa: en_curso + viaje operacional iniciado (PR-30). watchPosition con POST escalonado. */
   useEffect(()=>{
     if(jState!=="open")return;
     if(servicioUbicacion?.estado!=="en_curso")return;
+    if(!getOperationalTripStartedAt(servicioUbicacion))return;
     const uid=getUserId();
     if(!uid||!navigator.geolocation)return;
-    function guardarPos(){
+    let lastPost=0;
+    function postUbicacion(lat,lon,speed,accuracy){
+      sbFetch("/rest/v1/ubicaciones",{
+        method:"POST",
+        headers:{"Prefer":"resolution=merge-duplicates"},
+        body:JSON.stringify({user_id:uid,lat,lon,velocidad:speed?Math.round(speed*3.6):null,precision_m:Math.round(accuracy||0),ts:new Date().toISOString()}),
+      }).catch(()=>{});
+    }
+    const wid=navigator.geolocation.watchPosition(
+      pos=>{
+        const nowT=Date.now();
+        if(nowT-lastPost<90000)return;
+        lastPost=nowT;
+        const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
+        postUbicacion(lat,lon,speed,accuracy);
+      },
+      ()=>{},
+      {enableHighAccuracy:false,maximumAge:60000},
+    );
+    const backup=setInterval(()=>{
       navigator.geolocation.getCurrentPosition(
         pos=>{
           const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
-          sbFetch("/rest/v1/ubicaciones",{
-            method:"POST",
-            headers:{"Prefer":"resolution=merge-duplicates"},
-            body:JSON.stringify({user_id:uid,lat,lon,velocidad:speed?Math.round(speed*3.6):null,precision_m:Math.round(accuracy||0),ts:new Date().toISOString()})
-          }).catch(()=>{});
+          postUbicacion(lat,lon,speed,accuracy);
         },
-        ()=>{}, // error callback vacío — no hacer nada si falla
-        {enableHighAccuracy:false,timeout:10000,maximumAge:120000}
+        ()=>{},
+        {enableHighAccuracy:false,timeout:12000,maximumAge:180000},
       );
-    }
-    guardarPos();
-    const t=setInterval(guardarPos,10*60*1000);
-    return()=>clearInterval(t);
-  },[jState,servicioUbicacion?.estado,servicioUbicacion?.id]);
+    },12*60*1000);
+    return()=>{
+      navigator.geolocation.clearWatch(wid);
+      clearInterval(backup);
+    };
+  },[jState,servicioUbicacion?.estado,servicioUbicacion?.id,servicioUbicacion?.referencia]);
   const tl=buildTimeline(todayEnts,clock);
   const dayMap={};db.entries.forEach(e=>{const k=dayKey(e.ts);if(!dayMap[k])dayMap[k]={date:new Date(e.ts),list:[]};dayMap[k].list.push(e);});
   const days=Object.entries(dayMap).sort((a,b)=>b[0].localeCompare(a[0]));
@@ -3725,7 +3751,26 @@ function AppInner(){
       {modal==="qr_muelle"&&<QrMuelleModal onClose={(abrirAccion)=>{setModal(null);if(abrirAccion)setTimeout(()=>openAdd("__accion__"),200);}} onCarga={(tipo,datos)=>{setModal(null);openAdd(tipo,datos);}} setDb={setDb} showToast={showToast}/>}
 
       {/* ════ MODAL DESTINO VIAJE ════ */}
-      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={v=>{setViajeActivo(v);localStorage.setItem("viaje_activo",JSON.stringify(v));setModalViaje(false);setViajePrefill(null);showToast("🗺 Viaje configurado");setTimeout(()=>speakNatural(`Destino configurado: ${v.destino}. Distancia aproximada ${v.km} kilómetros. La app te avisará si el plan cambia.`),500);}} showToast={showToast}/>}
+      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={async v=>{
+        setViajeActivo(v);
+        localStorage.setItem("viaje_activo",JSON.stringify(v));
+        const pref=viajePrefillRef.current;
+        setModalViaje(false);
+        setViajePrefill(null);
+        const sid=pref?.servicioId;
+        if(sid&&getUserId()){
+          try{
+            const curMeta=getServicioOperacionMeta({referencia:pref?.referenciaActual});
+            if(!curMeta.operational_trip_started_at){
+              const merged=mergeReferenciaOperacional(pref?.referenciaActual||null,{operational_trip_started_at:new Date().toISOString()});
+              await sbFetch(`/rest/v1/servicios?id=eq.${sid}`,{method:"PATCH",body:JSON.stringify({referencia:merged})});
+              window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+            }
+          }catch(_){/* noop */}
+        }
+        showToast(sid?"🗺 Viaje configurado · viaje operacional activo":"🗺 Viaje configurado");
+        setTimeout(()=>speakNatural(`Destino configurado: ${v.destino}. Distancia aproximada ${v.km} kilómetros. La app te avisará si el plan cambia.`),500);
+      }} showToast={showToast}/>}
 
       {/* ════ MODAL DATOS ACTUALES ════ */}
       {modal==="datos_actuales"&&<DatosActualesModal onClose={()=>setModal(null)} setDb={setDb} setManualOffset={v=>{setManualOffset(v);localStorage.setItem("manual_offset",JSON.stringify(v));}} showToast={showToast}/>}
@@ -9810,7 +9855,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       return;
     }
     (async()=>{
-      const uids=[...new Set(list.filter(s=>s.estado==="en_curso"&&s.conductor_id).map(s=>s.conductor_id))];
+      const uids=[...new Set(list.filter(s=>s.conductor_id).map(s=>s.conductor_id))];
       const posByUid={};
       const locMerged={};
       await Promise.all(uids.map(async uid=>{
@@ -9835,8 +9880,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         try{
           const svStops=flotaStops[sv.id]||[];
           const cond=conductores.find(c=>c.user_id===sv.conductor_id);
-          const pos=sv.estado==="en_curso"&&sv.conductor_id?posByUid[sv.conductor_id]:null;
-          const slot=await getServiceEta({service:sv,stops:svStops,norma:cond?.norma??null,currentPosition:pos});
+          const opStarted=!!getOperationalTripStartedAt(sv);
+          const pos=
+            sv.estado==="en_curso"&&opStarted&&sv.conductor_id?posByUid[sv.conductor_id]:null;
+          const slot=await getServiceEta({
+            service:sv,
+            stops:svStops,
+            norma:cond?.norma??null,
+            currentPosition:pos,
+            operationalTripStarted:opStarted,
+          });
           etas[sv.id]=slot?.label||"—";
         }catch{
           etas[sv.id]="—";
@@ -9844,7 +9897,44 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }));
       if(!cancelled)setEtaOperativaById(etas);
     })();
-    return()=>{cancelled=true;};
+    const tick=setInterval(()=>{
+      if(cancelled)return;
+      (async()=>{
+        const list=serviciosListaOperativa;
+        if(!list.length)return;
+        const etas={};
+        await Promise.all(list.map(async sv=>{
+          try{
+            const svStops=flotaStops[sv.id]||[];
+            const cond=conductores.find(c=>c.user_id===sv.conductor_id);
+            const opStarted=!!getOperationalTripStartedAt(sv);
+            let pos=null;
+            if(sv.estado==="en_curso"&&opStarted&&sv.conductor_id){
+              try{
+                const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${sv.conductor_id}&order=ts.desc&limit=1`);
+                const j=await r.json();
+                const row=Array.isArray(j)?j[0]:null;
+                if(row&&Number.isFinite(Number(row.lat))&&Number.isFinite(Number(row.lon))){
+                  pos={lat:Number(row.lat),lon:Number(row.lon)};
+                }
+              }catch(_){/* noop */}
+            }
+            const slot=await getServiceEta({
+              service:sv,
+              stops:svStops,
+              norma:cond?.norma??null,
+              currentPosition:pos,
+              operationalTripStarted:opStarted,
+            });
+            etas[sv.id]=slot?.label||"—";
+          }catch{
+            etas[sv.id]="—";
+          }
+        }));
+        if(!cancelled)setEtaOperativaById((prev)=>({...prev,...etas}));
+      })();
+    },75000);
+    return()=>{cancelled=true;clearInterval(tick);};
   },[serviciosListaOperativa,flotaStops,conductores]);
 
   function openNuevoViaje(){
@@ -10217,7 +10307,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
                     const normaC=conductor?.norma;
                     const etaCompact=etaOperativaById[sv.id]??"…";
-                    const ubicApprox=sv.estado==="en_curso"&&sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
+                    const ubicApprox=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
                     const incNCompact=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
                     const dossierMetrics=computeTripOperationalMetrics(sv,svStops);
                     const resumenViajeTexto=buildTripSummaryText({
@@ -10229,7 +10319,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       fmtDur,
                     });
                     const expanded=svCardExpand===sv.id;
-                    const clienteCompact=sv.referencia?.trim()||"—";
+                    const clienteCompact=stripServicioOperacionDisplay(sv.referencia)||"—";
                     const expedienteBg="#1a2234";
                     const expedienteCard="#243047";
                     return(
@@ -10257,9 +10347,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         >
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:14,fontWeight:900,color:tx,lineHeight:1.25,letterSpacing:0.2}}>{sv.origen} → {sv.destino}</div>
-                            {ubicApprox&&(
-                              <div style={{fontSize:12,color:"#94A3B8",marginTop:5,lineHeight:1.35}}>📍 {ubicApprox}</div>
-                            )}
+                            <div style={{fontSize:12,color:"#94A3B8",marginTop:5,lineHeight:1.35}}>📍 {ubicApprox||"—"}</div>
                             <div style={{fontSize:12,color:"#CBD5E1",marginTop:5,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>🕒 {etaCompact}</div>
                             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,marginTop:6,fontSize:12,color:su}}>
                               <span>👷 {nombreConductor(sv.conductor_id)}</span>
@@ -10282,9 +10370,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:8}}>
                                 {[
                                   {l:"Tiempo total viaje",v:dossierMetrics.tiempoTotalViajeMin!=null?fmtDur(dossierMetrics.tiempoTotalViajeMin):"—"},
-                                  {l:"Tiempo conducción (est.)",v:fmtDur(dossierMetrics.tiempoConduccionMin)},
+                                  {l:"Conducción operacional",v:fmtDur(dossierMetrics.tiempoConduccionMin)},
                                   {l:"Tiempo en planta · cargas",v:fmtDur(dossierMetrics.tiempoEnPlantaCargaMin)},
                                   {l:"Tiempo en planta · descargas",v:fmtDur(dossierMetrics.tiempoEnPlantaDescargaMin)},
+                                  {l:"Espera muelle · cargas",v:fmtDur(dossierMetrics.esperaMuelleCargaMin)},
+                                  {l:"Espera muelle · descargas",v:fmtDur(dossierMetrics.esperaMuelleDescargaMin)},
                                   {l:"Incidencias",v:String(incNCompact),raw:true},
                                 ].map(({l,v,raw})=>(
                                   <div key={l} style={{background:"rgba(15,23,42,0.45)",borderRadius:8,padding:"8px 10px"}}>
@@ -10294,7 +10384,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 ))}
                               </div>
                               <div style={{fontSize:10,color:su,marginTop:8,lineHeight:1.4}}>
-                                Conducción = tramos entre registros de salida base / salidas de parada y llegadas. Tiempo en planta = entre llegada y salida en cada parada (sin desglose cola/muelle sin telemetría adicional).
+                                Totales desde inicio del viaje operacional (tras «Añadir destino al viaje»). En planta = entre entrada y salida de muelle.
                               </div>
                             </div>
 
@@ -10309,9 +10399,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 <div key={row.stop.id||idx} style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:8,border:"1px solid rgba(51,65,85,0.55)"}}>
                                   <div style={{fontSize:13,fontWeight:800,color:tx,marginBottom:8}}>{titulo}</div>
                                   <div style={{display:"flex",flexDirection:"column",gap:5,fontSize:12,color:su}}>
-                                    <div><span style={{color:"#94A3B8"}}>Llegada muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.llegadaMs)}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Inicio operación · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.inicioOperacionMs)}</span>{row.inicioOperacionMs!=null&&<span style={{fontSize:10,marginLeft:6,color:"#64748B"}}>(registro llegada)</span>}</div>
-                                    <div><span style={{color:"#94A3B8"}}>Salida · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.salidaMs)}</span></div>
+                                    <div><span style={{color:"#94A3B8"}}>Entrada muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.entradaMuelleMs)}</span></div>
+                                    <div><span style={{color:"#94A3B8"}}>Inicio operación · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.inicioOperacionMs)}</span></div>
+                                    <div><span style={{color:"#94A3B8"}}>Salida muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.salidaMuelleMs)}</span></div>
                                     <div><span style={{color:"#94A3B8"}}>Tiempo en planta · </span><span style={{color:"#F59E0B",fontWeight:700}}>{row.tiempoEnPlantaMin!=null?fmtDur(row.tiempoEnPlantaMin):"—"}</span></div>
                                     <div><span style={{color:"#94A3B8"}}>Traslado previo · </span><span style={{color:tx}}>{row.trasladoPrevioMin!=null?fmtDur(row.trasladoPrevioMin):"—"}</span><span style={{fontSize:10,marginLeft:6,color:"#64748B"}}> (hasta esta parada)</span></div>
                                   </div>
@@ -10326,7 +10416,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                             })}
 
                             <div style={{background:expedienteCard,borderRadius:10,padding:"12px 14px",marginTop:10,marginBottom:12,border:"1px solid rgba(245,158,11,0.25)"}}>
-                              <div style={{fontSize:12,fontWeight:800,color:"#F59E0B",marginBottom:8}}>📄 Resumen del viaje</div>
+                              <div style={{fontSize:13,fontWeight:800,color:"#F59E0B",marginBottom:8}}>📄 Documento · Resumen del viaje</div>
                               <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,lineHeight:1.5,color:su,fontFamily:"system-ui,sans-serif"}}>{resumenViajeTexto}</pre>
                             </div>
 
@@ -10334,7 +10424,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               <div style={{fontSize:12,color:su,marginBottom:8}}>
                                 <span style={{background:operationalMeta.color+"22",color:operationalMeta.color,borderRadius:4,padding:"2px 8px",fontSize:11,fontWeight:700,marginRight:8}}>{operationalMeta.icon} {operationalMeta.label}</span>
                                 <span>Última actividad: {lastActivity.label}</span>
-                                {sv.referencia&&<span style={{marginLeft:8,color:"#F59E0B"}}>Ref {sv.referencia}</span>}
+                                {stripServicioOperacionDisplay(sv.referencia)&&<span style={{marginLeft:8,color:"#F59E0B"}}>Ref {stripServicioOperacionDisplay(sv.referencia)}</span>}
                               </div>
                               {attention&&(
                                 <div style={{fontSize:12,color:"#FB923C",lineHeight:1.35,marginBottom:8}}>
@@ -11795,7 +11885,20 @@ function useServicioActivo(uid){
     finally{setLoading(false);}
   },[uid]);
   useEffect(()=>{cargar();},[cargar]);
+  useEffect(()=>{
+    function onRecarga(){cargar();}
+    window.addEventListener("cuaderno-recargar-servicio",onRecarga);
+    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
+  },[cargar]);
   const completados=countCompletedStops(stops);
+  async function marcarInicioOperacion(stopId){
+    const stop=stops.find(s=>s.id===stopId);
+    if(!stop)return;
+    const now=new Date().toISOString();
+    const nuevas=mergeStopOperacionMeta(stop.notas,{inicio_operacion_at:now});
+    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas:nuevas})});
+    setStops(prev=>prev.map(s=>s.id===stopId?{...s,notas:nuevas}:s));
+  }
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
     await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
@@ -11829,7 +11932,7 @@ function useServicioActivo(uid){
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio:new Date().toISOString()})});
     setServicio(prev=>({...prev,estado:"en_curso"}));
   }
-  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar:cargar};
+  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,marcarInicioOperacion,iniciarServicio,recargar:cargar};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -12489,7 +12592,7 @@ function EvidenciasStop({stopId,showToast}){
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
 function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActivo,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,marcarInicioOperacion,iniciarServicio,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const card="#1E293B",tx="#F1F5F9",su="#64748B";
@@ -12573,6 +12676,7 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       viajeActivo={viajeActivo}
       onOpenViajeModal={onOpenViajeModal}
       conductorNombre={conductorNombre}
+      marcarInicioOperacion={marcarInicioOperacion}
     />
   );
 
@@ -12587,6 +12691,7 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       onIniciarServicio={iniciarServicio}
       marcarLlegado={marcarLlegado}
       marcarCompletado={marcarCompletado}
+      marcarInicioOperacion={marcarInicioOperacion}
       recargar={recargar}
       EvidenciasStopComponent={EvidenciasStop}
       card={card}

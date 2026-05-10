@@ -45,20 +45,31 @@ function resolveConfidence(routeReals, skippedStops) {
  * @param {Array} params.stops
  * @param {object|null} params.norma — mismo objeto que calcNorma (opcional)
  * @param {{ lat: number, lon: number }|null} params.currentPosition
+ * @param {boolean} [params.operationalTripStarted=true] — si es false en servicio en_curso, ETA planificada (sin GPS vivo).
  * @returns {Promise<{ eta: string, label: string, confidence: 'high'|'medium'|'low' }|null>}
  */
-export async function getServiceEta({ service, stops, norma, currentPosition }) {
+export async function getServiceEta({
+  service,
+  stops,
+  norma,
+  currentPosition,
+  operationalTripStarted = true,
+}) {
   try {
     if (!service?.origen?.trim() || !service?.destino?.trim()) return null;
 
-    let from;
-    if (
+    const gpsOk =
       currentPosition &&
       typeof currentPosition.lat === "number" &&
       typeof currentPosition.lon === "number" &&
       !Number.isNaN(currentPosition.lat) &&
-      !Number.isNaN(currentPosition.lon)
-    ) {
+      !Number.isNaN(currentPosition.lon);
+
+    const useLiveGps =
+      service.estado === "en_curso" ? operationalTripStarted && gpsOk : false;
+
+    let from;
+    if (useLiveGps) {
       from = {
         lat: currentPosition.lat,
         lon: currentPosition.lon,
@@ -97,7 +108,11 @@ export async function getServiceEta({ service, stops, norma, currentPosition }) 
 
     const planStart =
       service.estado === "en_curso"
-        ? new Date()
+        ? operationalTripStarted
+          ? new Date()
+          : service.fecha_inicio
+            ? new Date(service.fecha_inicio)
+            : new Date()
         : service.fecha_inicio
           ? new Date(service.fecha_inicio)
           : new Date();

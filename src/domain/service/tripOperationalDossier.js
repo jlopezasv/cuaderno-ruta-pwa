@@ -2,6 +2,10 @@
  * Expediente operacional — agrupa paradas y calcula tiempos con datos ya cargados (sin Supabase extra).
  */
 
+import { getOperationalTripStartMs } from "./operationalTrip.js";
+import { getInicioOperacionMs } from "./stopOperacionMeta.js";
+import { stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
+
 export function operationalGroupFromStopTipo(tipo) {
   const t = String(tipo || "").toLowerCase();
   if (t === "carga") return "carga";
@@ -47,37 +51,48 @@ export function incidenciaLinesForStop(stopId, flotaEvs) {
  */
 export function computeTripOperationalMetrics(servicio, stopsRaw, nowMs = Date.now()) {
   const stops = sortStopsByOrden(stopsRaw);
-  const startMs = parseTs(servicio?.fecha_inicio);
+  const fechaInicioMs = parseTs(servicio?.fecha_inicio);
+  const opStartMs = getOperationalTripStartMs(servicio, stops);
 
   let endMs = nowMs;
   if (servicio?.estado === "completado") {
-    let maxMs = startMs ?? 0;
+    let maxMs = fechaInicioMs ?? 0;
     for (const st of stops) {
       const ls = parseTs(st.hora_salida_real);
       const ll = parseTs(st.hora_llegada_real);
       if (ls != null && ls > maxMs) maxMs = ls;
       if (ll != null && ll > maxMs) maxMs = ll;
     }
-    if (maxMs > (startMs ?? 0)) endMs = maxMs;
+    if (maxMs > (fechaInicioMs ?? 0)) endMs = maxMs;
   }
 
+  /** Tiempo total del expediente operacional: solo tras salida del 1.º muelle de carga. */
   const tiempoTotalViajeMin =
-    startMs != null ? Math.max(0, Math.round((endMs - startMs) / 60000)) : null;
+    opStartMs != null ? Math.max(0, Math.round((endMs - opStartMs) / 60000)) : null;
 
-  let tiempoConduccionMin = 0;
-  let prevFinMs = startMs;
-  for (let i = 0; i < stops.length; i++) {
-    const st = stops[i];
-    const llegada = parseTs(st.hora_llegada_real);
-    if (prevFinMs != null && llegada != null && llegada >= prevFinMs) {
-      tiempoConduccionMin += Math.round((llegada - prevFinMs) / 60000);
+  /** Conducción del viaje operacional solo tras `operational_trip_started_at` (PR-30). */
+  let tiempoConduccionViajeMin = 0;
+  if (opStartMs != null) {
+    let prevFinMs = opStartMs;
+    for (const st of stops) {
+      const llegada = parseTs(st.hora_llegada_real);
+      const salida = parseTs(st.hora_salida_real);
+      if (llegada == null) continue;
+      if (llegada < opStartMs) {
+        prevFinMs = salida ?? llegada ?? prevFinMs;
+        continue;
+      }
+      if (prevFinMs != null && llegada >= prevFinMs) {
+        tiempoConduccionViajeMin += Math.round((llegada - prevFinMs) / 60000);
+      }
+      prevFinMs = salida ?? llegada ?? prevFinMs;
     }
-    const salida = parseTs(st.hora_salida_real);
-    prevFinMs = salida ?? llegada ?? prevFinMs;
   }
 
   let tiempoEnPlantaCargaMin = 0;
   let tiempoEnPlantaDescargaMin = 0;
+  let esperaMuelleCargaMin = 0;
+  let esperaMuelleDescargaMin = 0;
 
   const perStop = [];
 
@@ -86,6 +101,7 @@ export function computeTripOperationalMetrics(servicio, stopsRaw, nowMs = Date.n
     const g = operationalGroupFromStopTipo(st.tipo);
     const llegada = parseTs(st.hora_llegada_real);
     const salida = parseTs(st.hora_salida_real);
+    const inicioOp = getInicioOperacionMs(st) ?? llegada;
     const tiempoEnPlantaMin =
       llegada != null && salida != null && salida >= llegada
         ? Math.round((salida - llegada) / 60000)
@@ -96,9 +112,26 @@ export function computeTripOperationalMetrics(servicio, stopsRaw, nowMs = Date.n
       else if (g === "descarga") tiempoEnPlantaDescargaMin += tiempoEnPlantaMin;
     }
 
+    let esperaAntesOperacionMin = null;
+    if (llegada != null && inicioOp != null && inicioOp > llegada) {
+      esperaAntesOperacionMin = Math.round((inicioOp - llegada) / 60000);
+      if (g === "carga" || g === "carga_descarga") esperaMuelleCargaMin += esperaAntesOperacionMin;
+      else if (g === "descarga") esperaMuelleDescargaMin += esperaAntesOperacionMin;
+    }
+
     let trasladoPrevioMin = null;
-    if (i === 0 && startMs != null && llegada != null && llegada >= startMs) {
-      trasladoPrevioMin = Math.round((llegada - startMs) / 60000);
+    if (opStartMs != null) {
+      if (i === 0) {
+        /* primer tramo hasta entrada muelle: NO cuenta como conducción de viaje */
+      } else {
+        const prev = stops[i - 1];
+        const prevSalida = parseTs(prev.hora_salida_real);
+        if (prevSalida != null && llegada != null && llegada >= prevSalida) {
+          trasladoPrevioMin = Math.round((llegada - prevSalida) / 60000);
+        }
+      }
+    } else if (i === 0 && fechaInicioMs != null && llegada != null && llegada >= fechaInicioMs) {
+      trasladoPrevioMin = Math.round((llegada - fechaInicioMs) / 60000);
     } else if (i > 0) {
       const prev = stops[i - 1];
       const prevSalida = parseTs(prev.hora_salida_real);
@@ -112,17 +145,25 @@ export function computeTripOperationalMetrics(servicio, stopsRaw, nowMs = Date.n
       group: g,
       llegadaMs: llegada,
       salidaMs: salida,
+      entradaMuelleMs: llegada,
+      salidaMuelleMs: salida,
       tiempoEnPlantaMin,
       trasladoPrevioMin,
-      inicioOperacionMs: llegada,
+      inicioOperacionMs: inicioOp,
+      esperaAntesOperacionMin,
     });
   }
 
   return {
     tiempoTotalViajeMin,
-    tiempoConduccionMin,
+    /** Conducción entre paradas contada solo tras inicio operacional (PR-30). */
+    tiempoConduccionMin: tiempoConduccionViajeMin,
+    tiempoConduccionViajeMin,
     tiempoEnPlantaCargaMin,
     tiempoEnPlantaDescargaMin,
+    esperaMuelleCargaMin,
+    esperaMuelleDescargaMin,
+    viajeOperacionalInicioMs: opStartMs,
     perStop,
   };
 }
@@ -138,19 +179,33 @@ export function buildTripSummaryText({
   const line = (s) => s;
   const o = servicio?.origen || "—";
   const d = servicio?.destino || "—";
-  const ref = servicio?.referencia ? ` · Ref ${servicio.referencia}` : "";
+  const refVis = stripServicioOperacionDisplay(servicio?.referencia);
+  const ref = refVis ? ` · Ref ${refVis}` : "";
   const cond = nombreConductor(servicio?.conductor_id) || "—";
+  const inicioOp =
+    metrics.viajeOperacionalInicioMs != null
+      ? new Date(metrics.viajeOperacionalInicioMs).toLocaleString("es-ES", {
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null;
   const blocks = [
+    line(`Resumen del viaje (operacional)`),
     line(`Ruta: ${o} → ${d}${ref}`),
     line(`Conductor: ${cond}`),
     line(`Estado: ${servicio?.estado || "—"}`),
+    line(`Inicio viaje operacional: ${inicioOp || "— (pulsa «Añadir destino al viaje»)"}`),
     "",
     line(
       `Tiempo total viaje (aprox.): ${metrics.tiempoTotalViajeMin != null ? fmtDur(metrics.tiempoTotalViajeMin) : "—"}`
     ),
-    line(`Tiempo conducción estimado (entre registros): ${fmtDur(metrics.tiempoConduccionMin)}`),
+    line(`Conducción operacional (tras inicio viaje): ${fmtDur(metrics.tiempoConduccionMin)}`),
     line(`Tiempo en planta — cargas: ${fmtDur(metrics.tiempoEnPlantaCargaMin)}`),
     line(`Tiempo en planta — descargas: ${fmtDur(metrics.tiempoEnPlantaDescargaMin)}`),
+    line(`Espera muelle — cargas: ${fmtDur(metrics.esperaMuelleCargaMin)}`),
+    line(`Espera muelle — descargas: ${fmtDur(metrics.esperaMuelleDescargaMin)}`),
     line(`Incidencias registradas: ${totalIncidencias}`),
     "",
     line("Paradas:"),
