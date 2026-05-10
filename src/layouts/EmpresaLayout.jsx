@@ -12,7 +12,7 @@ export default function EmpresaLayout({
   ProfView,
 }) {
   const [prof, setProf] = useState(PROF0);
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState("");
   const [dark, setDark] = useState(() => localStorage.getItem("dark") === "1");

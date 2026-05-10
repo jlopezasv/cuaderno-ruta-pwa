@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { STOP_COLOR, STOP_ICON } from "../../../domain/fleet/stopTypes";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../../domain/fleet/serviceStatus";
 import {
@@ -10,6 +10,7 @@ import { getLastServiceActivity } from "../../../domain/service/serviceActivity"
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getServiceEta } from "../../../domain/service/serviceEta";
+import { getUnifiedTripPresentation } from "../../../domain/service/activeTripState";
 
 function flattenEvidencias(evidenciasByStop) {
   const out = [];
@@ -30,7 +31,7 @@ function recentEvidenciasFlat(evidenciasByStop, limit) {
     .slice(0, limit);
 }
 
-function getCockpitSignals(servicio, stops, evidenciasByStop) {
+export function getCockpitSignals(servicio, stops, evidenciasByStop) {
   const lastActivity = getLastServiceActivity({
     service: servicio,
     stops,
@@ -95,36 +96,127 @@ function CockpitSection({ title, children, first }) {
   );
 }
 
-function EtaOperacionalBlock({ etaLoading, etaSlot, tx, su }) {
-  const main =
-    etaLoading ? "…" : etaSlot?.label && etaSlot.label !== "Sin ETA" ? etaSlot.label : "Sin ETA";
+/** Bloque compacto: mismo motor ETA/norma vía `presentation` (getServiceEta + getUnifiedTripPresentation). */
+export function OperativaViajeBlock({
+  servicio,
+  presentation,
+  tx,
+  su,
+  onOpenViajeModal,
+  showViajeCta = true,
+  viajeCtaLabel = "Añadir destino al viaje",
+  hideEta = false,
+  hideRuta = false,
+  dense = false,
+}) {
+  const etaBig =
+    presentation.etaOperacionalLabel === "…"
+      ? "…"
+      : presentation.etaOperacionalLabel === "Sin ETA"
+        ? "—"
+        : presentation.etaOperacionalLabel;
+
+  const pad = dense ? "10px 11px 12px" : "14px 14px 16px";
+  const etaSize = dense ? 24 : 28;
+
   return (
-    <div>
-      <div style={{ fontSize: 17, fontWeight: 900, color: tx, letterSpacing: 0.2 }}>{main}</div>
-      <div style={{ fontSize: 11, color: su, marginTop: 6 }}>Estimación operacional</div>
+    <div
+      style={{
+        background: "rgba(15, 23, 42, 0.55)",
+        borderRadius: dense ? 12 : 14,
+        padding: pad,
+        border: "1px solid rgba(51, 65, 85, 0.9)",
+      }}
+    >
+      {showViajeCta ? (
+        <button
+          type="button"
+          onClick={() =>
+            onOpenViajeModal?.({
+              destino: servicio?.destino?.trim() || "",
+              origen: servicio?.origen?.trim() || "",
+            })
+          }
+          style={{
+            width: "100%",
+            background: "transparent",
+            color: "#F59E0B",
+            border: "1px solid rgba(245, 158, 11, 0.35)",
+            borderRadius: 10,
+            padding: "8px 12px",
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+            marginBottom: 4,
+          }}
+        >
+          {viajeCtaLabel}
+        </button>
+      ) : null}
+
+      {!hideEta ? (
+        <div style={{ marginTop: showViajeCta ? 10 : 0 }}>
+          <div style={{ fontSize: 11, color: su, fontWeight: 700, marginBottom: 6 }}>📍 Llegada estimada</div>
+          <div
+            style={{
+              fontSize: etaSize,
+              fontWeight: 900,
+              color: tx,
+              letterSpacing: -0.3,
+              lineHeight: 1.15,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {etaBig}
+          </div>
+          <div style={{ fontSize: 11, color: su, marginTop: 6 }}>Estimación operacional</div>
+        </div>
+      ) : null}
+
+      <div
+        style={{
+          marginTop: hideEta ? (showViajeCta ? 10 : 0) : 16,
+          paddingTop: hideEta ? 0 : 14,
+          borderTop: hideEta && !showViajeCta ? "none" : "1px solid rgba(51, 65, 85, 0.65)",
+        }}
+      >
+        <div style={{ fontSize: 11, color: su, fontWeight: 700, marginBottom: 4 }}>⏱ Conducción disponible</div>
+        <div style={{ fontSize: dense ? 15 : 17, fontWeight: 800, color: "#22C55E" }}>
+          {presentation.tiempoConduccionDisponible}
+        </div>
+      </div>
+
+      {!hideRuta ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11, color: su, fontWeight: 700, marginBottom: 4 }}>🚚 Ruta activa</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: tx, lineHeight: 1.35 }}>{presentation.rutaHeadline}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function CockpitShell({ children }) {
+export function CockpitShell({ children, dense = false }) {
   return (
     <div
       style={{
-        background: "#0F172A",
-        borderRadius: 22,
-        border: "1px solid #334155",
-        boxShadow: "0 0 0 1px rgba(245, 158, 11, 0.1), 0 16px 48px rgba(0,0,0,.35)",
+        background: "#151d2e",
+        borderRadius: dense ? 16 : 22,
+        border: "1px solid rgba(51, 65, 85, 0.65)",
+        boxShadow: dense
+          ? "0 0 0 1px rgba(245, 158, 11, 0.06)"
+          : "0 0 0 1px rgba(245, 158, 11, 0.1), 0 16px 48px rgba(0,0,0,.35)",
         overflow: "hidden",
         position: "relative",
       }}
     >
       <div
         style={{
-          height: 5,
+          height: dense ? 3 : 5,
           background: "linear-gradient(90deg, #F59E0B, #EA580C, #22C55E)",
         }}
       />
-      <div style={{ padding: "20px 18px 22px" }}>{children}</div>
+      <div style={{ padding: dense ? "10px 12px 12px" : "20px 18px 22px" }}>{children}</div>
     </div>
   );
 }
@@ -148,11 +240,25 @@ export function ActiveServicePanel({
   tx = "#F1F5F9",
   su = "#64748B",
   norma,
+  viajeActivo = null,
+  onOpenViajeModal,
+  conductorNombre = "Conductor",
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const estadoColor = ESTADO_COLOR[servicio.estado] || su;
   const [etaSlot, setEtaSlot] = useState(null);
   const [etaLoading, setEtaLoading] = useState(false);
+  const presentation = useMemo(
+    () =>
+      getUnifiedTripPresentation({
+        viajeActivo,
+        servicio,
+        norma,
+        etaSlot,
+        etaLoading,
+      }),
+    [viajeActivo, servicio, norma, etaSlot, etaLoading],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -198,85 +304,78 @@ export function ActiveServicePanel({
     norma,
   ]);
 
+  if (import.meta.env.DEV) {
+    console.log("[AUDIT PR-22B] RENDER ActiveServicePanel", {
+      mode,
+      servicioEstado: servicio?.estado,
+      bloqueOperativa: true,
+    });
+  }
+
   if (mode === "asignado") {
     const nextStop = stops.find((s) => s.estado === "pendiente") || stops[0] || null;
     return (
       <div style={{ padding: "14px 12px 88px", maxWidth: 560, margin: "0 auto" }}>
         <CockpitShell>
           <CockpitSection title="CABECERA OPERACIONAL" first>
-            <div style={{ fontSize: 22, fontWeight: 900, color: tx, lineHeight: 1.25, marginBottom: 10 }}>
+            <div style={{ fontSize: 17, fontWeight: 900, color: tx, lineHeight: 1.25, marginBottom: 12 }}>
               {servicio.origen} → {servicio.destino}
             </div>
-            {servicio.referencia && (
-              <div style={{ fontSize: 13, color: "#F59E0B", fontWeight: 600, marginBottom: 10 }}>
-                Ref: {servicio.referencia}
-              </div>
-            )}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 8 }}>
-              <span
-                style={{
-                  background: sig.operationalMeta.color + "22",
-                  color: sig.operationalMeta.color,
-                  borderRadius: 8,
-                  padding: "5px 12px",
-                  fontSize: 12,
-                  fontWeight: 800,
-                }}
-              >
-                {sig.operationalMeta.icon} {sig.operationalMeta.label.toUpperCase()}
+            <div style={{ fontSize: 13, color: su, marginBottom: 6 }}>
+              <span style={{ color: "#94A3B8" }}>Cliente · </span>
+              <span style={{ color: tx, fontWeight: 600 }}>{servicio.referencia?.trim() || "—"}</span>
+            </div>
+            <div style={{ fontSize: 13, color: su, marginBottom: 8 }}>
+              <span style={{ color: "#94A3B8" }}>Conductor · </span>
+              <span style={{ color: tx, fontWeight: 600 }}>{conductorNombre}</span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <span style={{ background: estadoColor + "28", color: estadoColor, borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 800 }}>
+                {ESTADO_LABEL[servicio.estado] || servicio.estado}
               </span>
-              <span style={{ fontSize: 12, color: su }}>Última actividad: {sig.lastActivity.label}</span>
+              <span style={{ fontSize: 12, color: su }}>
+                <span style={{ color: sig.operationalMeta.color }}>{sig.operationalMeta.icon}</span> {sig.operationalMeta.label} · {sig.lastActivity.label}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: su, marginBottom: 6 }}>
+              Próxima parada ·{" "}
+              <strong style={{ color: tx }}>{nextStop ? nextStop.nombre : "—"}</strong>
+              {nextStop && (
+                <span style={{ color: "#64748B" }}>
+                  {" "}
+                  · {nextStop.orden}/{stops.length}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: su }}>
+              Progreso paradas · <strong style={{ color: "#F59E0B" }}>0</strong>/{stops.length || "0"}
             </div>
             {sig.attention && (
-              <div style={{ marginTop: 8 }}>
-                <span
-                  style={{
-                    background: "#F59E0B25",
-                    color: "#FB923C",
-                    borderRadius: 8,
-                    padding: "5px 12px",
-                    fontSize: 11,
-                    fontWeight: 800,
-                  }}
-                >
-                  ⚠ Atención requerida
-                </span>
-                {sig.attentionReason ? (
-                  <div style={{ fontSize: 12, color: su, marginTop: 6, lineHeight: 1.45 }}>{sig.attentionReason}</div>
-                ) : null}
+              <div style={{ marginTop: 10 }}>
+                <span style={{ background: "#F59E0B25", color: "#FB923C", borderRadius: 8, padding: "5px 12px", fontSize: 11, fontWeight: 800 }}>⚠ Atención requerida</span>
+                {sig.attentionReason ? <div style={{ fontSize: 12, color: su, marginTop: 6, lineHeight: 1.45 }}>{sig.attentionReason}</div> : null}
               </div>
             )}
           </CockpitSection>
 
-          <CockpitSection title="📍 ETA OPERACIONAL">
-            <EtaOperacionalBlock etaLoading={etaLoading} etaSlot={etaSlot} tx={tx} su={su} />
+          <CockpitSection title="PLANIFICACIÓN DEL VIAJE">
+            <OperativaViajeBlock servicio={servicio} presentation={presentation} tx={tx} su={su} onOpenViajeModal={onOpenViajeModal} />
           </CockpitSection>
 
           <CockpitSection title="EJECUCIÓN">
-            <div style={{ fontSize: 14, color: tx, marginBottom: 10 }}>
-              <span style={{ color: su, fontSize: 12, fontWeight: 700 }}>Estado del servicio </span>
-              <span style={{ color: estadoColor, fontWeight: 800 }}>{ESTADO_LABEL[servicio.estado] || servicio.estado}</span>
-            </div>
-            <div style={{ fontSize: 13, color: su, marginBottom: 8 }}>
-              Progreso de paradas: <strong style={{ color: "#F59E0B" }}>0</strong>
-              <span style={{ color: "#475569" }}> / {stops.length}</span>
-            </div>
-            <div style={{ background: card, borderRadius: 10, height: 8, overflow: "hidden", marginBottom: 14 }}>
-              <div style={{ background: "#334155", height: "100%", width: "0%", borderRadius: 10 }} />
-            </div>
             {nextStop ? (
-              <div>
-                <div style={{ fontSize: 11, color: su, fontWeight: 700, marginBottom: 4 }}>Próxima parada</div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: tx }}>{nextStop.nombre}</div>
-                <div style={{ fontSize: 12, color: STOP_COLOR[nextStop.tipo] || "#06B6D4", marginTop: 4 }}>
-                  {STOP_ICON[nextStop.tipo]} {nextStop.tipo.replace("_", " ").toUpperCase()} · Stop {nextStop.orden}/{stops.length}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: STOP_COLOR[nextStop.tipo] || "#06B6D4", marginBottom: 4 }}>
+                  {STOP_ICON[nextStop.tipo]} {nextStop.tipo.replace("_", " ").toUpperCase()}
                 </div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: tx }}>{nextStop.nombre}</div>
+                {nextStop.direccion && <div style={{ fontSize: 13, color: su, marginTop: 4 }}>{nextStop.direccion}</div>}
               </div>
             ) : (
               <div style={{ fontSize: 13, color: su }}>Sin paradas definidas.</div>
             )}
             {servicio.fecha_inicio && (
-              <div style={{ fontSize: 12, color: su, marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: su, marginBottom: 12 }}>
                 Salida prevista:{" "}
                 {new Date(servicio.fecha_inicio).toLocaleString("es-ES", {
                   weekday: "short",
@@ -360,64 +459,40 @@ export function ActiveServicePanel({
     <div style={{ padding: "14px 12px 88px", maxWidth: 560, margin: "0 auto" }}>
       <CockpitShell>
         <CockpitSection title="CABECERA OPERACIONAL" first>
-          <div style={{ fontSize: 22, fontWeight: 900, color: tx, lineHeight: 1.25, marginBottom: 10 }}>
+          <div style={{ fontSize: 17, fontWeight: 900, color: tx, lineHeight: 1.25, marginBottom: 12 }}>
             {servicio.origen} → {servicio.destino}
           </div>
-          {servicio.referencia && (
-            <div style={{ fontSize: 13, color: "#F59E0B", fontWeight: 600, marginBottom: 10 }}>Ref: {servicio.referencia}</div>
-          )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 8 }}>
-            <span
-              style={{
-                background: sig.operationalMeta.color + "22",
-                color: sig.operationalMeta.color,
-                borderRadius: 8,
-                padding: "5px 12px",
-                fontSize: 12,
-                fontWeight: 800,
-              }}
-            >
-              {sig.operationalMeta.icon} {sig.operationalMeta.label.toUpperCase()}
+          <div style={{ fontSize: 13, color: su, marginBottom: 6 }}>
+            <span style={{ color: "#94A3B8" }}>Cliente · </span>
+            <span style={{ color: tx, fontWeight: 600 }}>{servicio.referencia?.trim() || "—"}</span>
+          </div>
+          <div style={{ fontSize: 13, color: su, marginBottom: 8 }}>
+            <span style={{ color: "#94A3B8" }}>Conductor · </span>
+            <span style={{ color: tx, fontWeight: 600 }}>{conductorNombre}</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <span style={{ background: estadoColor + "28", color: estadoColor, borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 800 }}>
+              {ESTADO_LABEL[servicio.estado] || servicio.estado}
             </span>
-            <span style={{ fontSize: 12, color: su }}>Última actividad: {sig.lastActivity.label}</span>
-          </div>
-          {sig.attention && (
-            <div style={{ marginTop: 6 }}>
-              <span
-                style={{
-                  background: "#F59E0B25",
-                  color: "#FB923C",
-                  borderRadius: 8,
-                  padding: "5px 12px",
-                  fontSize: 11,
-                  fontWeight: 800,
-                }}
-              >
-                ⚠ Atención requerida
-              </span>
-              {sig.attentionReason ? (
-                <div style={{ fontSize: 12, color: su, marginTop: 6, lineHeight: 1.45 }}>{sig.attentionReason}</div>
-              ) : null}
-            </div>
-          )}
-        </CockpitSection>
-
-        <CockpitSection title="📍 ETA OPERACIONAL">
-          <EtaOperacionalBlock etaLoading={etaLoading} etaSlot={etaSlot} tx={tx} su={su} />
-        </CockpitSection>
-
-        <CockpitSection title="EJECUCIÓN">
-          <div style={{ fontSize: 14, color: tx, marginBottom: 12 }}>
-            <span style={{ color: su, fontSize: 12, fontWeight: 700 }}>Estado del servicio </span>
-            <span style={{ color: estadoColor, fontWeight: 800 }}>{ESTADO_LABEL[servicio.estado] || servicio.estado}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-            <span style={{ fontSize: 12, color: su, fontWeight: 700 }}>Progreso de paradas</span>
-            <span style={{ fontSize: 20, fontWeight: 900, color: "#F59E0B" }}>
-              {completados}/{stops.length}
+            <span style={{ fontSize: 12, color: su }}>
+              <span style={{ color: sig.operationalMeta.color }}>{sig.operationalMeta.icon}</span> {sig.operationalMeta.label} · {sig.lastActivity.label}
             </span>
           </div>
-          <div style={{ background: card, borderRadius: 10, height: 10, overflow: "hidden", marginBottom: 18 }}>
+          <div style={{ fontSize: 12, color: su, marginBottom: 6 }}>
+            {estaEnParada ? "En parada · " : "Próxima parada · "}
+            <strong style={{ color: tx }}>{stopMostrar.nombre}</strong>
+            <span style={{ color: "#64748B" }}>
+              {" "}
+              · {stopMostrar.orden}/{stops.length}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: su, marginBottom: 6 }}>
+            Progreso paradas ·{" "}
+            <strong style={{ color: "#F59E0B" }}>
+              {completados}/{stops.length || "0"}
+            </strong>
+          </div>
+          <div style={{ background: card, borderRadius: 10, height: 8, overflow: "hidden", marginBottom: 12 }}>
             <div
               style={{
                 background: "linear-gradient(90deg, #22C55E, #4ADE80)",
@@ -428,9 +503,27 @@ export function ActiveServicePanel({
               }}
             />
           </div>
+          {sig.attention && (
+            <div style={{ marginTop: 6 }}>
+              <span style={{ background: "#F59E0B25", color: "#FB923C", borderRadius: 8, padding: "5px 12px", fontSize: 11, fontWeight: 800 }}>⚠ Atención requerida</span>
+              {sig.attentionReason ? <div style={{ fontSize: 12, color: su, marginTop: 6, lineHeight: 1.45 }}>{sig.attentionReason}</div> : null}
+            </div>
+          )}
+        </CockpitSection>
 
+        <CockpitSection title="PLANIFICACIÓN DEL VIAJE">
+          <OperativaViajeBlock servicio={servicio} presentation={presentation} tx={tx} su={su} onOpenViajeModal={onOpenViajeModal} />
+          {presentation.proximaParadaNormativa && presentation.proximaParadaNormativa !== "—" ? (
+            <div style={{ marginTop: 14, fontSize: 12, color: su, lineHeight: 1.45 }}>
+              <span style={{ fontWeight: 700 }}>Descansos / hitos normativos · </span>
+              {presentation.proximaParadaNormativa}
+            </div>
+          ) : null}
+        </CockpitSection>
+
+        <CockpitSection title="EJECUCIÓN">
           <div style={{ fontSize: 11, color: estaEnParada ? "#A78BFA" : su, fontWeight: 800, marginBottom: 8 }}>
-            {estaEnParada ? "EN PARADA — " + stopMostrar.tipo.replace("_", " ").toUpperCase() : "PRÓXIMA PARADA"}
+            {estaEnParada ? "EN PARADA — " + stopMostrar.tipo.replace("_", " ").toUpperCase() : "PARADA ACTIVA"}
           </div>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <div style={{ fontSize: 40, lineHeight: 1 }}>{STOP_ICON[stopMostrar.tipo] || "📍"}</div>
