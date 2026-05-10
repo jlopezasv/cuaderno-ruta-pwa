@@ -58,6 +58,18 @@ import { ActiveServicePanel } from "./features/services/components/ActiveService
 import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { getConductorTabs } from "./navigation/conductorTabs";
+import {
+  LIM,
+  geocode,
+  getRoute,
+  buildPlan,
+  fmtT,
+  fmtDur,
+  TRUCK_KMH,
+  haverDist,
+  p2,
+  revGeo,
+} from "./domain/route/routePlanning.js";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -490,8 +502,6 @@ function AuthScreen({ onAuth }) {
 const KM_KEY="cuaderno_km_v1";
 const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:""};
 
-const LIM={CONT:270,DAY:540,DAY_X:600,MAX_EXT:2,WEEK:3360,BIWEEK:5400,REST:660,REST_R:540,MAX_RED:3,WREST:2700,WREST_R:1440};
-
 // Símbolos oficiales tacógrafo EU (renderizados como SVG inline en los botones)
 // ⊙ conducción · ⊓ pausa/descanso · ⊠ disponibilidad · ✱ otros trabajos
 const EV={
@@ -692,72 +702,8 @@ const TX={
 function useT(lang="es"){return(key)=>{const e=TX[key];if(!e)return key;return e[lang]||e.es||key;};}
 function evLabel(type,lang="es"){const k="ev_"+type;const e=TX[k];if(!e)return EV[type]?.label||type;return e[lang]||e.es||EV[type]?.label||type;}
 
-const CITIES=[
-  ["almeria","almería","Almería",36.8381,-2.4597],["madrid","Madrid",40.4168,-3.7038],
-  ["barcelona","Barcelona",41.3851,2.1734],["valencia","Valencia",39.4699,-0.3763],
-  ["sevilla","Sevilla",37.3891,-5.9845],["zaragoza","Zaragoza",41.6488,-0.8891],
-  ["malaga","málaga","Málaga",36.7213,-4.4214],["bilbao","Bilbao",43.2630,-2.9350],
-  ["burgos","Burgos",42.3440,-3.6970],["santander","Santander",43.4623,-3.8099],
-  ["pamplona","Pamplona",42.8169,-1.6432],["irun","irún","Irún",43.3396,-1.7887],
-  ["la jonquera","La Jonquera",42.4199,2.8878],["algeciras","Algeciras",36.1408,-5.4558],
-  ["girona","Girona",41.9794,2.8214],["lleida","Lleida",41.6176,0.6200],
-  ["tarragona","Tarragona",41.1187,1.2445],["granada","Granada",37.1773,-3.5986],
-  ["cordoba","Córdoba",37.8882,-4.7794],["vitoria","Vitoria",42.8467,-2.6726],
-  ["vigo","Vigo",42.2314,-8.7124],["coruña","A Coruña",43.3623,-8.4115],
-  ["lisboa","lisbon","Lisboa",38.7169,-9.1395],["porto","Porto",41.1579,-8.6291],
-  ["paris","París",48.8566,2.3522],["lyon","Lyon",45.7640,4.8357],
-  ["marsella","Marsella",43.2965,5.3698],["toulouse","Toulouse",43.6047,1.4442],
-  ["calais","Calais",50.9513,1.8587],["perpignan","Perpiñán",42.6986,2.8954],
-  ["berlin","Berlín",52.5200,13.4050],["hamburgo","hamburg","Hamburgo",53.5511,9.9937],
-  ["munich","múnich","Múnich",48.1351,11.5820],["frankfurt","Frankfurt",50.1109,8.6821],
-  ["colonia","Colonia",50.9333,6.9500],["stuttgart","Stuttgart",48.7758,9.1829],
-  ["roma","Roma",41.9028,12.4964],["milan","milán","Milán",45.4642,9.1900],
-  ["amsterdam","Ámsterdam",52.3676,4.9041],["bruselas","Bruselas",50.8503,4.3517],
-  ["viena","Viena",48.2082,16.3738],["zurich","Zúrich",47.3769,8.5417],
-  ["praga","Praga",50.0755,14.4378],["varsovia","Varsovia",52.2297,21.0122],
-  ["budapest","Budapest",47.4979,19.0402],["estocolmo","Estocolmo",59.3293,18.0686],
-  ["oslo","Oslo",59.9139,10.7522],["copenhague","Copenhague",55.6761,12.5683],
-  ["londres","london","Londres",51.5074,-0.1278],["manchester","Manchester",53.4808,-2.2426],
-];
-const normC=s=>s.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ");
-function localFind(q){const nq=normC(q);for(const r of CITIES){const nm=r[r.length-3],la=r[r.length-2],lo=r[r.length-1];const ks=r.slice(0,r.length-3).map(k=>normC(k));if(ks.some(k=>k===nq))return{name:nm,lat:la,lon:lo};if(nq.length>=3&&(ks.some(k=>k.startsWith(nq))||normC(nm).startsWith(nq)))return{name:nm,lat:la,lon:lo};}return null;}
-function nearbyCity(lat,lon){let b=null,d=Infinity;for(const r of CITIES){const dd=Math.hypot(r[r.length-2]-lat,r[r.length-1]-lon);if(dd<d){d=dd;b=r[r.length-3];}}return b?`Zona ${b}`:"Parada";}
-const fetchTO=(url,ms=7000)=>new Promise((res,rej)=>{const t=setTimeout(()=>rej(new Error("timeout")),ms);fetch(url).then(r=>{clearTimeout(t);res(r);}).catch(e=>{clearTimeout(t);rej(e);});});
-async function geocode(q){q=q.trim();if(!q)throw new Error("Escribe una ciudad");const l=localFind(q);if(l)return l;try{const r=await fetchTO(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=es`,6000);if(r.ok){const d=await r.json();if(d.features?.length){const f=d.features[0],p=f.properties;return{lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],name:p.city||p.name||q};}}}catch(_){}try{const r=await fetchTO(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=es`,6000);if(r.ok){const d=await r.json();if(d?.length)return{lat:+d[0].lat,lon:+d[0].lon,name:d[0].display_name.split(",")[0]};}}catch(_){}throw new Error(`No encontrado: "${q}"`);}
-async function revGeo(lat,lon){try{const r=await fetchTO(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`,4000);if(r.ok){const d=await r.json();if(d.features?.length){const p=d.features[0].properties;const n=p.city||p.town||p.village||p.name;if(n)return n;}}}catch(_){}return nearbyCity(lat,lon);}
-function haverDist(la1,lo1,la2,lo2){const R=6371,dL=(la2-la1)*Math.PI/180,dN=(lo2-lo1)*Math.PI/180;const a=Math.sin(dL/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dN/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
-const TRUCK_KMH=80; // velocidad media camión — configurable
-
-async function getRoute(from,to,truckSpeed=TRUCK_KMH){
-  try{
-    const r=await fetchTO(`https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=full&geometries=geojson`,8000);
-    if(r.ok){
-      const d=await r.json();
-      if(d.code==="Ok"&&d.routes?.length){
-        const rt=d.routes[0];
-        const km=Math.round(rt.distance/1000);
-        // OSRM duration descartada — usamos km/velocidad camión
-        const mins=Math.round(km/truckSpeed*60);
-        return{km,mins,coords:rt.geometry.coordinates,real:true};
-      }
-    }
-  }catch(_){}
-  // Fallback haversine
-  const dist=haverDist(from.lat,from.lon,to.lat,to.lon);
-  const fac=dist<300?1.45:dist<700?1.35:1.28;
-  const km=Math.round(dist*fac);
-  const n=50;
-  return{
-    km,
-    mins:Math.round(km/truckSpeed*60),
-    coords:Array.from({length:n+1},(_,i)=>{const t=i/n;return[from.lon+(to.lon-from.lon)*t,from.lat+(to.lat-from.lat)*t];}),
-    real:false
-  };
-}
 function ptAlongRoute(coords,tkm){let acc=0;for(let i=1;i<coords.length;i++){const[lo1,la1]=coords[i-1],[lo2,la2]=coords[i];const seg=haverDist(la1,lo1,la2,lo2);if(acc+seg>=tkm){const t=(tkm-acc)/seg;return{lat:la1+(la2-la1)*t,lon:lo1+(lo2-lo1)*t};}acc+=seg;}const last=coords[coords.length-1];return{lat:last[1],lon:last[0]};}
 
-const p2=n=>String(n).padStart(2,"0");
-const fmtT=d=>`${p2(d.getHours())}:${p2(d.getMinutes())}`;
 const DAYS=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"],MONTHS=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
 const fmtD=d=>`${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
 const fmtFull=d=>`${fmtD(d)} · ${fmtT(d)}`;
@@ -766,7 +712,6 @@ const toDate=d=>d instanceof Date?d:new Date(d);
 const sameDay=(a,b)=>new Date(a).toDateString()===new Date(b).toDateString();
 const dayKey=d=>new Date(d).toISOString().slice(0,10);
 const diffMin=(a,b)=>Math.max(0,Math.round((toDate(b)-toDate(a))/60000));
-const fmtDur=m=>{if(!m||m<1)return"0m";const h=Math.floor(m/60),r=m%60;return h?(r?`${h}h ${r}m`:`${h}h`):`${r}m`;};
 const fmtLive=m=>{const h=Math.floor(m/60),r=m%60;return`${p2(h)}:${p2(r)}`;};
 const toDTL=d=>{const D=new Date(d);return`${D.getFullYear()}-${p2(D.getMonth()+1)}-${p2(D.getDate())}T${p2(D.getHours())}:${p2(D.getMinutes())}`;};
 function getMon(d){const d2=new Date(d);d2.setHours(0,0,0,0);const day=d2.getDay()||7;d2.setDate(d2.getDate()-(day-1));return d2;}
@@ -953,104 +898,6 @@ function calcNorma(entries,now=new Date(),abroadNow=false){
     dispInfo={jStart:jS,windowEnd:new Date(+jS+vMax*60000),restMin:jRest,pausaMin:jPausa,otrosMin:jOtros,activeUsed:actUsed,dispRemain:Math.max(0,vMax-actUsed),ventanaMax:vMax,closed:sorted.filter(e=>e.ts>=jS&&e.type==="fin_jornada").length>0};
   }
   return{cont,todayDrive,weekDrive,biweekDrive,rCont,rDay,rWeek,rBiweek,canDrive,canExt,extUsed:ext,redRests,sp,crDur,rRest,crType,maxDay,alerts,isDriving,dispInfo,debts,totalDebt,abroadNow,ventanaDisp,jornadaCount};
-}
-
-function buildPlan(driveMins,norma,cfg={}){
-  const{splitBreak=false,splitAt=135,start=new Date(),
-    contUsed,dayUsed,weekUsed,extUsed}=cfg;
-  // Usar valores del cfg si se pasan (modo continuación/ahora), si no 0 (modo fresco)
-  let rem=driveMins;
-  let cont=contUsed!=null?contUsed:(norma?.cont||0);
-  let day=dayUsed!=null?dayUsed:(norma?.todayDrive||0);
-  let week=weekUsed!=null?weekUsed:(norma?.weekDrive||0);
-  let ext=extUsed!=null?extUsed:(norma?.extUsed||0);
-  let sp=norma?.sp||0,drivenMin=0;
-  let t=new Date(start);const segs=[];
-  const AVG_KMH=80;
-  const add=(type,dur)=>{segs.push({type,start:new Date(t),dur,km:Math.round(drivenMin/60*AVG_KMH)});t=new Date(+t+dur*60000);};
-  const PMAP={conduccion:"🚛",pausa_45:"☕",pausa_15:"⏸",pausa_30:"☕",descanso:"🛏",descanso_semana:"🏨"};
-  const PLBL={conduccion:"Conducción",pausa_45:"Pausa 45 min",pausa_15:"Pausa 1ª — 15 min",pausa_30:"Pausa 2ª — 30 min",descanso:"Descanso 9h",descanso_semana:"Descanso semanal 45h"};
-  const PCOL={conduccion:"#F59E0B",pausa_45:"#6366F1",pausa_15:"#818CF8",pausa_30:"#6366F1",descanso:"#7C3AED",descanso_semana:"#9D174D"};
-  for(let g=0;g<1200&&rem>0;g++){
-    const canE=ext<LIM.MAX_EXT,maxD=canE?LIM.DAY_X:LIM.DAY;
-    const limC=splitBreak?(sp===0?Math.max(0,splitAt-cont):Math.max(0,LIM.CONT-cont)):Math.max(0,LIM.CONT-cont);
-    const limD=Math.max(0,maxD-day);
-    const limW=Math.max(0,LIM.WEEK-week);
-    const cd=Math.min(rem,limC,limD,limW);
-    if(cd<=0){
-      if(limW<=0){add("descanso_semana",LIM.WREST);week=0;day=0;cont=0;ext=0;sp=0;}
-      else if(limD<=0){add("descanso",LIM.REST_R);day=0;cont=0;sp=0;}
-      else if(splitBreak&&sp===0&&limC<=0){add("pausa_15",15);sp=1;}
-      else if(limC<=0){add(splitBreak?"pausa_30":"pausa_45",splitBreak?30:45);cont=0;sp=0;}
-      continue;
-    }
-    drivenMin+=cd;add("conduccion",cd);cont+=cd;day+=cd;week+=cd;rem-=cd;
-    if(day>LIM.DAY&&canE&&ext<LIM.MAX_EXT)ext++;
-    if(rem<=0)break;
-    const newMaxD=ext<LIM.MAX_EXT?LIM.DAY_X:LIM.DAY;
-    if(week>=LIM.WEEK){add("descanso_semana",LIM.WREST);week=0;day=0;cont=0;ext=0;sp=0;}
-    else if(day>=newMaxD){add("descanso",LIM.REST_R);day=0;cont=0;sp=0;}
-    else if(splitBreak&&sp===0&&cont>=splitAt){add("pausa_15",15);sp=1;}
-    else if(cont>=LIM.CONT){add(splitBreak?"pausa_30":"pausa_45",splitBreak?30:45);cont=0;sp=0;}
-  }
-  // ── Plan por días — cálculo correcto ──
-  const kmTotal=cfg.km||0;
-  const dias=[];
-
-  if(kmTotal>0){
-    // Calcular km por tramo de conducción proporcional a la distancia total
-    const totalDriveMins=segs.filter(s=>s.type==="conduccion").reduce((a,s)=>a+s.dur,0)||1;
-    let kmAcum=0;
-    let diaNum=1;
-    let drivHoy=0;
-    let kmHoy=0;
-
-    for(const seg of segs){
-      if(seg.type==="conduccion"){
-        // km de este tramo = proporción del total
-        const kmSeg=Math.round((seg.dur/totalDriveMins)*kmTotal);
-        drivHoy+=seg.dur;
-        kmHoy+=kmSeg;
-      } else if(["descanso","descanso_semana"].includes(seg.type)){
-        // Fin de jornada — guardar día
-        const kmDiaReal=Math.min(kmHoy, kmTotal-kmAcum);
-        if(kmDiaReal>0){
-          kmAcum+=kmDiaReal;
-          dias.push({
-            dia:diaNum,
-            conduccion:Math.round(drivHoy),
-            km:kmDiaReal,
-            kmAcum:Math.min(kmAcum,kmTotal),
-            llegada:false,
-          });
-        }
-        diaNum++;drivHoy=0;kmHoy=0;
-      }
-    }
-    // Último día (llegada)
-    if(drivHoy>0){
-      const kmUltimo=Math.max(0,kmTotal-kmAcum);
-      if(kmUltimo>0||dias.length===0){
-        dias.push({
-          dia:diaNum,
-          conduccion:Math.round(drivHoy),
-          km:kmUltimo,
-          kmAcum:kmTotal,
-          llegada:true,
-        });
-      }
-    }
-  }
-
-  // Validación: si no hay días generados, crear uno
-  if(kmTotal>0&&dias.length===0){
-    dias.push({dia:1,conduccion:driveMins,km:kmTotal,kmAcum:kmTotal,llegada:true});
-  }
-
-  const nDias=dias.length;
-  const llegaHoy=nDias<=1;
-
-  return{segs,arrival:new Date(t),driveMins,restMins:segs.filter(s=>s.type!=="conduccion").reduce((a,s)=>a+s.dur,0),dias,nDias,llegaHoy,PMAP,PLBL,PCOL};
 }
 
 function buildTxt(entries,label){const sorted=[...entries].sort((a,b)=>a.ts-b.ts);let t=`📋 CUADERNO DE RUTA\n${label}\n${"─".repeat(28)}\n`;sorted.forEach(e=>{const T=EV[e.type];const dur=findDuration(sorted,e);t+=`\n${fmtT(e.ts)}  ${T?.icon||"•"} ${T?.label||e.type}`;if(dur!=null)t+=` (${fmtDur(dur)})`;if(e.late)t+=` ⚠`;if(e.location)t+=`\n  📍 ${e.location}`;if(e.note)t+=`\n  📝 ${e.note}`;});return t;}
@@ -3016,7 +2863,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} showToast={showToast}/>
+          <TabServicio uid={getUserId()} showToast={showToast} norma={norma}/>
         )}
 
         {tab==="resumen"&&(
@@ -12330,7 +12177,7 @@ function EvidenciasStop({stopId,showToast}){
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-function TabServicio({uid,showToast}){
+function TabServicio({uid,showToast,norma}){
   const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
@@ -12402,6 +12249,7 @@ function TabServicio({uid,showToast}){
       card={card}
       tx={tx}
       su={su}
+      norma={norma}
     />
   );
 
@@ -12421,6 +12269,7 @@ function TabServicio({uid,showToast}){
       card={card}
       tx={tx}
       su={su}
+      norma={norma}
     />
   );
 }

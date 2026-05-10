@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { STOP_COLOR, STOP_ICON } from "../../../domain/fleet/stopTypes";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../../domain/fleet/serviceStatus";
 import {
@@ -8,6 +9,7 @@ import { getCurrentStop } from "../../../domain/service/serviceStops";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
+import { getServiceEta } from "../../../domain/service/serviceEta";
 
 function flattenEvidencias(evidenciasByStop) {
   const out = [];
@@ -93,6 +95,17 @@ function CockpitSection({ title, children, first }) {
   );
 }
 
+function EtaOperacionalBlock({ etaLoading, etaSlot, tx, su }) {
+  const main =
+    etaLoading ? "…" : etaSlot?.label && etaSlot.label !== "Sin ETA" ? etaSlot.label : "Sin ETA";
+  return (
+    <div>
+      <div style={{ fontSize: 17, fontWeight: 900, color: tx, letterSpacing: 0.2 }}>{main}</div>
+      <div style={{ fontSize: 11, color: su, marginTop: 6 }}>Estimación operacional</div>
+    </div>
+  );
+}
+
 function CockpitShell({ children }) {
   return (
     <div
@@ -134,9 +147,56 @@ export function ActiveServicePanel({
   card = "#1E293B",
   tx = "#F1F5F9",
   su = "#64748B",
+  norma,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const estadoColor = ESTADO_COLOR[servicio.estado] || su;
+  const [etaSlot, setEtaSlot] = useState(null);
+  const [etaLoading, setEtaLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEtaLoading(true);
+    setEtaSlot(null);
+
+    const run = async (pos) => {
+      try {
+        const r = await getServiceEta({
+          service: servicio,
+          stops,
+          norma: norma ?? null,
+          currentPosition: pos,
+        });
+        if (!cancelled) setEtaSlot(r);
+      } catch {
+        if (!cancelled) setEtaSlot(null);
+      } finally {
+        if (!cancelled) setEtaLoading(false);
+      }
+    };
+
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (p) => run({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        () => run(null),
+        { enableHighAccuracy: false, timeout: 12000, maximumAge: 600000 },
+      );
+    } else {
+      run(null);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    servicio?.id,
+    servicio?.origen,
+    servicio?.destino,
+    servicio?.estado,
+    servicio?.fecha_inicio,
+    stops,
+    norma,
+  ]);
 
   if (mode === "asignado") {
     const nextStop = stops.find((s) => s.estado === "pendiente") || stops[0] || null;
@@ -186,6 +246,10 @@ export function ActiveServicePanel({
                 ) : null}
               </div>
             )}
+          </CockpitSection>
+
+          <CockpitSection title="📍 ETA OPERACIONAL">
+            <EtaOperacionalBlock etaLoading={etaLoading} etaSlot={etaSlot} tx={tx} su={su} />
           </CockpitSection>
 
           <CockpitSection title="EJECUCIÓN">
@@ -336,6 +400,10 @@ export function ActiveServicePanel({
               ) : null}
             </div>
           )}
+        </CockpitSection>
+
+        <CockpitSection title="📍 ETA OPERACIONAL">
+          <EtaOperacionalBlock etaLoading={etaLoading} etaSlot={etaSlot} tx={tx} su={su} />
         </CockpitSection>
 
         <CockpitSection title="EJECUCIÓN">
