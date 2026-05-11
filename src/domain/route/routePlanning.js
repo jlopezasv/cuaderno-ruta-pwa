@@ -26,6 +26,7 @@ const CITIES = [
   ["zaragoza", "Zaragoza", 41.6488, -0.8891],
   ["malaga", "málaga", "Málaga", 36.7213, -4.4214],
   ["bilbao", "Bilbao", 43.263, -2.935],
+  ["sondika", "Sondika", 43.3002, -2.9244],
   ["burgos", "Burgos", 42.344, -3.697],
   ["santander", "Santander", 43.4623, -3.8099],
   ["pamplona", "Pamplona", 42.8169, -1.6432],
@@ -37,9 +38,37 @@ const CITIES = [
   ["tarragona", "Tarragona", 41.1187, 1.2445],
   ["granada", "Granada", 37.1773, -3.5986],
   ["cordoba", "Córdoba", 37.8882, -4.7794],
+  ["murcia", "Murcia", 37.9922, -1.1307],
+  ["alicante", "Alacant", "Alicante", 38.3452, -0.481],
+  ["castellon", "castellón", "Castellón", 39.9864, -0.0513],
+  ["cadiz", "cádiz", "Cádiz", 36.5271, -6.2886],
+  ["huelva", "Huelva", 37.2614, -6.9447],
+  ["jaen", "jaén", "Jaén", 37.7796, -3.7849],
+  ["toledo", "Toledo", 39.8628, -4.0273],
+  ["valladolid", "Valladolid", 41.6523, -4.7245],
+  ["leon", "león", "León", 42.5987, -5.5671],
+  ["salamanca", "Salamanca", 40.9701, -5.6635],
+  ["segovia", "Segovia", 40.9429, -4.1088],
+  ["avila", "ávila", "Ávila", 40.6565, -4.6818],
+  ["logrono", "logroño", "Logroño", 42.4627, -2.4449],
   ["vitoria", "Vitoria", 42.8467, -2.6726],
+  ["san sebastian", "san sebastián", "donostia", "Donostia / San Sebastián", 43.3183, -1.9812],
+  ["tolosa", "tolosa gipuzkoa", "tolosa guipuzcoa", "Tolosa", 43.1348, -2.0783],
+  ["hernani", "Hernani", 43.2662, -1.9766],
+  ["andoain", "Andoain", 43.2167, -2.0204],
+  ["beasain", "Beasain", 43.0462, -2.1993],
+  ["azkoitia", "Azkoitia", 43.1774, -2.3113],
+  ["azpeitia", "Azpeitia", 43.1817, -2.2661],
+  ["oviedo", "Oviedo", 43.3619, -5.8494],
+  ["gijon", "gijón", "Gijón", 43.5322, -5.6611],
   ["vigo", "Vigo", 42.2314, -8.7124],
   ["coruña", "A Coruña", 43.3623, -8.4115],
+  ["santiago", "santiago de compostela", "Santiago de Compostela", 42.8782, -8.5448],
+  ["pontevedra", "Pontevedra", 42.431, -8.6444],
+  ["ourense", "orense", "Ourense", 42.3358, -7.8639],
+  ["lugo", "Lugo", 43.0097, -7.5568],
+  ["badajoz", "Badajoz", 38.8794, -6.9707],
+  ["caceres", "cáceres", "Cáceres", 39.4753, -6.3724],
   ["lisboa", "lisbon", "Lisboa", 38.7169, -9.1395],
   ["porto", "Porto", 41.1579, -8.6291],
   ["paris", "París", 48.8566, 2.3522],
@@ -78,6 +107,32 @@ const normC = (s) =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ");
 
+function addressFallbackCandidates(q) {
+  const candidates = [];
+  const add = (value) => {
+    const clean = String(value || "").trim();
+    if (clean && normC(clean) !== normC(q) && !candidates.some((x) => normC(x) === normC(clean))) candidates.push(clean);
+  };
+
+  String(q || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(1)
+    .reverse()
+    .forEach(add);
+
+  const words = String(q || "")
+    .replace(/[^\wÀ-ÿ\s-]/g, " ")
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter((x) => x && !/^\d+$/.test(x));
+  for (let len = 1; len <= Math.min(3, words.length); len++) {
+    add(words.slice(words.length - len).join(" "));
+  }
+  return candidates;
+}
+
 function localFind(q) {
   const nq = normC(q);
   for (const r of CITIES) {
@@ -85,9 +140,7 @@ function localFind(q) {
       la = r[r.length - 2],
       lo = r[r.length - 1];
     const ks = r.slice(0, r.length - 3).map((k) => normC(k));
-    if (ks.some((k) => k === nq)) return { name: nm, lat: la, lon: lo };
-    if (nq.length >= 3 && (ks.some((k) => k.startsWith(nq)) || normC(nm).startsWith(nq)))
-      return { name: nm, lat: la, lon: lo };
+    if (ks.some((k) => k === nq) || normC(nm) === nq) return { name: nm, lat: la, lon: lo };
   }
   return null;
 }
@@ -105,50 +158,126 @@ export function nearbyCity(lat, lon) {
   return b ? `Zona ${b}` : "Parada";
 }
 
-const fetchTO = (url, ms = 7000) =>
-  new Promise((res, rej) => {
-    const t = setTimeout(() => rej(new Error("timeout")), ms);
-    fetch(url)
-      .then((r) => {
-        clearTimeout(t);
-        res(r);
-      })
-      .catch((e) => {
-        clearTimeout(t);
-        rej(e);
-      });
-  });
+function routeLog(level, msg, data) {
+  if (typeof console === "undefined") return;
+  const fn = level === "warn" ? console.warn : console.info;
+  fn(`[route-planning] ${msg}`, data ?? "");
+}
+
+function validCoord(lat, lon) {
+  return Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180;
+}
+
+function normalizePoint(point, label) {
+  const lat = Number(point?.lat);
+  const lon = Number(point?.lon);
+  if (!validCoord(lat, lon)) {
+    throw new Error(`Coordenadas invalidas para ${label}: lat=${point?.lat ?? "null"}, lon=${point?.lon ?? "null"}`);
+  }
+  return { ...point, lat, lon, name: point?.name || label };
+}
+
+const fetchTO = async (url, ms = 7000, init = {}) => {
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
+  try {
+    return await fetch(url, ctrl ? { ...init, signal: ctrl.signal } : init);
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error(`timeout ${ms}ms`);
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
 export async function geocode(q) {
   q = q.trim();
   if (!q) throw new Error("Escribe una ciudad");
   const l = localFind(q);
-  if (l) return l;
-  try {
-    const r = await fetchTO(
-      `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=es`,
-      6000,
-    );
-    if (r.ok) {
+  if (l) {
+    routeLog("info", "geocode local ok", { q, result: l });
+    return l;
+  }
+
+  const errors = [];
+  const tryProvider = async (provider, url, parse, init = {}) => {
+    routeLog("info", "geocode provider start", { q, provider });
+    try {
+      const r = await fetchTO(url, 7000, init);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      if (d.features?.length) {
-        const f = d.features[0],
-          p = f.properties;
-        return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: p.city || p.name || q };
-      }
+      const point = parse(d);
+      if (!point) throw new Error("sin resultados");
+      const normalized = normalizePoint(point, provider);
+      routeLog("info", "geocode provider ok", { q, provider, result: normalized });
+      return normalized;
+    } catch (e) {
+      const message = e?.message || String(e);
+      errors.push(`${provider}: ${message}`);
+      routeLog("warn", "geocode provider failed", { q, provider, error: message });
+      return null;
     }
-  } catch (_) {}
-  try {
-    const r = await fetchTO(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=es`,
-      6000,
-    );
-    if (r.ok) {
-      const d = await r.json();
-      if (d?.length) return { lat: +d[0].lat, lon: +d[0].lon, name: d[0].display_name.split(",")[0] };
+  };
+
+  const openMeteo = await tryProvider(
+    "open-meteo",
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=es&format=json`,
+    (d) => {
+      const rows = Array.isArray(d?.results) ? d.results : [];
+      const r = rows.find((x) => validCoord(x?.latitude, x?.longitude));
+      if (!r) return null;
+      return { lat: r.latitude, lon: r.longitude, name: r.name || q };
+    },
+  );
+  if (openMeteo) return openMeteo;
+
+  const photon = await tryProvider(
+    "photon",
+    `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=es`,
+    (d) => {
+      const rows = Array.isArray(d?.features) ? d.features : [];
+      const f = rows.find((x) => validCoord(x?.geometry?.coordinates?.[1], x?.geometry?.coordinates?.[0]));
+      if (!f) return null;
+      const p = f.properties || {};
+      return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: p.city || p.town || p.village || p.name || q };
+    },
+  );
+  if (photon) return photon;
+
+  const nominatimHeaders = {
+    Accept: "application/json",
+    ...(typeof window === "undefined" ? { "User-Agent": "CuadernoRuta/1.0 operational-planning" } : {}),
+  };
+  const nominatim = await tryProvider(
+    "nominatim",
+    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=es`,
+    (d) => {
+      const rows = Array.isArray(d) ? d : [];
+      const r = rows.find((x) => validCoord(x?.lat, x?.lon));
+      if (!r) return null;
+      const display = r.display_name?.split(",")?.slice(0, 3)?.join(",")?.trim();
+      const name = r.name && !/^\d+$/.test(String(r.name).trim()) ? r.name : display;
+      return { lat: +r.lat, lon: +r.lon, name: name || q };
+    },
+    { headers: nominatimHeaders },
+  );
+  if (nominatim) return nominatim;
+
+  for (const candidate of addressFallbackCandidates(q)) {
+    try {
+      routeLog("info", "geocode address fallback start", { q, candidate });
+      const point = await geocode(candidate);
+      const result = { ...point, name: q };
+      routeLog("info", "geocode address fallback ok", { q, candidate, result });
+      return result;
+    } catch (e) {
+      const message = e?.message || String(e);
+      errors.push(`fallback ${candidate}: ${message}`);
+      routeLog("warn", "geocode address fallback failed", { q, candidate, error: message });
     }
-  } catch (_) {}
-  throw new Error(`No encontrado: "${q}"`);
+  }
+
+  throw new Error(`No encontrado: "${q}". ${errors.join(" | ")}`);
 }
 
 export async function revGeo(lat, lon) {
@@ -159,7 +288,7 @@ export async function revGeo(lat, lon) {
       if (d.features?.length) {
         const p = d.features[0].properties;
         const n = p.city || p.town || p.village || p.name;
-        if (n) return n;
+        if (n) return [n, p.country].filter(Boolean).join(", ");
       }
     }
   } catch (_) {}
@@ -180,34 +309,36 @@ export const TRUCK_KMH = 80;
 export const AVG_KMH = 80;
 
 export async function getRoute(from, to, truckSpeed = TRUCK_KMH) {
-  try {
-    const r = await fetchTO(
-      `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=full&geometries=geojson`,
-      8000,
-    );
-    if (r.ok) {
+  const fromPoint = normalizePoint(from, "origen");
+  const toPoint = normalizePoint(to, "destino");
+  routeLog("info", "route request", { from: fromPoint, to: toPoint, truckSpeed });
+  const path = `${fromPoint.lon},${fromPoint.lat};${toPoint.lon},${toPoint.lat}`;
+  const providers = [
+    ["osrm-project", `https://router.project-osrm.org/route/v1/driving/${path}?overview=full&geometries=geojson`],
+    ["osm-de", `https://routing.openstreetmap.de/routed-car/route/v1/driving/${path}?overview=full&geometries=geojson`],
+  ];
+  const errors = [];
+  for (const [provider, url] of providers) {
+    routeLog("info", "route provider start", { provider, from: fromPoint, to: toPoint });
+    try {
+      const r = await fetchTO(url, 9000);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      if (d.code === "Ok" && d.routes?.length) {
-        const rt = d.routes[0];
-        const km = Math.round(rt.distance / 1000);
-        const mins = Math.round((km / truckSpeed) * 60);
-        return { km, mins, coords: rt.geometry.coordinates, real: true };
-      }
+      if (d.code !== "Ok" || !d.routes?.length) throw new Error(`${d.code || "sin rutas"}`);
+      const rt = d.routes[0];
+      const rawCoords = rt.geometry?.coordinates;
+      if (!Array.isArray(rawCoords) || rawCoords.length < 2) throw new Error("sin geometria");
+      const km = Math.round(rt.distance / 1000);
+      const mins = Math.round((km / truckSpeed) * 60);
+      routeLog("info", "route provider ok", { provider, km, mins, coords: rawCoords.length });
+      return { km, mins, coords: rawCoords, real: true, provider };
+    } catch (e) {
+      const message = e?.message || String(e);
+      errors.push(`${provider}: ${message}`);
+      routeLog("warn", "route provider failed", { provider, error: message, from: fromPoint, to: toPoint });
     }
-  } catch (_) {}
-  const dist = haverDist(from.lat, from.lon, to.lat, to.lon);
-  const fac = dist < 300 ? 1.45 : dist < 700 ? 1.35 : 1.28;
-  const km = Math.round(dist * fac);
-  const n = 50;
-  return {
-    km,
-    mins: Math.round((km / truckSpeed) * 60),
-    coords: Array.from({ length: n + 1 }, (_, i) => {
-      const t = i / n;
-      return [from.lon + (to.lon - from.lon) * t, from.lat + (to.lat - from.lat) * t];
-    }),
-    real: false,
-  };
+  }
+  throw new Error(`No se pudo calcular ruta real. ${errors.join(" | ")}`);
 }
 
 export const p2 = (n) => String(n).padStart(2, "0");

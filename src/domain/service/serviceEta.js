@@ -100,11 +100,16 @@ export async function getServiceEta({
       }
     }
 
-    const dest = await geocode(service.destino.trim());
-    const lastLeg = await getRoute(cursor, dest);
-    totalKm += lastLeg.km;
-    totalMins += lastLeg.mins;
-    routeReals.push(lastLeg.real);
+    try {
+      const dest = await geocode(service.destino.trim());
+      const lastLeg = await getRoute(cursor, dest);
+      totalKm += lastLeg.km;
+      totalMins += lastLeg.mins;
+      routeReals.push(lastLeg.real);
+    } catch {
+      skippedStops = true;
+      if (totalMins <= 0) return null;
+    }
 
     const planStart =
       service.estado === "en_curso"

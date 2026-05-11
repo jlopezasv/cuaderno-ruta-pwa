@@ -2,6 +2,17 @@ import { useState } from "react";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
+import { getOperationalPlanSnapshot, stripServicioOperacionDisplay } from "../../../domain/service/serviceOperacionMeta";
+
+function looksLikeLatLonName(value){
+  return /^-?\d{1,2}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?$/.test(String(value||"").trim());
+}
+
+function safePlaceName(value,fallback){
+  const t=String(value||"").trim();
+  if(!t||looksLikeLatLonName(t))return fallback;
+  return t;
+}
 
 export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConductor,ESTADO_COLOR,ESTADO_LABEL,TIPO_EV,TIPO_EV_COL,onVerEv,bg,card,tx,su}){
   const[abierto,setAbierto]=useState(false);
@@ -12,10 +23,13 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
   const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:flotaEvs});
   const attention=needsAttention({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity});
   const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
+  const refVisible=stripServicioOperacionDisplay(sv.referencia);
+  const planSnapshot=getOperationalPlanSnapshot(sv);
+  const routeTitle=`${planSnapshot?.planned_origin||safePlaceName(sv.origen,"Ubicación actual")} → ${planSnapshot?.planned_destination||safePlaceName(sv.destino,"Destino")}`;
 
   function descargarServicio(){
     const fecha=sv.fecha_inicio?new Date(sv.fecha_inicio).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}).replace(/\//g,"-"):"sin-fecha";
-    const ref=(sv.referencia||"SRV").replace(/[^a-zA-Z0-9-_]/g,"");
+    const ref=(refVisible||"SRV").replace(/[^a-zA-Z0-9-_]/g,"");
     const dest=(sv.destino||"destino").replace(/[^a-zA-Z0-9-_ ]/g,"").trim().replace(/\s+/g,"-");
     const nombreArchivo=`${ref}_${dest}_${fecha}`;
 
@@ -76,9 +90,9 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
     </style>
     <script>window.onload=()=>window.print();</script>
     </head><body>
-    <h1>${sv.origen} → ${sv.destino}</h1>
+    <h1>${routeTitle}</h1>
     <div class="meta">
-      ${sv.referencia?`<strong>Ref:</strong> ${sv.referencia} &nbsp;·&nbsp;`:""}
+      ${refVisible?`<strong>Ref:</strong> ${refVisible} &nbsp;·&nbsp;`:""}
       <strong>Conductor:</strong> ${nombreConductor(sv.conductor_id)} &nbsp;·&nbsp;
       <strong>Estado:</strong> ${ESTADO_LABEL[sv.estado]||sv.estado}
       ${sv.fecha_inicio?`&nbsp;·&nbsp;<strong>Salida:</strong> ${new Date(sv.fecha_inicio).toLocaleString("es-ES",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})}`:""} 
@@ -100,7 +114,7 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
       <button onClick={()=>setAbierto(o=>!o)}
         style={{width:"100%",background:"transparent",border:"none",padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,textAlign:"left"}}>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:14,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</div>
+          <div style={{fontSize:14,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{routeTitle}</div>
           {attention&&(
             <div style={{marginTop:6,marginBottom:2}}>
               <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
@@ -109,7 +123,7 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
           )}
           <div style={{display:"flex",gap:8,marginTop:4,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:su}}>👷 {nombreConductor(sv.conductor_id)}</span>
-            {sv.referencia&&<span style={{fontSize:11,color:"#F59E0B"}}>Ref: {sv.referencia}</span>}
+            {refVisible&&<span style={{fontSize:11,color:"#F59E0B"}}>Ref: {refVisible}</span>}
             <span style={{background:color+"20",color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
               <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>

@@ -66,10 +66,10 @@ import { getServiceEta } from "./domain/service/serviceEta.js";
 import {
   mergeReferenciaOperacional,
   getOperationalTripStartedAt,
-  getServicioOperacionMeta,
+  getOperationalPlanSnapshot,
   stripServicioOperacionDisplay,
 } from "./domain/service/serviceOperacionMeta.js";
-import { mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
+import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { getConductorTabs } from "./navigation/conductorTabs";
@@ -1843,6 +1843,7 @@ function AppInner(){
   const[stopErr,setStopErr]=useState("");
   const photoRef=useRef(null),tmplPhotoR=useRef(null);
   const geoRef=useRef(null);
+  const geoLastSavedRef=useRef({ts:0,lat:null,lon:null});
   const jStateRef=useRef("none");
   const width=useWidth(),isWide=width>=768;
 
@@ -2020,53 +2021,58 @@ function AppInner(){
   },[normaRaw,manualOffset]);
   const T=useT(prof.lang||"es");
 
-  const uidServicioTrack=getUserId();
-  const {servicio:servicioUbicacion}=useServicioActivo(uidServicioTrack);
-
   // Actualizar ref de jState para el efecto de geolocalización
   jStateRef.current=jState;
 
-  /** Tracking empresa: en_curso + viaje operacional iniciado (PR-30). watchPosition con POST escalonado. */
+  /** Tracking empresa: jornada abierta, guardado por eventos/cambios relevantes. */
   useEffect(()=>{
     if(jState!=="open")return;
-    if(servicioUbicacion?.estado!=="en_curso")return;
-    if(!getOperationalTripStartedAt(servicioUbicacion))return;
     const uid=getUserId();
     if(!uid||!navigator.geolocation)return;
-    let lastPost=0;
+    const MIN_SAVE_MS=12*60*1000;
+    const MIN_MOVE_KM=5;
     function postUbicacion(lat,lon,speed,accuracy){
+      geoLastSavedRef.current={ts:Date.now(),lat,lon};
       sbFetch("/rest/v1/ubicaciones",{
         method:"POST",
         headers:{"Prefer":"resolution=merge-duplicates"},
         body:JSON.stringify({user_id:uid,lat,lon,velocidad:speed?Math.round(speed*3.6):null,precision_m:Math.round(accuracy||0),ts:new Date().toISOString()}),
       }).catch(()=>{});
     }
-    const wid=navigator.geolocation.watchPosition(
-      pos=>{
-        const nowT=Date.now();
-        if(nowT-lastPost<90000)return;
-        lastPost=nowT;
-        const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
-        postUbicacion(lat,lon,speed,accuracy);
-      },
-      ()=>{},
-      {enableHighAccuracy:false,maximumAge:60000},
-    );
-    const backup=setInterval(()=>{
+    function shouldSave(lat,lon,force=false){
+      if(force)return true;
+      const last=geoLastSavedRef.current;
+      if(!last?.ts||last.lat==null||last.lon==null)return true;
+      if(Date.now()-last.ts>=MIN_SAVE_MS)return true;
+      return haverDist(last.lat,last.lon,lat,lon)>=MIN_MOVE_KM;
+    }
+    function readAndMaybePost(force=false){
       navigator.geolocation.getCurrentPosition(
         pos=>{
           const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
-          postUbicacion(lat,lon,speed,accuracy);
+          if(shouldSave(lat,lon,force))postUbicacion(lat,lon,speed,accuracy);
         },
         ()=>{},
         {enableHighAccuracy:false,timeout:12000,maximumAge:180000},
       );
+    }
+    readAndMaybePost(true);
+    const wid=navigator.geolocation.watchPosition(
+      pos=>{
+        const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
+        if(shouldSave(lat,lon))postUbicacion(lat,lon,speed,accuracy);
+      },
+      ()=>{},
+      {enableHighAccuracy:false,maximumAge:180000},
+    );
+    const backup=setInterval(()=>{
+      readAndMaybePost(false);
     },12*60*1000);
     return()=>{
       navigator.geolocation.clearWatch(wid);
       clearInterval(backup);
     };
-  },[jState,servicioUbicacion?.estado,servicioUbicacion?.id,servicioUbicacion?.referencia]);
+  },[jState,active?.type]);
   const tl=buildTimeline(todayEnts,clock);
   const dayMap={};db.entries.forEach(e=>{const k=dayKey(e.ts);if(!dayMap[k])dayMap[k]={date:new Date(e.ts),list:[]};dayMap[k].list.push(e);});
   const days=Object.entries(dayMap).sort((a,b)=>b[0].localeCompare(a[0]));
@@ -2314,7 +2320,7 @@ function AppInner(){
     if(type==="__accion__"){setModal("accion_modal");return;}
     if(type==="__inspeccion__"){setModal("inspeccion");return;}
     if(type==="__datos_actuales__"){setModal("datos_actuales");return;}
-    if(type==="__cancel_viaje__"){setViajeActivo(null);localStorage.removeItem("viaje_activo");showToast("Viaje cancelado");return;}
+    if(type==="__cancel_viaje__"){setViajeActivo(null);localStorage.removeItem("viaje_activo");showToast("Ruta operacional cancelada");return;}
     if(type==="__cambiar_viaje__"){setViajeActivo(null);localStorage.removeItem("viaje_activo");setModalViaje(true);return;}
     if(type==="__nora__"){setModal("nora");return;}
     if(type==="__parking_cercano__"){setModal("parking_cercano");return;}
@@ -2842,7 +2848,6 @@ function AppInner(){
             {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} tl={tl} todayEnts={todayEnts} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></div>}
             <div className="mc">
               {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} tl={tl} todayEnts={todayEnts} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></>}
-              <BandaServicio uid={getUserId()} showToast={showToast} onVerServicio={()=>setTab("servicio")}/>
               {todayEnts.length>0&&(
                 <>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"8px 0 10px",gap:6}}>
@@ -3750,26 +3755,36 @@ function AppInner(){
 
       {modal==="qr_muelle"&&<QrMuelleModal onClose={(abrirAccion)=>{setModal(null);if(abrirAccion)setTimeout(()=>openAdd("__accion__"),200);}} onCarga={(tipo,datos)=>{setModal(null);openAdd(tipo,datos);}} setDb={setDb} showToast={showToast}/>}
 
-      {/* ════ MODAL DESTINO VIAJE ════ */}
-      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={async v=>{
-        setViajeActivo(v);
-        localStorage.setItem("viaje_activo",JSON.stringify(v));
+      {/* ════ MODAL DESTINO (servicio operacional) ════ */}
+      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} prefillWaypoint={viajePrefill?.waypoint||""} prefillVelocidad={viajePrefill?.velocidad||80} prefillGpsOrigen={viajePrefill?.gpsOrigen||null} norma={norma} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={async v=>{
         const pref=viajePrefillRef.current;
-        setModalViaje(false);
-        setViajePrefill(null);
         const sid=pref?.servicioId;
         if(sid&&getUserId()){
-          try{
-            const curMeta=getServicioOperacionMeta({referencia:pref?.referenciaActual});
-            if(!curMeta.operational_trip_started_at){
-              const merged=mergeReferenciaOperacional(pref?.referenciaActual||null,{operational_trip_started_at:new Date().toISOString()});
-              await sbFetch(`/rest/v1/servicios?id=eq.${sid}`,{method:"PATCH",body:JSON.stringify({referencia:merged})});
-              window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+          const patch={};
+          let savedReferencia=pref?.referenciaActual||null;
+          if(v.origen?.trim())patch.origen=v.origen.trim();
+          if(v.destino?.trim())patch.destino=v.destino.trim();
+          if(v.operationalPlan){
+            patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{operational_plan:v.operationalPlan});
+          }
+          if(patch.referencia)savedReferencia=patch.referencia;
+          if(Object.keys(patch).length){
+            const res=await sbFetch(`/rest/v1/servicios?id=eq.${sid}`,{method:"PATCH",body:JSON.stringify(patch)});
+            if(!res.ok){
+              let msg="";
+              try{
+                const data=await res.json();
+                msg=data?.message||data?.error||"";
+              }catch(_){/* noop */}
+              throw new Error(msg||`Supabase ${res.status}`);
             }
-          }catch(_){/* noop */}
+          }
+          window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
         }
-        showToast(sid?"🗺 Viaje configurado · viaje operacional activo":"🗺 Viaje configurado");
-        setTimeout(()=>speakNatural(`Destino configurado: ${v.destino}. Distancia aproximada ${v.km} kilómetros. La app te avisará si el plan cambia.`),500);
+        setViajeActivo(v);
+        localStorage.setItem("viaje_activo",JSON.stringify(v));
+        showToast(sid?"✅ Ruta guardada · planificación operacional lista":"✅ Destino guardado");
+        setTimeout(()=>speakNatural("Ruta guardada. Planificación operacional lista."),500);
       }} showToast={showToast}/>}
 
       {/* ════ MODAL DATOS ACTUALES ════ */}
@@ -4177,28 +4192,308 @@ function AppInner(){
 // ─────────────────────────────────────────────────────────────
 //  MODAL DESTINO — pregunta el destino al iniciar jornada
 // ─────────────────────────────────────────────────────────────
-function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=""}){
-  const[origen,setOrigen]=useState(prefillOrigen||"");
-  const[destino,setDestino]=useState(prefillDestino||"");
-  const[waypoint,setWaypoint]=useState("");
-  const[velocidad,setVelocidad]=useState(80);
+function fmtOperationalEtaLabel(etaIso){
+  const d=new Date(etaIso);
+  if(Number.isNaN(d.getTime()))return null;
+  const today=new Date();today.setHours(0,0,0,0);
+  const tomorrow=new Date(today);tomorrow.setDate(tomorrow.getDate()+1);
+  const d0=new Date(d);d0.setHours(0,0,0,0);
+  if(d0.getTime()===today.getTime())return`Hoy · ${fmtT(d)}`;
+  if(d0.getTime()===tomorrow.getTime())return`Mañana · ${fmtT(d)}`;
+  return`${DAYS[d.getDay()]} ${d.getDate()} · ${fmtT(d)}`;
+}
+
+function thinRouteCoords(coords,max=24){
+  if(!Array.isArray(coords)||coords.length<=max)return coords||[];
+  const step=(coords.length-1)/(max-1);
+  return Array.from({length:max},(_,i)=>coords[Math.round(i*step)]).filter(Boolean);
+}
+
+function looksLikeLatLonName(value){
+  return /^-?\d{1,2}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?$/.test(String(value||"").trim());
+}
+
+function parseOperationalLatLon(value){
+  const m=String(value||"").trim().match(/^(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
+  if(!m)return null;
+  const lat=Number(m[1]),lon=Number(m[2]);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180)return null;
+  return{lat,lon};
+}
+
+function safeOperationalPlaceName(value,fallback){
+  const t=String(value||"").trim();
+  if(!t||looksLikeLatLonName(t))return fallback;
+  return t;
+}
+
+function operationalPlanLog(level,step,data){
+  if(typeof console==="undefined")return;
+  const fn=level==="warn"?console.warn:console.info;
+  fn(`[operational-plan] ${step}`,data??"");
+}
+
+function operationalGpsFromPlan(plan){
+  const lat=Number(plan?.input_origin_lat);
+  const lon=Number(plan?.input_origin_lon);
+  if(Number.isFinite(lat)&&Number.isFinite(lon))return{lat,lon};
+  return parseOperationalLatLon(plan?.input_origin);
+}
+
+function getBrowserOperationalGps(){
+  if(typeof navigator==="undefined"||!navigator.geolocation)return Promise.resolve(null);
+  return new Promise(resolve=>{
+    navigator.geolocation.getCurrentPosition(
+      pos=>resolve({lat:pos.coords.latitude,lon:pos.coords.longitude}),
+      ()=>resolve(null),
+      {timeout:6000,enableHighAccuracy:false,maximumAge:300000}
+    );
+  });
+}
+
+async function resolveOperationalPoint(text,{gps=null,fallbackName="Ubicación GPS detectada"}={}){
+  if(gps&&Number.isFinite(Number(gps.lat))&&Number.isFinite(Number(gps.lon))){
+    return{lat:Number(gps.lat),lon:Number(gps.lon),name:safeOperationalPlaceName(text,fallbackName)};
+  }
+  const parsed=parseOperationalLatLon(text);
+  if(parsed)return{...parsed,name:fallbackName};
+  return geocode(String(text||"").trim());
+}
+
+async function buildOperationalPlanSnapshot({origen,destino,waypoint,velocidad,norma,gpsOrigen,modoManual}){
+  const startedAt=new Date();
+  const inputGps=gpsOrigen||parseOperationalLatLon(origen);
+  operationalPlanLog("info","input modal",{
+    origenTexto:origen?.trim?.()||"",
+    destinoTexto:destino?.trim?.()||"",
+    waypointTexto:waypoint?.trim?.()||"",
+    velocidad,
+    modoManual,
+    gpsOrigen:inputGps?{lat:Number(inputGps.lat),lon:Number(inputGps.lon)}:null,
+  });
+  try{
+    const from=await resolveOperationalPoint(origen,{gps:inputGps,fallbackName:"Ubicación actual"});
+    operationalPlanLog("info","geocode origen",{
+      texto:origen?.trim?.()||"",
+      coords:{lat:from.lat,lon:from.lon},
+      nombre:from.name,
+      gpsUsado:!!inputGps,
+    });
+    const to=await resolveOperationalPoint(destino,{fallbackName:"Destino"});
+    operationalPlanLog("info","geocode destino",{
+      texto:destino?.trim?.()||"",
+      coords:{lat:to.lat,lon:to.lon},
+      nombre:to.name,
+    });
+    const legs=[];
+    let km=0,mins=0,coords=[];
+    if(waypoint?.trim()){
+      try{
+        const via=await resolveOperationalPoint(waypoint,{fallbackName:"Punto intermedio"});
+        operationalPlanLog("info","geocode waypoint",{
+          texto:waypoint?.trim?.()||"",
+          coords:{lat:via.lat,lon:via.lon},
+          nombre:via.name,
+        });
+        const r1=await getRoute(from,via,velocidad);
+        const r2=await getRoute(via,to,velocidad);
+        operationalPlanLog("info","route result",{
+          modo:"via",
+          legs:[
+            {from:from.name,to:via.name,km:r1.km,mins:r1.mins,real:!!r1.real,coords:Array.isArray(r1.coords)?r1.coords.length:0},
+            {from:via.name,to:to.name,km:r2.km,mins:r2.mins,real:!!r2.real,coords:Array.isArray(r2.coords)?r2.coords.length:0},
+          ],
+        });
+        legs.push({from:from.name,to:via.name,km:r1.km,mins:r1.mins,real:!!r1.real});
+        legs.push({from:via.name,to:to.name,km:r2.km,mins:r2.mins,real:!!r2.real});
+        km=r1.km+r2.km;mins=r1.mins+r2.mins;coords=[...r1.coords,...r2.coords];
+      }catch(e){
+        operationalPlanLog("warn","waypoint skipped; direct route retry",{
+          waypoint:waypoint?.trim?.()||"",
+          error:e?.message||String(e),
+        });
+        const route=await getRoute(from,to,velocidad);
+        operationalPlanLog("info","route result",{
+          modo:"directa_sin_waypoint",
+          km:route.km,
+          mins:route.mins,
+          real:!!route.real,
+          coords:Array.isArray(route.coords)?route.coords.length:0,
+        });
+        legs.push({from:from.name,to:to.name,km:route.km,mins:route.mins,real:!!route.real,waypointSkipped:true});
+        km=route.km;mins=route.mins;coords=route.coords;
+      }
+    }else{
+      const route=await getRoute(from,to,velocidad);
+      operationalPlanLog("info","route result",{
+        modo:"directa",
+        km:route.km,
+        mins:route.mins,
+        real:!!route.real,
+        coords:Array.isArray(route.coords)?route.coords.length:0,
+      });
+      legs.push({from:from.name,to:to.name,km:route.km,mins:route.mins,real:!!route.real});
+      km=route.km;mins=route.mins;coords=route.coords;
+    }
+    const plan=buildPlan(mins,norma||null,{
+      contUsed:norma?.cont,
+      dayUsed:norma?.todayDrive,
+      weekUsed:norma?.weekDrive,
+      extUsed:norma?.extUsed,
+      start:startedAt,
+      km,
+    });
+    const eta=(plan.arrival instanceof Date?plan.arrival:new Date(plan.arrival)).toISOString();
+    const rests=(plan.segs||[]).filter(seg=>seg.type!=="conduccion");
+    const breaks=rests.filter(seg=>String(seg.type).startsWith("pausa"));
+    const dailyRest=rests.find(seg=>seg.type==="descanso");
+    const weeklyRest=rests.find(seg=>seg.type==="descanso_semana");
+    const routeFrom=safeOperationalPlaceName(from.name,"Ubicación actual");
+    const routeTo=safeOperationalPlaceName(to.name,destino.trim()||"Destino");
+    const snapshot={
+      status:"ok",
+      route_plan_status:"ready",
+      snapshot_at:startedAt.toISOString(),
+      input_origin:origen?.trim?.()||"",
+      input_origin_lat:Number.isFinite(Number(inputGps?.lat))?Number(inputGps.lat):null,
+      input_origin_lon:Number.isFinite(Number(inputGps?.lon))?Number(inputGps.lon):null,
+      input_destination:destino?.trim?.()||"",
+      input_waypoint:waypoint?.trim?.()||null,
+      planned_origin:routeFrom,
+      planned_destination:routeTo,
+      planned_waypoint:waypoint?.trim()||null,
+      planned_km:Math.round(km*10)/10,
+      planned_drive_min:Math.round(mins),
+      planned_drive_time:fmtDur(Math.round(mins)),
+      planned_eta:eta,
+      planned_eta_label:fmtOperationalEtaLabel(eta),
+      planned_breaks:breaks.length,
+      planned_daily_rest:!!dailyRest,
+      planned_daily_rest_label:dailyRest?"Descanso diario previsto":weeklyRest?"Descanso semanal previsto":"Sin descanso diario previsto",
+      planned_rest_plan:rests.map(seg=>({
+        type:seg.type,
+        start:seg.start instanceof Date?seg.start.toISOString():new Date(seg.start).toISOString(),
+        dur:seg.dur,
+      })),
+      planned_summary:`${Math.round(km)} km · ${fmtDur(Math.round(mins))} conducción · ${breaks.length} pausa${breaks.length===1?"":"s"} · ${dailyRest?"descanso diario":"sin descanso diario"}`,
+      planned_route:{legs,coords:thinRouteCoords(coords)},
+      confidence:legs.every(l=>l.real)?"high":"medium",
+      velocidad,
+    };
+    operationalPlanLog("info","snapshot operational_plan",{
+      status:snapshot.status,
+      route_plan_status:snapshot.route_plan_status,
+      planned_km:snapshot.planned_km,
+      planned_eta:snapshot.planned_eta,
+      planned_breaks:snapshot.planned_breaks,
+      planned_daily_rest:snapshot.planned_daily_rest,
+      legs:snapshot.planned_route?.legs,
+    });
+    return snapshot;
+  }catch(e){
+    operationalPlanLog("warn","build failed",{
+      origenTexto:origen?.trim?.()||"",
+      destinoTexto:destino?.trim?.()||"",
+      origenCoords:inputGps?{lat:Number(inputGps.lat),lon:Number(inputGps.lon)}:null,
+      error:e?.message||String(e),
+      stack:e?.stack,
+    });
+    return{
+      status:"failed",
+      route_plan_status:"failed",
+      snapshot_at:startedAt.toISOString(),
+      input_origin:origen?.trim?.()||"",
+      input_origin_lat:Number.isFinite(Number(inputGps?.lat))?Number(inputGps.lat):null,
+      input_origin_lon:Number.isFinite(Number(inputGps?.lon))?Number(inputGps.lon):null,
+      input_destination:destino?.trim?.()||"",
+      input_waypoint:waypoint?.trim?.()||null,
+      planned_origin:safeOperationalPlaceName(origen,"Ubicación actual"),
+      planned_destination:safeOperationalPlaceName(destino,"Destino"),
+      planned_waypoint:waypoint?.trim()||null,
+      planned_km:null,
+      planned_drive_min:null,
+      planned_drive_time:null,
+      planned_eta:null,
+      planned_eta_label:null,
+      planned_breaks:null,
+      planned_daily_rest:false,
+      planned_daily_rest_label:"Sin descanso calculado",
+      planned_rest_plan:[],
+      planned_route:null,
+      planned_summary:"No se pudo calcular ruta completa",
+      confidence:"low",
+      error:e?.message||"routing_failed",
+      velocidad,
+    };
+  }
+}
+
+async function retryOperationalPlanBuild({servicio,request,norma,showToast}){
+  if(!servicio?.id)return;
+  const plan=getOperationalPlanSnapshot(servicio);
+  const storedGps=operationalGpsFromPlan(plan);
+  const needsGps=!storedGps&&/^(origen gps|ubicaci[oó]n gps detectada)$/i.test(String(plan?.planned_origin||servicio.origen||"").trim());
+  const liveGps=needsGps?await getBrowserOperationalGps():null;
+  const retryRequest=request||{
+    origen:plan?.input_origin||plan?.planned_origin||servicio.origen||"",
+    destino:plan?.input_destination||plan?.planned_destination||servicio.destino||"",
+    waypoint:plan?.input_waypoint||plan?.planned_waypoint||"",
+    velocidad:plan?.velocidad||80,
+    norma,
+    gpsOrigen:storedGps||liveGps,
+    modoManual:!(storedGps||liveGps),
+  };
+  if(!retryRequest.origen?.trim?.()||!retryRequest.destino?.trim?.()){
+    showToast?.("Faltan origen o destino para recalcular");
+    return;
+  }
+  showToast?.("Calculando planificación operacional...");
+  const operationalPlan=await buildOperationalPlanSnapshot(retryRequest);
+  const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
+    operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+    operational_plan:operationalPlan,
+  });
+  const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
+  if(!res.ok)throw new Error(`Supabase ${res.status}`);
+  window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+  if(operationalPlan.status==="ok"){
+    showToast?.(`✅ Planificación operacional calculada${operationalPlan.planned_eta_label?` · ${operationalPlan.planned_eta_label}`:""}`);
+  }else{
+    showToast?.(`⚠ No se pudo calcular ruta completa${operationalPlan.error?`: ${operationalPlan.error}`:""}`);
+  }
+}
+
+function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen="",prefillWaypoint="",prefillVelocidad=80,prefillGpsOrigen=null,norma=null}){
+  const[origen,setOrigen]=useState(()=>prefillOrigen||"");
+  const[destino,setDestino]=useState(()=>prefillDestino||"");
+  const[waypoint,setWaypoint]=useState(()=>prefillWaypoint||"");
+  const[velocidad,setVelocidad]=useState(()=>prefillVelocidad||80);
   const[loading,setLoading]=useState(false);
-  const[gpsOrigen,setGpsOrigen]=useState(null);
+  const[gpsOrigen,setGpsOrigen]=useState(()=>prefillGpsOrigen||null);
   const[gpsLoading,setGpsLoading]=useState(false);
-  const[modoManual,setModoManual]=useState(!!prefillOrigen?.trim());
+  const[modoManual,setModoManual]=useState(()=>!!prefillOrigen?.trim()&&!prefillGpsOrigen);
+  const origenTouchedRef=useRef(false);
+  const destinoTouchedRef=useRef(false);
+  const gpsRequestRef=useRef(0);
 
   function pedirGPS(){
+    const requestId=++gpsRequestRef.current;
+    origenTouchedRef.current=false;
     setGpsLoading(true);
     if(!navigator.geolocation){setGpsLoading(false);setModoManual(true);return;}
     navigator.geolocation.getCurrentPosition(
       pos=>{
+        if(requestId!==gpsRequestRef.current)return;
         const{latitude:lat,longitude:lon}=pos.coords;
         setGpsOrigen({lat,lon});
+        setModoManual(false);
         setGpsLoading(false); // inmediato — no esperar al nombre
-        setOrigen(`${lat.toFixed(3)},${lon.toFixed(3)}`);
-        reverseGeocode(lat,lon).then(name=>setOrigen(name)).catch(()=>{});
+        if(!origenTouchedRef.current)setOrigen(`${lat.toFixed(3)},${lon.toFixed(3)}`);
+        reverseGeocode(lat,lon).then(name=>{
+          if(requestId===gpsRequestRef.current&&!origenTouchedRef.current)setOrigen(name);
+        }).catch(()=>{});
       },
-      ()=>{setGpsLoading(false);setModoManual(true);},
+      ()=>{if(requestId===gpsRequestRef.current){setGpsLoading(false);setModoManual(true);}},
       {timeout:6000,enableHighAccuracy:false,maximumAge:300000}
     );
   }
@@ -4206,71 +4501,69 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
   useEffect(()=>{
     if(prefillOrigen?.trim()){
       setOrigen(prefillOrigen.trim());
-      setModoManual(true);
+      setModoManual(!prefillGpsOrigen);
       return;
     }
     pedirGPS();
   },[]);
   useEffect(()=>{
-    if(prefillDestino?.trim())setDestino(prefillDestino.trim());
+    if(prefillDestino?.trim()&&!destinoTouchedRef.current)setDestino(prefillDestino.trim());
   },[prefillDestino]);
 
   async function confirmar(){
-    if(!destino.trim()){onClose();return;}
+    if(loading)return;
+    if(!origen.trim()){showToast("Introduce el origen del servicio");return;}
+    if(!destino.trim()){showToast("Introduce el destino del servicio");return;}
     setLoading(true);
     try{
-      let from;
-      if(gpsOrigen&&!modoManual){
-        from={lat:gpsOrigen.lat,lon:gpsOrigen.lon,name:origen||"Mi posición"};
-      } else if(origen.trim()){
-        from=await geocode(origen.trim());
-      } else {
-        showToast("Introduce tu ubicación de origen");setLoading(false);return;
+      const planningRequest={
+        origen,
+        destino,
+        waypoint,
+        velocidad,
+        norma,
+        gpsOrigen,
+        modoManual,
+      };
+      showToast("Calculando planificación operacional...");
+      const operationalPlan=await buildOperationalPlanSnapshot(planningRequest);
+      if(operationalPlan.status!=="ok"){
+        throw new Error(operationalPlan.error||"No se pudo calcular ruta completa");
       }
-      const to=await geocode(destino.trim());
-
-      // Punto intermedio
-      let coords,km,mins;
-      if(waypoint.trim()){
-        const via=await geocode(waypoint.trim());
-        const r1=await getRoute(from,via,velocidad);
-        const r2=await getRoute(via,to,velocidad);
-        km=r1.km+r2.km;
-        mins=r1.mins+r2.mins;
-        coords=[...r1.coords,...r2.coords];
-      } else {
-        const route=await getRoute(from,to,velocidad);
-        km=route.km;mins=route.mins;coords=route.coords;
-      }
-
-      onSave({
-        destino:to.name,
-        origen:from.name,
+      await onSave({
+        destino:operationalPlan.planned_destination||destino.trim(),
+        origen:operationalPlan.planned_origin||origen.trim(),
         waypoint:waypoint.trim()||null,
-        km,mins,coords,velocidad,
+        km:operationalPlan.planned_km,
+        mins:operationalPlan.planned_drive_min,
+        coords:operationalPlan.planned_route?.coords||null,
+        velocidad,
+        operationalPlan,
         diaActual:1,
         savedAt:new Date().toISOString()
       });
+      onClose();
     }catch(e){
-      showToast("No se encontró la ciudad: "+e.message);
+      const msg=e?.message||"inténtalo de nuevo";
+      showToast("Error al guardar destino: "+msg);
     }finally{setLoading(false);}
   }
 
   const iStyle={width:"100%",background:"#0F172A",border:"1.5px solid #334155",borderRadius:10,padding:"12px 14px",fontSize:15,color:"#F1F5F9",outline:"none",boxSizing:"border-box"};
 
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:2000,display:"flex",alignItems:"flex-end"}} onClick={onClose}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:2000,display:"flex",alignItems:"flex-end"}} onClick={()=>{if(!loading)onClose();}}>
       <div style={{background:"#1E293B",borderRadius:"18px 18px 0 0",width:"100%",padding:"20px 18px 36px",borderTop:"3px solid #F59E0B",maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-        <div style={{fontSize:16,fontWeight:800,color:"#F59E0B",marginBottom:4}}>🗺 Configurar viaje</div>
-        <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>La app calculará el plan y te avisará en ruta</div>
+        <div style={{fontSize:16,fontWeight:800,color:"#F59E0B",marginBottom:4}}>🗺 Destino del servicio</div>
+        <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>Se guardará una planificación estable del servicio.</div>
 
         {/* Origen */}
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:6}}>🟢 ORIGEN</div>
           <div style={{display:"flex",gap:8}}>
-            <input value={origen} onChange={e=>setOrigen(e.target.value)} placeholder="Tu ciudad actual..."
+            <input value={origen} onChange={e=>{origenTouchedRef.current=true;setModoManual(true);setOrigen(e.target.value);}} placeholder="Tu ciudad actual..."
               style={{...iStyle,flex:1}}/>
-            <button onClick={pedirGPS} disabled={gpsLoading}
+            <button type="button" onClick={pedirGPS} disabled={gpsLoading||loading}
               style={{background:"#3B82F6",color:"white",border:"none",borderRadius:8,padding:"0 12px",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap"}}>
               {gpsLoading?"⌛":"📍 GPS"}
             </button>
@@ -4289,8 +4582,8 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
         {/* Destino */}
         <div style={{marginBottom:20}}>
           <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:6}}>🔴 DESTINO</div>
-          <input value={destino} onChange={e=>setDestino(e.target.value)}
-            onKeyDown={e=>e.key==="Enter"&&confirmar()}
+          <input value={destino} onChange={e=>{destinoTouchedRef.current=true;setDestino(e.target.value);}}
+            onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();confirmar();}}}
             placeholder="Ej: Berlín, París, Hamburgo..." autoFocus={!origen}
             style={iStyle}/>
         </div>
@@ -4300,23 +4593,29 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
           <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:8}}>🚛 VELOCIDAD MEDIA — {velocidad} km/h</div>
           <div style={{display:"flex",gap:6}}>
             {[70,75,80,85,90].map(v=>(
-              <button key={v} onClick={()=>setVelocidad(v)}
-                style={{flex:1,background:velocidad===v?"#F59E0B":"#1E293B",color:velocidad===v?"#0F172A":"#64748B",border:"none",borderRadius:8,padding:"8px 2px",fontSize:13,fontWeight:velocidad===v?800:400,cursor:"pointer"}}>
+              <button key={v} type="button" onClick={()=>setVelocidad(v)} disabled={loading}
+                style={{flex:1,background:velocidad===v?"#F59E0B":"#1E293B",color:velocidad===v?"#0F172A":"#64748B",border:"none",borderRadius:8,padding:"8px 2px",fontSize:13,fontWeight:velocidad===v?800:400,cursor:loading?"default":"pointer",opacity:loading&&velocidad!==v?0.65:1}}>
                 {v}
               </button>
             ))}
           </div>
-          <div style={{fontSize:10,color:"#475569",marginTop:5,textAlign:"center"}}>Recalcula al arrancar y parar · no en tiempo real</div>
+          <div style={{fontSize:10,color:"#475569",marginTop:5,textAlign:"center"}}>Se usa para el snapshot inicial del servicio</div>
         </div>
 
+        {loading&&(
+          <div style={{background:"#0F2A1A",border:"1px solid #22C55E40",borderRadius:10,padding:"9px 11px",fontSize:12,color:"#86EFAC",fontWeight:700,marginBottom:10}}>
+            Calculando ruta operacional completa y guardando snapshot estable...
+          </div>
+        )}
+
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <button onClick={onClose}
-            style={{background:"transparent",border:"1px solid #334155",borderRadius:10,padding:"13px",fontSize:14,color:"#64748B",cursor:"pointer",fontWeight:600}}>
-            Sin destino
+          <button type="button" onClick={onClose} disabled={loading}
+            style={{background:"transparent",border:"1px solid #334155",borderRadius:10,padding:"13px",fontSize:14,color:"#64748B",cursor:loading?"default":"pointer",fontWeight:600,opacity:loading?0.55:1}}>
+            Cancelar
           </button>
-          <button onClick={confirmar} disabled={loading||!destino.trim()}
-            style={{background:destino.trim()&&!loading?"#F59E0B":"#334155",color:destino.trim()&&!loading?"#0F172A":"#64748B",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>
-            {loading?"⌛ Calculando...":"✅ Confirmar"}
+          <button type="button" onClick={confirmar} disabled={loading||!origen.trim()||!destino.trim()}
+            style={{background:origen.trim()&&destino.trim()&&!loading?"#F59E0B":"#334155",color:origen.trim()&&destino.trim()&&!loading?"#0F172A":"#64748B",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:loading?"default":"pointer"}}>
+            {loading?"⌛ Guardando...":"✅ Confirmar"}
           </button>
         </div>
       </div>
@@ -9511,8 +9810,8 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
-  const card="#1E293B",bg="#0F172A",tx="#F1F5F9",su="#64748B";
-  const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
+  const card=EMPRESA_UI.surface,bg=EMPRESA_UI.surfaceSoft,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
+  const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
 
   function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:""}]);}
   function addStopAfter(i){
@@ -9568,16 +9867,23 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
 
   return(
     <div style={overlayStyle} onClick={onClose}>
-      <div style={{...modalStyle,background:card}} onClick={e=>e.stopPropagation()}>
+      <div style={{...modalStyle,background:card,boxShadow:"0 24px 60px rgba(15,23,42,.18)",border:`1px solid ${EMPRESA_UI.border}`}} onClick={e=>e.stopPropagation()}>
 
         {/* HEADER — sticky */}
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid #334155",flexShrink:0,background:card}}>
+        <div style={{padding:"14px 16px 12px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
-              <div style={{fontSize:15,fontWeight:800,color:"#F59E0B"}}>NUEVO VIAJE</div>
-              <div style={{fontSize:11,color:su,marginTop:1}}>Asignar a · {conductorNombre}</div>
+              <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
+              <div style={{fontSize:11,color:su,marginTop:1}}>Conductor seleccionado</div>
             </div>
-            <button onClick={onClose} style={{background:"#334155",border:"none",borderRadius:8,width:28,height:28,color:tx,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+            <button onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+          </div>
+          <div style={{marginTop:12,background:EMPRESA_UI.accentSoft,border:"1.5px solid #93c5fd",borderRadius:12,padding:"11px 12px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 6px 18px rgba(37,99,235,.10)"}}>
+            <span style={{width:22,height:22,borderRadius:"50%",background:EMPRESA_UI.accent,color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,flexShrink:0}}>✓</span>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:650,color:"#1e3a8a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{conductorNombre||"Conductor"}</div>
+              <div style={{fontSize:11,color:"#475569",marginTop:1}}>Asignado a este servicio</div>
+            </div>
           </div>
         </div>
 
@@ -9587,12 +9893,12 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
           {/* Origen / Destino */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>🟢 ORIGEN</div>
+              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Origen</div>
               <input value={origen} onChange={e=>setOrigen(e.target.value)} placeholder="Almería"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>🔴 DESTINO</div>
+              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Destino</div>
               <input value={destino} onChange={e=>setDestino(e.target.value)} placeholder="Bilbao"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
@@ -9601,9 +9907,9 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
           {/* Fecha / Referencia */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>📅 SALIDA</div>
+              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}
-                style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"dark",marginBottom:0}}/>
+                style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"light",marginBottom:0}}/>
             </div>
             <div>
               <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>REF.</div>
@@ -9613,23 +9919,23 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
           </div>
 
           {/* Paradas */}
-          <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>PARADAS — {stops.length}</div>
+              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:6}}>Paradas · {stops.length}</div>
           {stops.map((stop,i)=>(
             <div key={stop.orden}>
-              <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:"1px solid #334155"}}>
+              <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:`1px solid ${EMPRESA_UI.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                   <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                    <span style={{background:"#F59E0B",color:"#0F172A",borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,flexShrink:0}}>{i+1}</span>
+                    <span style={{background:"#e2e8f0",color:EMPRESA_UI.subtle,borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:650,flexShrink:0}}>{i+1}</span>
                     <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
-                      style={{background:bg,border:"1px solid #334155",borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
+                      style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
                       {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
                     </select>
                   </div>
                   <div style={{display:"flex",gap:3}}>
                     <button onClick={()=>moveStop(i,-1)} disabled={i===0}
-                      style={{background:i===0?"transparent":"#334155",border:"none",borderRadius:4,width:20,height:20,color:i===0?"#475569":tx,cursor:i===0?"default":"pointer",fontSize:11}}>↑</button>
+                      style={{background:i===0?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===0?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===0?"default":"pointer",fontSize:11}}>↑</button>
                     <button onClick={()=>moveStop(i,1)} disabled={i===stops.length-1}
-                      style={{background:i===stops.length-1?"transparent":"#334155",border:"none",borderRadius:4,width:20,height:20,color:i===stops.length-1?"#475569":tx,cursor:i===stops.length-1?"default":"pointer",fontSize:11}}>↓</button>
+                      style={{background:i===stops.length-1?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===stops.length-1?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===stops.length-1?"default":"pointer",fontSize:11}}>↓</button>
                     {stops.length>1&&<button onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
                   </div>
                 </div>
@@ -9642,7 +9948,7 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
               </div>
               {i<stops.length-1&&(
                 <button onClick={()=>addStopAfter(i)}
-                  style={{width:"100%",background:"transparent",border:"1px dashed #334155",borderRadius:6,padding:"3px",fontSize:10,color:"#3B82F6",cursor:"pointer",marginBottom:4}}>
+                  style={{width:"100%",background:"transparent",border:`1px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:6,padding:"3px",fontSize:10,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4}}>
                   + insertar aquí
                 </button>
               )}
@@ -9650,18 +9956,18 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
           ))}
 
           <button onClick={addStop}
-            style={{width:"100%",background:"transparent",border:"1.5px dashed #334155",borderRadius:9,padding:"8px",fontSize:13,color:"#22C55E",cursor:"pointer",marginBottom:8}}>
-            + AÑADIR PARADA
+            style={{width:"100%",background:"transparent",border:`1.5px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"8px",fontSize:13,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:8}}>
+            + Añadir parada
           </button>
 
-          {error&&<div style={{background:"#450a0a",border:"1px solid #EF4444",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#EF4444",marginBottom:8}}>⚠️ {error}</div>}
+          {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red,marginBottom:8}}>{error}</div>}
         </div>
 
         {/* FOOTER — sticky, siempre visible */}
-        <div style={{padding:"12px 16px",borderTop:"1px solid #334155",flexShrink:0,background:card}}>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
           <button onClick={guardar} disabled={saving}
-            style={{width:"100%",background:saving?"#334155":"#F59E0B",color:saving?"#64748B":"#0F172A",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:800,cursor:saving?"default":"pointer"}}>
-            {saving?"⏳ Asignando...":"✅ ASIGNAR SERVICIO"}
+            style={{width:"100%",background:saving?"#cbd5e1":EMPRESA_UI.tx,color:saving?"#64748B":"white",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:650,cursor:saving?"default":"pointer"}}>
+            {saving?"Asignando...":"Asignar servicio"}
           </button>
         </div>
 
@@ -9694,6 +10000,173 @@ function fmtClockMs(ms){
   return new Date(ms).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
 }
 
+/** Fila compacta empresa: ETA operacional sin placeholder de carga interminable. */
+function fmtEtaEmpresaCompacto(raw){
+  if(raw==null||raw===""||raw==="…"||raw==="..."||raw==="Sin ETA")return"—";
+  if(raw instanceof Date)return fmtClockMs(raw.getTime());
+  if(typeof raw==="object"){
+    const slot=raw.planned||raw.operational||raw;
+    return fmtEtaEmpresaCompacto(slot?.label||slot?.eta||null);
+  }
+  return String(raw);
+}
+
+/** Ciudad aproximada (sin coordenadas); vacío → — */
+function fmtUbicacionConductorEmpresa(raw){
+  const t=String(typeof raw==="object"&&raw?raw.label:raw||"").trim();
+  return t||"—";
+}
+
+function fmtUbicacionActualizada(raw){
+  const ts=typeof raw==="object"&&raw?raw.updatedAt||raw.ts:null;
+  const t=ts?new Date(ts).getTime():NaN;
+  if(!Number.isFinite(t))return"";
+  const min=Math.max(0,Math.round((Date.now()-t)/60000));
+  if(min<1)return"Actualizado ahora";
+  if(min<60)return`Actualizado hace ${min} min`;
+  const h=Math.floor(min/60),m=min%60;
+  return`Actualizado hace ${h} h${m?` ${m} min`:""}`;
+}
+
+function validUbicacionRow(row){
+  const lat=Number(row?.lat),lon=Number(row?.lon);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;
+  if(Math.abs(lat)>90||Math.abs(lon)>180)return null;
+  return{lat,lon,ts:row?.ts||null,velocidad:row?.velocidad};
+}
+
+function isRecentTrackingPoint(pos,maxAgeMs=45*60*1000){
+  const t=pos?.ts?new Date(pos.ts).getTime():NaN;
+  if(!Number.isFinite(t))return true;
+  return Date.now()-t<=maxAgeMs;
+}
+
+function safeUbicacionLabel(label){
+  const clean=String(label||"").trim();
+  if(!clean||looksLikeLatLonName(clean))return"Ubicación GPS";
+  return clean;
+}
+
+async function revGeoUbicacionLabel(lat,lon){
+  try{
+    return safeUbicacionLabel(await revGeo(lat,lon));
+  }catch(_){
+    return"Ubicación GPS";
+  }
+}
+
+function conductorJourneyInfo(conductor,now=new Date()){
+  const entries=[...(conductor?.entries||[])]
+    .filter(e=>!e.deleted&&!e.corrected_by)
+    .sort((a,b)=>+toDate(a.ts)-+toDate(b.ts));
+  const state=jornadaState(entries);
+  if(state!=="open")return{open:false,label:"⚪ Fuera de jornada",color:"#94A3B8"};
+  const active=findActive(entries.filter(e=>sameDay(e.ts,now)));
+  if(active?.type==="inicio_conduccion")return{open:true,label:"🟢 Conduciendo",color:"#22C55E",active};
+  if(active?.type==="inicio_pausa")return{open:true,label:"🟠 Pausa",color:"#F97316",active};
+  if(active?.type==="inicio_descanso"||active?.type==="inicio_descanso_frac")return{open:true,label:"🟠 Descanso",color:"#F97316",active};
+  return{open:true,label:"🟢 Jornada activa",color:"#22C55E",active};
+}
+
+const ETA_RIESGO_WARN_MIN=20;
+const ETA_RIESGO_LATE_MIN=45;
+
+function getEtaLabelEmpresa(entry){
+  const raw=entry?.planned?.label ?? entry?.planned?.eta ?? entry?.operational?.label ?? entry?.operational?.eta ?? entry?.label ?? entry?.eta ?? entry;
+  return fmtEtaEmpresaCompacto(raw);
+}
+
+function etaMs(slot){
+  const t=slot?.eta?new Date(slot.eta).getTime():NaN;
+  return Number.isFinite(t)?t:null;
+}
+
+function getEtaEstadoEmpresa(entry){
+  const planStatus=entry?.planned?.status;
+  if(planStatus==="calculating")return{icon:"🟡",label:"Calculando",color:"#FACC15",bg:"rgba(250,204,21,0.13)",deltaMin:null};
+  if(planStatus==="failed")return{icon:"⚠",label:"Sin ruta completa",color:"#FB923C",bg:"rgba(251,146,60,0.14)",deltaMin:null};
+  const opMs=etaMs(entry?.operational);
+  const planMs=etaMs(entry?.planned);
+  if(planMs!=null&&opMs==null)return{icon:"🟢",label:"Plan estable",color:"#22C55E",bg:"rgba(34,197,94,0.12)",deltaMin:null};
+  if(opMs==null||planMs==null)return{icon:"⚪",label:"Sin previsión",color:"#94A3B8",bg:"rgba(148,163,184,0.12)",deltaMin:null};
+  const deltaMin=Math.round((opMs-planMs)/60000);
+  if(deltaMin>ETA_RIESGO_LATE_MIN)return{icon:"🔴",label:"Retrasado",color:"#F87171",bg:"rgba(248,113,113,0.13)",deltaMin};
+  if(deltaMin>ETA_RIESGO_WARN_MIN)return{icon:"🟠",label:"Riesgo retraso",color:"#FB923C",bg:"rgba(251,146,60,0.14)",deltaMin};
+  return{icon:"🟢",label:"Dentro de previsión",color:"#22C55E",bg:"rgba(34,197,94,0.12)",deltaMin};
+}
+
+function nextPendingStop(stops){
+  return [...(stops||[])].sort((a,b)=>(a.orden??0)-(b.orden??0)).find(s=>s.estado==="pendiente")||null;
+}
+
+function stopTipoCompacto(stop){
+  return String(stop?.tipo||"parada").replace(/_/g," ").toUpperCase();
+}
+
+function etaSlotFromOperationalPlan(plan){
+  const routePlanStatus=plan?.route_plan_status||null;
+  if(routePlanStatus==="pending"||plan?.status==="calculating")return{
+    eta:null,
+    label:"Calculando planificación operacional...",
+    confidence:"pending",
+    stable:true,
+    status:"calculating",
+  };
+  if(routePlanStatus==="failed"||plan?.status==="failed")return{
+    eta:null,
+    label:null,
+    confidence:"low",
+    stable:true,
+    status:"failed",
+  };
+  if(!plan?.planned_eta)return null;
+  return{
+    eta:plan.planned_eta,
+    label:plan.planned_eta_label||fmtOperationalEtaLabel(plan.planned_eta)||"Sin ETA",
+    confidence:plan.confidence||"medium",
+    stable:true,
+    status:plan.status||"ok",
+  };
+}
+
+const EMPRESA_UI=Object.freeze({
+  bg:"#f1f5f9",
+  surface:"#ffffff",
+  surfaceSoft:"#f8fafc",
+  border:"#dbe4ee",
+  borderStrong:"#cbd5e1",
+  tx:"#0f172a",
+  muted:"#64748B",
+  subtle:"#475569",
+  accent:"#2563eb",
+  accentSoft:"#eff6ff",
+  green:"#15803d",
+  greenSoft:"#dcfce7",
+  amber:"#b45309",
+  amberSoft:"#ffedd5",
+  red:"#b91c1c",
+  redSoft:"#fee2e2",
+  shadow:"0 1px 2px rgba(15,23,42,.05)",
+});
+
+function empresaTone(color){
+  const c=String(color||"").toLowerCase();
+  if(c.includes("ef4444")||c.includes("f97316")||c.includes("fb923c"))return{fg:EMPRESA_UI.red,bg:EMPRESA_UI.redSoft,border:"#fecaca"};
+  if(c.includes("f59e0b")||c.includes("facc15"))return{fg:EMPRESA_UI.amber,bg:EMPRESA_UI.amberSoft,border:"#fed7aa"};
+  if(c.includes("22c55e"))return{fg:EMPRESA_UI.green,bg:EMPRESA_UI.greenSoft,border:"#bbf7d0"};
+  return{fg:EMPRESA_UI.subtle,bg:"#eef2f7",border:EMPRESA_UI.border};
+}
+
+function statusPill(label,color){
+  const tone=empresaTone(color);
+  return{
+    label,
+    color:tone.fg,
+    bg:tone.bg,
+    border:tone.border,
+  };
+}
+
 function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[modo,setModo]=useState(null);
   const[empresa,setEmpresa]=useState(null);
@@ -9723,9 +10196,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
   const[etaOperativaById,setEtaOperativaById]=useState({});
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
+  const flotaLoadingRef=useRef(false);
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-  const bg="#121a2e",card="#1f293d",tx="#F1F5F9",su="#64748B";
+  const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
 
   useEffect(()=>{init();},[]);
 
@@ -9785,8 +10259,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     setLoading(false);
   }
 
-  async function loadFlotaServicios(){
-    if(!empresa||flotaLoading)return;
+  const loadConductoresRef=useRef(loadConductores);
+  loadConductoresRef.current=loadConductores;
+
+  async function loadFlotaServicios(force=false){
+    if(!empresa)return;
+    if(flotaLoadingRef.current)return;
+    if(!force&&flotaLoading)return;
+    flotaLoadingRef.current=true;
     setFlotaLoading(true);
     try{
       // Cargamos servicios de todos los conductores de la empresa
@@ -9812,12 +10292,45 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         }
       }
     }catch(e){console.warn("loadFlotaServicios:",e);}
-    finally{setFlotaLoading(false);}
+    finally{flotaLoadingRef.current=false;setFlotaLoading(false);}
   }
 
   useEffect(()=>{
     if(!empresa?.id)return;
     loadFlotaServicios();
+  },[empresa?.id]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe")return;
+    const refresh=()=>{if(document.visibilityState!=="hidden")void loadConductoresRef.current?.(empresa.id);};
+    const onVisible=()=>{if(document.visibilityState==="visible")refresh();};
+    window.addEventListener("focus",refresh);
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{
+      window.removeEventListener("focus",refresh);
+      document.removeEventListener("visibilitychange",onVisible);
+    };
+  },[empresa?.id,modo]);
+
+  const loadFlotaRef=useRef(loadFlotaServicios);
+  loadFlotaRef.current=loadFlotaServicios;
+  useEffect(()=>{
+    if(!empresa?.id)return;
+    function onRecargaServicio(){void loadFlotaRef.current(true);}
+    window.addEventListener("cuaderno-recargar-servicio",onRecargaServicio);
+    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecargaServicio);
+  },[empresa?.id]);
+
+  useEffect(()=>{
+    if(!empresa?.id)return;
+    const refresh=()=>{void loadFlotaRef.current(true);};
+    const onVisible=()=>{if(document.visibilityState==="visible")refresh();};
+    window.addEventListener("focus",refresh);
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{
+      window.removeEventListener("focus",refresh);
+      document.removeEventListener("visibilitychange",onVisible);
+    };
   },[empresa?.id]);
 
   const serviciosListaOperativa=useMemo(()=>{
@@ -9847,95 +10360,101 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return list;
   },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab]);
 
+  const serviciosListaRef=useRef(serviciosListaOperativa);
+  serviciosListaRef.current=serviciosListaOperativa;
+
+  async function readLatestConductorLocation(uid,{allowStale=false}={}){
+    if(!uid)return null;
+    const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
+    const j=await r.json();
+    const pos=validUbicacionRow(Array.isArray(j)?j[0]:null);
+    if(!pos||(!allowStale&&!isRecentTrackingPoint(pos)))return null;
+    return{
+      ...pos,
+      label:await revGeoUbicacionLabel(pos.lat,pos.lon),
+      updatedAt:pos.ts,
+    };
+  }
+
+  async function refreshUbicacionConductores(uids=null){
+    const target=[...new Set((uids||conductores.map(c=>c.user_id)).filter(Boolean))];
+    if(!target.length)return;
+    const locs={};
+    await Promise.all(target.map(async uid=>{
+      const cond=conductores.find(c=>c.user_id===uid);
+      if(!conductorJourneyInfo(cond).open)return;
+      try{
+        const loc=await readLatestConductorLocation(uid);
+        if(loc)locs[uid]=loc;
+      }catch(_){/* noop */}
+    }));
+    setUbicacionConductorByUid(prev=>{
+      const next={...prev};
+      target.forEach(uid=>{
+        const cond=conductores.find(c=>c.user_id===uid);
+        if(!conductorJourneyInfo(cond).open)delete next[uid];
+        else if(locs[uid])next[uid]=locs[uid];
+      });
+      return next;
+    });
+  }
+
+  async function actualizarConductorUbicacion(uid){
+    const cond=conductores.find(c=>c.user_id===uid);
+    if(!conductorJourneyInfo(cond).open){
+      setUbicacionConductorByUid(prev=>{const next={...prev};delete next[uid];return next;});
+      showToast("Conductor fuera de jornada");
+      return null;
+    }
+    try{
+      const loc=await readLatestConductorLocation(uid);
+      if(!loc){showToast("Sin ubicación reciente");return null;}
+      setUbicacionConductorByUid(prev=>({...prev,[uid]:loc}));
+      showToast("Ubicación actualizada");
+      return loc;
+    }catch(_){
+      showToast("No se pudo actualizar ubicación");
+      return null;
+    }
+  }
+
+  async function actualizarServicioUbicacionYEta(sv){
+    if(!sv?.conductor_id)return;
+    const cond=conductores.find(c=>c.user_id===sv.conductor_id);
+    const loc=await actualizarConductorUbicacion(sv.conductor_id);
+    const planned=etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv));
+    let operational=null;
+    if(loc&&sv.estado==="en_curso"&&getOperationalTripStartedAt(sv)){
+      try{
+        operational=await getServiceEta({
+          service:sv,
+          stops:flotaStops[sv.id]||[],
+          norma:cond?.norma??null,
+          currentPosition:{lat:loc.lat,lon:loc.lon},
+          operationalTripStarted:true,
+        });
+      }catch(_){/* noop */}
+    }
+    setEtaOperativaById(prev=>({...prev,[sv.id]:{planned,operational}}));
+  }
+
   useEffect(()=>{
-    let cancelled=false;
-    const list=serviciosListaOperativa;
-    if(!list.length){
+    if(!serviciosListaOperativa.length){
       setEtaOperativaById({});
       return;
     }
-    (async()=>{
-      const uids=[...new Set(list.filter(s=>s.conductor_id).map(s=>s.conductor_id))];
-      const posByUid={};
-      const locMerged={};
-      await Promise.all(uids.map(async uid=>{
-        try{
-          const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
-          const j=await r.json();
-          const row=Array.isArray(j)?j[0]:null;
-          if(row&&Number.isFinite(Number(row.lat))&&Number.isFinite(Number(row.lon))){
-            const lat=Number(row.lat),lon=Number(row.lon);
-            posByUid[uid]={lat,lon};
-            try{
-              const name=await revGeo(lat,lon);
-              locMerged[uid]=name;
-            }catch(_){/* noop */}
-          }
-        }catch(_){/* noop */}
-      }));
-      if(!cancelled)setUbicacionConductorByUid(prev=>({...prev,...locMerged}));
+    const etas={};
+    serviciosListaOperativa.forEach(sv=>{
+      etas[sv.id]={planned:etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv)),operational:null};
+    });
+    setEtaOperativaById(etas);
+    void refreshUbicacionConductores([...new Set(serviciosListaOperativa.map(s=>s.conductor_id).filter(Boolean))]);
+  },[serviciosListaOperativa,conductores]);
 
-      const etas={};
-      await Promise.all(list.map(async sv=>{
-        try{
-          const svStops=flotaStops[sv.id]||[];
-          const cond=conductores.find(c=>c.user_id===sv.conductor_id);
-          const opStarted=!!getOperationalTripStartedAt(sv);
-          const pos=
-            sv.estado==="en_curso"&&opStarted&&sv.conductor_id?posByUid[sv.conductor_id]:null;
-          const slot=await getServiceEta({
-            service:sv,
-            stops:svStops,
-            norma:cond?.norma??null,
-            currentPosition:pos,
-            operationalTripStarted:opStarted,
-          });
-          etas[sv.id]=slot?.label||"—";
-        }catch{
-          etas[sv.id]="—";
-        }
-      }));
-      if(!cancelled)setEtaOperativaById(etas);
-    })();
-    const tick=setInterval(()=>{
-      if(cancelled)return;
-      (async()=>{
-        const list=serviciosListaOperativa;
-        if(!list.length)return;
-        const etas={};
-        await Promise.all(list.map(async sv=>{
-          try{
-            const svStops=flotaStops[sv.id]||[];
-            const cond=conductores.find(c=>c.user_id===sv.conductor_id);
-            const opStarted=!!getOperationalTripStartedAt(sv);
-            let pos=null;
-            if(sv.estado==="en_curso"&&opStarted&&sv.conductor_id){
-              try{
-                const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${sv.conductor_id}&order=ts.desc&limit=1`);
-                const j=await r.json();
-                const row=Array.isArray(j)?j[0]:null;
-                if(row&&Number.isFinite(Number(row.lat))&&Number.isFinite(Number(row.lon))){
-                  pos={lat:Number(row.lat),lon:Number(row.lon)};
-                }
-              }catch(_){/* noop */}
-            }
-            const slot=await getServiceEta({
-              service:sv,
-              stops:svStops,
-              norma:cond?.norma??null,
-              currentPosition:pos,
-              operationalTripStarted:opStarted,
-            });
-            etas[sv.id]=slot?.label||"—";
-          }catch{
-            etas[sv.id]="—";
-          }
-        }));
-        if(!cancelled)setEtaOperativaById((prev)=>({...prev,...etas}));
-      })();
-    },75000);
-    return()=>{cancelled=true;clearInterval(tick);};
-  },[serviciosListaOperativa,flotaStops,conductores]);
+  useEffect(()=>{
+    if(!empresa?.id||!conductores.length)return;
+    void refreshUbicacionConductores();
+  },[empresa?.id,conductores]);
 
   function openNuevoViaje(){
     const list=conductores.filter(c=>c.user_id);
@@ -10045,14 +10564,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   // ── VISTA JEFE ──
   const semaforo=(n)=>{
-    if(!n)return{col:"#94A3B8",icon:"⚪",label:"Sin datos"};
-    if(n.canDrive<=0)return{col:"#EF4444",icon:"🔴",label:"Parar ahora"};
-    if(n.canDrive<=30||n.rDay<=60)return{col:"#F97316",icon:"🟠",label:"Atención"};
-    return{col:"#22C55E",icon:"🟢",label:"OK"};
+    if(!n)return{col:"#94A3B8",icon:"",label:"Sin datos"};
+    if(n.canDrive<=0)return{col:EMPRESA_UI.red,icon:"",label:"Parar ahora"};
+    if(n.canDrive<=30||n.rDay<=60)return{col:EMPRESA_UI.amber,icon:"",label:"Atención"};
+    return{col:EMPRESA_UI.green,icon:"",label:"Operativo"};
   };
 
-  const TIPO_EV={cmr:"📄",foto:"📸",incidencia:"⚠️"};
-  const TIPO_EV_COL={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444"};
+  const TIPO_EV={cmr:"▤",foto:"□",incidencia:"○"};
+  const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red};
 
   // Nombre del conductor por uid
   const nombreConductor=(uid)=>{
@@ -10063,12 +10582,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const serviciosEnRuta=flotaServicios.filter(s=>s.estado==="en_curso").length;
 
   return(
-    <div style={{background:bg,minHeight:"100vh",paddingBottom:72}}>
+    <div style={{background:bg,minHeight:"100vh",paddingBottom:72,color:tx}}>
 
       {pickConductorViaje&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setPickConductorViaje(false)}>
-          <div style={{background:card,borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,maxHeight:"70vh",overflowY:"auto",padding:"16px 16px 28px",borderTop:"3px solid #F59E0B"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:14,fontWeight:800,color:tx,marginBottom:4}}>NUEVO VIAJE</div>
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.36)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setPickConductorViaje(false)}>
+          <div style={{background:card,borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,maxHeight:"70vh",overflowY:"auto",padding:"16px 16px 28px",borderTop:`1px solid ${EMPRESA_UI.border}`,boxShadow:"0 -12px 32px rgba(15,23,42,.16)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:14,fontWeight:650,color:tx,marginBottom:4}}>Nuevo servicio</div>
             <div style={{fontSize:12,color:su,marginBottom:14}}>Elige conductor para asignar el viaje</div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {conductores.filter(c=>c.user_id).map(c=>(
@@ -10079,8 +10598,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   style={{
                     width:"100%",
                     textAlign:"left",
-                    background:bg,
-                    border:"1px solid #334155",
+                    background:EMPRESA_UI.surfaceSoft,
+                    border:`1px solid ${EMPRESA_UI.border}`,
                     borderRadius:10,
                     padding:"12px 14px",
                     fontSize:14,
@@ -10089,7 +10608,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     cursor:"pointer",
                   }}
                 >
-                  👷 {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:600,marginLeft:8}}>· {c.matricula}</span>}
+                  {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:500,marginLeft:8}}>· {c.matricula}</span>}
                 </button>
               ))}
             </div>
@@ -10101,27 +10620,27 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       )}
 
       {/* Identidad empresa — compacto */}
-      <div style={{background:bg,borderBottom:"1px solid #334155",padding:"4px 12px",display:"flex",flexWrap:"wrap",alignItems:"center",justifyContent:"space-between",gap:8}}>
-        <div style={{fontSize:11,color:"#64748B",minWidth:0}}>
-          <span style={{fontWeight:700}}>{empresa?.nombre}</span>
+      <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"8px 14px",display:"flex",flexWrap:"wrap",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
+          <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
           {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}
           <span style={{marginLeft:8,color:su}}>
-            · <strong style={{color:"#F59E0B"}}>{serviciosEnRuta}</strong> activos
+            · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> activos
           </span>
         </div>
         <button type="button" onClick={()=>{navigator.clipboard?.writeText(empresa?.codigo_corto||empresa?.id?.slice(0,6).toUpperCase()||"");showToast("Copiado ✓");}}
-          style={{background:"none",border:"none",color:"#475569",fontFamily:"monospace",fontSize:10,cursor:"pointer",padding:"2px 0"}}>
+          style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:999,color:EMPRESA_UI.subtle,fontFamily:"monospace",fontSize:10,cursor:"pointer",padding:"3px 8px"}}>
           {empresa?.codigo_corto||empresa?.id?.slice(0,6).toUpperCase()||"—"}
         </button>
       </div>
 
       {/* Tabs flota — navegación secundaria */}
-      <div style={{display:"flex",background:bg,borderBottom:"1px solid #334155",position:"sticky",top:0,zIndex:90}}>
-        {[{id:"conductores",icon:"👷",label:"Conductores"},{id:"servicios",icon:"📦",label:"Servicios"},{id:"documentos",icon:"📄",label:"Documentos"}].map(t=>(
+      <div style={{display:"flex",background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,position:"sticky",top:0,zIndex:90}}>
+        {[{id:"conductores",icon:"◇",label:"Conductores"},{id:"servicios",icon:"▱",label:"Servicios"},{id:"documentos",icon:"▤",label:"Documentos"}].map(t=>(
           <button key={t.id} onClick={()=>setFlotaTab(t.id)}
-            style={{flex:1,background:"transparent",border:"none",borderBottom:`2px solid ${flotaTab===t.id?"#F59E0B55":"transparent"}`,padding:"6px 4px 5px",fontSize:10,fontWeight:600,color:flotaTab===t.id?"#F59E0B":"#64748B",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
-            <span style={{fontSize:15}}>{t.icon}</span>
-            <span style={{letterSpacing:0.3}}>{t.label}</span>
+            style={{flex:1,background:"transparent",border:"none",borderBottom:`2px solid ${flotaTab===t.id?EMPRESA_UI.accent:"transparent"}`,padding:"8px 4px 7px",fontSize:11,fontWeight:flotaTab===t.id?650:500,color:flotaTab===t.id?"#1e3a8a":EMPRESA_UI.subtle,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
+            <span style={{fontSize:14,color:flotaTab===t.id?EMPRESA_UI.accent:"#94a3b8"}}>{t.icon}</span>
+            <span>{t.label}</span>
           </button>
         ))}
       </div>
@@ -10130,9 +10649,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {flotaTab==="conductores"&&(
         <div style={{padding:"14px 14px 80px"}}>
           {/* Invite */}
-          <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
             {!addOpen?(
-              <button onClick={()=>setAddOpen(true)} style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:800,cursor:"pointer"}}>
+              <button onClick={()=>setAddOpen(true)} style={{width:"100%",background:EMPRESA_UI.tx,color:"white",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:600,cursor:"pointer"}}>
                 + Invitar conductor
               </button>
             ):(
@@ -10140,13 +10659,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 <div style={{fontSize:13,fontWeight:700,color:tx,marginBottom:10}}>Invitar conductor</div>
                 {[{val:addForm.nombre,key:"nombre",ph:"Nombre completo *"},{val:addForm.matricula,key:"matricula",ph:"Matrícula del camión"},{val:addForm.email,key:"email",ph:"Email del conductor *",type:"email"}].map(({val,key,ph,type})=>(
                   <input key={key} value={val} type={type||"text"} onChange={e=>setAddForm(p=>({...p,[key]:e.target.value}))} placeholder={ph}
-                    style={{width:"100%",background:bg,border:"2px solid #334155",borderRadius:9,padding:"10px 13px",fontSize:14,color:tx,marginBottom:8,outline:"none",boxSizing:"border-box"}}/>
+                    style={{width:"100%",background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"10px 13px",fontSize:14,color:tx,marginBottom:8,outline:"none",boxSizing:"border-box"}}/>
                 ))}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <button onClick={()=>setAddOpen(false)} style={{background:"#334155",color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
+                  <button onClick={()=>setAddOpen(false)} style={{background:EMPRESA_UI.surfaceSoft,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"10px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
                   <button onClick={añadirConductor} disabled={addLoading||!addForm.nombre.trim()||!addForm.email.trim()}
-                    style={{background:addLoading||!addForm.nombre.trim()||!addForm.email.trim()?"#475569":"#22C55E",color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
-                    {addLoading?"⏳ Enviando...":"📧 Invitar"}
+                    style={{background:addLoading||!addForm.nombre.trim()||!addForm.email.trim()?"#cbd5e1":EMPRESA_UI.tx,color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                    {addLoading?"Enviando...":"Invitar"}
                   </button>
                 </div>
               </div>
@@ -10155,9 +10674,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
           {/* Lista conductores */}
           {conductores.length===0?(
-            <div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}>
-              <div style={{fontSize:40,marginBottom:12}}>👷</div>
-              <div style={{fontSize:16,fontWeight:700,color:tx,marginBottom:6}}>Sin conductores todavía</div>
+            <div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
+              <div style={{fontSize:16,fontWeight:650,color:tx,marginBottom:6}}>Sin conductores todavía</div>
               <div style={{fontSize:13,color:su}}>Comparte el código con tus conductores</div>
             </div>
           ):(
@@ -10165,27 +10683,51 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               {conductores.map(c=>{
                 const sem=semaforo(c.norma);
                 const n=c.norma;
+                const journey=conductorJourneyInfo(c);
+                const liveLocation=journey.open&&c.user_id?ubicacionConductorByUid[c.user_id]:null;
+                const serviciosConductor=flotaServicios
+                  .filter(s=>s.conductor_id===c.user_id&&(s.estado==="en_curso"||s.estado==="asignado"))
+                  .sort((a,b)=>(a.estado==="en_curso"?0:1)-(b.estado==="en_curso"?0:1));
+                const servicioActual=serviciosConductor[0]||null;
+                const servicioPlan=servicioActual?getOperationalPlanSnapshot(servicioActual):null;
+                const servicioRuta=servicioActual
+                  ? `${servicioPlan?.planned_origin||safeOperationalPlaceName(servicioActual.origen,"Origen")} → ${servicioPlan?.planned_destination||safeOperationalPlaceName(servicioActual.destino,"Destino")}`
+                  : null;
                 return(
-                  <div key={c.id} style={{background:card,borderRadius:14,padding:"14px 16px",borderLeft:`4px solid ${c.pendiente?"#94A3B8":sem.col}`}}>
+                  <div key={c.id} style={{background:card,borderRadius:14,padding:"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:c.pendiente?0:10}}>
                       <div>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                          <span style={{fontSize:18}}>{c.pendiente?"⏳":sem.icon}</span>
-                          <span style={{fontSize:15,fontWeight:800,color:tx}}>{c.nombre||"Conductor"}</span>
-                          <span style={{fontSize:11,background:sem.col+"20",color:sem.col,borderRadius:6,padding:"2px 7px",fontWeight:700}}>{c.pendiente?"Sin vincular":sem.label}</span>
-                          {!c.pendiente&&c.rol==="gestor"&&<span style={{fontSize:11,background:"#A78BFA20",color:"#A78BFA",borderRadius:6,padding:"2px 7px",fontWeight:700}}>⚡ Gestor</span>}
+                          <span style={{width:8,height:8,borderRadius:"50%",background:c.pendiente?"#94a3b8":journey.open?sem.col:"#cbd5e1",flexShrink:0}}/>
+                          <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
+                          <span style={{fontSize:11,background:empresaTone(journey.open?sem.col:"#94A3B8").bg,color:empresaTone(journey.open?sem.col:"#94A3B8").fg,border:`1px solid ${empresaTone(journey.open?sem.col:"#94A3B8").border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>{c.pendiente?"Sin vincular":journey.open?sem.label:"Fuera jornada"}</span>
+                          {!c.pendiente&&c.rol==="gestor"&&<span style={{fontSize:11,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe",borderRadius:999,padding:"2px 8px",fontWeight:600}}>Gestor</span>}
                         </div>
-                        {c.matricula&&<div style={{fontSize:12,color:su}}>🚛 {c.matricula}</div>}
+                        {c.matricula&&<div style={{fontSize:12,color:su}}>Unidad {c.matricula}</div>}
                         {c.pendiente&&<div style={{fontSize:12,color:su,marginTop:4}}>Dale el código para que se vincule desde PERFIL</div>}
+                        {!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
+                        {!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:500}}>{fmtUbicacionActualizada(liveLocation)}</div>}
+                        {!c.pendiente&&<div style={{fontSize:12,color:journey.color,marginTop:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
+                        {!c.pendiente&&servicioActual&&(
+                          <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>
+                            Servicio actual: <span style={{color:tx,fontWeight:600}}>{servicioRuta}</span>
+                          </div>
+                        )}
                       </div>
                       <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
-                        <button onClick={()=>toggleActivo(c.id,c.activo)} style={{background:bg,border:"none",borderRadius:8,padding:"5px 10px",fontSize:11,color:su,cursor:"pointer"}}>
+                        <button onClick={()=>toggleActivo(c.id,c.activo)} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,padding:"5px 10px",fontSize:11,color:su,cursor:"pointer"}}>
                           {c.activo?"Desactivar":"Activar"}
                         </button>
                         {!c.pendiente&&c.user_id&&(
                           <button onClick={()=>toggleRol(c.id,c.rol||"conductor")}
-                            style={{background:c.rol==="gestor"?"#A78BFA20":"transparent",border:`1px solid ${c.rol==="gestor"?"#A78BFA":"#334155"}`,borderRadius:8,padding:"4px 8px",fontSize:10,color:c.rol==="gestor"?"#A78BFA":su,cursor:"pointer",fontWeight:700}}>
-                            {c.rol==="gestor"?"⬇️ Conductor":"⬆️ Gestor"}
+                            style={{background:c.rol==="gestor"?"#eef2ff":"transparent",border:`1px solid ${c.rol==="gestor"?"#c7d2fe":EMPRESA_UI.border}`,borderRadius:8,padding:"4px 8px",fontSize:10,color:c.rol==="gestor"?"#3730a3":su,cursor:"pointer",fontWeight:600}}>
+                            {c.rol==="gestor"?"Conductor":"Gestor"}
+                          </button>
+                        )}
+                        {!c.pendiente&&c.user_id&&journey.open&&(
+                          <button type="button" onClick={()=>actualizarConductorUbicacion(c.user_id)}
+                            style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:8,padding:"4px 8px",fontSize:10,color:"#1d4ed8",cursor:"pointer",fontWeight:600}}>
+                            ↻ Ubicación
                           </button>
                         )}
                       </div>
@@ -10199,9 +10741,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           {l:"Continua",      v:fmtDur(n.cont),c:n.cont>=270?"#EF4444":n.cont>=210?"#F97316":"#64748B"},
                           {l:"Semana",        v:`${fmtDur(n.weekDrive)}/56h`,c:n.weekDrive>LIM.WEEK*0.9?"#EF4444":n.weekDrive>LIM.WEEK*0.7?"#F97316":"#64748B"},
                         ].map(({l,v,c})=>(
-                          <div key={l} style={{background:bg,borderRadius:9,padding:"8px 10px"}}>
-                            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:2}}>{l.toUpperCase()}</div>
-                            <div style={{fontSize:15,fontWeight:800,color:c,fontFamily:"monospace"}}>{v}</div>
+                          <div key={l} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"8px 10px"}}>
+                            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:2}}>{l}</div>
+                            <div style={{fontSize:15,fontWeight:650,color:empresaTone(c).fg,fontFamily:"monospace"}}>{v}</div>
                           </div>
                         ))}
                       </div>
@@ -10209,8 +10751,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
                     {!c.pendiente&&c.user_id&&(
                       <button onClick={()=>setAsignarModal({id:c.user_id,nombre:c.nombre})}
-                        style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
-                        📦 ASIGNAR SERVICIO
+                        style={{width:"100%",background:EMPRESA_UI.tx,color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                        Asignar servicio
                       </button>
                     )}
                   </div>
@@ -10219,8 +10761,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             </div>
           )}
 
-          <button onClick={()=>loadConductores(empresa.id)} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
-            🔄 Actualizar
+          <button onClick={async()=>{await loadConductores(empresa.id);await refreshUbicacionConductores();}} style={{width:"100%",marginTop:16,background:EMPRESA_UI.surface,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:12,padding:"13px",fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:EMPRESA_UI.shadow}}>
+            Actualizar listado
           </button>
         </div>
       )}
@@ -10231,66 +10773,77 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           {flotaLoading?(
             <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando servicios...</div>
           ):flotaServicios.length===0?(
-            <div style={{background:card,borderRadius:10,padding:"20px 14px",textAlign:"center",border:"1px solid #334155"}}>
+            <div style={{background:card,borderRadius:12,padding:"24px 16px",textAlign:"center",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
               <button type="button" onClick={openNuevoViaje}
                 style={{
                   width:"100%",
-                  background:"linear-gradient(180deg,#F59E0B,#D97706)",
-                  color:"#0F172A",
+                  background:EMPRESA_UI.tx,
+                  color:"white",
                   border:"none",
                   borderRadius:10,
-                  padding:"12px 14px",
-                  fontSize:15,
-                  fontWeight:900,
+                  padding:"11px 14px",
+                  fontSize:14,
+                  fontWeight:600,
                   cursor:"pointer",
-                  letterSpacing:0.5,
                   marginBottom:12,
                 }}>
-                ＋ NUEVO VIAJE
+                Nuevo servicio
               </button>
-              <div style={{fontSize:36,marginBottom:10}}>📭</div>
-              <div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin servicios todavía</div>
-              <div style={{fontSize:13,color:su,lineHeight:1.45}}>Crea un viaje con <strong style={{color:"#F59E0B"}}>NUEVO VIAJE</strong> o asigna desde Conductores.</div>
+              <div style={{fontSize:15,fontWeight:650,color:tx,marginBottom:6}}>Sin servicios todavía</div>
+              <div style={{fontSize:13,color:su,lineHeight:1.45}}>Crea un servicio nuevo o asígnalo desde Conductores.</div>
             </div>
           ):(
             <>
-              <button type="button" onClick={openNuevoViaje}
-                style={{
-                  width:"100%",
-                  background:"linear-gradient(180deg,#F59E0B,#D97706)",
-                  color:"#0F172A",
-                  border:"none",
-                  borderRadius:11,
-                  padding:"12px 14px",
-                  fontSize:15,
-                  fontWeight:900,
-                  cursor:"pointer",
-                  letterSpacing:0.5,
-                  marginBottom:8,
-                }}>
-                ＋ NUEVO VIAJE
-              </button>
-              <div style={{display:"flex",gap:6,marginBottom:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
-                {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
-                  <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
+              <div style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:14,padding:"14px",boxShadow:EMPRESA_UI.shadow,marginBottom:18}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,marginBottom:12}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:650,color:tx}}>Acciones</div>
+                    <div style={{fontSize:11,color:su,marginTop:2}}>Crear servicio o filtrar la operación</div>
+                  </div>
+                  <button type="button" onClick={openNuevoViaje}
                     style={{
-                      flexShrink:0,
-                      background:serviciosVistaTab===tab.id?"#334155":"transparent",
-                      border:`1px solid ${serviciosVistaTab===tab.id?"#F59E0B66":"#334155"}`,
-                      borderRadius:20,
-                      padding:"5px 11px",
-                      fontSize:11,
-                      fontWeight:700,
-                      color:serviciosVistaTab===tab.id?"#F59E0B":"#94A3B8",
+                      background:EMPRESA_UI.tx,
+                      color:"white",
+                      border:"none",
+                      borderRadius:10,
+                      padding:"9px 13px",
+                      fontSize:13,
+                      fontWeight:600,
                       cursor:"pointer",
+                      flexShrink:0,
                     }}>
-                    {tab.label}
+                    Nuevo servicio
                   </button>
-                ))}
+                </div>
+                <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
+                <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
+                  {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
+                    <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
+                      style={{
+                        flexShrink:0,
+                        background:serviciosVistaTab===tab.id?EMPRESA_UI.accentSoft:EMPRESA_UI.surface,
+                        border:`1px solid ${serviciosVistaTab===tab.id?"#bfdbfe":EMPRESA_UI.border}`,
+                        borderRadius:20,
+                        padding:"5px 11px",
+                        fontSize:11,
+                        fontWeight:serviciosVistaTab===tab.id?650:500,
+                        color:serviciosVistaTab===tab.id?"#1d4ed8":EMPRESA_UI.subtle,
+                        cursor:"pointer",
+                      }}>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
               </div>
+              <div style={{display:"flex",alignItems:"center",gap:12,margin:"4px 0 10px"}}>
+                <div style={{height:1,background:EMPRESA_UI.border,flex:1}}/>
+                <div style={{fontSize:11,color:su,fontWeight:600,letterSpacing:.2}}>Lista operacional</div>
+                <div style={{height:1,background:EMPRESA_UI.border,flex:1}}/>
+              </div>
+              <div style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:14,boxShadow:EMPRESA_UI.shadow,overflow:"hidden"}}>
               {serviciosListaOperativa.length===0?(
-                <div style={{padding:"24px 12px",textAlign:"center",color:su,fontSize:13,lineHeight:1.5}}>
-                  Nada en esta vista · prueba otro filtro o <strong style={{color:"#F59E0B"}}>NUEVO VIAJE</strong>
+                <div style={{padding:"28px 14px",textAlign:"center",color:su,fontSize:13,lineHeight:1.5}}>
+                  Nada en esta vista · prueba otro filtro o crea un servicio nuevo
                 </div>
               ):(
                 <div style={{display:"flex",flexDirection:"column"}}>
@@ -10306,9 +10859,23 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
                     const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
                     const normaC=conductor?.norma;
-                    const etaCompact=etaOperativaById[sv.id]??"…";
-                    const ubicApprox=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
+                    const ubicInfo=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
+                    const ubicLine=fmtUbicacionConductorEmpresa(ubicInfo);
+                    const ubicUpdated=fmtUbicacionActualizada(ubicInfo);
                     const incNCompact=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
+                    const nextStop=nextPendingStop(svStops);
+                    const progressLabel=svStops.length?`${completados}/${svStops.length}`:"0/0";
+                    const planSnapshot=getOperationalPlanSnapshot(sv);
+                    const planSlot=etaSlotFromOperationalPlan(planSnapshot);
+                    const etaEntry=etaOperativaById[sv.id]||{planned:planSlot,operational:null};
+                    const etaCompact=getEtaLabelEmpresa(etaEntry);
+                    const etaEstado=getEtaEstadoEmpresa(etaEntry);
+                    const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
+                    const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
+                    const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
+                    const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
+                    const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
+                    const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
                     const dossierMetrics=computeTripOperationalMetrics(sv,svStops);
                     const resumenViajeTexto=buildTripSummaryText({
                       servicio:sv,
@@ -10320,15 +10887,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     });
                     const expanded=svCardExpand===sv.id;
                     const clienteCompact=stripServicioOperacionDisplay(sv.referencia)||"—";
-                    const expedienteBg="#1a2234";
-                    const expedienteCard="#243047";
+                    const etaTone=empresaTone(etaEstado.color);
+                    const opTone=empresaTone(operationalMeta.color);
+                    const stateTone=empresaTone(color);
+                    const expedienteBg=EMPRESA_UI.surfaceSoft;
+                    const expedienteCard=EMPRESA_UI.surface;
                     return(
                       <div
                         key={sv.id}
                         style={{
-                          borderBottom:"1px solid rgba(51,65,85,0.45)",
+                          borderBottom:`1px solid ${EMPRESA_UI.border}`,
                           overflow:"hidden",
-                          borderLeft:attention&&!expanded?"2px solid rgba(251, 146, 60, 0.85)":"2px solid transparent",
+                          background:expanded?EMPRESA_UI.surface:"transparent",
+                          borderLeft:attention&&!expanded?`3px solid ${EMPRESA_UI.amber}`:"3px solid transparent",
                         }}
                       >
                         <div
@@ -10337,36 +10908,70 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           onClick={()=>setSvCardExpand(expanded?null:sv.id)}
                           onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setSvCardExpand(expanded?null:sv.id);}}}
                           style={{
-                            padding:"8px 0 10px",
+                            padding:"10px 8px 11px",
                             cursor:"pointer",
-                            display:"flex",
-                            alignItems:"flex-start",
-                            justifyContent:"space-between",
+                            display:"grid",
+                            gridTemplateColumns:"1fr auto",
                             gap:8,
+                            background:expanded?EMPRESA_UI.surface:"transparent",
                           }}
                         >
                           <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:14,fontWeight:900,color:tx,lineHeight:1.25,letterSpacing:0.2}}>{sv.origen} → {sv.destino}</div>
-                            <div style={{fontSize:12,color:"#94A3B8",marginTop:5,lineHeight:1.35}}>📍 {ubicApprox||"—"}</div>
-                            <div style={{fontSize:12,color:"#CBD5E1",marginTop:5,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>🕒 {etaCompact}</div>
-                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,marginTop:6,fontSize:12,color:su}}>
-                              <span>👷 {nombreConductor(sv.conductor_id)}</span>
-                              {svStops.length>0&&<span>📦 {completados}/{svStops.length}</span>}
-                              {incNCompact>0&&<span style={{color:"#FB923C",fontWeight:800}}>⚠ {incNCompact} incidencia{incNCompact!==1?"s":""}</span>}
+                            <div style={{fontSize:13,fontWeight:600,color:tx,lineHeight:1.35,letterSpacing:0.05,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              {routeFrom} → {routeTo}
                             </div>
-                            <div style={{fontSize:11,color:su,marginTop:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              Cliente · <span style={{color:"#CBD5E1",fontWeight:600}}>{clienteCompact}</span>
-                              <span style={{margin:"0 6px",color:"#475569"}}>·</span>
-                              <span style={{background:color+"22",color,borderRadius:4,padding:"1px 6px",fontWeight:800}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
-                              {attention&&<span title={attentionReason||"Atención"} style={{color:"#FB923C",marginLeft:6}}>⚠</span>}
+                            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3,flexWrap:"wrap"}}>
+                              <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                                <span style={{fontSize:22,fontWeight:650,color:etaCompact==="—"?"#94A3B8":tx,lineHeight:1,fontVariantNumeric:"tabular-nums",letterSpacing:-0.2}}>{String(etaCompact).replace(/^.*?(\d{1,2}:\d{2}).*$/,"$1")}</span>
+                                <span style={{fontSize:10,color:su,fontWeight:500}}>Llegada estimada</span>
+                              </div>
+                              <span style={{fontSize:10,fontWeight:600,color:etaTone.fg,background:etaTone.bg,border:`1px solid ${etaTone.border}`,borderRadius:999,padding:"2px 7px",lineHeight:1.2,whiteSpace:"nowrap"}}>
+                                ● {etaEstado.label}
+                              </span>
+                            </div>
+                            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:6,fontSize:13,color:EMPRESA_UI.subtle,lineHeight:1.35,overflow:"hidden",whiteSpace:"nowrap"}}>
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Ubicación · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:500}}> · {ubicUpdated}</span>}</span>
+                              {sv.conductor_id&&(
+                                <button type="button" onClick={e=>{e.stopPropagation();void actualizarServicioUbicacionYEta(sv);}}
+                                  style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 7px",fontSize:10,color:"#1d4ed8",cursor:"pointer",fontWeight:600,flexShrink:0}}>
+                                  ↻
+                                </button>
+                              )}
+                            </div>
+                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:"6px 10px",marginTop:6,fontSize:12.5,color:EMPRESA_UI.subtle,lineHeight:1.35}}>
+                              <span>Conductor · {nombreConductor(sv.conductor_id)}</span>
+                              <span>Paradas · {progressLabel}</span>
+                              {(planKm!=null||planDrive||planBreaks!=null||planRestLabel)&&(
+                                <span>
+                                  Plan · {[
+                                    planKm!=null?`${planKm} km`:null,
+                                    planDrive,
+                                    planBreaks!=null?`${planBreaks} pausa${planBreaks===1?"":"s"}`:null,
+                                    planRestLabel,
+                                  ].filter(Boolean).join(" · ")}
+                                </span>
+                              )}
+                              <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>
+                                Próxima: <strong style={{color:tx,fontWeight:600}}>{nextStop?.nombre||"—"}</strong>{nextStop&&<span style={{color:su}}> · {stopTipoCompacto(nextStop)}</span>}
+                              </span>
+                            </div>
+                            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:5,fontSize:11.5,color:su,lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap"}}>
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Cliente: <span style={{color:EMPRESA_UI.subtle,fontWeight:500}}>{clienteCompact}</span></span>
+                              <span style={{background:stateTone.bg,color:stateTone.fg,border:`1px solid ${stateTone.border}`,borderRadius:999,padding:"2px 7px",fontWeight:600,flexShrink:0}}>● {ESTADO_LABEL[sv.estado]||sv.estado}</span>
+                              <span style={{background:opTone.bg,color:opTone.fg,border:`1px solid ${opTone.border}`,borderRadius:999,padding:"2px 7px",fontWeight:600,flexShrink:0}}>● {operationalMeta.label}</span>
+                              {incNCompact>0?(
+                                <span title={attentionReason||undefined} style={{color:EMPRESA_UI.amber,fontWeight:600,flexShrink:0}}>Atención · {incNCompact}</span>
+                              ):(
+                                <span style={{color:su,fontWeight:500,flexShrink:0}}>Incidencias · 0</span>
+                              )}
                             </div>
                           </div>
-                          <div style={{fontSize:13,color:su,flexShrink:0,lineHeight:1.2,paddingTop:2}}>{expanded?"▼":"▶"}</div>
+                          <div style={{fontSize:13,color:su,flexShrink:0,lineHeight:1.2,paddingTop:2}}>{expanded?"⌄":"›"}</div>
                         </div>
                         {expanded&&(
-                          <div style={{borderTop:"1px solid rgba(51,65,85,0.55)",padding:"10px 8px 10px",marginBottom:2,background:expedienteBg}}>
-                            <div style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:10,border:"1px solid rgba(51,65,85,0.65)"}}>
-                              <div style={{fontSize:12,fontWeight:800,color:tx,marginBottom:8,letterSpacing:0.4}}>Resumen operacional</div>
+                          <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 8px 10px",marginBottom:2,background:expedienteBg}}>
+                            <div style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:10,border:`1px solid ${EMPRESA_UI.border}`}}>
+                              <div style={{fontSize:12,fontWeight:650,color:tx,marginBottom:8,letterSpacing:0.2}}>Resumen operacional</div>
                               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:8}}>
                                 {[
                                   {l:"Tiempo total viaje",v:dossierMetrics.tiempoTotalViajeMin!=null?fmtDur(dossierMetrics.tiempoTotalViajeMin):"—"},
@@ -10377,18 +10982,18 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                   {l:"Espera muelle · descargas",v:fmtDur(dossierMetrics.esperaMuelleDescargaMin)},
                                   {l:"Incidencias",v:String(incNCompact),raw:true},
                                 ].map(({l,v,raw})=>(
-                                  <div key={l} style={{background:"rgba(15,23,42,0.45)",borderRadius:8,padding:"8px 10px"}}>
-                                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>{l}</div>
-                                    <div style={{fontSize:13,fontWeight:800,color:raw&&Number(v)>0?"#FB923C":tx,fontFamily:raw?undefined:"monospace"}}>{v}</div>
+                                  <div key={l} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,padding:"8px 10px"}}>
+                                    <div style={{fontSize:10,color:su,fontWeight:500,marginBottom:3}}>{l}</div>
+                                    <div style={{fontSize:13,fontWeight:650,color:raw&&Number(v)>0?EMPRESA_UI.amber:tx,fontFamily:raw?undefined:"monospace"}}>{v}</div>
                                   </div>
                                 ))}
                               </div>
                               <div style={{fontSize:10,color:su,marginTop:8,lineHeight:1.4}}>
-                                Totales desde inicio del viaje operacional (tras «Añadir destino al viaje»). En planta = entre entrada y salida de muelle.
+                                Totales desde inicio del viaje operacional (tras «Añadir destino al servicio»). En planta = entre entrada y salida de muelle.
                               </div>
                             </div>
 
-                            <div style={{fontSize:12,fontWeight:800,color:tx,marginBottom:8,letterSpacing:0.5}}>OPERACIÓN DEL VIAJE</div>
+                            <div style={{fontSize:12,fontWeight:650,color:tx,marginBottom:8,letterSpacing:0.3}}>Operación del servicio</div>
                             {dossierMetrics.perStop.length===0?(
                               <div style={{fontSize:12,color:su,marginBottom:10}}>Sin paradas registradas en el plan.</div>
                             ):dossierMetrics.perStop.map((row,idx)=>{
@@ -10396,52 +11001,52 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               const labelGroup=OPERATIONAL_GROUP_LABEL[row.group]||row.stop.tipo||"PARADA";
                               const titulo=`${labelGroup} — ${row.stop.nombre||"Sin nombre"}`;
                               return(
-                                <div key={row.stop.id||idx} style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:8,border:"1px solid rgba(51,65,85,0.55)"}}>
-                                  <div style={{fontSize:13,fontWeight:800,color:tx,marginBottom:8}}>{titulo}</div>
+                                <div key={row.stop.id||idx} style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:8,border:`1px solid ${EMPRESA_UI.border}`}}>
+                                  <div style={{fontSize:13,fontWeight:650,color:tx,marginBottom:8}}>{titulo}</div>
                                   <div style={{display:"flex",flexDirection:"column",gap:5,fontSize:12,color:su}}>
                                     <div><span style={{color:"#94A3B8"}}>Entrada muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.entradaMuelleMs)}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Inicio operación · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.inicioOperacionMs)}</span></div>
+                                    <div><span style={{color:"#94A3B8"}}>Inicio operación (entrada) · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.inicioOperacionMs)}</span></div>
                                     <div><span style={{color:"#94A3B8"}}>Salida muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.salidaMuelleMs)}</span></div>
                                     <div><span style={{color:"#94A3B8"}}>Tiempo en planta · </span><span style={{color:"#F59E0B",fontWeight:700}}>{row.tiempoEnPlantaMin!=null?fmtDur(row.tiempoEnPlantaMin):"—"}</span></div>
                                     <div><span style={{color:"#94A3B8"}}>Traslado previo · </span><span style={{color:tx}}>{row.trasladoPrevioMin!=null?fmtDur(row.trasladoPrevioMin):"—"}</span><span style={{fontSize:10,marginLeft:6,color:"#64748B"}}> (hasta esta parada)</span></div>
                                   </div>
                                   {incLines.length>0&&(
-                                    <div style={{marginTop:10,paddingTop:8,borderTop:"1px solid rgba(51,65,85,0.5)"}}>
-                                      <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:4}}>Incidencias en esta operación</div>
-                                      {incLines.map((t,j)=>(<div key={j} style={{fontSize:12,color:"#FB923C",lineHeight:1.35}}>⚠ {t}</div>))}
+                                    <div style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${EMPRESA_UI.border}`}}>
+                                      <div style={{fontSize:10,color:su,fontWeight:650,marginBottom:4}}>Incidencias en esta operación</div>
+                                      {incLines.map((t,j)=>(<div key={j} style={{fontSize:12,color:EMPRESA_UI.amber,lineHeight:1.35}}>Atención · {t}</div>))}
                                     </div>
                                   )}
                                 </div>
                               );
                             })}
 
-                            <div style={{background:expedienteCard,borderRadius:10,padding:"12px 14px",marginTop:10,marginBottom:12,border:"1px solid rgba(245,158,11,0.25)"}}>
-                              <div style={{fontSize:13,fontWeight:800,color:"#F59E0B",marginBottom:8}}>📄 Documento · Resumen del viaje</div>
+                            <div style={{background:expedienteCard,borderRadius:10,padding:"12px 14px",marginTop:10,marginBottom:12,border:`1px solid ${EMPRESA_UI.border}`}}>
+                              <div style={{fontSize:13,fontWeight:650,color:tx,marginBottom:8}}>Documento · Resumen del viaje</div>
                               <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,lineHeight:1.5,color:su,fontFamily:"system-ui,sans-serif"}}>{resumenViajeTexto}</pre>
                             </div>
 
-                            <div style={{borderTop:"1px solid rgba(51,65,85,0.45)",paddingTop:10}}>
+                            <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,paddingTop:10}}>
                               <div style={{fontSize:12,color:su,marginBottom:8}}>
-                                <span style={{background:operationalMeta.color+"22",color:operationalMeta.color,borderRadius:4,padding:"2px 8px",fontSize:11,fontWeight:700,marginRight:8}}>{operationalMeta.icon} {operationalMeta.label}</span>
+                                <span style={{background:opTone.bg,color:opTone.fg,border:`1px solid ${opTone.border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600,marginRight:8}}>● {operationalMeta.label}</span>
                                 <span>Última actividad: {lastActivity.label}</span>
                                 {stripServicioOperacionDisplay(sv.referencia)&&<span style={{marginLeft:8,color:"#F59E0B"}}>Ref {stripServicioOperacionDisplay(sv.referencia)}</span>}
                               </div>
                               {attention&&(
-                                <div style={{fontSize:12,color:"#FB923C",lineHeight:1.35,marginBottom:8}}>
-                                  ⚠ {attentionReason||"Atención requerida"}
+                                <div style={{fontSize:12,color:EMPRESA_UI.amber,lineHeight:1.35,marginBottom:8}}>
+                                  {attentionReason||"Atención requerida"}
                                 </div>
                               )}
                               {svStops.length>0&&(
-                                <div style={{background:"#141c2e",borderRadius:4,height:5,overflow:"hidden",marginBottom:10}}>
-                                  <div style={{background:sv.estado==="completado"?"#22C55E":"#F59E0B",height:"100%",width:`${(completados/svStops.length)*100}%`,borderRadius:4}}/>
+                                <div style={{background:"#e2e8f0",borderRadius:4,height:5,overflow:"hidden",marginBottom:10}}>
+                                  <div style={{background:sv.estado==="completado"?EMPRESA_UI.green:EMPRESA_UI.accent,height:"100%",width:`${(completados/svStops.length)*100}%`,borderRadius:4}}/>
                                 </div>
                               )}
                               {stopActual&&sv.estado==="en_curso"&&(
                                 <div style={{marginBottom:10}}>
                                   <div style={{fontSize:11,color:su,marginBottom:3}}>Stop actual</div>
-                                  <div style={{fontSize:14,fontWeight:700,color:tx}}>{stopActual.nombre}</div>
+                                  <div style={{fontSize:14,fontWeight:650,color:tx}}>{stopActual.nombre}</div>
                                   <div style={{fontSize:12,color:su}}>{String(stopActual.tipo||"").replace("_"," ").toUpperCase()} · {stopActual.orden}/{svStops.length}</div>
-                                  {stopActual.hora_llegada_real&&<div style={{fontSize:12,color:"#22C55E",marginTop:2}}>Llegó {new Date(stopActual.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
+                                  {stopActual.hora_llegada_real&&<div style={{fontSize:12,color:EMPRESA_UI.green,marginTop:2}}>Llegó {new Date(stopActual.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
                                 </div>
                               )}
                               {normaC&&sv.estado==="en_curso"&&(
@@ -10449,12 +11054,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                   <div style={{fontSize:11,color:su,marginBottom:6}}>Conducción · {nombreConductor(sv.conductor_id)}</div>
                                   <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
                                     {[
-                                      {l:"Disponible",v:normaC.canDrive<=0?"¡PARAR!":fmtDur(normaC.canDrive),c:normaC.canDrive<=0?"#EF4444":normaC.canDrive<=30?"#F97316":"#22C55E"},
-                                      {l:"Hoy",v:fmtDur(normaC.todayDrive),c:"#F59E0B"},
+                                      {l:"Disponible",v:normaC.canDrive<=0?"Parar":fmtDur(normaC.canDrive),c:normaC.canDrive<=0?EMPRESA_UI.red:normaC.canDrive<=30?EMPRESA_UI.amber:EMPRESA_UI.green},
+                                      {l:"Hoy",v:fmtDur(normaC.todayDrive),c:EMPRESA_UI.amber},
                                       {l:"Semana",v:fmtDur(normaC.weekDrive),c:"#64748B"},
                                     ].map(({l,v,c})=>(
                                       <div key={l} style={{textAlign:"center"}}>
-                                        <div style={{fontSize:13,fontWeight:800,color:c,fontFamily:"monospace"}}>{v}</div>
+                                        <div style={{fontSize:13,fontWeight:650,color:c,fontFamily:"monospace"}}>{v}</div>
                                         <div style={{fontSize:10,color:su,marginTop:2}}>{l}</div>
                                       </div>
                                     ))}
@@ -10470,7 +11075,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   })}
                 </div>
               )}
-              <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:12,background:"#334155",color:"white",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}}>🔄 Actualizar</button>
+              </div>
+              <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:12,background:EMPRESA_UI.surface,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:EMPRESA_UI.shadow}}>Actualizar</button>
             </>
           )}
         </div>
@@ -10548,8 +11154,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 const serviciosFiltrados=flotaServicios.filter(sv=>{
                   if(filtConductor&&sv.conductor_id!==filtConductor)return false;
                   if(filtFecha&&sv.fecha_inicio&&!sv.fecha_inicio.startsWith(filtFecha))return false;
-                  if(filtRef&&sv.referencia&&!sv.referencia.toLowerCase().includes(filtRef.toLowerCase()))return false;
-                  if(filtRef&&!sv.referencia&&filtRef)return false;
+                  const refVisible=stripServicioOperacionDisplay(sv.referencia);
+                  if(filtRef&&refVisible&&!refVisible.toLowerCase().includes(filtRef.toLowerCase()))return false;
+                  if(filtRef&&!refVisible&&filtRef)return false;
                   if(filtCliente){
                     const q=filtCliente.toLowerCase();
                     if(!sv.destino?.toLowerCase().includes(q)&&!sv.origen?.toLowerCase().includes(q))return false;
@@ -11758,6 +12365,10 @@ function ServiciosTimelineView({uid}){
               const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
               const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
               const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
+              const refVisible=stripServicioOperacionDisplay(sv.referencia);
+              const planSnapshot=getOperationalPlanSnapshot(sv);
+              const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
+              const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
               let duracion=null;
               if(sv.estado==="completado"&&sv.fecha_inicio){
                 const lastStop=svStops.filter(s=>s.hora_salida_real).sort((a,b)=>new Date(b.hora_salida_real)-new Date(a.hora_salida_real))[0];
@@ -11774,7 +12385,7 @@ function ServiciosTimelineView({uid}){
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                           <span style={{fontSize:16}}>{ESTADO_ICON[sv.estado]||"📋"}</span>
-                          <span style={{fontSize:16,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</span>
+                          <span style={{fontSize:16,fontWeight:800,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{routeFrom} → {routeTo}</span>
                         </div>
                         {attention&&(
                           <div style={{marginBottom:6,textAlign:"left"}}>
@@ -11782,7 +12393,7 @@ function ServiciosTimelineView({uid}){
                             {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
                           </div>
                         )}
-                        {sv.referencia&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {sv.referencia}</div>}
+                        {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {refVisible}</div>}
                         <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                           <span style={{background:color+"20",color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
                           <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
@@ -11891,22 +12502,17 @@ function useServicioActivo(uid){
     return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
   },[cargar]);
   const completados=countCompletedStops(stops);
-  async function marcarInicioOperacion(stopId){
-    const stop=stops.find(s=>s.id===stopId);
-    if(!stop)return;
-    const now=new Date().toISOString();
-    const nuevas=mergeStopOperacionMeta(stop.notas,{inicio_operacion_at:now});
-    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas:nuevas})});
-    setStops(prev=>prev.map(s=>s.id===stopId?{...s,notas:nuevas}:s));
-  }
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
-    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
+    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
+    if(!res.ok)throw new Error("No se pudo guardar la entrada en muelle");
     setStops(prev=>prev.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s));
+    window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId){
     const now=new Date().toISOString();
-    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
+    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
+    if(!res.ok)throw new Error("No se pudo guardar la salida de muelle");
     const updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
     setStops(updated);
 
@@ -11915,24 +12521,49 @@ function useServicioActivo(uid){
     if(stop&&uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
       const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
       const finEv=STOP_TIPO_TO_FIN_EV[stop.tipo];
-      const llegada=stop.hora_llegada_real||now;
+      const inicioMs=getInicioOperacionMs(stop);
+      const llegada=inicioMs?new Date(inicioMs).toISOString():stop.hora_llegada_real||now;
       const rows=[
-        {id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:llegada,note:`Auto: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false},
+        !inicioMs&&{id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:llegada,note:`Auto: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false},
         {id:Date.now()+Math.random()+1,user_id:uid,type:finEv,ts:now,note:`Auto: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false},
-      ];
+      ].filter(Boolean);
       sbUpsert("entries",rows).catch(()=>{});
     }
 
     if(updated.filter(s=>s.estado==="pendiente").length===0){
-      await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
+      const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
+      if(!doneRes.ok)throw new Error("No se pudo completar el servicio");
       setServicio(prev=>({...prev,estado:"completado"}));
     }
+    window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function iniciarServicio(servicioId){
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio:new Date().toISOString()})});
     setServicio(prev=>({...prev,estado:"en_curso"}));
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,marcarInicioOperacion,iniciarServicio,recargar:cargar};
+  async function iniciarViajeOperacional(servicioId){
+    if(!servicio||servicio.id!==servicioId)return;
+    if(getOperationalTripStartedAt(servicio))return;
+    const referencia=mergeReferenciaOperacional(servicio.referencia||null,{operational_trip_started_at:new Date().toISOString()});
+    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
+    setServicio(prev=>prev?{...prev,referencia}:prev);
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
+  async function marcarInicioOperacionStop(stopId){
+    const stop=stops.find(s=>s.id===stopId);
+    if(!stop||getInicioOperacionMs(stop))return;
+    const now=new Date().toISOString();
+    const notas=mergeStopOperacionMeta(stop.notas||"",{inicio_operacion_at:now});
+    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
+    setStops(prev=>prev.map(s=>s.id===stopId?{...s,notas}:s));
+    if(uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
+      const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
+      sbUpsert("entries",[{id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:now,note:`Manual: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false}]).catch(()=>{});
+    }
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
+  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar:cargar};
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -12276,17 +12907,21 @@ function ServicioDocsView({uid,showToast}){
         const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
         const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
         const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
+        const refVisible=stripServicioOperacionDisplay(sv.referencia);
+        const planSnapshot=getOperationalPlanSnapshot(sv);
+        const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
+        const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
         return(
           <div key={sv.id} style={{marginBottom:16}}>
             <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
-              <div style={{fontSize:16,fontWeight:800,color:tx,marginBottom:2}}>{sv.origen} → {sv.destino}</div>
+              <div style={{fontSize:16,fontWeight:800,color:tx,marginBottom:2}}>{routeFrom} → {routeTo}</div>
               {attention&&(
                 <div style={{marginBottom:6}}>
                   <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
                   {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
                 </div>
               )}
-              {sv.referencia&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {sv.referencia}</div>}
+              {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {refVisible}</div>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
@@ -12350,66 +12985,6 @@ function ServicioDocsView({uid,showToast}){
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-//  BANDA DE SERVICIO — HOY
-// ─────────────────────────────────────────────────────────────
-function BandaServicio({uid,showToast,onVerServicio}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,recargar}=useServicioActivo(uid);
-  const su="#64748B";
-
-  if(loading||!servicio||servicio.estado==="completado")return null;
-  const stopMostrar=getCurrentStop(stops);
-  if(!stopMostrar)return null;
-  const estaEnParada=stopMostrar.estado==="llegado";
-  const color=STOP_COLOR[stopMostrar.tipo]||"#06B6D4";
-
-  return(
-    <div style={{margin:"10px 14px 0",background:estaEnParada?"#1A0E2E":"#0D1829",border:`1.5px solid ${estaEnParada?"#7C3AED50":"#1E3A5F"}`,borderRadius:14,overflow:"hidden"}}>
-      <div style={{padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${estaEnParada?"#7C3AED30":"#0D2040"}`}}>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <div style={{width:6,height:6,borderRadius:"50%",background:estaEnParada?"#A78BFA":"#3B82F6",boxShadow:`0 0 6px ${estaEnParada?"#7C3AED":"#3B82F6"}`}}/>
-          <span style={{fontSize:10,fontWeight:800,color:estaEnParada?"#A78BFA":"#3B82F6",letterSpacing:1}}>{estaEnParada?"EN PARADA":"SERVICIO ACTIVO"}</span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:10,color:su}}>{completados}/{stops.length} stops</span>
-          <button onClick={onVerServicio} style={{background:"transparent",border:"none",color:"#3B82F6",fontSize:11,fontWeight:700,cursor:"pointer",padding:"2px 6px"}}>VER TODO →</button>
-        </div>
-      </div>
-      <div style={{padding:"10px 12px"}}>
-        <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
-          <span style={{fontSize:28,flexShrink:0}}>{STOP_ICON[stopMostrar.tipo]||"📍"}</span>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:15,fontWeight:800,color:"#F1F5F9",lineHeight:1.2}}>{stopMostrar.nombre}</div>
-            <div style={{fontSize:11,color,marginTop:2,fontWeight:600}}>{estaEnParada?"📍 Has llegado":"🚛 Siguiente parada"} · Stop {stopMostrar.orden}/{stops.length}</div>
-            {stopMostrar.direccion&&<div style={{fontSize:11,color:su,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stopMostrar.direccion}</div>}
-          </div>
-        </div>
-        {!estaEnParada?(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            {(stopMostrar.lat&&stopMostrar.lon||stopMostrar.direccion)&&(
-              <a href={stopMostrar.lat?`https://maps.google.com/maps?daddr=${stopMostrar.lat},${stopMostrar.lon}`:`https://maps.google.com/maps?daddr=${encodeURIComponent(stopMostrar.direccion)}`}
-                target="_blank" rel="noopener noreferrer"
-                style={{background:"#1E40AF",color:"white",borderRadius:10,padding:"10px",fontSize:13,fontWeight:700,textAlign:"center",textDecoration:"none",display:"block"}}>
-                🗺 NAVEGAR
-              </a>
-            )}
-            <button onClick={()=>marcarLlegado(stopMostrar.id).then(()=>showToast("📍 Llegada registrada"))}
-              style={{background:"#22C55E",color:"white",border:"none",borderRadius:10,padding:"10px",fontSize:13,fontWeight:800,cursor:"pointer",gridColumn:(stopMostrar.lat||stopMostrar.direccion)?"auto":"1/-1"}}>
-              ✅ HE LLEGADO
-            </button>
-          </div>
-        ):(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <button onClick={onVerServicio} style={{background:"#7C3AED20",color:"#A78BFA",border:"1.5px solid #7C3AED50",borderRadius:10,padding:"10px",fontSize:13,fontWeight:700,cursor:"pointer"}}>📄 EVIDENCIAS</button>
-            <button onClick={()=>marcarCompletado(stopMostrar.id).then(()=>{showToast("✅ Stop completado");recargar();})}
-              style={{background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:10,padding:"10px",fontSize:13,fontWeight:800,cursor:"pointer"}}>✅ SALIR</button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -12592,10 +13167,19 @@ function EvidenciasStop({stopId,showToast}){
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
 function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActivo,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,marcarInicioOperacion,iniciarServicio,recargar}=useServicioActivo(uid);
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
-  const card="#1E293B",tx="#F1F5F9",su="#64748B";
+  const card="#FFFFFF",tx="#0F172A",su="#64748B";
+
+  async function onRetryViajePlan(sv){
+    try{
+      await retryOperationalPlanBuild({servicio:sv,norma,showToast});
+      await recargar?.();
+    }catch(e){
+      showToast?.("Error al reintentar cálculo: "+(e?.message||"inténtalo de nuevo"));
+    }
+  }
 
   useEffect(()=>{
     if(!servicio?.id||!stops.length){
@@ -12630,27 +13214,27 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
     });
   }
 
-  if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando...</div>;
+  if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando...</div>;
 
   if(!servicio)return(
-    <div style={{padding:"24px 16px"}}>
-      <div style={{background:card,borderRadius:18,padding:"32px 20px",textAlign:"center",marginBottom:16}}>
-        <div style={{fontSize:48,marginBottom:12}}>🚛</div>
-        <div style={{fontSize:18,fontWeight:800,color:tx,marginBottom:6}}>Sin servicio activo</div>
+    <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+      <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",marginBottom:16,boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
+        <div style={{fontSize:12,fontWeight:800,color:"#64748B",letterSpacing:.8,marginBottom:10}}>SERVICIO</div>
+        <div style={{fontSize:18,fontWeight:750,color:tx,marginBottom:6}}>Sin servicio activo</div>
         <div style={{fontSize:14,color:su,lineHeight:1.6,marginBottom:24}}>Crea tu propio servicio o espera<br/>a que tu empresa te asigne uno.</div>
-        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:"pointer"}}>+ CREAR SERVICIO</button>
+        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Crear servicio</button>
       </div>
       {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </div>
   );
 
   if(servicio.estado==="completado")return(
-    <div style={{padding:"24px 16px"}}>
-      <div style={{background:card,borderRadius:18,padding:"32px 20px",textAlign:"center"}}>
-        <div style={{fontSize:48,marginBottom:12}}>🏁</div>
-        <div style={{fontSize:18,fontWeight:800,color:"#22C55E",marginBottom:6}}>Servicio completado</div>
+    <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+      <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
+        <div style={{fontSize:12,fontWeight:800,color:"#16A34A",letterSpacing:.8,marginBottom:10}}>COMPLETADO</div>
+        <div style={{fontSize:18,fontWeight:750,color:"#16A34A",marginBottom:6}}>Servicio completado</div>
         <div style={{fontSize:14,color:su,marginBottom:20}}>{servicio.origen} → {servicio.destino}</div>
-        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:800,cursor:"pointer"}}>+ NUEVO SERVICIO</button>
+        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Nuevo servicio</button>
       </div>
       {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </div>
@@ -12665,6 +13249,8 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       evidenciasByStop={evidenciasByStop}
       showToast={showToast}
       onIniciarServicio={iniciarServicio}
+      onIniciarViajeOperacional={iniciarViajeOperacional}
+      marcarInicioOperacionStop={marcarInicioOperacionStop}
       marcarLlegado={marcarLlegado}
       marcarCompletado={marcarCompletado}
       recargar={recargar}
@@ -12675,8 +13261,8 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       norma={norma}
       viajeActivo={viajeActivo}
       onOpenViajeModal={onOpenViajeModal}
+      onRetryViajePlan={onRetryViajePlan}
       conductorNombre={conductorNombre}
-      marcarInicioOperacion={marcarInicioOperacion}
     />
   );
 
@@ -12689,9 +13275,10 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       evidenciasByStop={evidenciasByStop}
       showToast={showToast}
       onIniciarServicio={iniciarServicio}
+      onIniciarViajeOperacional={iniciarViajeOperacional}
+      marcarInicioOperacionStop={marcarInicioOperacionStop}
       marcarLlegado={marcarLlegado}
       marcarCompletado={marcarCompletado}
-      marcarInicioOperacion={marcarInicioOperacion}
       recargar={recargar}
       EvidenciasStopComponent={EvidenciasStop}
       card={card}
@@ -12700,6 +13287,7 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       norma={norma}
       viajeActivo={viajeActivo}
       onOpenViajeModal={onOpenViajeModal}
+      onRetryViajePlan={onRetryViajePlan}
       conductorNombre={conductorNombre}
     />
   );
@@ -12716,7 +13304,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[servicios,setServicios]=useState([]);
   const[loading,setLoading]=useState(true);
   const[viajeLocal,setViajeLocal]=useState(()=>readViajeActivoFromStorage());
-  const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
+  const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
 
   useEffect(()=>{
     function refreshViajeLocal(){setViajeLocal(readViajeActivoFromStorage());}
@@ -12741,14 +13329,29 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         if(uids.length){
           const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&estado=in.(asignado,en_curso)&order=created_at.desc&limit=20`).then(r=>r.json());
           setServicios(Array.isArray(svs)?svs:[]);
-        }
+        }else setServicios([]);
       }catch(e){console.warn("EmpresaDashboard:",e);}
       finally{setLoading(false);}
     }
     cargar();
+    window.addEventListener("cuaderno-recargar-servicio",cargar);
+    const onVisible=()=>{if(document.visibilityState==="visible")cargar();};
+    window.addEventListener("focus",cargar);
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{
+      window.removeEventListener("cuaderno-recargar-servicio",cargar);
+      window.removeEventListener("focus",cargar);
+      document.removeEventListener("visibilitychange",onVisible);
+    };
   },[]);
 
   const primerCurso=servicios.find(s=>s.estado==="en_curso");
+  const primerCursoPlan=getOperationalPlanSnapshot(primerCurso);
+  const primerCursoRuta=primerCursoPlan
+    ? `${primerCursoPlan.planned_origin||safeOperationalPlaceName(primerCurso?.origen,"Ubicación actual")} → ${primerCursoPlan.planned_destination||safeOperationalPlaceName(primerCurso?.destino,"Destino")}`
+    : null;
+  const primerCursoEta=primerCursoPlan?.planned_eta_label||fmtOperationalEtaLabel(primerCursoPlan?.planned_eta);
+  const primerCursoKm=Number.isFinite(Number(primerCursoPlan?.planned_km))?Math.round(Number(primerCursoPlan.planned_km)):null;
   const tripPres=useMemo(
     ()=>getUnifiedTripPresentation({
       viajeActivo:viajeLocal,
@@ -12760,7 +13363,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     [viajeLocal,primerCurso],
   );
 
-  if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>⏳ Cargando...</div>;
+  if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>;
 
   if(import.meta.env.DEV){
     console.log("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
@@ -12772,20 +13375,21 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   return(
     <div style={{padding:"24px 24px 60px",maxWidth:1200,margin:"0 auto"}}>
 
-      <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:16,border:"1px solid #334155"}}>
-        <div style={{fontSize:10,fontWeight:800,color:su,letterSpacing:1.2,marginBottom:10}}>RESUMEN OPERACIONAL</div>
+      <div style={{background:card,borderRadius:14,padding:"16px 18px",marginBottom:16,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
+        <div style={{fontSize:11,fontWeight:600,color:su,letterSpacing:.4,marginBottom:10}}>Resumen operacional</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:12,alignItems:"center",fontSize:13,color:tx,lineHeight:1.5}}>
-          <span><strong style={{color:"#F59E0B",fontSize:17}}>{activos}</strong> <span style={{color:su}}>activos</span></span>
-          <span style={{color:"#475569"}}>·</span>
-          <span><strong style={{color:"#3B82F6",fontSize:17}}>{asignados}</strong> <span style={{color:su}}>pendientes</span></span>
-          <span style={{color:"#475569"}}>·</span>
+          <span><strong style={{color:EMPRESA_UI.accent,fontSize:17,fontWeight:650}}>{activos}</strong> <span style={{color:su}}>activos</span></span>
+          <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
+          <span><strong style={{color:EMPRESA_UI.subtle,fontSize:17,fontWeight:650}}>{asignados}</strong> <span style={{color:su}}>pendientes</span></span>
+          <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
           {(viajeLocal||primerCurso)&&(
             <span style={{width:"100%",fontSize:12,color:su,marginTop:4,lineHeight:1.45}}>
-              ETA: <strong style={{color:tx}}>{tripPres.rutaHeadline}</strong>
-              {tripPres.kmRestantes!=null&&<> · {tripPres.kmRestantes} km</>}
+              ETA: <strong style={{color:tx}}>{primerCursoRuta||tripPres.rutaHeadline}</strong>
+              {primerCursoKm!=null?<> · {primerCursoKm} km</>:tripPres.kmRestantes!=null&&<> · {tripPres.kmRestantes} km</>}
               {tripPres.etaPlanNormativoLabel&&<> · {tripPres.etaPlanNormativoLabel}</>}
+              {primerCursoEta&&<> · ETA {primerCursoEta}</>}
               {tripPres.etaOperacionalLabel&&tripPres.etaOperacionalLabel!=="Sin ETA"&&<> · {tripPres.etaOperacionalLabel}</>}
-              {viajeLocal&&<span style={{display:"block",marginTop:4,fontSize:11,color:"#475569"}}>Viaje local (este navegador)</span>}
+              {viajeLocal&&<span style={{display:"block",marginTop:4,fontSize:11,color:"#475569"}}>Ruta guardada en este navegador (vista previa)</span>}
             </span>
           )}
         </div>
@@ -12795,31 +13399,31 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       </div>
 
       {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16,marginBottom:28}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
         {[
-          {l:"Servicios activos",  v:activos,     c:"#F59E0B", icon:"🚛", action:()=>onTabChange("servicios")},
-          {l:"Pendientes salida",  v:asignados,   c:"#3B82F6", icon:"📋", action:()=>onTabChange("servicios")},
-          {l:"Conductores activos",v:conductores.filter(c=>c.user_id).length, c:"#22C55E", icon:"👷", action:()=>onTabChange("conductores")},
-          {l:"Total servicios hoy",v:servicios.length, c:"#A78BFA", icon:"📊", action:null},
+          {l:"Servicios activos",  v:activos,     c:EMPRESA_UI.accent, icon:"▱", action:()=>onTabChange("servicios")},
+          {l:"Pendientes salida",  v:asignados,   c:EMPRESA_UI.subtle, icon:"○", action:()=>onTabChange("servicios")},
+          {l:"Conductores activos",v:conductores.filter(c=>c.user_id).length, c:EMPRESA_UI.green, icon:"◇", action:()=>onTabChange("conductores")},
+          {l:"Total servicios hoy",v:servicios.length, c:"#475569", icon:"▤", action:null},
         ].map(({l,v,c,icon,action})=>(
           <button key={l} onClick={action||undefined}
-            style={{background:card,border:`1px solid ${c}30`,borderRadius:14,padding:"18px 20px",textAlign:"left",cursor:action?"pointer":"default",transition:"border-color .15s"}}>
+            style={{background:card,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:14,padding:"16px 18px",textAlign:"left",cursor:action?"pointer":"default",transition:"border-color .15s",boxShadow:EMPRESA_UI.shadow}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-              <span style={{fontSize:24}}>{icon}</span>
-              <span style={{fontSize:11,color:c,background:c+"15",borderRadius:6,padding:"2px 8px",fontWeight:700}}>HOY</span>
+              <span style={{fontSize:18,color:"#94a3b8"}}>{icon}</span>
+              <span style={{fontSize:11,color:empresaTone(c).fg,background:empresaTone(c).bg,border:`1px solid ${empresaTone(c).border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>Hoy</span>
             </div>
-            <div style={{fontSize:32,fontWeight:900,color:c,fontFamily:"monospace",lineHeight:1,marginBottom:4}}>{v}</div>
-            <div style={{fontSize:12,color:su,fontWeight:600}}>{l.toUpperCase()}</div>
+            <div style={{fontSize:30,fontWeight:650,color:c,fontFamily:"monospace",lineHeight:1,marginBottom:5}}>{v}</div>
+            <div style={{fontSize:12,color:su,fontWeight:500}}>{l}</div>
           </button>
         ))}
       </div>
 
       {/* Servicios en curso */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
-        <div style={{background:card,borderRadius:16,padding:"20px"}}>
+        <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:800,color:tx}}>🚛 SERVICIOS ACTIVOS</div>
-            <button onClick={()=>onTabChange("servicios")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:12,fontWeight:700,cursor:"pointer"}}>Ver todos →</button>
+            <div style={{fontSize:14,fontWeight:650,color:tx}}>Servicios activos</div>
+            <button onClick={()=>onTabChange("servicios")} style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>Ver todos →</button>
           </div>
           {servicios.filter(s=>s.estado==="en_curso").length===0?(
             <div style={{textAlign:"center",padding:"24px 0",color:su,fontSize:13}}>Sin servicios en curso ahora mismo</div>
@@ -12829,25 +13433,45 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
             const lastActivity=getLastServiceActivity({service:sv,stops:[],evidencias:[]});
             const attention=needsAttention({service:sv,stops:[],evidencias:[],lastActivity});
             const attentionReason=attention?getAttentionReason({service:sv,stops:[],evidencias:[],lastActivity}):"";
+            const refVisible=stripServicioOperacionDisplay(sv.referencia);
+            const planSnapshot=getOperationalPlanSnapshot(sv);
+            const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
+            const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
+            const planEta=planSnapshot?.planned_eta_label||fmtOperationalEtaLabel(planSnapshot?.planned_eta);
+            const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
+            const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
+            const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
+            const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
             return(
-            <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #334155",boxShadow:attention?"inset 3px 0 0 rgba(251, 146, 60, 0.55)":"none",paddingLeft:attention?6:0}}>
+            <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"11px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`,boxShadow:attention?`inset 3px 0 0 ${EMPRESA_UI.amber}`:"none",paddingLeft:attention?8:0}}>
               <div style={{minWidth:0,flex:1}}>
-                <div style={{fontSize:13,fontWeight:700,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sv.origen} → {sv.destino}</div>
+                <div style={{fontSize:13,fontWeight:600,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{routeFrom} → {routeTo}</div>
+                {(planEta||planKm!=null)&&(
+                  <div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:3}}>
+                    {planEta&&<span>ETA {planEta}</span>}
+                    {planKm!=null&&<span>{planEta?" · ":""}{planKm} km</span>}
+                  </div>
+                )}
+                {(planDrive||planBreaks!=null||planRestLabel)&&(
+                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.35}}>
+                    Plan · {[planDrive,planBreaks!=null?`${planBreaks} pausa${planBreaks===1?"":"s"}`:null,planRestLabel].filter(Boolean).join(" · ")}
+                  </div>
+                )}
                 {attention&&(
                   <div style={{marginTop:4}}>
-                    <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700}}>⚠ Atención requerida</span>
+                    <span style={{background:EMPRESA_UI.amberSoft,color:EMPRESA_UI.amber,border:"1px solid #fed7aa",borderRadius:999,padding:"2px 7px",fontSize:9,fontWeight:600}}>Atención requerida</span>
                     {attentionReason&&<div style={{fontSize:9,color:su,marginTop:2,lineHeight:1.3}}>{attentionReason}</div>}
                   </div>
                 )}
-                {sv.referencia&&<div style={{fontSize:11,color:"#F59E0B",marginTop:1}}>Ref: {sv.referencia}</div>}
+                {refVisible&&<div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:1}}>Ref: {refVisible}</div>}
               </div>
               <div style={{display:"flex",alignItems:"flex-start",gap:6,flexShrink:0,marginLeft:10}}>
-                <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
-                  {ESTADO_LABEL[sv.estado]}
+                <span style={{background:empresaTone(ESTADO_COLOR[sv.estado]).bg,color:empresaTone(ESTADO_COLOR[sv.estado]).fg,border:`1px solid ${empresaTone(ESTADO_COLOR[sv.estado]).border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600}}>
+                  ● {ESTADO_LABEL[sv.estado]}
                 </span>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                  <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
-                    {operationalMeta.icon} {operationalMeta.label.toUpperCase()}
+                  <span style={{background:empresaTone(operationalMeta.color).bg,color:empresaTone(operationalMeta.color).fg,border:`1px solid ${empresaTone(operationalMeta.color).border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600}}>
+                    ● {operationalMeta.label}
                   </span>
                   <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
                 </div>
@@ -12858,10 +13482,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         </div>
 
         {/* Conductores */}
-        <div style={{background:card,borderRadius:16,padding:"20px"}}>
+        <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:800,color:tx}}>👷 CONDUCTORES</div>
-            <button onClick={()=>onTabChange("conductores")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:12,fontWeight:700,cursor:"pointer"}}>Gestionar →</button>
+            <div style={{fontSize:14,fontWeight:650,color:tx}}>Conductores</div>
+            <button onClick={()=>onTabChange("conductores")} style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>Gestionar →</button>
           </div>
           {conductores.length===0?(
             <div style={{textAlign:"center",padding:"24px 0",color:su,fontSize:13}}>
@@ -12874,12 +13498,12 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
               )}
             </div>
           ):conductores.filter(c=>c.user_id).map(c=>(
-            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #334155"}}>
+            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
               <div>
-                <div style={{fontSize:13,fontWeight:700,color:tx}}>{c.nombre||"Conductor"}</div>
-                {c.matricula&&<div style={{fontSize:11,color:su,marginTop:1}}>🚛 {c.matricula}</div>}
+                <div style={{fontSize:13,fontWeight:600,color:tx}}>{c.nombre||"Conductor"}</div>
+                {c.matricula&&<div style={{fontSize:11,color:su,marginTop:1}}>Unidad {c.matricula}</div>}
               </div>
-              <span style={{width:8,height:8,borderRadius:"50%",background:"#22C55E",boxShadow:"0 0 6px #22C55E",flexShrink:0}}/>
+              <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.green,flexShrink:0}}/>
             </div>
           ))}
         </div>
@@ -12893,10 +13517,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 // ─────────────────────────────────────────────────────────────
 function EmpresaPanelSeccion({seccion,prof,showToast}){
   return(
-    <div style={{padding:"20px 24px 60px",maxWidth:1200,margin:"0 auto"}}>
+    <div style={{padding:"20px 24px 60px",maxWidth:1200,margin:"0 auto",background:EMPRESA_UI.bg}}>
       <EmpresaPanel
         prof={prof}
-        dark={true}
+        dark={false}
         onRoleChange={()=>{}}
         initialTab={seccion}
       />
@@ -12941,8 +13565,8 @@ export default function App(){
   },[]);
 
   if(checking)return(
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0F172A"}}>
-      <div style={{fontSize:14,color:"#64748B"}}>⏳</div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f1f5f9"}}>
+      <div style={{fontSize:14,color:"#64748B"}}>Cargando...</div>
     </div>
   );
 

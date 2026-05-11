@@ -79,24 +79,26 @@ export default function EmpresaLayout({
 
   if (!loaded)
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0F172A" }}>
-        <div style={{ fontSize: 14, color: "#64748B" }}>⏳ Cargando...</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f1f5f9" }}>
+        <div style={{ fontSize: 14, color: "#64748B" }}>Cargando...</div>
       </div>
     );
 
-  const bg = "#0F172A",
-    card = "#1E293B",
-    tx = "#F1F5F9",
-    su = "#64748B";
+  const bg = "#f1f5f9",
+    card = "#ffffff",
+    tx = "#0f172a",
+    su = "#64748B",
+    border = "#dbe4ee",
+    accent = "#2563eb";
 
   return (
-    <div style={{ minHeight: "100vh", background: bg, display: "flex", flexDirection: "column" }}>
+    <div style={{ minHeight: "100vh", background: bg, display: "flex", flexDirection: "column", color: tx }}>
       {/* ── TOP NAV (desktop) ── */}
       {!isMobile && (
         <div
           style={{
             background: card,
-            borderBottom: "1px solid #334155",
+            borderBottom: `1px solid ${border}`,
             padding: "0 20px",
             display: "flex",
             alignItems: "center",
@@ -104,14 +106,14 @@ export default function EmpresaLayout({
             position: "sticky",
             top: 0,
             zIndex: 100,
-            boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+            boxShadow: "0 1px 2px rgba(15,23,42,.05)",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", marginRight: 32, flexShrink: 0 }}>
-            <span style={{ fontSize: 22 }}>🚛</span>
+            <span style={{ width: 34, height: 34, borderRadius: 9, background: "#e2e8f0", color: "#334155", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, letterSpacing: .4 }}>CDR</span>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#F59E0B", lineHeight: 1 }}>CUADERNO DE RUTA</div>
-              <div style={{ fontSize: 10, color: su, marginTop: 1 }}>Panel de empresa</div>
+              <div style={{ fontSize: 13, fontWeight: 650, color: tx, lineHeight: 1 }}>Cuaderno de Ruta</div>
+              <div style={{ fontSize: 11, color: su, marginTop: 2 }}>Panel operacional</div>
             </div>
           </div>
           <div style={{ display: "flex", flex: 1, gap: 0 }}>
@@ -122,11 +124,11 @@ export default function EmpresaLayout({
                 style={{
                   background: "transparent",
                   border: "none",
-                  borderBottom: `3px solid ${tab === t.id ? "#F59E0B" : "transparent"}`,
+                  borderBottom: `2px solid ${tab === t.id ? accent : "transparent"}`,
                   padding: "16px 18px 13px",
                   fontSize: 13,
-                  fontWeight: 700,
-                  color: tab === t.id ? "#F59E0B" : su,
+                  fontWeight: tab === t.id ? 650 : 500,
+                  color: tab === t.id ? "#1e3a8a" : "#475569",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -135,7 +137,7 @@ export default function EmpresaLayout({
                   whiteSpace: "nowrap",
                 }}
               >
-                <span style={{ fontSize: 15 }}>{t.icon}</span>
+                <span style={{ fontSize: 14, color: tab === t.id ? accent : "#94a3b8" }}>{t.icon}</span>
                 {t.label}
               </button>
             ))}
@@ -150,25 +152,27 @@ export default function EmpresaLayout({
                 width: 36,
                 height: 36,
                 borderRadius: "50%",
-                background: "#F59E0B20",
-                border: "2px solid #F59E0B40",
+                background: "#f8fafc",
+                border: `1px solid ${border}`,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: 16,
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#334155",
               }}
             >
-              🏢
+              {String(prof.nombre || "E").charAt(0).toUpperCase()}
             </div>
-            <button onClick={() => setTab("config")} style={{ background: "transparent", border: "1px solid #334155", borderRadius: 8, padding: "6px 10px", fontSize: 12, color: su, cursor: "pointer" }}>
-              ⚙️
+            <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+              Ajustes
             </button>
             <button
               onClick={async () => {
                 await sbSignOut();
                 window.location.reload();
               }}
-              style={{ background: "#EF444420", border: "1px solid #EF444440", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#EF4444", cursor: "pointer" }}
+              style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#9a3412", cursor: "pointer" }}
             >
               Salir
             </button>
@@ -178,21 +182,21 @@ export default function EmpresaLayout({
 
       {/* ── MOBILE HEADER ── */}
       {isMobile && (
-        <div style={{ background: card, borderBottom: "1px solid #334155", padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 20 }}>🚛</span>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#F59E0B" }}>CUADERNO DE RUTA</div>
+            <span style={{ width: 30, height: 30, borderRadius: 8, background: "#e2e8f0", color: "#334155", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>CDR</span>
+            <div style={{ fontSize: 13, fontWeight: 650, color: tx }}>Cuaderno de Ruta</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setTab("config")} style={{ background: "transparent", border: "1px solid #334155", borderRadius: 8, padding: "5px 8px", fontSize: 12, color: su, cursor: "pointer" }}>
-              ⚙️
+            <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+              Ajustes
             </button>
             <button
               onClick={async () => {
                 await sbSignOut();
                 window.location.reload();
               }}
-              style={{ background: "#EF444420", border: "1px solid #EF444440", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700, color: "#EF4444", cursor: "pointer" }}
+              style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: "#9a3412", cursor: "pointer" }}
             >
               Salir
             </button>
@@ -217,7 +221,7 @@ export default function EmpresaLayout({
         {/* CONFIGURACIÓN */}
         {tab === "config" && (
           <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: tx, marginBottom: 4 }}>⚙️ Configuración</div>
+            <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
             <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
             <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
           </div>
@@ -226,7 +230,7 @@ export default function EmpresaLayout({
 
       {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: "1px solid #334155", display: "flex", zIndex: 100 }}>
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)" }}>
           {EMPRESA_TABS.filter((t) => t.id !== "config").map((t) => (
             <button
               key={t.id}
@@ -235,11 +239,11 @@ export default function EmpresaLayout({
                 flex: 1,
                 background: "transparent",
                 border: "none",
-                borderTop: `3px solid ${tab === t.id ? "#F59E0B" : "transparent"}`,
+                borderTop: `2px solid ${tab === t.id ? accent : "transparent"}`,
                 padding: "8px 4px 6px",
                 fontSize: 10,
-                fontWeight: 700,
-                color: tab === t.id ? "#F59E0B" : su,
+                fontWeight: tab === t.id ? 650 : 500,
+                color: tab === t.id ? "#1e3a8a" : "#475569",
                 cursor: "pointer",
                 display: "flex",
                 flexDirection: "column",
@@ -247,8 +251,8 @@ export default function EmpresaLayout({
                 gap: 2,
               }}
             >
-              <span style={{ fontSize: 18 }}>{t.icon}</span>
-              {t.label.toUpperCase()}
+              <span style={{ fontSize: 17, color: tab === t.id ? accent : "#94a3b8" }}>{t.icon}</span>
+              {t.label}
             </button>
           ))}
         </div>
@@ -256,7 +260,7 @@ export default function EmpresaLayout({
 
       {/* Toast */}
       {toast && (
-        <div style={{ position: "fixed", bottom: isMobile ? 72 : 24, left: "50%", transform: "translateX(-50%)", background: "#1E293B", color: "white", padding: "12px 20px", borderRadius: 11, fontSize: 14, fontWeight: 700, zIndex: 500, boxShadow: "0 4px 20px rgba(0,0,0,.4)", whiteSpace: "nowrap" }}>
+        <div style={{ position: "fixed", bottom: isMobile ? 72 : 24, left: "50%", transform: "translateX(-50%)", background: "#0f172a", color: "white", padding: "12px 20px", borderRadius: 11, fontSize: 14, fontWeight: 600, zIndex: 500, boxShadow: "0 10px 24px rgba(15,23,42,.18)", whiteSpace: "nowrap" }}>
           {toast}
         </div>
       )}

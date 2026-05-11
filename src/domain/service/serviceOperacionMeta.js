@@ -3,23 +3,32 @@
  * La parte visible para cliente/ref es la anterior al marcador.
  */
 
-const MARK = "\n__SRV_OP__:";
+const BARE_MARK = "__SRV_OP__:";
+const MARK = "\n" + BARE_MARK;
+
+function findMetaMark(s) {
+  const withBreak = s.indexOf(MARK);
+  if (withBreak !== -1) return { index: withBreak, length: MARK.length };
+  const bare = s.indexOf(BARE_MARK);
+  if (bare !== -1) return { index: bare, length: BARE_MARK.length };
+  return null;
+}
 
 export function stripServicioOperacionDisplay(referencia) {
   if (referencia == null || referencia === "") return "";
   const s = String(referencia);
-  const i = s.indexOf(MARK);
-  if (i === -1) return s.trim();
-  return s.slice(0, i).trim();
+  const mark = findMetaMark(s);
+  if (!mark) return s.trim();
+  return s.slice(0, mark.index).trim();
 }
 
 function parseMetaFromRef(ref) {
   if (ref == null || ref === "") return {};
   const s = String(ref);
-  const i = s.indexOf(MARK);
-  if (i === -1) return {};
+  const mark = findMetaMark(s);
+  if (!mark) return {};
   try {
-    const o = JSON.parse(s.slice(i + MARK.length).trim());
+    const o = JSON.parse(s.slice(mark.index + mark.length).trim());
     return o && typeof o === "object" ? o : {};
   } catch {
     return {};
@@ -36,10 +45,15 @@ export function getOperationalTripStartedAt(servicio) {
   return typeof iso === "string" && iso.trim() ? iso.trim() : null;
 }
 
+export function getOperationalPlanSnapshot(servicio) {
+  const plan = getServicioOperacionMeta(servicio).operational_plan;
+  return plan && typeof plan === "object" ? plan : null;
+}
+
 export function mergeReferenciaOperacional(referencia, patch) {
   const prev = parseMetaFromRef(referencia);
   const next = { ...prev, ...patch };
   const base = stripServicioOperacionDisplay(referencia || "");
   const payload = MARK + JSON.stringify(next);
-  return base ? base + payload : payload.replace(/^\n/, "");
+  return base ? base + payload : BARE_MARK + JSON.stringify(next);
 }

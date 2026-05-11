@@ -3,8 +3,8 @@
  */
 
 import { getOperationalTripStartMs } from "./operationalTrip.js";
-import { getInicioOperacionMs } from "./stopOperacionMeta.js";
 import { stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
+import { getInicioOperacionMs } from "./stopOperacionMeta.js";
 
 export function operationalGroupFromStopTipo(tipo) {
   const t = String(tipo || "").toLowerCase();
@@ -196,7 +196,7 @@ export function buildTripSummaryText({
     line(`Ruta: ${o} → ${d}${ref}`),
     line(`Conductor: ${cond}`),
     line(`Estado: ${servicio?.estado || "—"}`),
-    line(`Inicio viaje operacional: ${inicioOp || "— (pulsa «Añadir destino al viaje»)"}`),
+    line(`Inicio viaje operacional: ${inicioOp || "— (pulsa «Iniciar viaje operacional»)"}`),
     "",
     line(
       `Tiempo total viaje (aprox.): ${metrics.tiempoTotalViajeMin != null ? fmtDur(metrics.tiempoTotalViajeMin) : "—"}`
