@@ -1,4 +1,5 @@
 import { SB_URL, SB_KEY, sbFetch } from "./supabaseClient";
+import { clearAuthContext } from "./authContext";
 
 export { getSession, getUserId } from "./supabaseClient";
 
@@ -15,6 +16,8 @@ export async function signUp(email, password) {
 }
 
 export async function signIn(email, password) {
+  clearAuthContext();
+  localStorage.removeItem("sb_session");
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "apikey": SB_KEY },
@@ -22,6 +25,7 @@ export async function signIn(email, password) {
   });
   const d = await res.json();
   if (d.error) throw new Error(d.error.message || d.msg || "Email o contraseña incorrectos");
+  clearAuthContext();
   // Limpiar datos del usuario anterior antes de cargar los nuevos
   const dark=localStorage.getItem("dark");
   const keysToRemove=[];
@@ -48,6 +52,7 @@ export async function resetPassword(email) {
 
 export async function signOut() {
   await sbFetch("/auth/v1/logout", { method: "POST" }).catch(() => {});
+  clearAuthContext();
   // Limpiar TODOS los datos del usuario del localStorage
   const keysToRemove = [];
   for(let i=0;i<localStorage.length;i++){

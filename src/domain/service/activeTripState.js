@@ -2,6 +2,7 @@ import {
   formatTiempoConduccionDisponible,
   getViajePlanningSummary,
 } from "./viajePlanSummary.js";
+import { formatOperationalEtaSlot } from "./etaFormatter.js";
 
 export const VIAJE_ACTIVO_STORAGE_KEY = "viaje_activo";
 
@@ -45,8 +46,8 @@ export function getUnifiedTripPresentation({
 
   const etaOperacionalLabel = etaLoading
     ? "…"
-    : etaSlot?.label && etaSlot.label !== "Sin ETA"
-      ? etaSlot.label
+    : etaSlot
+      ? formatOperationalEtaSlot(etaSlot)
       : "Sin ETA";
 
   const tieneViajeRuta = Boolean(viajeSummary);

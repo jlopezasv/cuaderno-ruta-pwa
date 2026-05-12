@@ -1,20 +1,5 @@
-import { buildPlan, fmtT, fmtDur } from "../route/routePlanning.js";
-
-function formatArrivalLabel(arrival, now = new Date()) {
-  const d = arrival instanceof Date ? arrival : new Date(arrival);
-  if (Number.isNaN(d.getTime())) return "—";
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const d0 = new Date(d);
-  d0.setHours(0, 0, 0, 0);
-  const timeStr = fmtT(d);
-  if (d0.getTime() === today.getTime()) return `Hoy · ${timeStr}`;
-  if (d0.getTime() === tomorrow.getTime()) return `Mañana · ${timeStr}`;
-  const DAYS_SHORT = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-  return `${DAYS_SHORT[d.getDay()]} ${d.getDate()} · ${timeStr}`;
-}
+import { buildPlan, fmtDur } from "../route/routePlanning.js";
+import { formatOperationalEtaLabel } from "./etaFormatter.js";
 
 /**
  * Misma fórmula que Nora / MapTab: buildPlan sobre km del viaje activo y offsets normativos.
@@ -41,7 +26,7 @@ export function getViajePlanningSummary(viajeActivo, norma) {
     return {
       destinoViaje: viajeActivo.destino,
       km: viajeActivo.km,
-      etaPlanNormativoLabel: formatArrivalLabel(arrival),
+      etaPlanNormativoLabel: formatOperationalEtaLabel(arrival) || "—",
       proximaParadaNormativa,
       plan,
     };

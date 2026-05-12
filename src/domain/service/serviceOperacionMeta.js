@@ -50,6 +50,12 @@ export function getOperationalPlanSnapshot(servicio) {
   return plan && typeof plan === "object" ? plan : null;
 }
 
+/** ISO string o null: marca que el conductor confirmó explícitamente destino/ruta. */
+export function getOperationalPlanConfirmedAt(servicio) {
+  const iso = getServicioOperacionMeta(servicio).operational_plan_confirmed_at;
+  return typeof iso === "string" && iso.trim() ? iso.trim() : null;
+}
+
 export function mergeReferenciaOperacional(referencia, patch) {
   const prev = parseMetaFromRef(referencia);
   const next = { ...prev, ...patch };

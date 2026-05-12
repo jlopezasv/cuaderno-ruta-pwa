@@ -1,4 +1,5 @@
-import { geocode, getRoute, buildPlan, fmtT } from "../route/routePlanning.js";
+import { geocode, getRoute, buildPlan } from "../route/routePlanning.js";
+import { formatOperationalEtaLabel } from "./etaFormatter.js";
 
 /**
  * Paradas relevantes para ETA: en curso solo pendientes/llegados;
@@ -10,22 +11,6 @@ function stopsForEta(stops, serviceEstado) {
     return sorted.filter((s) => s.estado !== "completado");
   }
   return sorted;
-}
-
-function formatEtaLabel(arrival, now = new Date()) {
-  const d = arrival instanceof Date ? arrival : new Date(arrival);
-  if (Number.isNaN(d.getTime())) return "Sin ETA";
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const d0 = new Date(d);
-  d0.setHours(0, 0, 0, 0);
-  const timeStr = fmtT(d);
-  if (d0.getTime() === today.getTime()) return `Hoy · ${timeStr}`;
-  if (d0.getTime() === tomorrow.getTime()) return `Mañana · ${timeStr}`;
-  const DAYS_SHORT = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-  return `${DAYS_SHORT[d.getDay()]} ${d.getDate()} · ${timeStr}`;
 }
 
 function resolveConfidence(routeReals, skippedStops) {
@@ -134,7 +119,7 @@ export async function getServiceEta({
     const arrival = plan.arrival instanceof Date ? plan.arrival : new Date(plan.arrival);
     if (Number.isNaN(arrival.getTime())) return null;
 
-    const label = formatEtaLabel(arrival);
+    const label = formatOperationalEtaLabel(arrival) || "Sin ETA";
     const confidence = resolveConfidence(routeReals, skippedStops);
 
     return {

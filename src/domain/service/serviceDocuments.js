@@ -2,6 +2,7 @@ export const DOCUMENT_TYPES = Object.freeze(["cmr", "foto", "incidencia", "qr", 
 
 export function getDocumentLabel(ev) {
   if (ev?.tipo === "cmr" && ev?.datos?.num_cmr) return "CMR " + ev.datos.num_cmr;
+  if (ev?.tipo === "nota") return "Observación";
   return (ev?.tipo || "").toUpperCase();
 }
 

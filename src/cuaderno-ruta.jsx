@@ -26,6 +26,11 @@ import {
   mergeRemoteWithLocalToday,
 } from "./data/sync";
 import {
+  contextKindFromProfileTipo,
+  getStoredAuthContext,
+  persistAuthContext,
+} from "./data/authContext";
+import {
   ESTADO_COLOR,
   ESTADO_LABEL,
   ESTADO_ICON,
@@ -56,21 +61,31 @@ import { getLastServiceActivity } from "./domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "./domain/service/serviceAttention";
 import {
   OPERATIONAL_GROUP_LABEL,
-  buildTripSummaryText,
   computeTripOperationalMetrics,
   incidenciaLinesForStop,
 } from "./domain/service/tripOperationalDossier.js";
+import {
+  buildServiceExpediente,
+  downloadServiceArchiveMetadata,
+  downloadServiceExpedientePdf,
+} from "./domain/service/serviceExpediente.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
+import { formatOperationalEtaLabel, formatOperationalEtaSlot, isRelativeEtaLabel } from "./domain/service/etaFormatter.js";
 import {
   mergeReferenciaOperacional,
   getOperationalTripStartedAt,
   getOperationalPlanSnapshot,
-  stripServicioOperacionDisplay,
 } from "./domain/service/serviceOperacionMeta.js";
+import {
+  buildServiceIdentityMeta,
+  getFixedServiceRoute,
+  getServiceClient,
+  getServiceClientReference,
+  getServiceNumber,
+} from "./domain/service/serviceIdentity.js";
 import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
-import { DocServicioColapsable } from "./features/services/components/DocServicioColapsable";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { getConductorTabs } from "./navigation/conductorTabs";
 import {
@@ -284,6 +299,19 @@ function PaywallScreen({status,user,email}){
   );
 }
 
+async function resolveAuthContextForUid(uid) {
+  if (!uid) return "conductor";
+  const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+  const hasManagerRole = rels.some((r) => r.rol === "gestor" || r.rol === "admin");
+  if (hasManagerRole) return "empresa";
+  if (rels.length) return "conductor";
+
+  const emps = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
+  if (emps.length) return "empresa";
+
+  return "conductor";
+}
+
 function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [tipo, setTipo] = useState("");
@@ -291,6 +319,7 @@ function AuthScreen({ onAuth }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
+  const [loginContext, setLoginContext] = useState("conductor");
   const [showPwd, setShowPwd] = useState(false);
   const [showPwd2, setShowPwd2] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -332,7 +361,9 @@ function AuthScreen({ onAuth }) {
         await sbSignUp(email.trim(), password);
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
+        const authContext = contextKindFromProfileTipo(tipo);
         if (uid) {
+          persistAuthContext(authContext, uid);
           await sbFetch("/rest/v1/profiles", {
             method:"POST",
             headers:{"Prefer":"resolution=merge-duplicates"},
@@ -350,11 +381,18 @@ function AuthScreen({ onAuth }) {
             })
           }).catch(()=>{});
         }
-        onAuth();
+        onAuth(authContext);
         setTimeout(()=>window.location.reload(), 500);
       } else {
         await sbSignIn(email.trim(), password);
-        onAuth();
+        const uid = getUserId();
+        const authContext = loginContext === "empresa" ? await resolveAuthContextForUid(uid) : "conductor";
+        if (loginContext === "empresa" && authContext !== "empresa") {
+          throw new Error("Esta cuenta no tiene permisos de empresa");
+        }
+        if (uid) persistAuthContext(authContext, uid);
+        onAuth(authContext);
+        setTimeout(()=>window.location.reload(), 100);
       }
     } catch(e) {
       setError(mode === "login" ? "Email o contraseña incorrectos" : e.message);
@@ -379,7 +417,7 @@ function AuthScreen({ onAuth }) {
         {mode !== "forgot" && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
-              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");}}
+              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");setLoginContext("conductor");}}
                 style={{ flex:1, background:mode===m?"#F59E0B":"transparent", color:mode===m?"#0F172A":"#64748B", border:"none", borderRadius:7, padding:"9px", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"sans-serif" }}>
                 {l}
               </button>
@@ -392,6 +430,24 @@ function AuthScreen({ onAuth }) {
             <button onClick={()=>{setMode("login");setError("");setOk("");}} style={{ background:"transparent", border:"none", color:"#64748B", fontSize:13, cursor:"pointer", fontFamily:"sans-serif", marginBottom:12 }}>← Volver</button>
             <div style={{ fontSize:16, fontWeight:800, color:"#F1F5F9", fontFamily:"sans-serif" }}>Recuperar contraseña</div>
             <div style={{ fontSize:12, color:"#64748B", marginTop:4, fontFamily:"sans-serif" }}>Te enviaremos un email de recuperación</div>
+          </div>
+        )}
+
+        {mode === "login" && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:8, fontFamily:"sans-serif" }}>ENTRAR COMO</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              {[
+                {id:"conductor", icon:"🚛", title:"Conductor"},
+                {id:"empresa", icon:"🏢", title:"Empresa"},
+              ].map(({id,icon,title})=>(
+                <button key={id} type="button" onClick={()=>setLoginContext(id)}
+                  style={{ background:loginContext===id?"#F59E0B15":"#0F172A", border:`2px solid ${loginContext===id?"#F59E0B":"#334155"}`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"center" }}>
+                  <div style={{ fontSize:22, marginBottom:3 }}>{icon}</div>
+                  <div style={{ fontSize:12, fontWeight:800, color:loginContext===id?"#F59E0B":"#F1F5F9", fontFamily:"sans-serif" }}>{title}</div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -1860,7 +1916,6 @@ function AppInner(){
       if(profRows.length){
         const p=profRows[0];
         setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||""}));
-        if(p.tipo_cuenta==="empresa") setTab("empresa");
       }
       const entRows=await sbSelect("entries",`user_id=eq.${uid}&limit=5000&order=ts.asc`);
       const sbEntries=entRows.map(r=>({
@@ -1909,12 +1964,17 @@ function AppInner(){
       // Detectar rol empresa — con reintento
       const uidRol=getUserId();
       if(uidRol){
+        const authContext = getStoredAuthContext(uidRol)?.kind || "conductor";
         const detectarRol=async(intento=0)=>{
           try{
+            const rels=await sbSelect("conductor_empresa",`user_id=eq.${uidRol}&activo=eq.true`);
+            if(authContext==="conductor"){
+              if(rels.length){setRolEmpresa("conductor");return;}
+              setRolEmpresa(null);
+              return;
+            }
             const emps=await sbSelect("empresas",`owner_id=eq.${uidRol}`);
             if(emps.length){setRolEmpresa("jefe");return;}
-            const rels=await sbSelect("conductor_empresa",`user_id=eq.${uidRol}&activo=eq.true`);
-            if(rels.length){setRolEmpresa("conductor");return;}
             // Sin rol — si hay empresa en profiles.tipo_cuenta=empresa, marcar jefe
             const prof2=await sbSelect("profiles",`id=eq.${uidRol}`);
             if(prof2[0]?.tipo_cuenta==="empresa"){
@@ -2082,7 +2142,11 @@ function AppInner(){
   const prevTs=tMode==="now"?clock:tMode==="offset"?new Date(+clock-tOff*60000):(tExact?new Date(tExact):clock);
   const isLate=tMode!=="now";
 
-  const showToast=(m,color="#1E293B",ms=2500)=>{setToast(m);setToastColor(color);setTimeout(()=>setToast(""),ms);};
+  const showToast=useCallback((m,color="#1E293B",ms=2500)=>{setToast(m);setToastColor(color);setTimeout(()=>setToast(""),ms);},[]);
+  const openServicioViajeModal=useCallback((hint)=>{
+    setViajePrefill(hint||null);
+    setModalViaje(true);
+  },[]);
 
   // ── SW KEEPALIVE — mantener el SW vivo para notificaciones ─────
   useEffect(()=>{
@@ -2916,7 +2980,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} norma={norma} viajeActivo={viajeActivo} onOpenViajeModal={(hint)=>{setViajePrefill(hint||null);setModalViaje(true);}}/>
+          <TabServicio uid={getUserId()} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal}/>
         )}
 
         {tab==="resumen"&&(
@@ -3756,18 +3820,19 @@ function AppInner(){
       {modal==="qr_muelle"&&<QrMuelleModal onClose={(abrirAccion)=>{setModal(null);if(abrirAccion)setTimeout(()=>openAdd("__accion__"),200);}} onCarga={(tipo,datos)=>{setModal(null);openAdd(tipo,datos);}} setDb={setDb} showToast={showToast}/>}
 
       {/* ════ MODAL DESTINO (servicio operacional) ════ */}
-      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} prefillWaypoint={viajePrefill?.waypoint||""} prefillVelocidad={viajePrefill?.velocidad||80} prefillGpsOrigen={viajePrefill?.gpsOrigen||null} norma={norma} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={async v=>{
+      {modalViaje&&<ModalDestino prefillDestino={viajePrefill?.destino||""} prefillOrigen={viajePrefill?.origen||""} prefillWaypoint={viajePrefill?.waypoint||""} prefillVelocidad={viajePrefill?.velocidad||80} prefillGpsOrigen={viajePrefill?.gpsOrigen||null} norma={norma} showToast={showToast} onClose={()=>{setModalViaje(false);setViajePrefill(null);}} onSave={async v=>{
         const pref=viajePrefillRef.current;
         const sid=pref?.servicioId;
         if(sid&&getUserId()){
           const patch={};
-          let savedReferencia=pref?.referenciaActual||null;
-          if(v.origen?.trim())patch.origen=v.origen.trim();
-          if(v.destino?.trim())patch.destino=v.destino.trim();
+          if(!pref?.origenActual?.trim()&&v.origen?.trim())patch.origen=v.origen.trim();
+          if(!pref?.destinoActual?.trim()&&v.destino?.trim())patch.destino=v.destino.trim();
           if(v.operationalPlan){
-            patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{operational_plan:v.operationalPlan});
+            patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{
+              operational_plan:v.operationalPlan,
+              operational_plan_confirmed_at:new Date().toISOString(),
+            });
           }
-          if(patch.referencia)savedReferencia=patch.referencia;
           if(Object.keys(patch).length){
             const res=await sbFetch(`/rest/v1/servicios?id=eq.${sid}`,{method:"PATCH",body:JSON.stringify(patch)});
             if(!res.ok){
@@ -3785,7 +3850,7 @@ function AppInner(){
         localStorage.setItem("viaje_activo",JSON.stringify(v));
         showToast(sid?"✅ Ruta guardada · planificación operacional lista":"✅ Destino guardado");
         setTimeout(()=>speakNatural("Ruta guardada. Planificación operacional lista."),500);
-      }} showToast={showToast}/>}
+      }}/>}
 
       {/* ════ MODAL DATOS ACTUALES ════ */}
       {modal==="datos_actuales"&&<DatosActualesModal onClose={()=>setModal(null)} setDb={setDb} setManualOffset={v=>{setManualOffset(v);localStorage.setItem("manual_offset",JSON.stringify(v));}} showToast={showToast}/>}
@@ -4193,14 +4258,7 @@ function AppInner(){
 //  MODAL DESTINO — pregunta el destino al iniciar jornada
 // ─────────────────────────────────────────────────────────────
 function fmtOperationalEtaLabel(etaIso){
-  const d=new Date(etaIso);
-  if(Number.isNaN(d.getTime()))return null;
-  const today=new Date();today.setHours(0,0,0,0);
-  const tomorrow=new Date(today);tomorrow.setDate(tomorrow.getDate()+1);
-  const d0=new Date(d);d0.setHours(0,0,0,0);
-  if(d0.getTime()===today.getTime())return`Hoy · ${fmtT(d)}`;
-  if(d0.getTime()===tomorrow.getTime())return`Mañana · ${fmtT(d)}`;
-  return`${DAYS[d.getDay()]} ${d.getDate()} · ${fmtT(d)}`;
+  return formatOperationalEtaLabel(etaIso);
 }
 
 function thinRouteCoords(coords,max=24){
@@ -4224,6 +4282,7 @@ function parseOperationalLatLon(value){
 function safeOperationalPlaceName(value,fallback){
   const t=String(value||"").trim();
   if(!t||looksLikeLatLonName(t))return fallback;
+  if(/^(ubicaci[oó]n actual|ubicaci[oó]n gps detectada|origen gps)$/i.test(t))return fallback;
   return t;
 }
 
@@ -4531,8 +4590,8 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
         throw new Error(operationalPlan.error||"No se pudo calcular ruta completa");
       }
       await onSave({
-        destino:operationalPlan.planned_destination||destino.trim(),
-        origen:operationalPlan.planned_origin||origen.trim(),
+        destino:destino.trim(),
+        origen:origen.trim(),
         waypoint:waypoint.trim()||null,
         km:operationalPlan.planned_km,
         mins:operationalPlan.planned_drive_min,
@@ -4745,7 +4804,7 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             {[
               {l:"Distancia",v:`${viaje.km} km`,c:"#F59E0B"},
-              {l:"Llegada estimada",v:(d=>{const now=new Date();const dias=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];const diff=Math.round((d-now)/86400000);const dia=diff===0?'Hoy':diff===1?'Mañana':dias[d.getDay()];return `${dia} ${p2(d.getHours())}:${p2(d.getMinutes())}`;})(llegada),c:color},
+              {l:"Llegada estimada",v:formatOperationalEtaLabel(llegada)||"—",c:color},
               {l:"Días en ruta",v:`${nDias} día${nDias>1?"s":""}`,c:"#A78BFA"},
               {l:"Próxima parada",v:kmProx?`~${kmProx} km`:"Hoy no",c:"#64748B"},
             ].map(({l,v,c})=>(
@@ -4767,7 +4826,7 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:12,fontWeight:600,color:"#F1F5F9"}}>{fmtDur(d.conduccion)} conducción · ~{d.km} km</div>
-                    {d.llegada&&<div style={{fontSize:11,color:"#22C55E",marginTop:1}}>🏁 Llegada a {viaje.destino} · {(d=>{const dias=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];const diff=Math.round((d-new Date())/86400000);const dia=diff===0?'Hoy':diff===1?'Mañana':dias[d.getDay()];return `${dia} ${p2(d.getHours())}:${p2(d.getMinutes())}`;})(llegada)}</div>}
+                    {d.llegada&&<div style={{fontSize:11,color:"#22C55E",marginTop:1}}>🏁 Llegada a {viaje.destino} · {formatOperationalEtaLabel(llegada)||"—"}</div>}
                   </div>
                 </div>
               ))}
@@ -9798,10 +9857,43 @@ function useModalLayout(){
 // ─────────────────────────────────────────────────────────────
 //  ASIGNAR SERVICIO A CONDUCTOR — modal para el jefe de flota
 // ─────────────────────────────────────────────────────────────
+async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, ...basePayload }) {
+  const referenciaBase = serviceNumber?.trim() || null;
+  const identityMeta = buildServiceIdentityMeta({ cliente, referenciaCliente });
+  const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
+  const fullPayload = {
+    ...basePayload,
+    service_number: referenciaBase,
+    cliente: cliente?.trim() || null,
+    referencia_cliente: referenciaCliente?.trim() || null,
+    referencia,
+  };
+  const res = await sbFetch("/rest/v1/servicios", {
+    method: "POST",
+    headers: { "Prefer": "return=representation" },
+    body: JSON.stringify(fullPayload),
+  });
+  if (res.ok) return res.json();
+
+  const errText = await res.text().catch(() => "");
+  const schemaFallback = /service_number|referencia_cliente|cliente|column|schema|PGRST/i.test(errText);
+  if (!schemaFallback) throw new Error(errText || `Supabase ${res.status}`);
+
+  const fallbackRes = await sbFetch("/rest/v1/servicios", {
+    method: "POST",
+    headers: { "Prefer": "return=representation" },
+    body: JSON.stringify({ ...basePayload, referencia }),
+  });
+  if (!fallbackRes.ok) throw new Error(await fallbackRes.text().catch(() => `Supabase ${fallbackRes.status}`));
+  return fallbackRes.json();
+}
+
 function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
+  const[cliente,setCliente]=useState("");
+  const[refCliente,setRefCliente]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});
   const[stops,setStops]=useState([
     {orden:1,tipo:"carga",nombre:"",direccion:"",notas:""},
@@ -9846,12 +9938,16 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
     setSaving(true);setError("");
     try{
-      const sr=await sbFetch("/rest/v1/servicios",{
-        method:"POST",
-        headers:{"Prefer":"return=representation"},
-        body:JSON.stringify({conductor_id:conductorId,estado:"asignado",origen:origen.trim(),destino:destino.trim(),referencia:ref.trim()||null,fecha_inicio:new Date(fechaInicio).toISOString()}),
+      const srData=await crearServicioConIdentidad({
+        conductor_id:conductorId,
+        estado:"asignado",
+        origen:origen.trim(),
+        destino:destino.trim(),
+        serviceNumber:ref.trim(),
+        cliente:cliente.trim(),
+        referenciaCliente:refCliente.trim(),
+        fecha_inicio:new Date(fechaInicio).toISOString(),
       });
-      const srData=await sr.json();
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
       await sbFetch("/rest/v1/stops",{
@@ -9904,20 +10000,31 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
             </div>
           </div>
 
-          {/* Fecha / Referencia */}
+          {/* Identidad documental */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Servicio</div>
+              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441"
+                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Cliente</div>
+              <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
+                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div>
+              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Ref cliente</div>
+              <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821"
+                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+            </div>
             <div>
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}
                 style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"light",marginBottom:0}}/>
             </div>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>REF.</div>
-              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
           </div>
-
           {/* Paradas */}
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:6}}>Paradas · {stops.length}</div>
           {stops.map((stop,i)=>(
@@ -10003,11 +10110,14 @@ function fmtClockMs(ms){
 /** Fila compacta empresa: ETA operacional sin placeholder de carga interminable. */
 function fmtEtaEmpresaCompacto(raw){
   if(raw==null||raw===""||raw==="…"||raw==="..."||raw==="Sin ETA")return"—";
-  if(raw instanceof Date)return fmtClockMs(raw.getTime());
+  if(raw instanceof Date)return formatOperationalEtaLabel(raw)||"—";
   if(typeof raw==="object"){
     const slot=raw.planned||raw.operational||raw;
-    return fmtEtaEmpresaCompacto(slot?.label||slot?.eta||null);
+    return formatOperationalEtaSlot(slot);
   }
+  const exact=formatOperationalEtaLabel(raw);
+  if(exact)return exact;
+  if(isRelativeEtaLabel(raw))return"—";
   return String(raw);
 }
 
@@ -10072,7 +10182,7 @@ const ETA_RIESGO_WARN_MIN=20;
 const ETA_RIESGO_LATE_MIN=45;
 
 function getEtaLabelEmpresa(entry){
-  const raw=entry?.planned?.label ?? entry?.planned?.eta ?? entry?.operational?.label ?? entry?.operational?.eta ?? entry?.label ?? entry?.eta ?? entry;
+  const raw=entry?.planned?.eta ?? entry?.operational?.eta ?? entry?.eta ?? entry?.planned?.label ?? entry?.operational?.label ?? entry?.label ?? entry;
   return fmtEtaEmpresaCompacto(raw);
 }
 
@@ -10122,7 +10232,7 @@ function etaSlotFromOperationalPlan(plan){
   if(!plan?.planned_eta)return null;
   return{
     eta:plan.planned_eta,
-    label:plan.planned_eta_label||fmtOperationalEtaLabel(plan.planned_eta)||"Sin ETA",
+    label:fmtOperationalEtaLabel(plan.planned_eta)||plan.planned_eta_label||"Sin ETA",
     confidence:plan.confidence||"medium",
     stable:true,
     status:plan.status||"ok",
@@ -10191,6 +10301,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   // Documentos de la flota
   const[docsLoading,setDocsLoading]=useState(false);
   const[visorEv,setVisorEv]=useState(null);
+  const[expedientePreview,setExpedientePreview]=useState(null);
   const[svCardExpand,setSvCardExpand]=useState(null);
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
@@ -10200,6 +10311,22 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
+
+  async function descargarExpediente(expediente){
+    try{
+      showToast("Preparando expediente visual...");
+      await downloadServiceExpedientePdf(expediente);
+      showToast("PDF descargado");
+    }catch(e){
+      console.warn("download expediente:",e);
+      showToast("No se pudo descargar el expediente");
+    }
+  }
+
+  function archivarMetadataExpediente(expediente){
+    downloadServiceArchiveMetadata(expediente);
+    showToast("Archivado ligero descargado");
+  }
 
   useEffect(()=>{init();},[]);
 
@@ -10689,9 +10816,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   .filter(s=>s.conductor_id===c.user_id&&(s.estado==="en_curso"||s.estado==="asignado"))
                   .sort((a,b)=>(a.estado==="en_curso"?0:1)-(b.estado==="en_curso"?0:1));
                 const servicioActual=serviciosConductor[0]||null;
-                const servicioPlan=servicioActual?getOperationalPlanSnapshot(servicioActual):null;
                 const servicioRuta=servicioActual
-                  ? `${servicioPlan?.planned_origin||safeOperationalPlaceName(servicioActual.origen,"Origen")} → ${servicioPlan?.planned_destination||safeOperationalPlaceName(servicioActual.destino,"Destino")}`
+                  ? getFixedServiceRoute(servicioActual)
                   : null;
                 return(
                   <div key={c.id} style={{background:card,borderRadius:14,padding:"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
@@ -10870,27 +10996,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     const etaEntry=etaOperativaById[sv.id]||{planned:planSlot,operational:null};
                     const etaCompact=getEtaLabelEmpresa(etaEntry);
                     const etaEstado=getEtaEstadoEmpresa(etaEntry);
-                    const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
-                    const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
+                    const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
+                    const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
                     const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
                     const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
                     const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
                     const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
                     const dossierMetrics=computeTripOperationalMetrics(sv,svStops);
-                    const resumenViajeTexto=buildTripSummaryText({
-                      servicio:sv,
-                      nombreConductor,
-                      stopsSorted:svStops,
-                      metrics:dossierMetrics,
-                      totalIncidencias:incNCompact,
-                      fmtDur,
-                    });
                     const expanded=svCardExpand===sv.id;
-                    const clienteCompact=stripServicioOperacionDisplay(sv.referencia)||"—";
+                    const serviceNumber=getServiceNumber(sv);
+                    const clienteCompact=getServiceClient(sv)||"—";
+                    const refClienteCompact=getServiceClientReference(sv);
                     const etaTone=empresaTone(etaEstado.color);
                     const opTone=empresaTone(operationalMeta.color);
                     const stateTone=empresaTone(color);
-                    const expedienteBg=EMPRESA_UI.surfaceSoft;
                     const expedienteCard=EMPRESA_UI.surface;
                     return(
                       <div
@@ -10917,12 +11036,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           }}
                         >
                           <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:11,color:su,fontWeight:700,letterSpacing:.3,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              {serviceNumber}{clienteCompact!=="—"?` · Cliente: ${clienteCompact}`:""}{refClienteCompact?` · Ref cliente: ${refClienteCompact}`:""}
+                            </div>
                             <div style={{fontSize:13,fontWeight:600,color:tx,lineHeight:1.35,letterSpacing:0.05,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                               {routeFrom} → {routeTo}
                             </div>
                             <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3,flexWrap:"wrap"}}>
                               <div style={{display:"flex",flexDirection:"column",gap:1}}>
-                                <span style={{fontSize:22,fontWeight:650,color:etaCompact==="—"?"#94A3B8":tx,lineHeight:1,fontVariantNumeric:"tabular-nums",letterSpacing:-0.2}}>{String(etaCompact).replace(/^.*?(\d{1,2}:\d{2}).*$/,"$1")}</span>
+                                <span style={{fontSize:16,fontWeight:750,color:etaCompact==="—"?"#94A3B8":tx,lineHeight:1.15,fontVariantNumeric:"tabular-nums",letterSpacing:-0.2}}>{etaCompact}</span>
                                 <span style={{fontSize:10,color:su,fontWeight:500}}>Llegada estimada</span>
                               </div>
                               <span style={{fontSize:10,fontWeight:600,color:etaTone.fg,background:etaTone.bg,border:`1px solid ${etaTone.border}`,borderRadius:999,padding:"2px 7px",lineHeight:1.2,whiteSpace:"nowrap"}}>
@@ -10930,7 +11052,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               </span>
                             </div>
                             <div style={{display:"flex",alignItems:"center",gap:7,marginTop:6,fontSize:13,color:EMPRESA_UI.subtle,lineHeight:1.35,overflow:"hidden",whiteSpace:"nowrap"}}>
-                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Ubicación · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:500}}> · {ubicUpdated}</span>}</span>
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Última ubicación conductor · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:500}}> · {ubicUpdated}</span>}</span>
                               {sv.conductor_id&&(
                                 <button type="button" onClick={e=>{e.stopPropagation();void actualizarServicioUbicacionYEta(sv);}}
                                   style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 7px",fontSize:10,color:"#1d4ed8",cursor:"pointer",fontWeight:600,flexShrink:0}}>
@@ -10969,7 +11091,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           <div style={{fontSize:13,color:su,flexShrink:0,lineHeight:1.2,paddingTop:2}}>{expanded?"⌄":"›"}</div>
                         </div>
                         {expanded&&(
-                          <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 8px 10px",marginBottom:2,background:expedienteBg}}>
+                          <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 8px 10px",marginBottom:2,background:EMPRESA_UI.surfaceSoft}}>
                             <div style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:10,border:`1px solid ${EMPRESA_UI.border}`}}>
                               <div style={{fontSize:12,fontWeight:650,color:tx,marginBottom:8,letterSpacing:0.2}}>Resumen operacional</div>
                               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:8}}>
@@ -11020,16 +11142,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               );
                             })}
 
-                            <div style={{background:expedienteCard,borderRadius:10,padding:"12px 14px",marginTop:10,marginBottom:12,border:`1px solid ${EMPRESA_UI.border}`}}>
-                              <div style={{fontSize:13,fontWeight:650,color:tx,marginBottom:8}}>Documento · Resumen del viaje</div>
-                              <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,lineHeight:1.5,color:su,fontFamily:"system-ui,sans-serif"}}>{resumenViajeTexto}</pre>
-                            </div>
-
                             <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,paddingTop:10}}>
                               <div style={{fontSize:12,color:su,marginBottom:8}}>
                                 <span style={{background:opTone.bg,color:opTone.fg,border:`1px solid ${opTone.border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600,marginRight:8}}>● {operationalMeta.label}</span>
                                 <span>Última actividad: {lastActivity.label}</span>
-                                {stripServicioOperacionDisplay(sv.referencia)&&<span style={{marginLeft:8,color:"#F59E0B"}}>Ref {stripServicioOperacionDisplay(sv.referencia)}</span>}
+                                {getServiceNumber(sv)&&<span style={{marginLeft:8,color:"#F59E0B"}}>{getServiceNumber(sv)}</span>}
                               </div>
                               {attention&&(
                                 <div style={{fontSize:12,color:EMPRESA_UI.amber,lineHeight:1.35,marginBottom:8}}>
@@ -11107,8 +11224,119 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               </div>
             </div>
           )}
-          {flotaLoading?<div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando documentos...</div>
-          :flotaServicios.length===0?(<div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>📭</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin documentos todavía</div></div>)
+          {expedientePreview&&(
+            <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:480,display:"flex",alignItems:"center",justifyContent:"center",padding:14}} onClick={()=>setExpedientePreview(null)}>
+              <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:16,width:"100%",maxWidth:760,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 70px rgba(15,23,42,.25)"}} onClick={e=>e.stopPropagation()}>
+                <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #cbd5e1",display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:10,fontWeight:800,letterSpacing:1.4,color:"#475569",marginBottom:5}}>EXPEDIENTE OPERACIONAL</div>
+                    <div style={{fontSize:21,fontWeight:800,color:"#0f172a",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis"}}>{expedientePreview.header.referencia}</div>
+                    <div style={{fontSize:13,color:"#475569",marginTop:4}}>{expedientePreview.header.ruta}</div>
+                  </div>
+                  <button type="button" onClick={()=>setExpedientePreview(null)} style={{background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:9,width:32,height:32,color:"#334155",cursor:"pointer",fontWeight:800}}>×</button>
+                </div>
+                <div style={{padding:20}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:16}}>
+                    {[
+                      ["Conductor",expedientePreview.header.conductor],
+                      ["Cliente",expedientePreview.header.cliente],
+                      ["Ref cliente",expedientePreview.header.referenciaCliente],
+                      ["Estado",ESTADO_LABEL[expedientePreview.header.estado]||expedientePreview.header.estado],
+                      ["ETA",expedientePreview.header.eta],
+                      ["Km",expedientePreview.header.km!=null?`${expedientePreview.header.km}`:"—"],
+                      ["Documentos",String(expedientePreview.evidencias.length)],
+                    ].map(([l,v])=>(
+                      <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px"}}>
+                        <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>{l}</div>
+                        <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"14px 14px 12px",marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12}}>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>Timeline operacional</div>
+                      <div style={{fontSize:11,color:"#64748b",fontWeight:700}}>{expedientePreview.timeline.length} eventos</div>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {expedientePreview.timeline.length===0?(
+                        <div style={{fontSize:12,color:"#64748b"}}>Sin eventos operacionales todavía.</div>
+                      ):expedientePreview.timeline.map((ev,idx)=>(
+                        <div key={`${ev.ts}-${idx}`} style={{display:"grid",gridTemplateColumns:"52px 16px 1fr",gap:8,alignItems:"start"}}>
+                          <div style={{fontSize:11,color:"#64748b",fontFamily:"monospace",paddingTop:1}}>{ev.time}</div>
+                          <div style={{width:9,height:9,borderRadius:99,background:ev.type==="incidencia"?"#f97316":ev.type==="cmr"?"#2563eb":ev.type==="foto"?"#16a34a":"#94a3b8",marginTop:4}}/>
+                          <div style={{minWidth:0,borderBottom:idx===expedientePreview.timeline.length-1?"none":"1px solid #e2e8f0",paddingBottom:8}}>
+                            <div style={{fontSize:13,fontWeight:750,color:"#0f172a",lineHeight:1.25}}>{ev.title}</div>
+                            {ev.detail&&<div style={{fontSize:12,color:"#64748b",lineHeight:1.35,marginTop:2}}>{ev.detail}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:12}}>
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px"}}>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Documentos y evidencias</div>
+                      {expedientePreview.evidencias.length===0?(
+                        <div style={{fontSize:12,color:"#64748b"}}>Sin evidencias adjuntas.</div>
+                      ):(
+                        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                          {expedientePreview.evidencias.map(ev=>(
+                            <button key={ev.id||`${ev.tipo}-${ev.created_at}`} type="button" onClick={()=>setVisorEv(ev)}
+                              style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 9px",textAlign:"left",cursor:"pointer"}}>
+                              <div style={{fontSize:12,fontWeight:800,color:ev.tipo==="incidencia"?"#c2410c":ev.tipo==="cmr"?"#1d4ed8":"#334155"}}>{ev.titulo}</div>
+                              <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{ev.stopLabel} · {ev.hora}{ev.url?" · adjunto":""}</div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px"}}>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Resumen operacional</div>
+                      {[
+                        ["Km reales / plan",expedientePreview.header.km!=null?`${expedientePreview.header.km} km`:"—"],
+                        ["Conducción",expedientePreview.metrics.conduccion],
+                        ["Pausas / descansos","Incluidas en timeline"],
+                        ["Espera carga",expedientePreview.metrics.esperaCarga],
+                        ["Espera descarga",expedientePreview.metrics.esperaDescarga],
+                        ["ETA prevista vs real",expedientePreview.header.eta],
+                      ].map(([l,v])=>(
+                        <div key={l} style={{display:"flex",justifyContent:"space-between",gap:10,borderBottom:"1px solid #e2e8f0",padding:"7px 0",fontSize:12}}>
+                          <span style={{color:"#64748b"}}>{l}</span>
+                          <span style={{color:"#0f172a",fontWeight:700,textAlign:"right"}}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px",marginBottom:14}}>
+                    <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8}}>Integridad operacional</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:7}}>
+                      {[
+                        `${expedientePreview.integrity.eventCount} eventos registrados automáticamente`,
+                        expedientePreview.integrity.chronologyConsistent?"Cronología operacional consistente":"Cronología pendiente de revisión",
+                        expedientePreview.integrity.timestampsVerified?"Timestamps verificados":"Timestamps incompletos",
+                        expedientePreview.integrity.geoAvailable?"Geolocalización operacional disponible":"Geolocalización no disponible",
+                      ].map(txt=>(
+                        <div key={txt} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 9px",fontSize:11.5,color:"#334155",fontWeight:650,lineHeight:1.35}}>
+                          ✓ {txt}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <button type="button" onClick={()=>descargarExpediente(expedientePreview)}
+                      style={{background:"#0f172a",color:"white",border:"none",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
+                      Descargar PDF
+                    </button>
+                    <button type="button" onClick={()=>archivarMetadataExpediente(expedientePreview)}
+                      style={{background:"#f1f5f9",color:"#334155",border:"1px solid #cbd5e1",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
+                      Archivar y liberar espacio
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {flotaLoading?<div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando expedientes...</div>
+          :flotaServicios.length===0?(<div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>▤</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin expedientes todavía</div></div>)
           :(
             <>
               {/* Filtros */}
@@ -11131,7 +11359,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none",colorScheme:"dark",boxSizing:"border-box"}}/>
                   </div>
                   <div>
-                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>REFERENCIA</div>
+                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>SERVICIO / REF CLIENTE</div>
                     <input value={filtRef} onChange={e=>setFiltRef(e.target.value)} placeholder="SRV-0441"
                       style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none",boxSizing:"border-box"}}/>
                   </div>
@@ -11154,12 +11382,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 const serviciosFiltrados=flotaServicios.filter(sv=>{
                   if(filtConductor&&sv.conductor_id!==filtConductor)return false;
                   if(filtFecha&&sv.fecha_inicio&&!sv.fecha_inicio.startsWith(filtFecha))return false;
-                  const refVisible=stripServicioOperacionDisplay(sv.referencia);
-                  if(filtRef&&refVisible&&!refVisible.toLowerCase().includes(filtRef.toLowerCase()))return false;
-                  if(filtRef&&!refVisible&&filtRef)return false;
+                  const refVisible=getServiceNumber(sv);
+                  const refClienteVisible=getServiceClientReference(sv);
+                  const refSearch=[refVisible,refClienteVisible].filter(Boolean).join(" ").toLowerCase();
+                  if(filtRef&&(!refSearch||!refSearch.includes(filtRef.toLowerCase())))return false;
                   if(filtCliente){
                     const q=filtCliente.toLowerCase();
-                    if(!sv.destino?.toLowerCase().includes(q)&&!sv.origen?.toLowerCase().includes(q))return false;
+                    const clienteSearch=[getServiceClient(sv),sv.destino,sv.origen].filter(Boolean).join(" ").toLowerCase();
+                    if(!clienteSearch.includes(q))return false;
                   }
                   return true;
                 });
@@ -11170,17 +11400,110 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 );
                 return(
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px 13px",boxShadow:EMPRESA_UI.shadow}}>
+                      <div style={{fontSize:12,fontWeight:850,color:"#0f172a",letterSpacing:.2}}>Expedientes operacionales</div>
+                      <div style={{fontSize:11.5,color:"#64748b",marginTop:3,lineHeight:1.35}}>Cada tarjeta representa un único PDF corporativo con timeline, evidencias, resumen e integridad del servicio.</div>
+                    </div>
                     {serviciosFiltrados.map(sv=>{
                       const svStops=flotaStops[sv.id]||[];
                       const totalEvs=countServiceDocuments(svStops,flotaEvs);
-                      return <DocServicioColapsable key={sv.id} sv={sv} svStops={svStops} flotaEvs={flotaEvs} totalEvs={totalEvs} nombreConductor={nombreConductor} ESTADO_COLOR={ESTADO_COLOR} ESTADO_LABEL={ESTADO_LABEL} TIPO_EV={TIPO_EV} TIPO_EV_COL={TIPO_EV_COL} onVerEv={setVisorEv} bg={bg} card={card} tx={tx} su={su}/>;
+                      const metrics=computeTripOperationalMetrics(sv,svStops);
+                      const planSnapshot=getOperationalPlanSnapshot(sv);
+                      const planSlot=etaSlotFromOperationalPlan(planSnapshot);
+                      const etaEntry=etaOperativaById[sv.id]||{planned:planSlot,operational:null};
+                      const etaCompact=getEtaLabelEmpresa(etaEntry);
+                      const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+                      const expediente=buildServiceExpediente({
+                        servicio:sv,
+                        stops:svStops,
+                        evidenciasByStop:flotaEvs,
+                        metrics,
+                        nombreConductor,
+                        etaLabel:etaCompact,
+                        fmtDur,
+                        entries:conductor?.entries||[],
+                      });
+                      const refVisible=getServiceNumber(sv);
+                      const clienteDoc=getServiceClient(sv)||"—";
+                      const refClienteDoc=getServiceClientReference(sv);
+                      const fechaDoc=sv.fecha_inicio?new Date(sv.fecha_inicio).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}):new Date(expediente.generatedAt).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"});
+                      const docName=`${refVisible} ${fechaDoc}`;
+                      const stateTone=empresaTone(ESTADO_COLOR[sv.estado]||su);
+                      return(
+                        <div key={sv.id} style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:13,padding:0,overflow:"hidden",boxShadow:"0 8px 22px rgba(15,23,42,.06)"}}>
+                          <div style={{height:4,background:"#64748b"}}/>
+                          <div style={{padding:"13px 14px 12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",marginBottom:9}}>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:10,fontWeight:850,letterSpacing:1.1,color:"#64748b",marginBottom:4}}>DOCUMENTO OPERACIONAL ÚNICO</div>
+                                <div style={{fontSize:17,fontWeight:800,color:"#0f172a",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis"}}>{docName}</div>
+                                <div style={{fontSize:12.5,color:"#475569",marginTop:3,lineHeight:1.35}}>Cliente: {clienteDoc}{refClienteDoc?` · Ref cliente: ${refClienteDoc}`:""}</div>
+                                <div style={{fontSize:12.5,color:"#475569",marginTop:2,lineHeight:1.35}}>{expediente.header.ruta}</div>
+                              </div>
+                              <span style={{background:stateTone.bg,color:stateTone.fg,border:`1px solid ${stateTone.border}`,borderRadius:999,padding:"3px 8px",fontSize:10.5,fontWeight:800,whiteSpace:"nowrap"}}>
+                                {ESTADO_LABEL[sv.estado]||sv.estado}
+                              </span>
+                            </div>
+                            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(116px,1fr))",gap:7,marginBottom:10}}>
+                              {[
+                                ["Conductor",expediente.header.conductor],
+                                ["ETA",expediente.header.eta],
+                                ["Km",expediente.header.km!=null?`${expediente.header.km}`:"—"],
+                                ["Docs",String(totalEvs)],
+                                ["Eventos",String(expediente.integrity.eventCount)],
+                              ].map(([l,v])=>(
+                                <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:9,padding:"7px 8px"}}>
+                                  <div style={{fontSize:9.5,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:2}}>{l}</div>
+                                  <div style={{fontSize:12.5,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"10px 11px",marginBottom:10}}>
+                              <div style={{fontSize:11,color:"#64748b",fontWeight:800,marginBottom:8}}>TIMELINE VERTEBRAL</div>
+                              {(expediente.timeline.slice(0,4).length?expediente.timeline.slice(0,4):[{time:"—",title:"Sin eventos operacionales todavía"}]).map((ev,idx)=>(
+                                <div key={`${ev.time}-${ev.title}-${idx}`} style={{display:"grid",gridTemplateColumns:"44px 12px 1fr",gap:7,alignItems:"start",marginBottom:idx===Math.min(expediente.timeline.length||1,4)-1?0:7}}>
+                                  <div style={{fontSize:10.5,color:"#64748b",fontFamily:"monospace"}}>{ev.time}</div>
+                                  <div style={{width:7,height:7,borderRadius:99,background:"#94a3b8",marginTop:4}}/>
+                                  <div style={{fontSize:12,color:"#334155",fontWeight:650,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.title}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:11}}>
+                              {[
+                                ["CMR",expediente.cmr.length],
+                                ["Incidencias",expediente.incidencias.length],
+                                ["Fotos",expediente.fotos.length],
+                              ].map(([l,n])=>(
+                                <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:9,padding:"7px 8px",textAlign:"center"}}>
+                                  <div style={{fontSize:14,fontWeight:850,color:"#0f172a"}}>{n}</div>
+                                  <div style={{fontSize:9.5,color:"#64748b",fontWeight:800,textTransform:"uppercase"}}>{l}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                              <button type="button" onClick={()=>setExpedientePreview(expediente)}
+                                style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
+                                Ver expediente
+                              </button>
+                              <button type="button" onClick={()=>descargarExpediente(expediente)}
+                                style={{background:"#0f172a",color:"white",border:"none",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
+                                Descargar PDF
+                              </button>
+                              <button type="button" onClick={()=>archivarMetadataExpediente(expediente)}
+                                style={{background:"white",color:"#334155",border:"1px solid #cbd5e1",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
+                                Archivar y liberar espacio
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
                     })}
                   </div>
                 );
               })()}
             </>
           )}
-          <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>🔄 Actualizar</button>
+          <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>Actualizar</button>
         </div>
       )}
 
@@ -12365,10 +12688,10 @@ function ServiciosTimelineView({uid}){
               const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
               const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
               const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
-              const refVisible=stripServicioOperacionDisplay(sv.referencia);
-              const planSnapshot=getOperationalPlanSnapshot(sv);
-              const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
-              const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
+              const refVisible=getServiceNumber(sv);
+              const clienteVisible=getServiceClient(sv);
+              const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
+              const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
               let duracion=null;
               if(sv.estado==="completado"&&sv.fecha_inicio){
                 const lastStop=svStops.filter(s=>s.hora_salida_real).sort((a,b)=>new Date(b.hora_salida_real)-new Date(a.hora_salida_real))[0];
@@ -12393,7 +12716,7 @@ function ServiciosTimelineView({uid}){
                             {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
                           </div>
                         )}
-                        {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {refVisible}</div>}
+                        {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>{refVisible}{clienteVisible?` · Cliente: ${clienteVisible}`:""}</div>}
                         <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                           <span style={{background:color+"20",color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
                           <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
@@ -12644,6 +12967,8 @@ function CrearServicioModal({uid,onClose,onCreado}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
+  const[cliente,setCliente]=useState("");
+  const[refCliente,setRefCliente]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});
   const[stops,setStops]=useState([{orden:1,tipo:"carga",nombre:"",direccion:"",notas:"",lat:null,lon:null},{orden:2,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);
   const[saving,setSaving]=useState(false);
@@ -12685,8 +13010,16 @@ function CrearServicioModal({uid,onClose,onCreado}){
     if(!validarPaso2())return;
     setSaving(true);setError("");
     try{
-      const sr=await sbFetch("/rest/v1/servicios",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({conductor_id:uid,estado:"asignado",origen:origen.trim(),destino:destino.trim(),referencia:ref.trim()||null,fecha_inicio:new Date(fechaInicio).toISOString()})});
-      const srData=await sr.json();
+      const srData=await crearServicioConIdentidad({
+        conductor_id:uid,
+        estado:"asignado",
+        origen:origen.trim(),
+        destino:destino.trim(),
+        serviceNumber:ref.trim(),
+        cliente:cliente.trim(),
+        referenciaCliente:refCliente.trim(),
+        fecha_inicio:new Date(fechaInicio).toISOString(),
+      });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
       await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
@@ -12727,10 +13060,14 @@ function CrearServicioModal({uid,onClose,onCreado}){
               <div><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>🟢 ORIGEN</div><input value={origen} onChange={e=>setOrigen(e.target.value)} placeholder="Almería" style={iStyle}/></div>
               <div><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>🔴 DESTINO</div><input value={destino} onChange={e=>setDestino(e.target.value)} placeholder="Bilbao" style={iStyle}/></div>
             </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <div><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>SERVICIO</div><input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441" style={iStyle}/></div>
+              <div><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>CLIENTE</div><input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona" style={iStyle}/></div>
+            </div>
+            <div style={{marginBottom:14}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>REF CLIENTE (opcional)</div>
+              <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821" style={iStyle}/></div>
             <div style={{marginBottom:14}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>📅 FECHA Y HORA DE SALIDA</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)} style={{...iStyle,colorScheme:"dark"}}/></div>
-            <div style={{marginBottom:14}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>REFERENCIA (opcional)</div>
-              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-2026-0441" style={iStyle}/></div>
             {error&&<div style={{background:"#450a0a",border:"1px solid #EF4444",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#EF4444",marginBottom:14}}>⚠️ {error}</div>}
           </>)}
 
@@ -12765,8 +13102,9 @@ function CrearServicioModal({uid,onClose,onCreado}){
           {paso===3&&(<>
             <div style={{background:"#0D1829",border:"1px solid #1E3A5F",borderRadius:14,padding:"16px",marginBottom:14}}>
               <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>RESUMEN DEL SERVICIO</div>
+              {ref&&<div style={{fontSize:13,color:"#F59E0B",fontWeight:800,marginBottom:3}}>{ref}</div>}
+              {cliente&&<div style={{fontSize:12,color:su,marginBottom:3}}>Cliente: <span style={{color:tx,fontWeight:700}}>{cliente}</span>{refCliente&&<span style={{color:"#94A3B8"}}> · Ref cliente {refCliente}</span>}</div>}
               <div style={{fontSize:18,fontWeight:800,color:tx,marginBottom:4}}>{origen} → {destino}</div>
-              {ref&&<div style={{fontSize:12,color:"#F59E0B",marginBottom:4}}>Ref: {ref}</div>}
               <div style={{fontSize:12,color:su}}>Salida: {new Date(fechaInicio).toLocaleString("es-ES",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
             </div>
             <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>{stops.length} PARADAS</div>
@@ -12812,8 +13150,16 @@ function CrearServicioModal({uid,onClose,onCreado}){
                 if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
                 setSaving(true);setError("");
                 try{
-                  const sr=await sbFetch("/rest/v1/servicios",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({conductor_id:uid,estado:"asignado",origen:origen.trim(),destino:destino.trim(),referencia:ref.trim()||null,fecha_inicio:new Date(fechaInicio).toISOString()})});
-                  const srData=await sr.json();
+                  const srData=await crearServicioConIdentidad({
+                    conductor_id:uid,
+                    estado:"asignado",
+                    origen:origen.trim(),
+                    destino:destino.trim(),
+                    serviceNumber:ref.trim(),
+                    cliente:cliente.trim(),
+                    referenciaCliente:refCliente.trim(),
+                    fecha_inicio:new Date(fechaInicio).toISOString(),
+                  });
                   const sv=Array.isArray(srData)?srData[0]:srData;
                   if(!sv?.id)throw new Error("No se pudo crear el servicio");
                   await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
@@ -12907,10 +13253,10 @@ function ServicioDocsView({uid,showToast}){
         const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
         const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
         const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
-        const refVisible=stripServicioOperacionDisplay(sv.referencia);
-        const planSnapshot=getOperationalPlanSnapshot(sv);
-        const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
-        const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
+        const refVisible=getServiceNumber(sv);
+        const clienteVisible=getServiceClient(sv);
+        const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
+        const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
         return(
           <div key={sv.id} style={{marginBottom:16}}>
             <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
@@ -12921,7 +13267,7 @@ function ServicioDocsView({uid,showToast}){
                   {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
                 </div>
               )}
-              {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>Ref: {refVisible}</div>}
+              {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>{refVisible}{clienteVisible?` · Cliente: ${clienteVisible}`:""}</div>}
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
@@ -13004,13 +13350,13 @@ function EvidenciasStop({stopId,showToast}){
   const[error,setError]=useState("");
   const fileRef=useRef(null);
   const fotoRef=useRef(null);
-  const card="#1E293B",bg="#0F172A",tx="#F1F5F9",su="#64748B";
-  const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
+  const card="#FFFFFF",bg="#F8FAFC",tx="#0F172A",su="#64748B";
+  const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
   const CMR_FIELDS=[{k:"num_cmr",l:"Nº CMR"},{k:"fecha",l:"Fecha"},{k:"remitente",l:"Remitente"},{k:"destinatario",l:"Destinatario"},{k:"transportista",l:"Transportista"},{k:"lugar_carga",l:"Lugar de carga"},{k:"lugar_entrega",l:"Lugar de entrega"},{k:"mercancia",l:"Mercancía"},{k:"peso_kg",l:"Peso (kg)"},{k:"matricula",l:"Matrícula"},{k:"observaciones",l:"Observaciones"}];
-  const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️"};
-  const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444"};
+  const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",nota:"📝"};
+  const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",nota:"#64748B"};
   const TIPO_LABEL=Object.freeze(
-    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo.toUpperCase();return acc;},{})
+    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo==="nota"?"OBSERVACIÓN":tipo.toUpperCase();return acc;},{})
   );
 
   useEffect(()=>{
@@ -13074,11 +13420,11 @@ function EvidenciasStop({stopId,showToast}){
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>EVIDENCIAS ({evidencias.length})</div>
           {evidencias.map(ev=>(
-            <div key={ev.id} style={{background:card,borderRadius:10,padding:"10px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"center"}}>
+            <div key={ev.id} style={{background:bg,border:"1px solid #E2E8F0",borderRadius:10,padding:"10px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"center"}}>
               <span style={{fontSize:20}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
-                {ev.nota&&<div style={{fontSize:12,color:su,marginTop:2}}>{ev.nota}</div>}
+                {(ev.nota||ev.datos?.texto)&&<div style={{fontSize:12,color:su,marginTop:2}}>{ev.nota||ev.datos?.texto}</div>}
                 {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:11,color:su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
                 <div style={{fontSize:11,color:"#334155",marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
               </div>
@@ -13087,23 +13433,26 @@ function EvidenciasStop({stopId,showToast}){
           ))}
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-        <button onClick={()=>{setModal("cmr");setCmrFase("scan");setError("");}} style={{background:"#0EA5E920",border:"1.5px solid #0EA5E950",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>📄</span><span style={{fontSize:12,fontWeight:700,color:"#0EA5E9"}}>CMR</span>
-        </button>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         <button onClick={()=>{setModal("foto");setError("");}} style={{background:"#22C55E20",border:"1.5px solid #22C55E50",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>📸</span><span style={{fontSize:12,fontWeight:700,color:"#22C55E"}}>FOTO</span>
+          <span style={{fontSize:24}}>📸</span><span style={{fontSize:12,fontWeight:700,color:"#22C55E"}}>Foto</span>
+        </button>
+        <button onClick={()=>{setModal("cmr");setCmrFase("scan");setError("");}} style={{background:"#0EA5E920",border:"1.5px solid #0EA5E950",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+          <span style={{fontSize:24}}>📄</span><span style={{fontSize:12,fontWeight:700,color:"#0EA5E9"}}>Scanner CMR</span>
         </button>
         <button onClick={()=>{setModal("incidencia");setNota("");setError("");}} style={{background:"#EF444420",border:"1.5px solid #EF444450",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>⚠️</span><span style={{fontSize:12,fontWeight:700,color:"#EF4444"}}>INCIDENCIA</span>
+          <span style={{fontSize:24}}>⚠️</span><span style={{fontSize:12,fontWeight:700,color:"#EF4444"}}>Incidencia</span>
+        </button>
+        <button onClick={()=>{setModal("nota");setNota("");setError("");}} style={{background:"#64748B20",border:"1.5px solid #64748B50",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+          <span style={{fontSize:24}}>📝</span><span style={{fontSize:12,fontWeight:700,color:"#64748B"}}>Observación</span>
         </button>
       </div>
       {modal==="cmr"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
           <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #334155",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#0EA5E9"}}>📄 ESCANEAR CMR</div>
-              <button onClick={()=>setModal(null)} style={{background:"#334155",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={escanearCmr} style={{display:"none"}}/>
@@ -13114,13 +13463,13 @@ function EvidenciasStop({stopId,showToast}){
               </>)}
               {cmrFase==="procesando"&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{fontSize:40,marginBottom:12}}>🤖</div><div style={{fontSize:15,fontWeight:700,color:"#F59E0B"}}>Analizando CMR...</div></div>)}
               {cmrFase==="revisar"&&(<div>
-                <div style={{background:"#0F2A1A",border:"1px solid #22C55E40",borderRadius:9,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#22C55E"}}>✓ Datos extraídos — revisa y corrige</div>
+                <div style={{background:"#DCFCE7",border:"1px solid #86EFAC",borderRadius:9,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#16A34A"}}>✓ Datos extraídos — revisa y corrige</div>
                 {CMR_FIELDS.map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
                 <input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Nota opcional..." style={iStyle}/>
-                {error&&<div style={{background:"#450a0a",borderRadius:8,padding:"9px 12px",fontSize:13,color:"#EF4444",marginBottom:10}}>⚠️ {error}</div>}
+                {error&&<div style={{background:"#FEE2E2",borderRadius:8,padding:"9px 12px",fontSize:13,color:"#DC2626",marginBottom:10}}>⚠️ {error}</div>}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:4}}>
-                  <button onClick={()=>{setCmrFase("scan");setError("");}} style={{background:"#1E293B",color:su,border:"1px solid #334155",borderRadius:10,padding:"13px",fontSize:14,cursor:"pointer"}}>✕ Cancelar</button>
-                  <button onClick={guardarCmr} disabled={saving} style={{background:saving?"#334155":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>{saving?"⏳...":"✅ Guardar"}</button>
+                  <button onClick={()=>{setCmrFase("scan");setError("");}} style={{background:"#F1F5F9",color:su,border:"1px solid #CBD5E1",borderRadius:10,padding:"13px",fontSize:14,cursor:"pointer"}}>✕ Cancelar</button>
+                  <button onClick={guardarCmr} disabled={saving} style={{background:saving?"#CBD5E1":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>{saving?"⏳...":"✅ Guardar"}</button>
                 </div>
               </div>)}
             </div>
@@ -13128,11 +13477,11 @@ function EvidenciasStop({stopId,showToast}){
         </div>
       )}
       {modal==="foto"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
           <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #334155",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#22C55E"}}>📸 FOTO</div>
-              <button onClick={()=>setModal(null)} style={{background:"#334155",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <input ref={fotoRef} type="file" accept="image/*" capture="environment" onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setFotoUrl(URL.createObjectURL(file));await subirFoto(file);}} style={{display:"none"}}/>
@@ -13143,17 +13492,34 @@ function EvidenciasStop({stopId,showToast}){
         </div>
       )}
       {modal==="incidencia"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
           <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #334155",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#EF4444"}}>⚠️ INCIDENCIA</div>
-              <button onClick={()=>setModal(null)} style={{background:"#334155",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Mercancía dañada..." rows={4} style={{...iStyle,resize:"vertical"}}/>
               <button onClick={()=>nota.trim()&&guardarEvidencia("incidencia",{texto:nota})} disabled={saving||!nota.trim()}
-                style={{width:"100%",background:saving||!nota.trim()?"#334155":"#EF4444",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
+                style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#EF4444",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"⚠️ REGISTRAR INCIDENCIA"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {modal==="nota"&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
+          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontSize:16,fontWeight:800,color:"#64748B"}}>📝 OBSERVACIÓN</div>
+              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+            </div>
+            <div style={{padding:"16px 18px 40px"}}>
+              <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Precinto revisado, muelle saturado..." rows={4} style={{...iStyle,resize:"vertical"}}/>
+              <button onClick={()=>nota.trim()&&guardarEvidencia("nota",{texto:nota})} disabled={saving||!nota.trim()}
+                style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#64748B",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
+                {saving?"⏳ Guardando...":"📝 GUARDAR OBSERVACIÓN"}
               </button>
             </div>
           </div>
@@ -13166,20 +13532,11 @@ function EvidenciasStop({stopId,showToast}){
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActivo,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar}=useServicioActivo(uid);
+const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conductor",showToast,onOpenViajeModal}){
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const card="#FFFFFF",tx="#0F172A",su="#64748B";
-
-  async function onRetryViajePlan(sv){
-    try{
-      await retryOperationalPlanBuild({servicio:sv,norma,showToast});
-      await recargar?.();
-    }catch(e){
-      showToast?.("Error al reintentar cálculo: "+(e?.message||"inténtalo de nuevo"));
-    }
-  }
 
   useEffect(()=>{
     if(!servicio?.id||!stops.length){
@@ -13249,8 +13606,6 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       evidenciasByStop={evidenciasByStop}
       showToast={showToast}
       onIniciarServicio={iniciarServicio}
-      onIniciarViajeOperacional={iniciarViajeOperacional}
-      marcarInicioOperacionStop={marcarInicioOperacionStop}
       marcarLlegado={marcarLlegado}
       marcarCompletado={marcarCompletado}
       recargar={recargar}
@@ -13258,10 +13613,7 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       card={card}
       tx={tx}
       su={su}
-      norma={norma}
-      viajeActivo={viajeActivo}
       onOpenViajeModal={onOpenViajeModal}
-      onRetryViajePlan={onRetryViajePlan}
       conductorNombre={conductorNombre}
     />
   );
@@ -13275,8 +13627,6 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       evidenciasByStop={evidenciasByStop}
       showToast={showToast}
       onIniciarServicio={iniciarServicio}
-      onIniciarViajeOperacional={iniciarViajeOperacional}
-      marcarInicioOperacionStop={marcarInicioOperacionStop}
       marcarLlegado={marcarLlegado}
       marcarCompletado={marcarCompletado}
       recargar={recargar}
@@ -13284,14 +13634,11 @@ function TabServicio({uid,conductorNombre="Conductor",showToast,norma,viajeActiv
       card={card}
       tx={tx}
       su={su}
-      norma={norma}
-      viajeActivo={viajeActivo}
       onOpenViajeModal={onOpenViajeModal}
-      onRetryViajePlan={onRetryViajePlan}
       conductorNombre={conductorNombre}
     />
   );
-}
+});
 
 
 
@@ -13347,10 +13694,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 
   const primerCurso=servicios.find(s=>s.estado==="en_curso");
   const primerCursoPlan=getOperationalPlanSnapshot(primerCurso);
-  const primerCursoRuta=primerCursoPlan
-    ? `${primerCursoPlan.planned_origin||safeOperationalPlaceName(primerCurso?.origen,"Ubicación actual")} → ${primerCursoPlan.planned_destination||safeOperationalPlaceName(primerCurso?.destino,"Destino")}`
+  const primerCursoRuta=primerCurso
+    ? getFixedServiceRoute(primerCurso)
     : null;
-  const primerCursoEta=primerCursoPlan?.planned_eta_label||fmtOperationalEtaLabel(primerCursoPlan?.planned_eta);
+  const primerCursoEta=fmtOperationalEtaLabel(primerCursoPlan?.planned_eta)||(!isRelativeEtaLabel(primerCursoPlan?.planned_eta_label)?primerCursoPlan?.planned_eta_label:null);
   const primerCursoKm=Number.isFinite(Number(primerCursoPlan?.planned_km))?Math.round(Number(primerCursoPlan.planned_km)):null;
   const tripPres=useMemo(
     ()=>getUnifiedTripPresentation({
@@ -13433,11 +13780,12 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
             const lastActivity=getLastServiceActivity({service:sv,stops:[],evidencias:[]});
             const attention=needsAttention({service:sv,stops:[],evidencias:[],lastActivity});
             const attentionReason=attention?getAttentionReason({service:sv,stops:[],evidencias:[],lastActivity}):"";
-            const refVisible=stripServicioOperacionDisplay(sv.referencia);
+            const refVisible=getServiceNumber(sv);
+            const clienteVisible=getServiceClient(sv);
             const planSnapshot=getOperationalPlanSnapshot(sv);
-            const routeFrom=planSnapshot?.planned_origin||safeOperationalPlaceName(sv.origen,"Ubicación actual");
-            const routeTo=planSnapshot?.planned_destination||safeOperationalPlaceName(sv.destino,"Destino");
-            const planEta=planSnapshot?.planned_eta_label||fmtOperationalEtaLabel(planSnapshot?.planned_eta);
+            const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
+            const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
+            const planEta=fmtOperationalEtaLabel(planSnapshot?.planned_eta)||(!isRelativeEtaLabel(planSnapshot?.planned_eta_label)?planSnapshot?.planned_eta_label:null);
             const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
             const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
             const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
@@ -13463,7 +13811,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                     {attentionReason&&<div style={{fontSize:9,color:su,marginTop:2,lineHeight:1.3}}>{attentionReason}</div>}
                   </div>
                 )}
-                {refVisible&&<div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:1}}>Ref: {refVisible}</div>}
+                {refVisible&&<div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:1}}>{refVisible}{clienteVisible?` · Cliente: ${clienteVisible}`:""}</div>}
               </div>
               <div style={{display:"flex",alignItems:"flex-start",gap:6,flexShrink:0,marginLeft:10}}>
                 <span style={{background:empresaTone(ESTADO_COLOR[sv.estado]).bg,color:empresaTone(ESTADO_COLOR[sv.estado]).fg,border:`1px solid ${empresaTone(ESTADO_COLOR[sv.estado]).border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600}}>
@@ -13548,20 +13896,24 @@ export default function App(){
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setChecking(false);return;}
-    // Primero perfil
-    sbSelect("profiles",`id=eq.${uid}`)
-      .then(async rows=>{
-        const tc=rows[0]?.tipo_cuenta||null;
-        if(tc==="empresa"){setTipoCuenta("empresa");setChecking(false);return;}
-        // Comprobar si es gestor en conductor_empresa
-        try{
-          const rels=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-          const esGestor=rels.some(r=>r.rol==="gestor"||r.rol==="admin");
-          setTipoCuenta(esGestor?"empresa":tc);
-        }catch(_){setTipoCuenta(tc);}
+    const localContext=getStoredAuthContext(uid);
+    if(localContext?.kind==="conductor"){
+      setTipoCuenta(localContext.kind);
+      setChecking(false);
+      return;
+    }
+    // Sin contexto local conductor, verificar contra relaciones reales.
+    resolveAuthContextForUid(uid)
+      .then((resolved)=>{
+        persistAuthContext(resolved,uid);
+        setTipoCuenta(resolved);
         setChecking(false);
       })
-      .catch(()=>setChecking(false));
+      .catch(()=>{
+        persistAuthContext("conductor",uid);
+        setTipoCuenta("conductor");
+        setChecking(false);
+      });
   },[]);
 
   if(checking)return(
@@ -13574,6 +13926,7 @@ export default function App(){
     console.log("[AUDIT PR-22B] App shell",{
       tipoCuenta,
       renderiza:tipoCuenta==="empresa"?"EmpresaLayout (dashboard=EmpresaDashboard)":"AppInner (tab servicio=TabServicio→ActiveServicePanel; tab empresa=EmpresaPanel incrustado)",
+      authContext:getStoredAuthContext(getUserId())?.kind||null,
     });
   }
 

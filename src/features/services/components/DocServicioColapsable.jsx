@@ -2,17 +2,7 @@ import { useState } from "react";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
-import { getOperationalPlanSnapshot, stripServicioOperacionDisplay } from "../../../domain/service/serviceOperacionMeta";
-
-function looksLikeLatLonName(value){
-  return /^-?\d{1,2}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?$/.test(String(value||"").trim());
-}
-
-function safePlaceName(value,fallback){
-  const t=String(value||"").trim();
-  if(!t||looksLikeLatLonName(t))return fallback;
-  return t;
-}
+import { getFixedServiceRoute, getServiceClient, getServiceNumber } from "../../../domain/service/serviceIdentity";
 
 export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConductor,ESTADO_COLOR,ESTADO_LABEL,TIPO_EV,TIPO_EV_COL,onVerEv,bg,card,tx,su}){
   const[abierto,setAbierto]=useState(false);
@@ -23,9 +13,9 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
   const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:flotaEvs});
   const attention=needsAttention({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity});
   const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
-  const refVisible=stripServicioOperacionDisplay(sv.referencia);
-  const planSnapshot=getOperationalPlanSnapshot(sv);
-  const routeTitle=`${planSnapshot?.planned_origin||safePlaceName(sv.origen,"Ubicación actual")} → ${planSnapshot?.planned_destination||safePlaceName(sv.destino,"Destino")}`;
+  const refVisible=getServiceNumber(sv);
+  const clienteVisible=getServiceClient(sv);
+  const routeTitle=getFixedServiceRoute(sv);
 
   function descargarServicio(){
     const fecha=sv.fecha_inicio?new Date(sv.fecha_inicio).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}).replace(/\//g,"-"):"sin-fecha";
@@ -123,7 +113,8 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
           )}
           <div style={{display:"flex",gap:8,marginTop:4,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:su}}>👷 {nombreConductor(sv.conductor_id)}</span>
-            {refVisible&&<span style={{fontSize:11,color:"#F59E0B"}}>Ref: {refVisible}</span>}
+            {refVisible&&<span style={{fontSize:11,color:"#F59E0B"}}>{refVisible}</span>}
+            {clienteVisible&&<span style={{fontSize:11,color:su}}>Cliente: {clienteVisible}</span>}
             <span style={{background:color+"20",color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
               <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:5,padding:"1px 7px",fontSize:10,fontWeight:700}}>
