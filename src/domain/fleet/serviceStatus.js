@@ -9,6 +9,7 @@ export const ESTADO_COLOR = Object.freeze({
   en_curso: "#F59E0B",
   completado: "#22C55E",
   cancelado: "#EF4444",
+  anulado: "#64748B",
 });
 
 /** @type {Readonly<Record<string, string>>} */
@@ -17,6 +18,7 @@ export const ESTADO_LABEL = Object.freeze({
   en_curso: "En curso",
   completado: "Completado",
   cancelado: "Cancelado",
+  anulado: "Anulado",
 });
 
 /** @type {Readonly<Record<string, string>>} */
@@ -25,6 +27,7 @@ export const ESTADO_ICON = Object.freeze({
   en_curso: "🚛",
   completado: "🏁",
   cancelado: "❌",
+  anulado: "○",
 });
 
 /** Estados incluidos en filtros “activos” (sin cambiar orden ni strings). */

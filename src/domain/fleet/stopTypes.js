@@ -23,7 +23,7 @@ export const STOP_COLOR = Object.freeze({
   parada: "#06B6D4",
 });
 
-/** Etiquetas de los tipos en formularios (sin tipo `parada`, no estaba en selects). */
+/** Etiquetas cortas por `stops.tipo` (UI listados / conductor). */
 /** @type {Readonly<Record<string, string>>} */
 export const STOP_LABEL = Object.freeze({
   carga: "Carga",
@@ -31,7 +31,23 @@ export const STOP_LABEL = Object.freeze({
   parada_tecnica: "Parada técnica",
   aduana: "Aduana",
   pernocta: "Pernocta",
+  parada: "Parada",
+  otros: "Parada",
+  pausa: "Pausa",
+  reparto: "Reparto",
 });
+
+/**
+ * Etiqueta legible para `stops.tipo` (UI conductor / listados).
+ * @param {string|null|undefined} tipo
+ * @returns {string}
+ */
+export function formatStopTipoLabel(tipo) {
+  if (!tipo || typeof tipo !== "string") return "Parada";
+  const key = tipo.trim().toLowerCase();
+  if (STOP_LABEL[key]) return STOP_LABEL[key];
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 /** Opciones de `<select>` — mismo orden y textos que AsignarServicioModal / StopFormRow. */
 export const STOP_TIPOS_FORM = Object.freeze([

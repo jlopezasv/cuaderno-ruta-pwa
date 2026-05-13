@@ -389,7 +389,7 @@ Nota operativa PR-01:
 ## Correcciones minimas aprobadas para PR-01 (sin reestructura)
 
 - crear/alinear ruta `api/cmr.js` para que `/api/cmr` exista formalmente.
-- crear `api/push.js` con soporte minimo para `vapid_key|subscribe|schedule|cancel`.
+- crear `api/push.mjs` (ESM en Vercel) con soporte mínimo para `vapid_key|subscribe|schedule|cancel` y FCM.
 - completar `api/admin.js` para las acciones ya llamadas por frontend o devolver `ADMIN_NOT_IMPLEMENTED` controlado en endpoints no listos.
 - normalizar responses de `admin`, `cmr`, `push`, `stripe` al envelope minimo.
 - documentar payload/response de cada action en este archivo.

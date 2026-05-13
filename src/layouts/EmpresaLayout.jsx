@@ -15,7 +15,6 @@ export default function EmpresaLayout({
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState("");
-  const [dark, setDark] = useState(() => localStorage.getItem("dark") === "1");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
 
   useEffect(() => {
@@ -58,6 +57,13 @@ export default function EmpresaLayout({
       .catch(() => setLoaded(true));
   }, []);
 
+  const visibleTabs = EMPRESA_TABS;
+
+  useEffect(() => {
+    if (!visibleTabs.length) return;
+    if (!visibleTabs.some((t) => t.id === tab)) setTab(visibleTabs[0].id);
+  }, [tab, visibleTabs]);
+
   function onSave(p) {
     const uid = getUserId();
     if (!uid) return;
@@ -90,6 +96,7 @@ export default function EmpresaLayout({
     su = "#64748B",
     border = "#dbe4ee",
     accent = "#2563eb";
+  const canUseConfig = true;
 
   return (
     <div style={{ minHeight: "100vh", background: bg, display: "flex", flexDirection: "column", color: tx }}>
@@ -117,7 +124,7 @@ export default function EmpresaLayout({
             </div>
           </div>
           <div style={{ display: "flex", flex: 1, gap: 0 }}>
-            {EMPRESA_TABS.map((t) => (
+            {visibleTabs.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
@@ -164,9 +171,11 @@ export default function EmpresaLayout({
             >
               {String(prof.nombre || "E").charAt(0).toUpperCase()}
             </div>
-            <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
-              Ajustes
-            </button>
+            {canUseConfig && (
+              <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+                Ajustes
+              </button>
+            )}
             <button
               onClick={async () => {
                 await sbSignOut();
@@ -188,9 +197,11 @@ export default function EmpresaLayout({
             <div style={{ fontSize: 13, fontWeight: 650, color: tx }}>Cuaderno de Ruta</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
-              Ajustes
-            </button>
+            {canUseConfig && (
+              <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+                Ajustes
+              </button>
+            )}
             <button
               onClick={async () => {
                 await sbSignOut();
@@ -218,8 +229,11 @@ export default function EmpresaLayout({
         {/* DOCUMENTOS */}
         {tab === "documentos" && <EmpresaPanelSeccion seccion="documentos" prof={prof} showToast={showToast} />}
 
+        {/* PLANIFICADOR */}
+        {tab === "planificador" && <EmpresaPanelSeccion seccion="planificador" prof={prof} showToast={showToast} />}
+
         {/* CONFIGURACIÓN */}
-        {tab === "config" && (
+        {tab === "config" && canUseConfig && (
           <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
             <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
             <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
@@ -231,7 +245,7 @@ export default function EmpresaLayout({
       {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)" }}>
-          {EMPRESA_TABS.filter((t) => t.id !== "config").map((t) => (
+          {visibleTabs.filter((t) => t.id !== "config").map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}

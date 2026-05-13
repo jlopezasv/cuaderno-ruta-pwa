@@ -50,6 +50,11 @@ export function getOperationalPlanSnapshot(servicio) {
   return plan && typeof plan === "object" ? plan : null;
 }
 
+export function getOperationalEtaSnapshot(servicio) {
+  const eta = getServicioOperacionMeta(servicio).operational_eta;
+  return eta && typeof eta === "object" ? eta : null;
+}
+
 /** ISO string o null: marca que el conductor confirmó explícitamente destino/ruta. */
 export function getOperationalPlanConfirmedAt(servicio) {
   const iso = getServicioOperacionMeta(servicio).operational_plan_confirmed_at;

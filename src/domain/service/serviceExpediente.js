@@ -1,4 +1,4 @@
-import { getOperationalPlanSnapshot } from "./serviceOperacionMeta.js";
+import { getOperationalPlanSnapshot, getServicioOperacionMeta } from "./serviceOperacionMeta.js";
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
 import { formatOperationalEtaLabel, isRelativeEtaLabel } from "./etaFormatter.js";
@@ -114,20 +114,26 @@ function eventRecord({ ts, type, title, detail = "", servicio, stopId = null, us
 }
 
 function serviceWindow(servicio, stopRows, evidencias) {
+  const meta = getServicioOperacionMeta(servicio);
+  const cancelledAt = meta?.cancellation?.at || meta?.service_cancelled_at || servicio?.fecha_anulacion || null;
+  const archivedAt = meta?.archive?.at || meta?.archived_at || null;
   const candidates = [
     parseTs(servicio?.fecha_inicio),
     ...stopRows.flatMap((st) => [parseTs(st.entrada), parseTs(st.salida)]),
     ...evidencias.map((ev) => parseTs(ev.created_at)),
+    parseTs(cancelledAt),
+    parseTs(archivedAt),
   ].filter((v) => v != null);
   if (!candidates.length) return { start: null, end: null };
   return {
     start: Math.min(...candidates),
-    end: servicio?.estado === "completado" ? Math.max(...candidates) : Date.now(),
+    end: servicio?.estado === "completado" || servicio?.estado === "anulado" ? Math.max(...candidates) : Date.now(),
   };
 }
 
 export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metrics, nombreConductor, etaLabel, fmtDur, entries = [] }) {
   const sortedStops = sortStopsByOrden(stops);
+  const serviceMeta = getServicioOperacionMeta(servicio);
   const plan = getOperationalPlanSnapshot(servicio);
   const ref = getServiceNumber(servicio);
   const counters = {};
@@ -172,6 +178,21 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
   if (servicio?.fecha_inicio) {
     timeline.push({ ts: servicio.fecha_inicio, time: fmtClock(parseTs(servicio.fecha_inicio)), type: "servicio", title: "Servicio iniciado", detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}` });
   }
+  const cancellation = serviceMeta?.cancellation || null;
+  const cancelledAt = cancellation?.at || serviceMeta?.service_cancelled_at || servicio?.fecha_anulacion || servicio?.anulado_at || null;
+  const cancellationUser = cancellation?.by_label || cancellation?.by || "tráfico";
+  const cancellationReason = cancellation?.reason || servicio?.motivo_anulacion || "";
+  const cancellationDetail = `Motivo: ${cancellationReason || "Sin motivo indicado"} · Usuario: ${cancellationUser}`;
+  if (servicio?.estado === "anulado" || cancelledAt) {
+    const ts = cancelledAt || servicio?.updated_at || new Date().toISOString();
+    timeline.push({
+      ts,
+      time: fmtClock(parseTs(ts)),
+      type: "servicio_anulado",
+      title: "Servicio anulado",
+      detail: cancellationDetail,
+    });
+  }
   for (const stop of stopRows) {
     if (stop.entrada) timeline.push({ ts: stop.entrada, time: stop.entradaHora, type: "entrada_muelle", title: `Entrada muelle — ${stop.nombre}`, detail: stop.label, stopId: stop.id });
     for (const ev of stop.evidencias) {
@@ -198,6 +219,21 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
       origin: "servicio",
       location: servicio.origen || "",
       metadata: { estado: servicio.estado || null },
+    }));
+  }
+
+  if (servicio?.estado === "anulado" || cancelledAt) {
+    const ts = cancelledAt || servicio?.updated_at || new Date().toISOString();
+    integrityRecords.push(eventRecord({
+      ts,
+      type: "servicio_anulado",
+      title: "Servicio anulado",
+      detail: cancellationDetail,
+      servicio,
+      userId: cancellation?.by || null,
+      origin: "servicio",
+      location: servicio?.origen || "",
+      metadata: { estado: "anulado", user_id: cancellation?.by || null, user_label: cancellationUser, reason: cancellationReason || null },
     }));
   }
 
@@ -298,14 +334,20 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
     header: {
       referencia: ref,
       ruta: getFixedServiceRoute(servicio, "—", "—"),
-      estado: servicio?.estado || "—",
+      estado: servicio?.estado === "anulado" ? "ANULADO" : (servicio?.estado || "—"),
       conductor: nombreConductor?.(servicio?.conductor_id) || "—",
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
-      eta: formatOperationalEtaLabel(plan?.planned_eta) || (isRelativeEtaLabel(etaLabel) ? null : etaLabel) || (isRelativeEtaLabel(plan?.planned_eta_label) ? null : plan?.planned_eta_label) || "—",
+      eta: servicio?.estado === "anulado" ? "—" : (formatOperationalEtaLabel(plan?.planned_eta) || (isRelativeEtaLabel(etaLabel) ? null : etaLabel) || (isRelativeEtaLabel(plan?.planned_eta_label) ? null : plan?.planned_eta_label) || "—"),
       km: Number.isFinite(Number(plan?.planned_km)) ? Math.round(Number(plan.planned_km)) : null,
       fechaInicio: servicio?.fecha_inicio || null,
       fecha: fechaDocumento,
+      cancellation: (servicio?.estado === "anulado" || cancelledAt) ? {
+        at: cancelledAt || null,
+        fecha: cancelledAt ? fmtDateTime(parseTs(cancelledAt)) : "—",
+        motivo: cancellationReason || "Sin motivo indicado",
+        usuario: cancellationUser,
+      } : null,
     },
     metrics: {
       tiempoTotalViaje: metrics?.tiempoTotalViajeMin != null ? fmtDur(metrics.tiempoTotalViajeMin) : "—",
@@ -512,6 +554,14 @@ async function makePdfBlob(expediente) {
   metric("Km", expediente.header.km != null ? `${expediente.header.km}` : "—", margin + 235, 70);
   metric("Estado", expediente.header.estado, margin + 315, 150);
   y -= 54;
+
+  if (expediente.header.cancellation) {
+    section("Anulacion operacional");
+    lines(`Fecha anulacion: ${expediente.header.cancellation.fecha || "—"}`, margin, 10, "#334155", 90, 14);
+    lines(`Motivo: ${expediente.header.cancellation.motivo || "Sin motivo indicado"}`, margin, 10, "#334155", 90, 14);
+    lines(`Usuario: ${expediente.header.cancellation.usuario || "trafico"}`, margin, 10, "#334155", 90, 14);
+    y -= 4;
+  }
 
   section("Timeline operacional");
   for (const ev of expediente.timeline) {

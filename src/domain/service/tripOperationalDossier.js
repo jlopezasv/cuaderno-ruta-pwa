@@ -122,7 +122,9 @@ export function computeTripOperationalMetrics(servicio, stopsRaw, nowMs = Date.n
     let trasladoPrevioMin = null;
     if (opStartMs != null) {
       if (i === 0) {
-        /* primer tramo hasta entrada muelle: NO cuenta como conducción de viaje */
+        if (llegada != null && llegada >= opStartMs) {
+          trasladoPrevioMin = Math.round((llegada - opStartMs) / 60000);
+        }
       } else {
         const prev = stops[i - 1];
         const prevSalida = parseTs(prev.hora_salida_real);

@@ -20,7 +20,7 @@ self.addEventListener('push', e => {
       requireInteraction: true,
       vibrate: [400, 100, 400, 100, 400],
       silent: false,
-      data: { url: '/' },
+      data: { url: data?.data?.url || data?.url || '/?tab=servicio' },
     })
   );
 });
@@ -81,8 +81,18 @@ self.addEventListener('periodicsync', e => {
 // ── AL PULSAR NOTIFICACIÓN ──
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const nData = e.notification?.data || {};
+  const fcmData = nData?.FCM_MSG?.data || {};
+  const targetUrl = nData.url || fcmData.url || '/?tab=servicio';
   e.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then(list => list.length ? list[0].focus() : clients.openWindow('/'))
+      .then(list => {
+        const app = list[0];
+        if (app) {
+          app.postMessage({ type: 'OPEN_TAB', payload: { tab: 'servicio' } });
+          return app.focus();
+        }
+        return clients.openWindow(targetUrl);
+      })
   );
 });

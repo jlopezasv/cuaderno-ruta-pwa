@@ -30,6 +30,7 @@ import {
   getStoredAuthContext,
   persistAuthContext,
 } from "./data/authContext";
+import { getPushClientContext, initFcmPush, isPushDebugEnvironmentEnabled, isPushDebugSessionEnabled, enablePushDebugSession, PUSH_DEBUG_LS_KEY } from "./data/fcmPush";
 import {
   ESTADO_COLOR,
   ESTADO_LABEL,
@@ -43,6 +44,7 @@ import {
   STOP_TIPOS_CON_AUTOTACO,
   STOP_TIPO_TO_FIN_EV,
   STOP_TIPO_TO_INICIO_EV,
+  formatStopTipoLabel,
 } from "./domain/fleet/stopTypes";
 import {
   jornadaState,
@@ -56,6 +58,12 @@ import {
   groupDocumentsByStop,
   isIncidentDocument,
 } from "./domain/service/serviceDocuments";
+import {
+  OPERATIONAL_SERVICIO_DOC_TIPOS,
+  countOperationalDocuments,
+  filterOperationalEvidencias,
+} from "./domain/service/operationalServicioDocs";
+import { uploadUserPhoto as uploadPhoto } from "./data/uploadUserPhoto";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "./domain/service/serviceOperationalStatus";
 import { getLastServiceActivity } from "./domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "./domain/service/serviceAttention";
@@ -66,17 +74,20 @@ import {
 } from "./domain/service/tripOperationalDossier.js";
 import {
   buildServiceExpediente,
-  downloadServiceArchiveMetadata,
   downloadServiceExpedientePdf,
 } from "./domain/service/serviceExpediente.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
 import { formatOperationalEtaLabel, formatOperationalEtaSlot, isRelativeEtaLabel } from "./domain/service/etaFormatter.js";
 import {
   mergeReferenciaOperacional,
+  getServicioOperacionMeta,
   getOperationalTripStartedAt,
   getOperationalPlanSnapshot,
+  getOperationalEtaSnapshot,
+  getOperationalPlanConfirmedAt,
 } from "./domain/service/serviceOperacionMeta.js";
 import {
   buildServiceIdentityMeta,
@@ -123,83 +134,6 @@ class ErrorBoundary extends React.Component {
     }
     return this.props.children;
   }
-}
-
-// ─────────────────────────────────────────────────────────────
-//  SUBIDA DE FOTOS A SUPABASE STORAGE (comprimidas)
-// ─────────────────────────────────────────────────────────────
-async function uploadPhoto(file, folder="misc") {
-  // 1. Comprimir antes de subir
-  const compressed = await compressImage(file, 800, 0.72);
-
-  // 2. Nombre único
-  const uid = getUserId() || "anon";
-  const ext = file.type === "image/png" ? "png" : "jpg";
-  const name = `${uid}/${folder}/${Date.now()}.${ext}`;
-
-  // 3. Subir a Supabase Storage
-  try {
-    const session = JSON.parse(localStorage.getItem("sb_session") || "null");
-    const token = session?.access_token || SB_KEY;
-    const res = await fetch(`${SB_URL}/storage/v1/object/user-photos/${name}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "apikey": SB_KEY,
-        "Content-Type": file.type || "image/jpeg",
-        "x-upsert": "true",
-      },
-      body: compressed,
-    });
-    if (res.ok) {
-      // Devolver URL pública firmada (válida 10 años)
-      const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/user-photos/${name}`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "apikey": SB_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ expiresIn: 315360000 }), // 10 años
-      });
-      if (signRes.ok) {
-        const sd = await signRes.json();
-        return `${SB_URL}/storage/v1${sd.signedURL}`;
-      }
-      return `${SB_URL}/storage/v1/object/public/user-photos/${name}`;
-    }
-  } catch(e) {
-    console.warn("Storage upload failed, using base64:", e.message);
-  }
-  // Fallback: devolver base64 si falla el upload
-  return await fileToBase64(compressed);
-}
-
-function compressImage(file, maxWidth=800, quality=0.72) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width, h = img.height;
-        if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function fileToBase64(blob) {
-  return new Promise((resolve) => {
-    const r = new FileReader();
-    r.onload = (e) => resolve(e.target.result);
-    r.readAsDataURL(blob);
-  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -301,14 +235,10 @@ function PaywallScreen({status,user,email}){
 
 async function resolveAuthContextForUid(uid) {
   if (!uid) return "conductor";
-  const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
-  const hasManagerRole = rels.some((r) => r.rol === "gestor" || r.rol === "admin");
-  if (hasManagerRole) return "empresa";
-  if (rels.length) return "conductor";
-
-  const emps = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
-  if (emps.length) return "empresa";
-
+  const ownerEmpresas = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
+  if (ownerEmpresas.length) return "empresa";
+  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
+  if (profiles[0]?.tipo_cuenta === "empresa") return "empresa";
   return "conductor";
 }
 
@@ -388,7 +318,7 @@ function AuthScreen({ onAuth }) {
         const uid = getUserId();
         const authContext = loginContext === "empresa" ? await resolveAuthContextForUid(uid) : "conductor";
         if (loginContext === "empresa" && authContext !== "empresa") {
-          throw new Error("Esta cuenta no tiene permisos de empresa");
+          throw new Error("Esta cuenta no es de empresa");
         }
         if (uid) persistAuthContext(authContext, uid);
         onAuth(authContext);
@@ -1818,8 +1748,18 @@ function AppInner(){
   const[loaded,setLoaded]=useState(false);
   const[authChecked,setAuthChecked]=useState(false);
   const[user,setUser]=useState(null);
-  const[tab,setTab]=useState("hoy");
+  const[tab,setTab]=useState("servicio");
   const[viajeActivo,setViajeActivo]=useState(()=>{try{const v=localStorage.getItem("viaje_activo");return v?JSON.parse(v):null;}catch{return null;}});
+  useEffect(()=>{
+    if(!navigator.serviceWorker)return;
+    function onSwMessage(e){
+      if(e?.data?.type==="OPEN_TAB"&&e?.data?.payload?.tab==="servicio"){
+        setTab("servicio");
+      }
+    }
+    navigator.serviceWorker.addEventListener("message",onSwMessage);
+    return()=>navigator.serviceWorker.removeEventListener("message",onSwMessage);
+  },[]);
   useEffect(()=>{
     function onStorage(e){
       if(e.key!=="viaje_activo")return;
@@ -1867,7 +1807,7 @@ function AppInner(){
     }
     setSessionExpiredHandler(()=>{
       setUser(null);
-      setTab("hoy");
+      setTab("servicio");
     });
     return()=>{setSessionExpiredHandler(null);};
   },[]);
@@ -1899,7 +1839,6 @@ function AppInner(){
   const[stopErr,setStopErr]=useState("");
   const photoRef=useRef(null),tmplPhotoR=useRef(null);
   const geoRef=useRef(null);
-  const geoLastSavedRef=useRef({ts:0,lat:null,lon:null});
   const jStateRef=useRef("none");
   const width=useWidth(),isWide=width>=768;
 
@@ -1961,7 +1900,7 @@ function AppInner(){
         setProf({...PROF0,...p});
       }
       setLoaded(true);
-      // Detectar rol empresa — con reintento
+      // Detectar contexto empresa — con reintento
       const uidRol=getUserId();
       if(uidRol){
         const authContext = getStoredAuthContext(uidRol)?.kind || "conductor";
@@ -1973,14 +1912,11 @@ function AppInner(){
               setRolEmpresa(null);
               return;
             }
-            const emps=await sbSelect("empresas",`owner_id=eq.${uidRol}`);
-            if(emps.length){setRolEmpresa("jefe");return;}
-            // Sin rol — si hay empresa en profiles.tipo_cuenta=empresa, marcar jefe
+            const emps2=await sbSelect("empresas",`owner_id=eq.${uidRol}`);
+            if(emps2.length){setRolEmpresa("jefe");return;}
             const prof2=await sbSelect("profiles",`id=eq.${uidRol}`);
             if(prof2[0]?.tipo_cuenta==="empresa"){
-              // Buscar empresa sin activa por si acaso
-              const emps2=await sbSelect("empresas",`owner_id=eq.${uidRol}`);
-              if(emps2.length)setRolEmpresa("jefe");
+              setRolEmpresa("jefe");
             }
           }catch(e){
             if(intento<2)setTimeout(()=>detectarRol(intento+1),2000);
@@ -2084,55 +2020,7 @@ function AppInner(){
   // Actualizar ref de jState para el efecto de geolocalización
   jStateRef.current=jState;
 
-  /** Tracking empresa: jornada abierta, guardado por eventos/cambios relevantes. */
-  useEffect(()=>{
-    if(jState!=="open")return;
-    const uid=getUserId();
-    if(!uid||!navigator.geolocation)return;
-    const MIN_SAVE_MS=12*60*1000;
-    const MIN_MOVE_KM=5;
-    function postUbicacion(lat,lon,speed,accuracy){
-      geoLastSavedRef.current={ts:Date.now(),lat,lon};
-      sbFetch("/rest/v1/ubicaciones",{
-        method:"POST",
-        headers:{"Prefer":"resolution=merge-duplicates"},
-        body:JSON.stringify({user_id:uid,lat,lon,velocidad:speed?Math.round(speed*3.6):null,precision_m:Math.round(accuracy||0),ts:new Date().toISOString()}),
-      }).catch(()=>{});
-    }
-    function shouldSave(lat,lon,force=false){
-      if(force)return true;
-      const last=geoLastSavedRef.current;
-      if(!last?.ts||last.lat==null||last.lon==null)return true;
-      if(Date.now()-last.ts>=MIN_SAVE_MS)return true;
-      return haverDist(last.lat,last.lon,lat,lon)>=MIN_MOVE_KM;
-    }
-    function readAndMaybePost(force=false){
-      navigator.geolocation.getCurrentPosition(
-        pos=>{
-          const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
-          if(shouldSave(lat,lon,force))postUbicacion(lat,lon,speed,accuracy);
-        },
-        ()=>{},
-        {enableHighAccuracy:false,timeout:12000,maximumAge:180000},
-      );
-    }
-    readAndMaybePost(true);
-    const wid=navigator.geolocation.watchPosition(
-      pos=>{
-        const{latitude:lat,longitude:lon,speed,accuracy}=pos.coords;
-        if(shouldSave(lat,lon))postUbicacion(lat,lon,speed,accuracy);
-      },
-      ()=>{},
-      {enableHighAccuracy:false,maximumAge:180000},
-    );
-    const backup=setInterval(()=>{
-      readAndMaybePost(false);
-    },12*60*1000);
-    return()=>{
-      navigator.geolocation.clearWatch(wid);
-      clearInterval(backup);
-    };
-  },[jState,active?.type]);
+  /** Ubicación conductor: se captura puntualmente al registrar una acción, sin tracking continuo. */
   const tl=buildTimeline(todayEnts,clock);
   const dayMap={};db.entries.forEach(e=>{const k=dayKey(e.ts);if(!dayMap[k])dayMap[k]={date:new Date(e.ts),list:[]};dayMap[k].list.push(e);});
   const days=Object.entries(dayMap).sort((a,b)=>b[0].localeCompare(a[0]));
@@ -2190,36 +2078,30 @@ function AppInner(){
   const swRef=useRef(null);
   const notifSent=useRef(new Set());
 
-  // ── PUSH NOTIFICATIONS — registro y suscripción ──
+  // ── PUSH NOTIFICATIONS (FCM) — Android + iOS PWA ──
+  // Depende de `user`: tras login `setUser(getUserId())` debe volver a ejecutar init (antes quedaba en no_user).
   useEffect(()=>{
-    const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
+    if(prof?.tipo_cuenta==="empresa")return;
+    if(!user)return;
     if(!('serviceWorker' in navigator))return;
-    if(isIOS&&!window.matchMedia('(display-mode: standalone)').matches)return;
-
     navigator.serviceWorker.register('/sw.js').then(async reg=>{
       swRef.current=reg;
-      // Obtener clave pública VAPID del servidor
       try{
-        const r=await fetch('/api/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'vapid_key'})});
-        const {publicKey}=await r.json();
-        if(!publicKey)return;
-        // Suscribir al usuario a push
-        const sub=await reg.pushManager.subscribe({
-          userVisibleOnly:true,
-          applicationServerKey:urlBase64ToUint8Array(publicKey),
-        });
-        // Guardar suscripción en servidor
-        const uid=getUserId();
-        if(uid){
-          fetch('/api/push',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({action:'subscribe',payload:{user_id:uid,subscription:sub.toJSON()}})
-          }).catch(()=>{});
+        console.log("[push] initFcmPush invoked after conductor session (user state set)",{uid:String(user).slice(0,8)+"…"});
+        const ctx=getPushClientContext();
+        if(ctx.ios&&!ctx.standalone){
+          showToast("Instala la app en pantalla de inicio para recibir servicios en tiempo real.");
         }
+        const init=await initFcmPush({showToast});
+        if(init?.ok)console.log("[push] FCM listo tras login");
+        else console.log("[push] initFcmPush finished without token",{reason:init?.reason,traceKeys:init?.trace?Object.keys(init.trace):[]});
       }catch(e){
-        console.log('Push subscription:',e.message);
+        console.log("[push] Push registration exception",e?.message||String(e),e);
       }
-    }).catch(()=>{});
-  },[]);
+    }).catch((e)=>{
+      console.log("[push] serviceWorker.register failed (AppInner effect)",e?.message||String(e),e);
+    });
+  },[user,prof?.tipo_cuenta,showToast]);
 
   function urlBase64ToUint8Array(base64String){
     const padding='='.repeat((4-base64String.length%4)%4);
@@ -2721,6 +2603,7 @@ function AppInner(){
         }]).catch(()=>{});
       }
       showToast("✏️ Corrección guardada — original conservado en auditoría","#3B82F6",3000);
+      void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:`event_correction:${evType}`,showToast});
       setModal(null);
       setEditId(null);
       return;
@@ -2734,6 +2617,7 @@ function AppInner(){
       sbUpsert("entries",[{id:ne.id,user_id:getUserId(),type:ne.type,ts:ne.ts instanceof Date?(ne.ts instanceof Date?(toDate(ne.ts).toISOString()):ne.ts):new Date(ne.ts).toISOString(),note:ne.note||null,location:ne.location||null,photo:ne.photo||null,late:ne.late||false,pais:paisInfo}]).catch(()=>{});
     }
     setModal(null);
+    void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:evType,showToast});
 
     const interp=interpretarDescanso(evType,currentEntries);
     if(interp) setTimeout(()=>showToast(interp.msg,interp.color,5000),200);
@@ -2746,6 +2630,7 @@ function AppInner(){
     const ne={id:Date.now()+Math.random(),type,ts:new Date(),note:"",location:"",photo:null,late:false};
     setDb(p=>({...p,entries:[...p.entries,ne]}));
     showToast(`${EV[type]?.icon} ${EV[type]?.label} iniciado`);
+    void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:type,showToast});
     // GPS en segundo plano — actualiza la ubicación cuando llegue
     if(navigator.geolocation){
       navigator.geolocation.getCurrentPosition(
@@ -2980,7 +2865,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal}/>
+          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal}/>
         )}
 
         {tab==="resumen"&&(
@@ -3020,11 +2905,6 @@ function AppInner(){
                     <div style={{fontSize:40,marginBottom:10}}>📦</div>
                     <div style={{fontSize:18,fontWeight:800,color:"#22C55E",letterSpacing:.5}}>DOCS POR SERVICIO</div>
                     <div style={{fontSize:12,color:"#475569",marginTop:4}}>CMR · Fotos · Incidencias por stop</div>
-                  </button>
-                  <button onClick={()=>setDocsTab("cmr")} style={{background:"#1E293B",border:"1px solid #F59E0B30",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
-                    <div style={{fontSize:40,marginBottom:10}}>📷</div>
-                    <div style={{fontSize:18,fontWeight:800,color:"#F59E0B",letterSpacing:.5}}>ESCÁNER CMR</div>
-                    <div style={{fontSize:12,color:"#475569",marginTop:4}}>Fotografía · IA extrae datos · Guarda en Supabase</div>
                   </button>
                   <button onClick={()=>setDocsTab("gastos")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
                     <div style={{fontSize:40,marginBottom:10}}>💰</div>
@@ -3180,8 +3060,7 @@ function AppInner(){
             {docsTab==="empresa"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>📊 INFORME</span></div><EmpresaReport db={db} prof={prof} dark={dark} norma={norma}/></div>}
             {docsTab==="auditoria"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>🔍 AUDITORÍA</span></div><AuditoriaView db={db} prof={prof} dark={dark}/></div>}
             {docsTab==="info"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>ℹ️ EMERGENCIAS</span></div><InfoEmergencias dark={dark}/></div>}
-            {docsTab==="cmr"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>📦 ESCÁNER CMR</span></div><CmrScanner prof={prof} dark={dark}/></div>}
-            {docsTab==="servicio_docs"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>📦 DOCS POR SERVICIO</span></div><ServicioDocsView uid={getUserId()} showToast={showToast}/></div>}
+            {docsTab==="servicio_docs"&&<ServicioDocsView uid={getUserId()} showToast={showToast} onBack={()=>setDocsTab("home")}/>}
             {docsTab==="km"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>🛣️ LIBRO KM</span></div><LibroKm dark={dark} prof={prof}/></div>}
           </div>
         )}
@@ -3825,11 +3704,12 @@ function AppInner(){
         const sid=pref?.servicioId;
         if(sid&&getUserId()){
           const patch={};
-          if(!pref?.origenActual?.trim()&&v.origen?.trim())patch.origen=v.origen.trim();
-          if(!pref?.destinoActual?.trim()&&v.destino?.trim())patch.destino=v.destino.trim();
+          if(v.origen?.trim()&&v.origen.trim()!==String(pref?.origenActual||"").trim())patch.origen=v.origen.trim();
+          if(v.destino?.trim()&&v.destino.trim()!==String(pref?.destinoActual||"").trim())patch.destino=v.destino.trim();
           if(v.operationalPlan){
             patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{
               operational_plan:v.operationalPlan,
+              operational_eta:null,
               operational_plan_confirmed_at:new Date().toISOString(),
             });
           }
@@ -4286,6 +4166,10 @@ function safeOperationalPlaceName(value,fallback){
   return t;
 }
 
+function isGenericOperationalOrigin(value){
+  return /^(ubicaci[oó]n actual|ubicaci[oó]n gps detectada|origen gps|mi ubicaci[oó]n|posici[oó]n actual)$/i.test(String(value||"").trim());
+}
+
 function operationalPlanLog(level,step,data){
   if(typeof console==="undefined")return;
   const fn=level==="warn"?console.warn:console.info;
@@ -4310,12 +4194,220 @@ function getBrowserOperationalGps(){
   });
 }
 
+function gpsActionErrorMessage(error){
+  if(!error)return"Ubicación no disponible";
+  if(error.code===1)return"Permiso GPS denegado";
+  if(error.code===2)return"Ubicación no disponible";
+  if(error.code===3)return"GPS tardó demasiado";
+  return error.message||"Ubicación no disponible";
+}
+
+function trackingLog(step,data){
+  if(typeof console==="undefined")return;
+  if(step.includes("failed")||step.includes("denied")||step.includes("timeout"))console.warn(`[tracking] ${step}`,data??"");
+  else console.info(`[tracking] ${step}`,data??"");
+}
+
+function getDriverActionGps(){
+  if(typeof navigator==="undefined"||!navigator.geolocation){
+    trackingLog("gps unavailable",{reason:"navigator.geolocation missing"});
+    return Promise.resolve({ok:false,error:"GPS no disponible en este dispositivo"});
+  }
+  return new Promise(resolve=>{
+    trackingLog("gps requested",{timeoutMs:12000,enableHighAccuracy:false,maximumAge:60000});
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        const{latitude:lat,longitude:lon,accuracy,speed}=pos.coords;
+        if(!Number.isFinite(lat)||!Number.isFinite(lon)){
+          trackingLog("gps invalid_coords",{lat,lon,accuracy});
+          resolve({ok:false,error:"Coordenadas GPS inválidas"});
+          return;
+        }
+        trackingLog("gps success",{lat,lon,accuracy,speed});
+        resolve({ok:true,point:{lat,lon,accuracy,speed,ts:new Date().toISOString()}});
+      },
+      error=>{
+        const detail={code:error?.code,message:error?.message||"unknown"};
+        if(error?.code===1)trackingLog("gps denied",detail);
+        else if(error?.code===3)trackingLog("gps timeout",detail);
+        else trackingLog("gps failed",detail);
+        resolve({ok:false,error:gpsActionErrorMessage(error)});
+      },
+      {enableHighAccuracy:false,timeout:12000,maximumAge:60000}
+    );
+  });
+}
+
+async function saveDriverActionLocation(uid,point,{servicio=null,eventType=null,stopId=null}={}){
+  if(!uid||!point||!Number.isFinite(point.lat)||!Number.isFinite(point.lon))return null;
+  const payload={
+    lat:point.lat,
+    lon:point.lon,
+    ts:point.ts||new Date().toISOString(),
+    precision_m:Math.round(point.accuracy||0),
+    velocidad:point.speed!=null?Math.round(point.speed*3.6):null,
+    conductor_id:uid||null,
+    empresa_id:servicio?.empresa_id||null,
+    servicio_id:servicio?.id||null,
+    event_type:eventType||null,
+    stop_id:stopId||null,
+  };
+  trackingLog("insert start",payload);
+  const res=await sbFetch("/rest/v1/ubicaciones",{
+    method:"POST",
+    headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},
+    body:JSON.stringify({
+      user_id:uid,
+      lat:payload.lat,
+      lon:payload.lon,
+      velocidad:payload.velocidad,
+      precision_m:payload.precision_m,
+      ts:payload.ts,
+    }),
+  });
+  if(!res.ok){
+    let raw="";
+    let parsed=null;
+    try{raw=await res.text();}catch(_){}
+    try{parsed=raw?JSON.parse(raw):null;}catch(_){}
+    const errorDetail={
+      status:res.status,
+      status_text:res.statusText||null,
+      code:parsed?.code||null,
+      message:parsed?.message||parsed?.error||raw||null,
+      detail:parsed?.details||parsed?.detail||null,
+      hint:parsed?.hint||null,
+      uid,
+      servicio_id:servicio?.id||null,
+      event_type:eventType||null,
+    };
+    trackingLog("insert failed",errorDetail);
+    throw new Error(errorDetail.message||`Supabase ${res.status}`);
+  }
+  trackingLog("insert success",{uid,status:res.status,servicio_id:servicio?.id||null,event_type:eventType||null});
+  try{
+    const verify=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
+    if(verify.ok){
+      const rows=await verify.json();
+      const row=Array.isArray(rows)?rows[0]:null;
+      trackingLog("persist verify latest row",{
+        uid,
+        ts:row?.ts||null,
+        lat:row?.lat??null,
+        lon:row?.lon??null,
+        precision_m:row?.precision_m??null,
+        velocidad:row?.velocidad??null,
+      });
+    }else{
+      trackingLog("persist verify failed",{uid,status:verify.status,status_text:verify.statusText||null});
+    }
+  }catch(e){
+    trackingLog("persist verify failed",{uid,error:e?.message||String(e)});
+  }
+  return res;
+}
+
+function buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId}){
+  const plan=getOperationalPlanSnapshot(servicio);
+  const planEta=plan?.planned_eta||null;
+  const etaMs=eta?.eta?new Date(eta.eta).getTime():NaN;
+  const planMs=planEta?new Date(planEta).getTime():NaN;
+  const deltaMin=Number.isFinite(etaMs)&&Number.isFinite(planMs)?Math.round((etaMs-planMs)/60000):null;
+  return{
+    eta:eta.eta,
+    label:eta.label,
+    confidence:eta.confidence||"medium",
+    status:"ok",
+    source:"driver_event",
+    event_type:eventType||null,
+    stop_id:stopId||null,
+    calculated_at:new Date().toISOString(),
+    location_ts:point?.ts||null,
+    lat:Number(point.lat),
+    lon:Number(point.lon),
+    precision_m:Math.round(point?.accuracy||0),
+    planned_eta:planEta,
+    delta_min:deltaMin,
+  };
+}
+
+async function persistServiceOperationalEta({servicio,stops,norma,point,eventType,stopId}){
+  if(!servicio?.id||!point||!Number.isFinite(point.lat)||!Number.isFinite(point.lon))return null;
+  if(!servicio.destino?.trim()||!servicio.origen?.trim())return null;
+  if(!isEtaActivationReady(servicio))return null;
+  const serviceForEta={...servicio,estado:servicio.estado==="asignado"?"en_curso":servicio.estado};
+  const eta=await getServiceEta({
+    service:serviceForEta,
+    stops,
+    norma:norma||null,
+    currentPosition:{lat:point.lat,lon:point.lon},
+    operationalTripStarted:true,
+  });
+  if(!eta?.eta)return null;
+  const operationalEta=buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId});
+  const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
+    operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+    operational_eta:operationalEta,
+  });
+  const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
+  if(!res.ok)throw new Error(`No se pudo guardar la ETA operacional`);
+  return{referencia,operationalEta};
+}
+
+async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
+  trackingLog("event dispatch",{event_type:eventType||null,uid,servicio_id:servicio?.id||null,stop_id:stopId||null});
+  const gps=await getDriverActionGps();
+  if(!gps.ok){
+    showToast?.(`${gps.error}. ETA no recalculada`,"#F97316",3500);
+    return null;
+  }
+  const point=gps.point;
+  try{
+    await saveDriverActionLocation(uid,point,{servicio,eventType,stopId});
+  }catch(e){
+    console.warn("ubicacion evento save failed:",e);
+    const msg=e?.message?String(e.message).slice(0,120):"Error desconocido";
+    showToast?.(`GPS obtenido, pero no se pudo guardar la ubicación: ${msg}`,"#F97316",4200);
+  }
+  try{
+    const etaRes=await persistServiceOperationalEta({servicio,stops,norma,point,eventType,stopId});
+    if(etaRes?.operationalEta?.label){
+      showToast?.(`ETA actualizada: ${etaRes.operationalEta.label}`,"#2563EB",3000);
+    }
+    return{point,...(etaRes||{})};
+  }catch(e){
+    console.warn("eta operacional failed:",e);
+    showToast?.("Ubicación guardada, pero no se pudo recalcular la ETA","#F97316",3500);
+    return{point};
+  }
+}
+
+async function readActiveServiceForDriver(uid){
+  if(!uid)return{servicio:null,stops:[]};
+  const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
+  if(!r.ok)return{servicio:null,stops:[]};
+  const data=await r.json();
+  const servicio=Array.isArray(data)?data[0]:null;
+  if(!servicio?.id)return{servicio:null,stops:[]};
+  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicio.id}&order=orden.asc`);
+  const stops=sr.ok?await sr.json():[];
+  return{servicio,stops:Array.isArray(stops)?stops:[]};
+}
+
+async function registerDriverEventOperationalPoint({uid,norma,eventType,showToast}){
+  const{servicio,stops}=await readActiveServiceForDriver(uid);
+  return registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,showToast});
+}
+
 async function resolveOperationalPoint(text,{gps=null,fallbackName="Ubicación GPS detectada"}={}){
   if(gps&&Number.isFinite(Number(gps.lat))&&Number.isFinite(Number(gps.lon))){
     return{lat:Number(gps.lat),lon:Number(gps.lon),name:safeOperationalPlaceName(text,fallbackName)};
   }
   const parsed=parseOperationalLatLon(text);
   if(parsed)return{...parsed,name:fallbackName};
+  if(isGenericOperationalOrigin(text)){
+    throw new Error("Origen GPS sin coordenadas válidas. Activa GPS o escribe origen manual");
+  }
   return geocode(String(text||"").trim());
 }
 
@@ -4526,7 +4618,10 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
   const[origen,setOrigen]=useState(()=>prefillOrigen||"");
   const[destino,setDestino]=useState(()=>prefillDestino||"");
   const[waypoint,setWaypoint]=useState(()=>prefillWaypoint||"");
-  const[velocidad,setVelocidad]=useState(()=>prefillVelocidad||80);
+  const[velocidad,setVelocidad]=useState(()=>{
+    const v=Number(prefillVelocidad);
+    return Number.isFinite(v)?Math.min(100,Math.max(60,Math.round(v))):80;
+  });
   const[loading,setLoading]=useState(false);
   const[gpsOrigen,setGpsOrigen]=useState(()=>prefillGpsOrigen||null);
   const[gpsLoading,setGpsLoading]=useState(false);
@@ -4647,18 +4742,51 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
             style={iStyle}/>
         </div>
 
-        {/* Velocidad media */}
+        {/* Velocidad media (60–100, paso 1 km/h — alineado con planificador ruta / normativa) */}
         <div style={{marginBottom:14,background:"#0F172A",borderRadius:10,padding:"12px 14px"}}>
-          <div style={{fontSize:11,fontWeight:700,color:"#64748B",marginBottom:8}}>🚛 VELOCIDAD MEDIA — {velocidad} km/h</div>
-          <div style={{display:"flex",gap:6}}>
-            {[70,75,80,85,90].map(v=>(
-              <button key={v} type="button" onClick={()=>setVelocidad(v)} disabled={loading}
-                style={{flex:1,background:velocidad===v?"#F59E0B":"#1E293B",color:velocidad===v?"#0F172A":"#64748B",border:"none",borderRadius:8,padding:"8px 2px",fontSize:13,fontWeight:velocidad===v?800:400,cursor:loading?"default":"pointer",opacity:loading&&velocidad!==v?0.65:1}}>
-                {v}
-              </button>
-            ))}
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:16}}>🚛</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,color:"#64748B",fontWeight:700,marginBottom:4}}>VELOCIDAD MEDIA · {velocidad} km/h</div>
+              <input
+                type="range"
+                min={60}
+                max={100}
+                step={1}
+                value={velocidad}
+                onChange={(e)=>setVelocidad(Math.min(100,Math.max(60,Number(e.target.value)||80)))}
+                disabled={loading}
+                style={{width:"100%",accentColor:"#F59E0B",opacity:loading?0.55:1}}
+              />
+            </div>
+            <div style={{textAlign:"center",flexShrink:0,minWidth:54}}>
+              <input
+                type="number"
+                min={60}
+                max={100}
+                step={1}
+                value={velocidad}
+                onChange={(e)=>setVelocidad(Math.min(100,Math.max(60,Number(e.target.value)||80)))}
+                disabled={loading}
+                style={{
+                  width:52,
+                  boxSizing:"border-box",
+                  background:"#1E293B",
+                  border:"1px solid #334155",
+                  borderRadius:8,
+                  outline:"none",
+                  color:"#F1F5F9",
+                  fontSize:15,
+                  fontWeight:800,
+                  textAlign:"center",
+                  padding:"6px 4px",
+                  opacity:loading?0.55:1,
+                }}
+              />
+              <div style={{fontSize:9,color:"#64748B",marginTop:2}}>km/h</div>
+            </div>
           </div>
-          <div style={{fontSize:10,color:"#475569",marginTop:5,textAlign:"center"}}>Se usa para el snapshot inicial del servicio</div>
+          <div style={{fontSize:10,color:"#475569",marginTop:8,textAlign:"center"}}>Por defecto 80 km/h · ajuste fino de 1 en 1 para el snapshot del servicio</div>
         </div>
 
         {loading&&(
@@ -4759,7 +4887,7 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
     if(nuevoEstado!==prevEstado.current){
       prevEstado.current=nuevoEstado;
       if(nuevoEstado===0){
-        speakNatural(`Buenas noticias. Con este ritmo llegas a ${viaje.destino} hoy sin necesidad de descanso en ruta.`);
+        speakNatural(`Buenas noticias. Con este ritmo llegas a ${viaje.destino} el ${formatOperationalEtaLabel(plan.arrival)||"horario previsto"} sin necesidad de descanso en ruta.`);
       } else if(nuevoEstado>prevEstado.current){
         speakNatural(`Atención. El retraso acumulado hace que necesites ${nuevoEstado===1?"un descanso adicional en ruta":nuevoEstado+" descansos en ruta"} para llegar a ${viaje.destino}.`);
       }
@@ -4780,9 +4908,9 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
     :null;
 
   let estado,color;
-  if(llegaHoy||nDias<=1){estado="✅ Llegas hoy";color="#22C55E";}
-  else if(nDias===2){estado="🛌 Llegas en 2 días";color="#F59E0B";}
-  else{estado=`🛌 ${nDias} días en ruta`;color="#F97316";}
+  const etaExacta=formatOperationalEtaLabel(llegada)||"ETA pendiente";
+  if(llegaHoy||nDias<=1){estado=`✅ ${etaExacta}`;color="#22C55E";}
+  else{estado=`🛌 ${etaExacta}`;color:nDias===2?"#F59E0B":"#F97316";}
 
   return(
     <div style={{margin:"0 14px 10px",flexShrink:0}}>
@@ -4806,7 +4934,7 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
               {l:"Distancia",v:`${viaje.km} km`,c:"#F59E0B"},
               {l:"Llegada estimada",v:formatOperationalEtaLabel(llegada)||"—",c:color},
               {l:"Días en ruta",v:`${nDias} día${nDias>1?"s":""}`,c:"#A78BFA"},
-              {l:"Próxima parada",v:kmProx?`~${kmProx} km`:"Hoy no",c:"#64748B"},
+              {l:"Próxima parada",v:kmProx?`~${kmProx} km`:"Sin parada normativa",c:"#64748B"},
             ].map(({l,v,c})=>(
               <div key={l} style={{background:"#1E293B",borderRadius:8,padding:"8px 10px"}}>
                 <div style={{fontSize:10,color:"#475569",marginBottom:2}}>{l.toUpperCase()}</div>
@@ -8098,6 +8226,132 @@ function LlegoView({norma,prof,dark}){
   );
 }
 
+function EmpresaPlanificadorRuta({dark=false}){
+  const[fromTxt,setFromTxt]=useState("");
+  const[toTxt,setToTxt]=useState("");
+  const[waypoint,setWaypoint]=useState("");
+  const[velocidad,setVelocidad]=useState(80);
+  const[salidaMode,setSalidaMode]=useState("ahora");
+  const[salidaManual,setSalidaManual]=useState(()=>toDTL(new Date()));
+  const[result,setResult]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState("");
+  const card=dark?"#1E293B":"#FFFFFF";
+  const bg=dark?"#0F172A":"#F8FAFC";
+  const tx=dark?"#F1F5F9":"#0F172A";
+  const su=dark?"#94A3B8":"#64748B";
+  const normaEmpresaNeutral={cont:0,todayDrive:0,weekDrive:0,extUsed:0};
+
+  async function calcular(){
+    if(!fromTxt.trim()||!toTxt.trim()){setError("Indica origen y destino");return;}
+    setError("");setLoading(true);setResult(null);
+    try{
+      const from=await geocode(fromTxt.trim());
+      const to=await geocode(toTxt.trim());
+      let route;
+      if(waypoint.trim()){
+        const via=await geocode(waypoint.trim());
+        const r1=await getRoute(from,via,velocidad);
+        const r2=await getRoute(via,to,velocidad);
+        route={km:r1.km+r2.km,mins:r1.mins+r2.mins,real:r1.real&&r2.real};
+      }else{
+        route=await getRoute(from,to,velocidad);
+      }
+      const minsConduccion=Math.max(route.mins,Math.round(route.km/velocidad*60));
+      const salidaBase=salidaMode==="manual"&&salidaManual
+        ? new Date(salidaManual)
+        : new Date();
+      if(Number.isNaN(salidaBase.getTime()))throw new Error("Fecha/hora de salida inválida");
+      const plan=buildPlan(minsConduccion,normaEmpresaNeutral,{
+        contUsed:0,
+        dayUsed:0,
+        weekUsed:0,
+        extUsed:0,
+        start:salidaBase,
+        km:route.km,
+      });
+      const rests=(plan.segs||[]).filter(s=>s.type!=="conduccion");
+      const breaks=rests.filter(s=>String(s.type).startsWith("pausa"));
+      const dailyRests=rests.filter(s=>s.type==="descanso").length;
+      const weeklyRests=rests.filter(s=>s.type==="descanso_semana").length;
+      setResult({
+        km:Math.round(route.km),
+        minsConduccion,
+        eta:plan.arrival instanceof Date?plan.arrival:new Date(plan.arrival),
+        breaks:breaks.length,
+        dailyRests,
+        weeklyRests,
+        real:!!route.real,
+        salidaBase,
+      });
+    }catch(e){
+      setError(e?.message||"No se pudo calcular la planificación");
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  const inputStyle={width:"100%",background:bg,border:`1px solid ${dark?"#334155":"#CBD5E1"}`,borderRadius:10,padding:"11px 12px",fontSize:14,color:tx,outline:"none",boxSizing:"border-box"};
+  return(
+    <div style={{padding:"12px 14px 84px"}}>
+      <div style={{background:card,border:`1px solid ${dark?"#334155":"#DBE4EE"}`,borderRadius:14,padding:"14px",boxShadow:dark?"none":"0 1px 2px rgba(15,23,42,.05)"}}>
+        <div style={{fontSize:13,fontWeight:700,color:tx,marginBottom:4}}>Planificador operacional</div>
+        <div style={{fontSize:11,color:su,marginBottom:12}}>Modelo neutro empresa (sin tacógrafo vivo del conductor)</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+          <input value={fromTxt} onChange={e=>setFromTxt(e.target.value)} placeholder="Origen" style={inputStyle}/>
+          <input value={toTxt} onChange={e=>setToTxt(e.target.value)} placeholder="Destino" style={inputStyle}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,marginBottom:10}}>
+          <input value={waypoint} onChange={e=>setWaypoint(e.target.value)} placeholder="Punto intermedio (opcional)" style={inputStyle}/>
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"0 10px",border:`1px solid ${dark?"#334155":"#CBD5E1"}`,borderRadius:10,background:bg}}>
+            <span style={{fontSize:11,color:su,fontWeight:700}}>KM/H</span>
+            <input type="number" min={60} max={100} step={1} value={velocidad} onChange={e=>setVelocidad(Math.min(100,Math.max(60,Number(e.target.value)||80)))} style={{width:52,background:"transparent",border:"none",outline:"none",color:tx,fontSize:14,fontWeight:700}}/>
+          </div>
+        </div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:6}}>Salida prevista</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            {[{id:"ahora",label:"Ahora"},{id:"manual",label:"Fecha y hora manual"}].map(o=>(
+              <button key={o.id} type="button" onClick={()=>setSalidaMode(o.id)}
+                style={{background:salidaMode===o.id?"#E0ECFF":bg,border:`1px solid ${salidaMode===o.id?"#93C5FD":(dark?"#334155":"#CBD5E1")}`,borderRadius:10,padding:"9px 10px",fontSize:12,fontWeight:700,color:salidaMode===o.id?"#1D4ED8":tx,cursor:"pointer"}}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {salidaMode==="manual"&&(
+            <input type="datetime-local" value={salidaManual} onChange={e=>setSalidaManual(e.target.value)} style={inputStyle}/>
+          )}
+        </div>
+        <button onClick={calcular} disabled={loading} style={{width:"100%",background:loading?"#94A3B8":"#2563EB",color:"white",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,cursor:loading?"default":"pointer"}}>
+          {loading?"Calculando...":"Calcular planificación"}
+        </button>
+        {error&&<div style={{marginTop:10,fontSize:12,color:"#DC2626",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:"8px 10px"}}>{error}</div>}
+      </div>
+      {result&&(
+        <div style={{marginTop:12,background:card,border:`1px solid ${dark?"#334155":"#DBE4EE"}`,borderRadius:14,padding:"14px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+            {[{l:"Distancia",v:`${result.km} km`},{l:"Conducción",v:fmtDur(result.minsConduccion)},{l:"Pausas",v:String(result.breaks)},{l:"Descanso diario",v:String(result.dailyRests)}].map(x=>(
+              <div key={x.l} style={{background:bg,borderRadius:10,padding:"9px 10px"}}>
+                <div style={{fontSize:10,color:su,fontWeight:700}}>{x.l}</div>
+                <div style={{fontSize:16,color:tx,fontWeight:800,marginTop:2}}>{x.v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:10,fontSize:13,color:tx,fontWeight:700}}>
+            ETA normativa: {formatOperationalEtaLabel(result.eta)||"—"}
+          </div>
+          <div style={{marginTop:4,fontSize:11,color:su}}>
+            Salida prevista: {result.salidaBase?.toLocaleString?.("es-ES",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})||"—"}
+          </div>
+          <div style={{marginTop:4,fontSize:11,color:su}}>
+            {result.real?"Ruta real OSRM":"Ruta estimada fallback"} · Velocidad media {velocidad} km/h · Descanso semanal {result.weeklyRests}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─────────────────────────────────────────────────────────────
 //  NORA — Asistente de voz para la pantalla de ruta
@@ -8121,17 +8375,14 @@ function useNora({norma,viajeActivo,active}){
   function getRouteStatus(){
     if(!norma)return"No tengo datos de tu jornada todavía.";
     const plan=getPlan(),rCont=norma.rCont||0;
-    if(plan){const nd=plan.nDias||1;if(nd<=1)return rCont<60?`Vas bien hacia ${viajeActivo.destino}, pero para en menos de una hora.`:`Todo en orden. Llegas hoy a ${viajeActivo.destino}.`;return`Vas hacia ${viajeActivo.destino}. Te quedan ${nd} días de ruta. ${rCont<60?"Para pronto.":"Sigues dentro de la normativa."}`;}
+    if(plan){const eta=formatOperationalEtaLabel(plan.arrival)||"ETA pendiente";return rCont<60?`Vas bien hacia ${viajeActivo.destino}, pero para en menos de una hora. ETA ${eta}.`:`Todo en orden hacia ${viajeActivo.destino}. ETA ${eta}.`;}
     if(rCont<=0)return"Para ya. Has alcanzado el límite de conducción continua.";
     if(rCont<60)return`Vas bien pero para en ${rCont} minutos como máximo.`;
     return`Todo correcto. Puedes seguir ${fmtM(rCont)} más antes de parar.`;
   }
   function getArrivalEstimate(){
     const plan=getPlan();if(!plan)return"No tienes destino configurado. Dime adónde vas para calcularlo.";
-    const arr=plan.arrival,dias=["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
-    const diff=Math.round((arr-new Date())/86400000),dia=diff===0?"hoy":diff===1?"mañana":dias[arr.getDay()];
-    const hora=`${String(arr.getHours()).padStart(2,"0")}:${String(arr.getMinutes()).padStart(2,"0")}`;
-    return(plan.nDias||1)<=1?`Llegas hoy a ${viajeActivo.destino} a las ${hora}.`:`Llegas a ${viajeActivo.destino} ${dia} a las ${hora}. Son ${plan.nDias} días de ruta.`;
+    return`Llegada estimada a ${viajeActivo.destino}: ${formatOperationalEtaLabel(plan.arrival)||"ETA pendiente"}.`;
   }
   function getRemainingTime(){
     if(!norma)return"Sin datos de jornada.";
@@ -8167,8 +8418,7 @@ function useNora({norma,viajeActivo,active}){
     const rCont=norma.rCont||0,rDay=norma.rDay||0,plan=getPlan();
     if(rCont<30)return"No te compensa seguir. Para ya antes de que te multen.";
     if(rDay<90)return"Tienes poco tiempo de jornada. Para y descansa. Mañana arrancas mejor.";
-    if(plan&&plan.nDias<=1&&rCont>90)return"Sigue. Llegas hoy a destino sin forzar los límites.";
-    if(plan&&plan.nDias>1&&rCont>90)return`Sigue hasta agotar la jornada. Llegarás en ${plan.nDias} días.`;
+    if(plan&&rCont>90)return`Sigue. ETA a destino: ${formatOperationalEtaLabel(plan.arrival)||"pendiente"}, sin forzar los límites.`;
     return"Puedes seguir. Vigila el tiempo restante.";
   }
   function getLegalStatus(){
@@ -8199,8 +8449,7 @@ function useNora({norma,viajeActivo,active}){
     const plan=getPlan(),rCont=norma.rCont||0;
     if(!plan)return"No tienes destino configurado. No puedo analizar el tiempo.";
     if(rCont<60)return"Llevas mucho tiempo conduciendo. Una pausa ahora te ahorrará tiempo después.";
-    if(plan.nDias<=1)return"No estás perdiendo tiempo. Llegas hoy a destino según el plan.";
-    return`Vas según el plan de ${plan.nDias} días. Sin pérdida de tiempo significativa detectada.`;
+    return`Vas según el plan. ETA a destino: ${formatOperationalEtaLabel(plan.arrival)||"pendiente"}. Sin pérdida de tiempo significativa detectada.`;
   }
   function detectIntent(raw){
     const t=raw;
@@ -8281,14 +8530,7 @@ function NoraModal({norma,viajeActivo,onClose}){
     // Llegada
     if(has(t,"llego","cuando llego","cuándo llego","cuanto tardo")){
       if(!plan)return"No tienes destino configurado. Añade un destino desde la pantalla principal.";
-      const arr=plan.arrival;
-      const dias=["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
-      const diff=Math.round((arr-new Date())/86400000);
-      const dia=diff===0?"hoy":diff===1?"mañana":dias[arr.getDay()];
-      const hora=`${String(arr.getHours()).padStart(2,"0")}:${String(arr.getMinutes()).padStart(2,"0")}`;
-      return (plan.nDias||1)<=1
-        ?`Llegas hoy a ${viajeActivo.destino} a las ${hora}.`
-        :`Llegas a ${viajeActivo.destino} el ${dia} a las ${hora}. Te quedan ${plan.nDias} días de ruta.`;
+      return`Llegada estimada a ${viajeActivo.destino}: ${formatOperationalEtaLabel(plan.arrival)||"ETA pendiente"}.`;
     }
 
     // Cuándo parar
@@ -8316,7 +8558,7 @@ function NoraModal({norma,viajeActivo,onClose}){
     if(has(t,"compensa","sigo o paro","sigo conduciendo","merece la pena")){
       if(rCont<30)return"No te compensa seguir. Para ya, la multa no vale la pena.";
       if(rDay<90)return"Poco tiempo de jornada. Para y descansa. Mañana arrancas fresco.";
-      if(plan&&(plan.nDias||1)<=1&&rCont>90)return"Sigue tranquilo. Llegas hoy sin forzar nada.";
+      if(plan&&rCont>90)return`Sigue tranquilo. ETA a destino: ${formatOperationalEtaLabel(plan.arrival)||"pendiente"}, sin forzar nada.`;
       return"Puedes seguir. Vigila el tiempo restante en el marcador.";
     }
 
@@ -8356,8 +8598,8 @@ function NoraModal({norma,viajeActivo,onClose}){
       const nd=plan.nDias||1;
       if(nd<=1)return rCont<60
         ?`Vas bien hacia ${viajeActivo.destino} pero para en menos de una hora.`
-        :`Todo en orden. Llegas hoy a ${viajeActivo.destino}. Te quedan ${fmtM(rCont)} antes de la próxima pausa.`;
-      return`Vas hacia ${viajeActivo.destino}. Te quedan ${nd} días de ruta. ${rCont<60?"Para pronto.":"Sigues dentro de la normativa con ${fmtM(rCont)} disponibles."}`;
+        :`Todo en orden hacia ${viajeActivo.destino}. ETA ${formatOperationalEtaLabel(plan.arrival)||"pendiente"}. Te quedan ${fmtM(rCont)} antes de la próxima pausa.`;
+      return`Vas hacia ${viajeActivo.destino}. ETA ${formatOperationalEtaLabel(plan.arrival)||"pendiente"}. ${rCont<60?"Para pronto.":"Sigues dentro de la normativa con ${fmtM(rCont)} disponibles."}`;
     }
     if(rCont<=0)return"Para ya. Has alcanzado el límite de conducción continua.";
     if(rCont<60)return`Para en ${rCont} minutos como máximo.`;
@@ -8528,7 +8770,12 @@ function MapTab({norma,prof,dark,viajeActivo}){
   const[gpsCiudad,setGpsCiudad]=useState("");
   const[origenTxt,setOrigenTxt]=useState("");
   const[origenManual,setOrigenManual]=useState(false);
-  const[velocidad,setVelocidad]=useState(()=>{try{return parseInt(localStorage.getItem(RUTA_KEY+"_vel")||"80");}catch(_){return 80;}});
+  const[velocidad,setVelocidad]=useState(()=>{
+    try{
+      const raw=Number(localStorage.getItem(RUTA_KEY+"_vel")||80);
+      return Number.isFinite(raw)?Math.min(100,Math.max(60,Math.round(raw))):80;
+    }catch(_){return 80;}
+  });
   const mapRef=useRef(null),mapDivRef=useRef(null),leafMapRef=useRef(null);
 
   useEffect(()=>{try{localStorage.setItem(RUTA_KEY+"_vel",String(velocidad));}catch(_){}},[ velocidad]);
@@ -8555,6 +8802,67 @@ function MapTab({norma,prof,dark,viajeActivo}){
   const PICO={conduccion:"🚛",pausa_45:"☕",pausa_15:"⏸",pausa_30:"☕",descanso:"🛏",descanso_semana:"🏨"};
   const PLBL={conduccion:"Conducción",pausa_45:"Pausa 45 min",pausa_15:"Pausa 1ª 15 min",pausa_30:"Pausa 2ª 30 min",descanso:"Descanso 9h",descanso_semana:"Descanso semanal"};
 
+  const finalizePlanFromRoute=useCallback(async(route,from,to,wp)=>{
+    let cfg={splitBreak:split,start:new Date(startDT)};
+    if(mode==="now"){
+      cfg={...cfg,contUsed:norma.cont,dayUsed:norma.todayDrive,weekUsed:norma.weekDrive,extUsed:norma.extUsed};
+    }else if(mode==="remain"){
+      cfg={...cfg,contUsed:norma.cont,dayUsed:norma.todayDrive,weekUsed:norma.weekDrive,extUsed:norma.extUsed};
+    }
+    const dMins=Math.max(1,Math.round(route.km/velocidad*60));
+    const result=buildPlan(dMins,norma,cfg);
+    const stops=[];
+    for(const seg of result.segs.filter(s=>s.type!=="conduccion")){
+      const frac=Math.min(seg.km/route.km,0.9999);
+      const idx=Math.max(0,Math.floor(frac*(route.coords.length-1)));
+      const[lon,lat]=route.coords[idx];
+      const city=await revGeo(lat,lon);
+      stops.push({...seg,lat,lon,city,kmOrig:seg.km,
+        startTs:seg.start instanceof Date?seg.start:new Date(seg.start)});
+    }
+    const kmRestante=Math.round(norma.canDrive/60*velocidad);
+    const stopIdx=route.coords.findIndex((_,i)=>{
+      if(i===0)return false;
+      let acc=0;
+      for(let j=1;j<=i;j++){
+        const[lo1,la1]=route.coords[j-1],[lo2,la2]=route.coords[j];
+        acc+=haverDist(la1,lo1,la2,lo2);
+      }
+      return acc>=kmRestante;
+    });
+    const stopCoord=stopIdx>0?route.coords[stopIdx]:route.coords[route.coords.length-1];
+    const stopCity=await revGeo(stopCoord[1],stopCoord[0]);
+    return{
+      from,to,wp,
+      route:{...route,mins:dMins},
+      segs:result.segs,stops,
+      driveMins:result.driveTotal||result.driveMins,
+      restMins:result.restTotal||result.restMins,
+      arrival:result.arrival instanceof Date?result.arrival:new Date(result.arrival),
+      startDT:new Date(startDT),
+      nearStop:{lat:stopCoord[1],lon:stopCoord[0],city:stopCity,km:kmRestante},
+      PCOL,PICO,PLBL,
+    };
+  },[velocidad,split,mode,startDT,norma.cont,norma.todayDrive,norma.weekDrive,norma.extUsed,norma.canDrive]);
+
+  useEffect(()=>{
+    if(!plan?.route?.coords?.length)return;
+    let cancelled=false;
+    const route=plan.route,from=plan.from,to=plan.to,wp=plan.wp;
+    (async()=>{
+      try{
+        const next=await finalizePlanFromRoute(route,from,to,wp);
+        if(cancelled)return;
+        setPlan(p=>{
+          if(!p?.route?.coords?.length)return p;
+          if(p.route.km!==route.km||p.route.coords.length!==route.coords.length)return p;
+          return{...p,...next};
+        });
+      }catch(_){}
+    })();
+    return()=>{cancelled=true;};
+  },[plan?.route?.km,plan?.route?.coords?.length,finalizePlanFromRoute]);
+
   async function calcular(){
     if(!dest.trim()){setErr("Escribe el destino");return;}
     if(!origenManual&&!gpsPos){setErr("Activa el GPS o escribe el origen manualmente");return;}
@@ -8578,8 +8886,8 @@ function MapTab({norma,prof,dark,viajeActivo}){
       // Calcular ruta — con o sin waypoint
       let route;
       if(wp){
-        const r1=await getRoute(from,wp);
-        const r2=await getRoute(wp,to);
+        const r1=await getRoute(from,wp,velocidad);
+        const r2=await getRoute(wp,to,velocidad);
         route={
           km:r1.km+r2.km,
           mins:r1.mins+r2.mins,
@@ -8588,52 +8896,11 @@ function MapTab({norma,prof,dark,viajeActivo}){
           waypoint:wp,
         };
       } else {
-        route=await getRoute(from,to);
+        route=await getRoute(from,to,velocidad);
       }
 
-      // Configurar normativa según modo
-      let cfg={splitBreak:split,start:new Date(startDT)};
-      if(mode==="now"){
-        cfg={...cfg,contUsed:norma.cont,dayUsed:norma.todayDrive,weekUsed:norma.weekDrive,extUsed:norma.extUsed};
-      } else if(mode==="remain"){
-        cfg={...cfg,contUsed:norma.cont,dayUsed:norma.todayDrive,weekUsed:norma.weekDrive,extUsed:norma.extUsed};
-      }
-
-      const result=buildPlan(route.mins||Math.round(route.km/velocidad*60),norma,cfg);
-
-      // Calcular posición de paradas en la ruta
-      const stops=[];
-      for(const seg of result.segs.filter(s=>s.type!=="conduccion")){
-        const frac=Math.min(seg.km/route.km,0.9999);
-        const idx=Math.max(0,Math.floor(frac*(route.coords.length-1)));
-        const[lon,lat]=route.coords[idx];
-        const city=await revGeo(lat,lon);
-        stops.push({...seg,lat,lon,city,kmOrig:seg.km,
-          startTs:seg.start instanceof Date?seg.start:new Date(seg.start)});
-      }
-
-      const kmRestante=Math.round(norma.canDrive/60*velocidad);
-      const stopIdx=route.coords.findIndex((_,i)=>{
-        if(i===0)return false;
-        let acc=0;
-        for(let j=1;j<=i;j++){
-          const[lo1,la1]=route.coords[j-1],[lo2,la2]=route.coords[j];
-          acc+=haverDist(la1,lo1,la2,lo2);
-        }
-        return acc>=kmRestante;
-      });
-      const stopCoord=stopIdx>0?route.coords[stopIdx]:route.coords[route.coords.length-1];
-      const stopCity=await revGeo(stopCoord[1],stopCoord[0]);
-
-      setPlan({
-        from,to,wp,route,segs:result.segs,stops,
-        driveMins:result.driveTotal||result.driveMins,
-        restMins:result.restTotal||result.restMins,
-        arrival:result.arrival instanceof Date?result.arrival:new Date(result.arrival),
-        startDT:new Date(startDT),
-        nearStop:{lat:stopCoord[1],lon:stopCoord[0],city:stopCity,km:kmRestante},
-        PCOL,PICO,PLBL,
-      });
+      const planPayload=await finalizePlanFromRoute(route,from,to,wp);
+      setPlan(planPayload);
     }catch(e){setErr(e.message);}
     finally{setLoading(false);}
   }
@@ -8735,7 +9002,7 @@ function MapTab({norma,prof,dark,viajeActivo}){
       {plan&&norma.canDrive>0&&norma.canDrive<=30&&(
         <div style={{background:"#EF4444",padding:"12px 16px",position:"sticky",top:108,zIndex:90,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <div style={{fontSize:13,fontWeight:800,color:"white"}}>🚨 Para en {fmtDur(norma.canDrive)} · ~{Math.round(norma.canDrive/60*80)} km</div>
+            <div style={{fontSize:13,fontWeight:800,color:"white"}}>🚨 Para en {fmtDur(norma.canDrive)} · ~{Math.round(norma.canDrive/60*velocidad)} km</div>
             {plan.nearStop&&<div style={{fontSize:12,color:"rgba(255,255,255,.9)",marginTop:2}}>📍 {plan.nearStop.city}</div>}
           </div>
           {plan.nearStop&&<button onClick={()=>window.open(`https://www.google.com/maps?q=${plan.nearStop.lat},${plan.nearStop.lon}`,"_blank","noopener")} style={{background:"white",color:"#EF4444",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:800,textDecoration:"none",background:"transparent",border:"none",cursor:"pointer"}}>Ir aquí →</button>}
@@ -8766,17 +9033,17 @@ function MapTab({norma,prof,dark,viajeActivo}){
             </div>
           )}
 
-          {/* Velocidad media */}
+          {/* Velocidad media (móvil táctil, paso 1 km/h) */}
           <div style={{background:dark?"#0F172A":"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:10,border:`1px solid ${dark?"#334155":"#E2E8F0"}`}}>
             <span style={{fontSize:16}}>🚛</span>
             <div style={{flex:1}}>
               <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:4}}>VELOCIDAD MEDIA</div>
-              <input type="range" min={50} max={130} step={5} value={velocidad}
-                onChange={e=>setVelocidad(parseInt(e.target.value))}
-                style={{width:"100%",accentColor:"#F59E0B"}}/>
+              <input type="range" min={60} max={100} step={1} value={velocidad}
+                onChange={e=>setVelocidad(Math.min(100,Math.max(60,Number(e.target.value)||80)))}
+                style={{width:"100%",accentColor:"#2563EB"}}/>
             </div>
-            <div style={{textAlign:"center",flexShrink:0,minWidth:48}}>
-              <div style={{fontSize:20,fontWeight:800,color:"#F59E0B",fontFamily:"monospace"}}>{velocidad}</div>
+            <div style={{textAlign:"center",flexShrink:0,minWidth:52}}>
+              <div style={{fontSize:20,fontWeight:800,color:"#2563EB",fontFamily:"monospace"}}>{velocidad}</div>
               <div style={{fontSize:10,color:su}}>km/h</div>
             </div>
           </div>
@@ -9888,13 +10155,31 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   return fallbackRes.json();
 }
 
+async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
+  if(!conductorId)return;
+  const salidaLabel=fechaInicio?new Date(fechaInicio).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}):"";
+  await fetch("/api/push",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      action:"notify_assignment",
+      payload:{
+        conductor_id:conductorId,
+        servicio_id:servicioId||null,
+        route:`${String(origen||"").trim()} → ${String(destino||"").trim()}`,
+        salida:salidaLabel,
+      },
+    }),
+  }).catch(()=>{});
+}
+
 function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
-  const[fechaInicio,setFechaInicio]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});
+  const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
     {orden:1,tipo:"carga",nombre:"",direccion:"",notas:""},
     {orden:2,tipo:"descarga",nombre:"",direccion:"",notas:""},
@@ -9956,6 +10241,7 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
       });
       // Registrar asignación
       sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
+      void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
       onCreado(sv);
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
@@ -10112,7 +10398,7 @@ function fmtEtaEmpresaCompacto(raw){
   if(raw==null||raw===""||raw==="…"||raw==="..."||raw==="Sin ETA")return"—";
   if(raw instanceof Date)return formatOperationalEtaLabel(raw)||"—";
   if(typeof raw==="object"){
-    const slot=raw.planned||raw.operational||raw;
+    const slot=raw.operational||raw.planned||raw;
     return formatOperationalEtaSlot(slot);
   }
   const exact=formatOperationalEtaLabel(raw);
@@ -10123,29 +10409,33 @@ function fmtEtaEmpresaCompacto(raw){
 
 /** Ciudad aproximada (sin coordenadas); vacío → — */
 function fmtUbicacionConductorEmpresa(raw){
-  const t=String(typeof raw==="object"&&raw?raw.label:raw||"").trim();
-  return t||"—";
+  if(!raw)return"Sin ubicación registrada";
+  if(typeof raw==="string"){
+    const text=raw.trim();
+    return text||"Sin ubicación registrada";
+  }
+  const label=String(raw?.label||"").trim();
+  if(label)return label;
+  const lat=Number(raw?.lat),lon=Number(raw?.lon);
+  if(Number.isFinite(lat)&&Number.isFinite(lon))return`${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+  return"Sin ubicación registrada";
 }
 
 function fmtUbicacionActualizada(raw){
-  const ts=typeof raw==="object"&&raw?raw.updatedAt||raw.ts:null;
-  const t=ts?new Date(ts).getTime():NaN;
-  if(!Number.isFinite(t))return"";
-  const min=Math.max(0,Math.round((Date.now()-t)/60000));
-  if(min<1)return"Actualizado ahora";
-  if(min<60)return`Actualizado hace ${min} min`;
-  const h=Math.floor(min/60),m=min%60;
-  return`Actualizado hace ${h} h${m?` ${m} min`:""}`;
+  if(!raw)return"● Sin actualización reciente";
+  return raw?.recent===false?"● Sin actualización reciente":"● Ubicación reciente";
 }
 
 function validUbicacionRow(row){
   const lat=Number(row?.lat),lon=Number(row?.lon);
   if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;
   if(Math.abs(lat)>90||Math.abs(lon)>180)return null;
-  return{lat,lon,ts:row?.ts||null,velocidad:row?.velocidad};
+  return{lat,lon,ts:row?.ts||null,velocidad:row?.velocidad,precision_m:row?.precision_m};
 }
 
-function isRecentTrackingPoint(pos,maxAgeMs=45*60*1000){
+const TRACKING_RECENT_MAX_AGE_MS=45*60*1000;
+
+function isRecentTrackingPoint(pos,maxAgeMs=TRACKING_RECENT_MAX_AGE_MS){
   const t=pos?.ts?new Date(pos.ts).getTime():NaN;
   if(!Number.isFinite(t))return true;
   return Date.now()-t<=maxAgeMs;
@@ -10182,7 +10472,8 @@ const ETA_RIESGO_WARN_MIN=20;
 const ETA_RIESGO_LATE_MIN=45;
 
 function getEtaLabelEmpresa(entry){
-  const raw=entry?.planned?.eta ?? entry?.operational?.eta ?? entry?.eta ?? entry?.planned?.label ?? entry?.operational?.label ?? entry?.label ?? entry;
+  if(entry?.phase==="pre_route"||entry?.label==="Pendiente de iniciar ruta")return"Pendiente de iniciar ruta";
+  const raw=entry?.operational?.eta ?? entry?.planned?.eta ?? entry?.eta ?? entry?.operational?.label ?? entry?.planned?.label ?? entry?.label ?? entry;
   return fmtEtaEmpresaCompacto(raw);
 }
 
@@ -10191,7 +10482,20 @@ function etaMs(slot){
   return Number.isFinite(t)?t:null;
 }
 
+function hasOperationalDestinationConfirmed(service){
+  const plan=getOperationalPlanSnapshot(service);
+  const confirmedAt=getOperationalPlanConfirmedAt(service);
+  const destinationOk=String(service?.destino||"").trim().length>0;
+  const planReady=plan?.status==="ok"&&plan?.route_plan_status==="ready"&&!!plan?.planned_eta;
+  return destinationOk&&!!confirmedAt&&planReady;
+}
+
+function isEtaActivationReady(service){
+  return hasOperationalDestinationConfirmed(service)&&!!getOperationalTripStartedAt(service);
+}
+
 function getEtaEstadoEmpresa(entry){
+  if(entry?.phase==="pre_route")return{icon:"⚪",label:"Pendiente de iniciar ruta",color:"#94A3B8",bg:"rgba(148,163,184,0.12)",deltaMin:null};
   const planStatus=entry?.planned?.status;
   if(planStatus==="calculating")return{icon:"🟡",label:"Calculando",color:"#FACC15",bg:"rgba(250,204,21,0.13)",deltaMin:null};
   if(planStatus==="failed")return{icon:"⚠",label:"Sin ruta completa",color:"#FB923C",bg:"rgba(251,146,60,0.14)",deltaMin:null};
@@ -10213,7 +10517,8 @@ function stopTipoCompacto(stop){
   return String(stop?.tipo||"parada").replace(/_/g," ").toUpperCase();
 }
 
-function etaSlotFromOperationalPlan(plan){
+function etaSlotFromOperationalPlan(plan,service=null){
+  if(service&&!isEtaActivationReady(service))return null;
   const routePlanStatus=plan?.route_plan_status||null;
   if(routePlanStatus==="pending"||plan?.status==="calculating")return{
     eta:null,
@@ -10232,11 +10537,63 @@ function etaSlotFromOperationalPlan(plan){
   if(!plan?.planned_eta)return null;
   return{
     eta:plan.planned_eta,
-    label:fmtOperationalEtaLabel(plan.planned_eta)||plan.planned_eta_label||"Sin ETA",
+    label:fmtOperationalEtaLabel(plan.planned_eta)||(!isRelativeEtaLabel(plan.planned_eta_label)?plan.planned_eta_label:null)||"Sin ETA",
     confidence:plan.confidence||"medium",
     stable:true,
     status:plan.status||"ok",
   };
+}
+
+function etaSlotFromOperationalEta(eta){
+  if(!eta?.eta)return null;
+  return{
+    eta:eta.eta,
+    label:fmtOperationalEtaLabel(eta.eta)||(!isRelativeEtaLabel(eta.label)?eta.label:null)||"Sin ETA",
+    confidence:eta.confidence||"medium",
+    status:eta.status||"ok",
+    source:eta.source||"driver_event",
+    delta_min:Number.isFinite(Number(eta.delta_min))?Number(eta.delta_min):null,
+    calculated_at:eta.calculated_at||null,
+    location_ts:eta.location_ts||null,
+  };
+}
+
+function shiftEtaSlotVisual(slot,{nowMs,conductor,ubicInfo}={}){
+  const baseMs=etaMs(slot);
+  if(baseMs==null)return slot;
+  const refRaw=slot?.calculated_at||slot?.location_ts||slot?.updated_at||slot?.ts||slot?.eta;
+  const refMs=refRaw?new Date(refRaw).getTime():NaN;
+  if(!Number.isFinite(refMs))return slot;
+  const elapsedMin=Math.floor((nowMs-refMs)/60000);
+  if(elapsedMin<=0)return slot;
+  const journey=conductorJourneyInfo(conductor,new Date(nowMs));
+  const locTsRaw=ubicInfo?.updatedAt||ubicInfo?.ts||null;
+  const locTsMs=locTsRaw?new Date(locTsRaw).getTime():NaN;
+  const locAgeMin=Number.isFinite(locTsMs)?Math.max(0,Math.floor((nowMs-locTsMs)/60000)):Infinity;
+  const locRecent=ubicInfo?.recent!==false&&locAgeMin<=Math.floor(TRACKING_RECENT_MAX_AGE_MS/60000);
+  const isDriving=journey?.active?.type==="inicio_conduccion";
+  const driftPerMin=isDriving&&locRecent?0.35:1;
+  const shiftMin=Math.max(0,Math.round(elapsedMin*driftPerMin));
+  const liveMs=baseMs+shiftMin*60000;
+  return{
+    ...slot,
+    eta:new Date(liveMs).toISOString(),
+    label:fmtOperationalEtaLabel(new Date(liveMs))||slot.label||"Sin ETA",
+    source:`${slot.source||"operational"}:heartbeat_visual`,
+    live_visual:true,
+    live_shift_min:shiftMin,
+    live_ref_at:new Date(refMs).toISOString(),
+    live_factor:driftPerMin,
+  };
+}
+
+function buildEtaEntryVisual({service,planSlot,operationalSlot,localEta,conductor,ubicInfo,nowMs}){
+  if(service?.estado==="anulado")return{planned:null,operational:null};
+  if(!isEtaActivationReady(service))return{planned:null,operational:null,phase:"pre_route",label:"Pendiente de iniciar ruta"};
+  const planned=localEta?.planned||planSlot;
+  const operationalBase=localEta?.operational||operationalSlot;
+  const operational=operationalBase?shiftEtaSlotVisual(operationalBase,{nowMs,conductor,ubicInfo}):null;
+  return{planned,operational};
 }
 
 const EMPRESA_UI=Object.freeze({
@@ -10283,7 +10640,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[conductores,setConductores]=useState([]);
   const[loading,setLoading]=useState(true);
   const[toast,setToast]=useState("");
-  const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos
+  const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
   const[asignarModal,setAsignarModal]=useState(null);
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
@@ -10293,6 +10650,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[filtFecha,setFiltFecha]=useState("");
   const[filtRef,setFiltRef]=useState("");
   const[filtCliente,setFiltCliente]=useState("");
+  const[filtMatricula,setFiltMatricula]=useState("");
+  const[filtEstado,setFiltEstado]=useState("");
+  const[filtIncidencias,setFiltIncidencias]=useState("");
+  const[docsSearch,setDocsSearch]=useState("");
+  const[docsArchiveView,setDocsArchiveView]=useState("activos");
+  const[docsPage,setDocsPage]=useState(1);
+  const[archivedExpedienteIds,setArchivedExpedienteIds]=useState(()=>new Set());
   // Servicios de la flota
   const[flotaServicios,setFlotaServicios]=useState([]);
   const[flotaStops,setFlotaStops]=useState({});
@@ -10302,12 +10666,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[docsLoading,setDocsLoading]=useState(false);
   const[visorEv,setVisorEv]=useState(null);
   const[expedientePreview,setExpedientePreview]=useState(null);
+  const[mailExpediente,setMailExpediente]=useState(null);
   const[svCardExpand,setSvCardExpand]=useState(null);
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
+  const[anularModal,setAnularModal]=useState(null);
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
+  const[serviciosPage,setServiciosPage]=useState(1);
   const[etaOperativaById,setEtaOperativaById]=useState({});
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
+  const[ubicacionRefreshByUid,setUbicacionRefreshByUid]=useState({});
+  const[etaHeartbeatNowMs,setEtaHeartbeatNowMs]=useState(()=>Date.now());
   const flotaLoadingRef=useRef(false);
+  const ubicacionLabelCacheRef=useRef(new Map());
+  const ubicacionLastSeenRef=useRef(new Map());
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
@@ -10323,10 +10694,166 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     }
   }
 
-  function archivarMetadataExpediente(expediente){
-    downloadServiceArchiveMetadata(expediente);
-    showToast("Archivado ligero descargado");
+  async function archivarMetadataExpediente(expediente){
+    const sv=flotaServicios.find(s=>s.id===expediente?.id);
+    const archivedAt=new Date().toISOString();
+    const archiveMeta={
+      at:archivedAt,
+      by:getUserId()||null,
+      status:"archived",
+      retained:["pdf_final","timeline","resumen_operacional","integridad","metadata_ligera"],
+      cleanup:["fotos_originales_pesadas","adjuntos_temporales","ocr_temporal","caches"],
+    };
+    if(sv?.id){
+      const referencia=mergeReferenciaOperacional(sv.referencia||"",{archive:archiveMeta,archived_at:archivedAt});
+      try{
+        const res=await sbFetch(`/rest/v1/servicios?id=eq.${sv.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
+        if(!res.ok)throw new Error(`Supabase ${res.status}`);
+        setFlotaServicios(prev=>prev.map(row=>row.id===sv.id?{...row,referencia}:row));
+      }catch(e){
+        console.warn("archive expediente:",e);
+        showToast("No se pudo archivar el expediente");
+        return;
+      }
+    }
+    setArchivedExpedienteIds(prev=>{
+      const next=new Set(prev);
+      if(expediente?.id)next.add(expediente.id);
+      try{localStorage.setItem(`cuaderno_archived_expedientes_${empresa?.id||"local"}`,JSON.stringify([...next]));}catch(_){}
+      return next;
+    });
+    setExpedientePreview(null);
+    showToast("Expediente archivado");
   }
+
+  function abrirAnularServicio(sv){
+    if(!sv?.id||sv.estado==="anulado")return;
+    setAnularModal({servicio:sv,motivo:"",loading:false,error:""});
+  }
+
+  async function confirmarAnulacionServicio(){
+    const sv=anularModal?.servicio;
+    if(!sv?.id||anularModal?.loading)return;
+    const at=new Date().toISOString();
+    const by=getUserId()||"empresa";
+    const byLabel=prof?.nombre||empresa?.nombre||"tráfico";
+    const reason=(anularModal?.motivo||"").trim();
+    const referencia=mergeReferenciaOperacional(sv.referencia||"",{
+      cancellation:{at,by,by_label:byLabel,reason:reason||null},
+      service_cancelled_at:at,
+    });
+    const patchBase={
+      estado:"anulado",
+      referencia,
+      motivo_anulacion:reason||null,
+      fecha_anulacion:at,
+    };
+    async function patchServicio(body){
+      const res=await sbFetch(`/rest/v1/servicios?id=eq.${sv.id}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify(body)});
+      if(res.ok)return res;
+      let detail="";
+      try{detail=await res.text();}catch(_){}
+      const err=new Error(detail||`Supabase ${res.status}`);
+      err.status=res.status;
+      err.detail=detail;
+      throw err;
+    }
+    try{
+      setAnularModal(prev=>prev?{...prev,loading:true,error:""}:prev);
+      try{
+        await patchServicio(patchBase);
+      }catch(e){
+        const detail=String(e.detail||e.message||"");
+        const schemaProblem=/motivo_anulacion|fecha_anulacion|column|schema|PGRST/i.test(detail);
+        const estadoProblem=/estado|anulado|constraint|invalid input value|violates|check/i.test(detail);
+        if(schemaProblem){
+          try{await patchServicio({estado:"anulado",referencia});}
+          catch(e2){
+            const detail2=String(e2.detail||e2.message||"");
+            if(/estado|anulado|constraint|invalid input value|violates|check/i.test(detail2))await patchServicio({estado:"cancelado",referencia});
+            else throw e2;
+          }
+        }else if(estadoProblem){
+          await patchServicio({estado:"cancelado",referencia});
+        }else throw e;
+      }
+      const updatedRow={...sv,estado:"anulado",referencia,motivo_anulacion:reason||null,fecha_anulacion:at};
+      setFlotaServicios(prev=>prev.map(row=>row.id===sv.id?{...row,...updatedRow}:row));
+      setEtaOperativaById(prev=>{const next={...prev};delete next[sv.id];return next;});
+      setSvCardExpand(null);
+      setAnularModal(null);
+      await loadFlotaRef.current?.(true);
+      showToast("Servicio anulado");
+    }catch(e){
+      console.warn("anular servicio:",e);
+      const msg=String(e.detail||e.message||"").slice(0,220)||"No se pudo anular el servicio";
+      setAnularModal(prev=>prev?{...prev,loading:false,error:msg}:prev);
+      showToast("No se pudo anular el servicio");
+    }
+  }
+
+  function servicioAnuladoDesdeMeta(sv){
+    const meta=getServicioOperacionMeta(sv);
+    return sv?.estado==="anulado"||!!meta?.cancellation||!!meta?.service_cancelled_at||!!sv?.fecha_anulacion;
+  }
+
+  function normalizarServicioEmpresa(sv){
+    if(!servicioAnuladoDesdeMeta(sv))return sv;
+    const meta=getServicioOperacionMeta(sv);
+    return{
+      ...sv,
+      estado:"anulado",
+      motivo_anulacion:sv?.motivo_anulacion??meta?.cancellation?.reason??null,
+      fecha_anulacion:sv?.fecha_anulacion??meta?.cancellation?.at??meta?.service_cancelled_at??null,
+    };
+  }
+
+  useEffect(()=>{
+    try{
+      const raw=localStorage.getItem(`cuaderno_archived_expedientes_${empresa?.id||"local"}`);
+      setArchivedExpedienteIds(new Set(raw?JSON.parse(raw):[]));
+    }catch(_){setArchivedExpedienteIds(new Set());}
+  },[empresa?.id]);
+
+  useEffect(()=>{
+    const dbArchived=flotaServicios
+      .filter(sv=>{
+        const meta=getServicioOperacionMeta(sv);
+        return meta?.archive?.status==="archived"||!!meta?.archived_at;
+      })
+      .map(sv=>sv.id)
+      .filter(Boolean);
+    if(!dbArchived.length)return;
+    setArchivedExpedienteIds(prev=>{
+      const next=new Set(prev);
+      dbArchived.forEach(id=>next.add(id));
+      return next;
+    });
+  },[flotaServicios]);
+
+  useEffect(()=>{
+    const raw=localStorage.getItem("cuaderno_docs_filters_v1");
+    if(!raw)return;
+    try{
+      const f=JSON.parse(raw);
+      setFiltConductor(f.filtConductor||"");
+      setFiltFecha(f.filtFecha||"");
+      setFiltRef(f.filtRef||"");
+      setFiltCliente(f.filtCliente||"");
+      setFiltMatricula(f.filtMatricula||"");
+      setFiltEstado(f.filtEstado||"");
+      setFiltIncidencias(f.filtIncidencias||"");
+      setDocsSearch(f.docsSearch||"");
+      setDocsArchiveView(f.docsArchiveView||"activos");
+    }catch(_){}
+  },[]);
+
+  useEffect(()=>{
+    try{
+      localStorage.setItem("cuaderno_docs_filters_v1",JSON.stringify({filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView}));
+    }catch(_){}
+    setDocsPage(1);
+  },[filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView]);
 
   useEffect(()=>{init();},[]);
 
@@ -10343,16 +10870,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return;
       }
       const relsAll=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-      const gestorRel=relsAll.find(r=>r.rol==="gestor"||r.rol==="admin");
-      if(gestorRel?.empresa_id){
-        const empRows=await sbSelect("empresas",`id=eq.${gestorRel.empresa_id}`);
-        if(empRows.length){
-          setEmpresa(empRows[0]);setModo("jefe");
-          onRoleChange?.("jefe");
-          await loadConductores(empRows[0].id);
-          return;
-        }
-      }
       // Si el perfil es tipo empresa pero sin empresa creada aún → modo crear
       const perfiles=await sbSelect("profiles",`id=eq.${uid}`);
       if(perfiles[0]?.tipo_cuenta==="empresa"){
@@ -10401,7 +10918,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const uids=rels.filter(r=>r.user_id).map(r=>r.user_id);
       if(!uids.length){setFlotaLoading(false);return;}
       const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&order=created_at.desc&limit=100`).then(r=>r.json());
-      const svsArr=Array.isArray(svs)?svs:[];
+      const svsArr=(Array.isArray(svs)?svs:[]).map(normalizarServicioEmpresa);
       setFlotaServicios(svsArr);
       if(svsArr.length){
         const ids=svsArr.map(s=>s.id).join(",");
@@ -10462,9 +10979,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const serviciosListaOperativa=useMemo(()=>{
     let list=[...flotaServicios];
-    if(serviciosVistaTab==="en_curso") list=list.filter(s=>s.estado==="en_curso");
+    if(serviciosVistaTab==="activos") list=list.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)&&!archivedExpedienteIds.has(s.id));
+    else if(serviciosVistaTab==="en_curso") list=list.filter(s=>s.estado==="en_curso");
     else if(serviciosVistaTab==="asignados") list=list.filter(s=>s.estado==="asignado");
     else if(serviciosVistaTab==="completados") list=list.filter(s=>s.estado==="completado");
+    else if(serviciosVistaTab==="archivados") list=list.filter(s=>archivedExpedienteIds.has(s.id));
+    else if(serviciosVistaTab==="anulados") list=list.filter(s=>s.estado==="anulado");
     else if(serviciosVistaTab==="incidencias"){
       list=list.filter(sv=>{
         const svStops=flotaStops[sv.id]||[];
@@ -10485,81 +11005,127 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       return tb-ta;
     });
     return list;
-  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab]);
+  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab,archivedExpedienteIds]);
+
+  useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length]);
+
+  const serviciosPageSize=15;
+  const serviciosTotal=serviciosListaOperativa.length;
+  const serviciosTotalPages=Math.max(1,Math.ceil(serviciosTotal/serviciosPageSize));
+  const serviciosPageActual=Math.min(Math.max(1,serviciosPage),serviciosTotalPages);
+  const serviciosFrom=(serviciosPageActual-1)*serviciosPageSize;
+  const serviciosTo=Math.min(serviciosFrom+serviciosPageSize,serviciosTotal);
+  const serviciosListaVisible=serviciosListaOperativa.slice(serviciosFrom,serviciosTo);
+  const serviciosPages=Array.from({length:serviciosTotalPages},(_,i)=>i+1).filter(p=>serviciosTotalPages<=6||Math.abs(p-serviciosPageActual)<=2||p===1||p===serviciosTotalPages);
 
   const serviciosListaRef=useRef(serviciosListaOperativa);
   serviciosListaRef.current=serviciosListaOperativa;
 
-  async function readLatestConductorLocation(uid,{allowStale=false}={}){
+  async function readLatestConductorLocation(uid,{allowStale=true}={}){
     if(!uid)return null;
     const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
+    if(!r.ok){
+      let detail="";
+      try{detail=await r.text();}catch(_){}
+      throw new Error(detail||`Supabase ${r.status}`);
+    }
     const j=await r.json();
     const pos=validUbicacionRow(Array.isArray(j)?j[0]:null);
-    if(!pos||(!allowStale&&!isRecentTrackingPoint(pos)))return null;
+    if(!pos){
+      trackingLog("latest location missing",{uid});
+      return null;
+    }
+    if(!allowStale&&!isRecentTrackingPoint(pos)){
+      trackingLog("latest location stale filtered",{uid,ts:pos.ts});
+      return null;
+    }
+    const tsMs=pos?.ts?new Date(pos.ts).getTime():NaN;
+    const ageMin=Number.isFinite(tsMs)?Math.round((Date.now()-tsMs)/60000):null;
+    trackingLog("latest location read",{uid,ts:pos.ts||null,age_min:ageMin,allowStale});
+    const prev=ubicacionLastSeenRef.current.get(uid)||null;
+    const nowKey=`${pos.ts||"null"}|${Number(pos.lat).toFixed(6)}|${Number(pos.lon).toFixed(6)}`;
+    if(!prev||prev!==nowKey)trackingLog("latest location changed",{uid,prev:prev||null,current:nowKey});
+    else trackingLog("latest location reused",{uid,current:nowKey});
+    ubicacionLastSeenRef.current.set(uid,nowKey);
+    const key=`${pos.lat.toFixed(3)},${pos.lon.toFixed(3)}`;
+    let label=ubicacionLabelCacheRef.current.get(key);
+    if(!label){
+      label=await revGeoUbicacionLabel(pos.lat,pos.lon);
+      ubicacionLabelCacheRef.current.set(key,label);
+    }
     return{
       ...pos,
-      label:await revGeoUbicacionLabel(pos.lat,pos.lon),
+      label,
       updatedAt:pos.ts,
+      recent:isRecentTrackingPoint(pos),
     };
   }
 
-  async function refreshUbicacionConductores(uids=null){
+  async function refreshUbicacionConductores(uids=null,{allowStale=true,requireOpen=true}={}){
     const target=[...new Set((uids||conductores.map(c=>c.user_id)).filter(Boolean))];
     if(!target.length)return;
     const locs={};
     await Promise.all(target.map(async uid=>{
       const cond=conductores.find(c=>c.user_id===uid);
-      if(!conductorJourneyInfo(cond).open)return;
+      if(requireOpen&&!conductorJourneyInfo(cond).open)return;
       try{
-        const loc=await readLatestConductorLocation(uid);
-        if(loc)locs[uid]=loc;
+        const loc=await readLatestConductorLocation(uid,{allowStale});
+        locs[uid]=loc||{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
       }catch(_){/* noop */}
     }));
     setUbicacionConductorByUid(prev=>{
       const next={...prev};
       target.forEach(uid=>{
         const cond=conductores.find(c=>c.user_id===uid);
-        if(!conductorJourneyInfo(cond).open)delete next[uid];
+        if(requireOpen&&!conductorJourneyInfo(cond).open)delete next[uid];
         else if(locs[uid])next[uid]=locs[uid];
       });
       return next;
     });
   }
 
-  async function actualizarConductorUbicacion(uid){
+  async function actualizarConductorUbicacion(uid,{allowStale=true,requireOpen=false,showResult=true}={}){
     const cond=conductores.find(c=>c.user_id===uid);
-    if(!conductorJourneyInfo(cond).open){
+    if(requireOpen&&!conductorJourneyInfo(cond).open){
       setUbicacionConductorByUid(prev=>{const next={...prev};delete next[uid];return next;});
-      showToast("Conductor fuera de jornada");
+      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:"Conductor fuera de jornada"}}));
+      if(showResult)showToast("Conductor fuera de jornada");
       return null;
     }
     try{
-      const loc=await readLatestConductorLocation(uid);
-      if(!loc){showToast("Sin ubicación reciente");return null;}
-      setUbicacionConductorByUid(prev=>({...prev,[uid]:loc}));
-      showToast("Ubicación actualizada");
+      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:true,error:""}}));
+      const loc=await readLatestConductorLocation(uid,{allowStale});
+      const nextLoc=loc||{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
+      setUbicacionConductorByUid(prev=>({...prev,[uid]:nextLoc}));
+      const status=!loc?"Sin ubicación registrada":loc.recent===false?"Sin actualización reciente":"";
+      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:status}}));
+      if(showResult)showToast(status||"Ubicación actualizada");
       return loc;
-    }catch(_){
-      showToast("No se pudo actualizar ubicación");
+    }catch(e){
+      console.warn("actualizar ubicacion conductor:",e);
+      const error="No se pudo actualizar ubicación";
+      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error}}));
+      if(showResult)showToast(error);
       return null;
     }
   }
 
-  async function actualizarServicioUbicacionYEta(sv){
+  async function actualizarServicioUbicacionYEta(sv,{showResult=true}={}){
     if(!sv?.conductor_id)return;
     const cond=conductores.find(c=>c.user_id===sv.conductor_id);
-    const loc=await actualizarConductorUbicacion(sv.conductor_id);
-    const planned=etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv));
+    const loc=await actualizarConductorUbicacion(sv.conductor_id,{allowStale:true,requireOpen:false,showResult});
+    const planned=etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv),sv);
     let operational=null;
-    if(loc&&sv.estado==="en_curso"&&getOperationalTripStartedAt(sv)){
+    if(loc?.recent!==false&&loc&&sv.estado==="en_curso"&&getOperationalTripStartedAt(sv)){
       try{
-        operational=await getServiceEta({
-          service:sv,
+        const saved=await persistServiceOperationalEta({
+          servicio:sv,
           stops:flotaStops[sv.id]||[],
           norma:cond?.norma??null,
-          currentPosition:{lat:loc.lat,lon:loc.lon},
-          operationalTripStarted:true,
+          point:{lat:loc.lat,lon:loc.lon,accuracy:loc.precision_m,ts:loc.ts||loc.updatedAt||new Date().toISOString()},
+          eventType:"empresa_refresh",
         });
+        operational=saved?.operationalEta?etaSlotFromOperationalEta(saved.operationalEta):null;
       }catch(_){/* noop */}
     }
     setEtaOperativaById(prev=>({...prev,[sv.id]:{planned,operational}}));
@@ -10572,16 +11138,32 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     }
     const etas={};
     serviciosListaOperativa.forEach(sv=>{
-      etas[sv.id]={planned:etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv)),operational:null};
+      if(sv.estado!=="anulado")etas[sv.id]={planned:etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv),sv),operational:null,phase:isEtaActivationReady(sv)?null:"pre_route"};
     });
     setEtaOperativaById(etas);
-    void refreshUbicacionConductores([...new Set(serviciosListaOperativa.map(s=>s.conductor_id).filter(Boolean))]);
+    void refreshUbicacionConductores([...new Set(serviciosListaOperativa.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id).filter(Boolean))],{allowStale:true,requireOpen:false});
   },[serviciosListaOperativa,conductores]);
 
   useEffect(()=>{
     if(!empresa?.id||!conductores.length)return;
-    void refreshUbicacionConductores();
+    void refreshUbicacionConductores(null,{allowStale:true,requireOpen:false});
   },[empresa?.id,conductores]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe")return;
+    const refreshLigero=()=>{
+      if(document.visibilityState==="hidden")return;
+      setEtaHeartbeatNowMs(Date.now());
+      const uids=[
+        ...conductores.map(c=>c.user_id),
+        ...serviciosListaRef.current.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id),
+      ].filter(Boolean);
+      void refreshUbicacionConductores(uids,{allowStale:true,requireOpen:false});
+    };
+    refreshLigero();
+    const id=setInterval(refreshLigero,75*1000);
+    return()=>clearInterval(id);
+  },[empresa?.id,modo,conductores]);
 
   function openNuevoViaje(){
     const list=conductores.filter(c=>c.user_id);
@@ -10620,15 +11202,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       await sbFetch(`/rest/v1/conductor_empresa?id=eq.${condId}`,{method:"PATCH",body:JSON.stringify({activo:!activo})});
       await loadConductores(empresa.id);
       showToast(activo?"Conductor desactivado":"Conductor activado");
-    }catch(_){}
-  }
-
-  async function toggleRol(condId,rolActual){
-    const nuevoRol=rolActual==="gestor"?"conductor":"gestor";
-    try{
-      await sbFetch(`/rest/v1/conductor_empresa?id=eq.${condId}`,{method:"PATCH",body:JSON.stringify({rol:nuevoRol})});
-      await loadConductores(empresa.id);
-      showToast(nuevoRol==="gestor"?"⬆️ Ahora es gestor de flota":"⬇️ Ahora es conductor");
     }catch(_){}
   }
 
@@ -10710,6 +11283,57 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   return(
     <div style={{background:bg,minHeight:"100vh",paddingBottom:72,color:tx}}>
+
+      {anularModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",zIndex:430,display:"flex",alignItems:"center",justifyContent:"center",padding:14}} onClick={()=>!anularModal.loading&&setAnularModal(null)}>
+          <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:16,width:"100%",maxWidth:520,boxShadow:"0 24px 70px rgba(15,23,42,.25)",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"17px 18px 13px",borderBottom:"1px solid #cbd5e1",display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontSize:11,color:"#64748b",fontWeight:850,letterSpacing:1.2,marginBottom:5}}>ANULACIÓN OPERACIONAL</div>
+                <div style={{fontSize:18,fontWeight:850,color:"#0f172a"}}>¿Deseas anular este servicio?</div>
+                <div style={{fontSize:12.5,color:"#475569",marginTop:4,lineHeight:1.35}}>
+                  {getServiceNumber(anularModal.servicio)} · {getFixedServiceRoute(anularModal.servicio)}
+                </div>
+              </div>
+              <button type="button" disabled={anularModal.loading} onClick={()=>setAnularModal(null)}
+                style={{background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:9,width:32,height:32,color:"#334155",cursor:anularModal.loading?"default":"pointer",fontWeight:800}}>×</button>
+            </div>
+            <div style={{padding:18}}>
+              <div style={{fontSize:12,color:"#334155",fontWeight:800,marginBottom:7}}>Motivo</div>
+              <input value={anularModal.motivo} onChange={e=>setAnularModal(prev=>prev?{...prev,motivo:e.target.value}:prev)}
+                placeholder="Motivo opcional"
+                style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:10,padding:"11px 12px",fontSize:14,color:"#0f172a",outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+              <div style={{fontSize:11,color:"#64748b",fontWeight:800,marginBottom:7}}>Motivos rápidos</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:16}}>
+                {["Cliente cancela","Carga anulada","Duplicado","Error operativo","Falta vehículo","Otro"].map(m=>(
+                  <button key={m} type="button" disabled={anularModal.loading} onClick={()=>setAnularModal(prev=>prev?{...prev,motivo:m}:prev)}
+                    style={{background:anularModal.motivo===m?"#0f172a":"white",color:anularModal.motivo===m?"white":"#475569",border:"1px solid #cbd5e1",borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:800,cursor:anularModal.loading?"default":"pointer"}}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <div style={{background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"10px 11px",fontSize:12,color:"#475569",lineHeight:1.45,marginBottom:14}}>
+                El servicio quedará histórico e inactivo. Se conservarán timeline parcial, documentos, evidencias, OCR, incidencias e integridad operacional.
+              </div>
+              {anularModal.error&&(
+                <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:10,padding:"10px 11px",fontSize:12,color:"#9a3412",lineHeight:1.45,marginBottom:14,fontWeight:700}}>
+                  No se pudo anular: {anularModal.error}
+                </div>
+              )}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+                <button type="button" disabled={anularModal.loading} onClick={()=>setAnularModal(null)}
+                  style={{background:"white",color:"#475569",border:"1px solid #cbd5e1",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:800,cursor:anularModal.loading?"default":"pointer"}}>
+                  Cancelar
+                </button>
+                <button type="button" disabled={anularModal.loading} onClick={confirmarAnulacionServicio}
+                  style={{background:anularModal.loading?"#94a3b8":"#475569",color:"white",border:"none",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:850,cursor:anularModal.loading?"default":"pointer"}}>
+                  {anularModal.loading?"Anulando...":"Confirmar anulación"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pickConductorViaje&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.36)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setPickConductorViaje(false)}>
@@ -10811,7 +11435,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 const sem=semaforo(c.norma);
                 const n=c.norma;
                 const journey=conductorJourneyInfo(c);
-                const liveLocation=journey.open&&c.user_id?ubicacionConductorByUid[c.user_id]:null;
+                const liveLocation=c.user_id?ubicacionConductorByUid[c.user_id]:null;
                 const serviciosConductor=flotaServicios
                   .filter(s=>s.conductor_id===c.user_id&&(s.estado==="en_curso"||s.estado==="asignado"))
                   .sort((a,b)=>(a.estado==="en_curso"?0:1)-(b.estado==="en_curso"?0:1));
@@ -10827,12 +11451,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           <span style={{width:8,height:8,borderRadius:"50%",background:c.pendiente?"#94a3b8":journey.open?sem.col:"#cbd5e1",flexShrink:0}}/>
                           <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
                           <span style={{fontSize:11,background:empresaTone(journey.open?sem.col:"#94A3B8").bg,color:empresaTone(journey.open?sem.col:"#94A3B8").fg,border:`1px solid ${empresaTone(journey.open?sem.col:"#94A3B8").border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>{c.pendiente?"Sin vincular":journey.open?sem.label:"Fuera jornada"}</span>
-                          {!c.pendiente&&c.rol==="gestor"&&<span style={{fontSize:11,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe",borderRadius:999,padding:"2px 8px",fontWeight:600}}>Gestor</span>}
                         </div>
                         {c.matricula&&<div style={{fontSize:12,color:su}}>Unidad {c.matricula}</div>}
                         {c.pendiente&&<div style={{fontSize:12,color:su,marginTop:4}}>Dale el código para que se vincule desde PERFIL</div>}
-                        {!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
-                        {!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:500}}>{fmtUbicacionActualizada(liveLocation)}</div>}
+                        {!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
+                        {!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:600}}>{fmtUbicacionActualizada(liveLocation)}</div>}
                         {!c.pendiente&&<div style={{fontSize:12,color:journey.color,marginTop:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
                         {!c.pendiente&&servicioActual&&(
                           <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>
@@ -10845,16 +11468,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           {c.activo?"Desactivar":"Activar"}
                         </button>
                         {!c.pendiente&&c.user_id&&(
-                          <button onClick={()=>toggleRol(c.id,c.rol||"conductor")}
-                            style={{background:c.rol==="gestor"?"#eef2ff":"transparent",border:`1px solid ${c.rol==="gestor"?"#c7d2fe":EMPRESA_UI.border}`,borderRadius:8,padding:"4px 8px",fontSize:10,color:c.rol==="gestor"?"#3730a3":su,cursor:"pointer",fontWeight:600}}>
-                            {c.rol==="gestor"?"Conductor":"Gestor"}
+                          <button type="button" onClick={()=>actualizarConductorUbicacion(c.user_id)}
+                            disabled={!!ubicacionRefreshByUid[c.user_id]?.loading}
+                            style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:8,padding:"4px 8px",fontSize:10,color:"#1d4ed8",cursor:ubicacionRefreshByUid[c.user_id]?.loading?"default":"pointer",fontWeight:600}}>
+                            {ubicacionRefreshByUid[c.user_id]?.loading?"Actualizando...":"↻ Ubicación"}
                           </button>
                         )}
-                        {!c.pendiente&&c.user_id&&journey.open&&(
-                          <button type="button" onClick={()=>actualizarConductorUbicacion(c.user_id)}
-                            style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:8,padding:"4px 8px",fontSize:10,color:"#1d4ed8",cursor:"pointer",fontWeight:600}}>
-                            ↻ Ubicación
-                          </button>
+                        {!c.pendiente&&c.user_id&&ubicacionRefreshByUid[c.user_id]?.error&&(
+                          <div style={{fontSize:10,color:"#b45309",marginTop:4,fontWeight:700}}>{ubicacionRefreshByUid[c.user_id].error}</div>
                         )}
                       </div>
                     </div>
@@ -10943,7 +11564,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 </div>
                 <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
-                  {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
+                  {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
@@ -10967,13 +11588,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 <div style={{height:1,background:EMPRESA_UI.border,flex:1}}/>
               </div>
               <div style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:14,boxShadow:EMPRESA_UI.shadow,overflow:"hidden"}}>
-              {serviciosListaOperativa.length===0?(
+              {serviciosTotal===0?(
                 <div style={{padding:"28px 14px",textAlign:"center",color:su,fontSize:13,lineHeight:1.5}}>
                   Nada en esta vista · prueba otro filtro o crea un servicio nuevo
                 </div>
               ):(
                 <div style={{display:"flex",flexDirection:"column"}}>
-                  {serviciosListaOperativa.map(sv=>{
+                  {serviciosListaVisible.map(sv=>{
                     const svStops=flotaStops[sv.id]||[];
                     const completados=countCompletedStops(svStops);
                     const stopActual=getCurrentStop(svStops);
@@ -10986,16 +11607,28 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
                     const normaC=conductor?.norma;
                     const ubicInfo=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
+                    const ubicRefresh=sv.conductor_id?ubicacionRefreshByUid[sv.conductor_id]:null;
                     const ubicLine=fmtUbicacionConductorEmpresa(ubicInfo);
                     const ubicUpdated=fmtUbicacionActualizada(ubicInfo);
                     const incNCompact=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
                     const nextStop=nextPendingStop(svStops);
                     const progressLabel=svStops.length?`${completados}/${svStops.length}`:"0/0";
                     const planSnapshot=getOperationalPlanSnapshot(sv);
-                    const planSlot=etaSlotFromOperationalPlan(planSnapshot);
-                    const etaEntry=etaOperativaById[sv.id]||{planned:planSlot,operational:null};
-                    const etaCompact=getEtaLabelEmpresa(etaEntry);
-                    const etaEstado=getEtaEstadoEmpresa(etaEntry);
+                    const planSlot=etaSlotFromOperationalPlan(planSnapshot,sv);
+                    const operationalSlot=etaSlotFromOperationalEta(getOperationalEtaSnapshot(sv));
+                    const localEta=etaOperativaById[sv.id];
+                    const etaEntry=buildEtaEntryVisual({
+                      service:sv,
+                      planSlot,
+                      operationalSlot,
+                      localEta,
+                      conductor,
+                      ubicInfo,
+                      nowMs:etaHeartbeatNowMs,
+                    });
+                    const etaActiva=etaEntry?.phase!=="pre_route";
+                    const etaCompact=sv.estado==="anulado"?"—":getEtaLabelEmpresa(etaEntry);
+                    const etaEstado=sv.estado==="anulado"?{label:"Sin ETA activa",color:"#64748B"}:getEtaEstadoEmpresa(etaEntry);
                     const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
                     const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
                     const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
@@ -11052,18 +11685,24 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               </span>
                             </div>
                             <div style={{display:"flex",alignItems:"center",gap:7,marginTop:6,fontSize:13,color:EMPRESA_UI.subtle,lineHeight:1.35,overflow:"hidden",whiteSpace:"nowrap"}}>
-                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Última ubicación conductor · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:500}}> · {ubicUpdated}</span>}</span>
-                              {sv.conductor_id&&(
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>
+                                {sv.estado==="anulado"?"Servicio histórico anulado":<>Última ubicación · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:600}}> · {ubicUpdated}</span>}</>}
+                              </span>
+                              {sv.conductor_id&&sv.estado!=="anulado"&&(
                                 <button type="button" onClick={e=>{e.stopPropagation();void actualizarServicioUbicacionYEta(sv);}}
-                                  style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 7px",fontSize:10,color:"#1d4ed8",cursor:"pointer",fontWeight:600,flexShrink:0}}>
-                                  ↻
+                                  disabled={!!ubicRefresh?.loading}
+                                  style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 7px",fontSize:10,color:"#1d4ed8",cursor:ubicRefresh?.loading?"default":"pointer",fontWeight:600,flexShrink:0}}>
+                                  {ubicRefresh?.loading?"...":"↻"}
                                 </button>
                               )}
                             </div>
+                            {ubicRefresh?.error&&(
+                              <div style={{fontSize:10.5,color:"#b45309",marginTop:3,fontWeight:700}}>{ubicRefresh.error}</div>
+                            )}
                             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:"6px 10px",marginTop:6,fontSize:12.5,color:EMPRESA_UI.subtle,lineHeight:1.35}}>
                               <span>Conductor · {nombreConductor(sv.conductor_id)}</span>
                               <span>Paradas · {progressLabel}</span>
-                              {(planKm!=null||planDrive||planBreaks!=null||planRestLabel)&&(
+                              {sv.estado!=="anulado"&&etaActiva&&(planKm!=null||planDrive||planBreaks!=null||planRestLabel)&&(
                                 <span>
                                   Plan · {[
                                     planKm!=null?`${planKm} km`:null,
@@ -11088,7 +11727,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               )}
                             </div>
                           </div>
-                          <div style={{fontSize:13,color:su,flexShrink:0,lineHeight:1.2,paddingTop:2}}>{expanded?"⌄":"›"}</div>
+                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
+                            {sv.estado!=="anulado"&&(
+                              <button type="button" onClick={e=>{e.stopPropagation();abrirAnularServicio(sv);}}
+                                style={{background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:8,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                Anular servicio
+                              </button>
+                            )}
+                            <div style={{fontSize:13,color:su,lineHeight:1.2,paddingTop:2}}>{expanded?"⌄":"›"}</div>
+                          </div>
                         </div>
                         {expanded&&(
                           <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 8px 10px",marginBottom:2,background:EMPRESA_UI.surfaceSoft}}>
@@ -11184,12 +11831,39 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 </div>
                               )}
                               {sv.fecha_inicio&&<div style={{fontSize:12,color:su}}>Salida programada / inicio: {new Date(sv.fecha_inicio).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
+                              {sv.estado!=="anulado"&&(
+                                <button type="button" onClick={()=>abrirAnularServicio(sv)}
+                                  style={{width:"100%",marginTop:10,background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:9,padding:"9px 10px",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>
+                                  Anular servicio
+                                </button>
+                              )}
                             </div>
                           </div>
                         )}
                       </div>
                     );
                   })}
+                  <div style={{background:"#f8fafc",borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 11px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                    <div style={{fontSize:12,color:"#334155",fontWeight:700}}>
+                      Mostrando {serviciosFrom+1}-{serviciosTo} de {serviciosTotal} servicios
+                    </div>
+                    <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
+                      <button type="button" disabled={serviciosPageActual<=1} onClick={()=>setServiciosPage(serviciosPageActual-1)}
+                        style={{background:serviciosPageActual<=1?"#f1f5f9":"white",color:serviciosPageActual<=1?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:serviciosPageActual<=1?"default":"pointer"}}>
+                        ← Anterior
+                      </button>
+                      {serviciosPages.map((p,i)=>(
+                        <button key={`${p}-${i}`} type="button" onClick={()=>setServiciosPage(p)}
+                          style={{background:p===serviciosPageActual?"#0f172a":"white",color:p===serviciosPageActual?"white":"#334155",border:"1px solid #cbd5e1",borderRadius:8,minWidth:30,padding:"6px 8px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                          {p}
+                        </button>
+                      ))}
+                      <button type="button" disabled={serviciosPageActual>=serviciosTotalPages} onClick={()=>setServiciosPage(serviciosPageActual+1)}
+                        style={{background:serviciosPageActual>=serviciosTotalPages?"#f1f5f9":"white",color:serviciosPageActual>=serviciosTotalPages?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:serviciosPageActual>=serviciosTotalPages?"default":"pointer"}}>
+                        Siguiente →
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               </div>
@@ -11197,6 +11871,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             </>
           )}
         </div>
+      )}
+
+      {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
+      {flotaTab==="planificador"&&(
+        <EmpresaPlanificadorRuta dark={dark}/>
       )}
 
       {/* ── DOCUMENTOS ── */}
@@ -11252,6 +11931,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       </div>
                     ))}
                   </div>
+                  {expedientePreview.header.cancellation&&(
+                    <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px 13px",marginBottom:12}}>
+                      <div style={{fontSize:12,fontWeight:850,color:"#334155",marginBottom:7}}>Anulación operacional</div>
+                      <div style={{fontSize:12,color:"#475569",lineHeight:1.55}}>
+                        Fecha: <strong>{expedientePreview.header.cancellation.fecha}</strong><br/>
+                        Motivo: <strong>{expedientePreview.header.cancellation.motivo}</strong><br/>
+                        Usuario: <strong>{expedientePreview.header.cancellation.usuario}</strong>
+                      </div>
+                    </div>
+                  )}
                   <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"14px 14px 12px",marginBottom:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>Timeline operacional</div>
@@ -11340,13 +12029,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           :(
             <>
               {/* Filtros */}
-              <div style={{background:card,borderRadius:12,padding:"12px",marginBottom:12}}>
-                <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>FILTROS</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px",marginBottom:12,boxShadow:EMPRESA_UI.shadow}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:10}}>
                   <div>
-                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>CONDUCTOR</div>
+                    <div style={{fontSize:12,color:"#0f172a",fontWeight:850}}>Centro documental</div>
+                    <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Localiza expedientes por servicio, cliente, ruta, conductor o matrícula.</div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    {[{id:"activos",label:"Activos"},{id:"archivados",label:"Archivados"}].map(tab=>(
+                      <button key={tab.id} type="button" onClick={()=>setDocsArchiveView(tab.id)}
+                        style={{background:docsArchiveView===tab.id?"#0f172a":"white",color:docsArchiveView===tab.id?"white":"#475569",border:"1px solid #cbd5e1",borderRadius:999,padding:"6px 10px",fontSize:11,fontWeight:800,cursor:"pointer"}}>
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>BÚSQUEDA GLOBAL</div>
+                  <input value={docsSearch} onChange={e=>setDocsSearch(e.target.value)} placeholder="Servicio, cliente, referencia, ciudad o conductor..."
+                    style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"9px 10px",fontSize:13,color:"#0f172a",outline:"none",boxSizing:"border-box"}}/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+                  <div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>CONDUCTOR</div>
                     <select value={filtConductor} onChange={e=>setFiltConductor(e.target.value)}
-                      style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none"}}>
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none"}}>
                       <option value="">Todos</option>
                       {conductores.filter(c=>c.user_id).map(c=>(
                         <option key={c.user_id} value={c.user_id}>{c.nombre}</option>
@@ -11354,34 +12061,84 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </select>
                   </div>
                   <div>
-                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>FECHA</div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>FECHA</div>
                     <input type="date" value={filtFecha} onChange={e=>setFiltFecha(e.target.value)}
-                      style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none",colorScheme:"dark",boxSizing:"border-box"}}/>
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none",colorScheme:"light",boxSizing:"border-box"}}/>
                   </div>
                   <div>
-                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>SERVICIO / REF CLIENTE</div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>SERVICIO / REF CLIENTE</div>
                     <input value={filtRef} onChange={e=>setFiltRef(e.target.value)} placeholder="SRV-0441"
-                      style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none",boxSizing:"border-box"}}/>
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none",boxSizing:"border-box"}}/>
                   </div>
                   <div>
-                    <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>CLIENTE / DESTINO</div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>CLIENTE / DESTINO</div>
                     <input value={filtCliente} onChange={e=>setFiltCliente(e.target.value)} placeholder="Madrid..."
-                      style={{width:"100%",background:bg,border:"1px solid #334155",borderRadius:8,padding:"8px 10px",fontSize:13,color:tx,outline:"none",boxSizing:"border-box"}}/>
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>MATRÍCULA</div>
+                    <input value={filtMatricula} onChange={e=>setFiltMatricula(e.target.value)} placeholder="1234 ABC"
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>ESTADO</div>
+                    <select value={filtEstado} onChange={e=>setFiltEstado(e.target.value)}
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none"}}>
+                      <option value="">Todos</option>
+                      {Object.entries(ESTADO_LABEL).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"#64748b",fontWeight:800,marginBottom:3}}>INCIDENCIAS</div>
+                    <select value={filtIncidencias} onChange={e=>setFiltIncidencias(e.target.value)}
+                      style={{width:"100%",background:"white",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",fontSize:13,color:"#0f172a",outline:"none"}}>
+                      <option value="">Todas</option>
+                      <option value="con">Con incidencias</option>
+                      <option value="sin">Sin incidencias</option>
+                    </select>
                   </div>
                 </div>
-                {(filtConductor||filtFecha||filtRef||filtCliente)&&(
-                  <button onClick={()=>{setFiltConductor("");setFiltFecha("");setFiltRef("");setFiltCliente("");}}
-                    style={{marginTop:8,background:"transparent",border:"none",color:"#EF4444",fontSize:12,fontWeight:700,cursor:"pointer",padding:0}}>
-                    ✕ Limpiar filtros
+                {(filtConductor||filtFecha||filtRef||filtCliente||filtMatricula||filtEstado||filtIncidencias||docsSearch)&&(
+                  <button onClick={()=>{setFiltConductor("");setFiltFecha("");setFiltRef("");setFiltCliente("");setFiltMatricula("");setFiltEstado("");setFiltIncidencias("");setDocsSearch("");}}
+                    style={{marginTop:9,background:"transparent",border:"none",color:"#b91c1c",fontSize:12,fontWeight:800,cursor:"pointer",padding:0}}>
+                    Limpiar filtros
                   </button>
                 )}
               </div>
 
               {/* Lista filtrada */}
               {(()=>{
+                const pageSize=20;
+                const lower=(v)=>String(v||"").toLowerCase();
+                const serviceDate=(sv)=>sv.fecha_inicio||sv.created_at||sv.generatedAt||"";
+                const temporalGroup=(sv)=>{
+                  const t=new Date(serviceDate(sv)).getTime();
+                  if(!Number.isFinite(t))return"Sin fecha";
+                  const d=new Date(t),now=new Date();
+                  const day0=x=>{const y=new Date(x);y.setHours(0,0,0,0);return y;};
+                  const d0=day0(d),n0=day0(now);
+                  if(d0.getTime()===n0.getTime())return"Hoy";
+                  const weekStart=day0(now);weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7));
+                  if(d0>=weekStart)return"Esta semana";
+                  if(d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth())return"Este mes";
+                  const prev=new Date(now.getFullYear(),now.getMonth()-1,1);
+                  if(d.getFullYear()===prev.getFullYear()&&d.getMonth()===prev.getMonth())return"Mes anterior";
+                  return d.toLocaleDateString("es-ES",{month:"long",year:"numeric"});
+                };
                 const serviciosFiltrados=flotaServicios.filter(sv=>{
+                  const isArchived=archivedExpedienteIds.has(sv.id);
+                  if(docsArchiveView==="activos"&&isArchived)return false;
+                  if(docsArchiveView==="archivados"&&!isArchived)return false;
                   if(filtConductor&&sv.conductor_id!==filtConductor)return false;
-                  if(filtFecha&&sv.fecha_inicio&&!sv.fecha_inicio.startsWith(filtFecha))return false;
+                  if(filtFecha&&!String(serviceDate(sv)).startsWith(filtFecha))return false;
+                  if(filtEstado&&sv.estado!==filtEstado)return false;
+                  const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+                  const matricula=sv.matricula||conductor?.matricula||"";
+                  if(filtMatricula&&!lower(matricula).includes(lower(filtMatricula)))return false;
+                  const svStops=flotaStops[sv.id]||[];
+                  const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
+                  if(filtIncidencias==="con"&&incN<=0)return false;
+                  if(filtIncidencias==="sin"&&incN>0)return false;
                   const refVisible=getServiceNumber(sv);
                   const refClienteVisible=getServiceClientReference(sv);
                   const refSearch=[refVisible,refClienteVisible].filter(Boolean).join(" ").toLowerCase();
@@ -11391,113 +12148,130 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     const clienteSearch=[getServiceClient(sv),sv.destino,sv.origen].filter(Boolean).join(" ").toLowerCase();
                     if(!clienteSearch.includes(q))return false;
                   }
+                  if(docsSearch){
+                    const q=lower(docsSearch);
+                    const hay=[refVisible,refClienteVisible,getServiceClient(sv),sv.origen,sv.destino,conductor?.nombre,matricula,...svStops.map(st=>st.nombre),...svStops.map(st=>st.direccion)]
+                      .filter(Boolean).join(" ").toLowerCase();
+                    if(!hay.includes(q))return false;
+                  }
                   return true;
-                });
+                }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
                 if(!serviciosFiltrados.length)return(
                   <div style={{background:card,borderRadius:12,padding:"24px",textAlign:"center",color:su,fontSize:13}}>
                     Sin resultados para los filtros aplicados
                   </div>
                 );
+                const total=serviciosFiltrados.length;
+                const totalPages=Math.max(1,Math.ceil(total/pageSize));
+                const page=Math.min(Math.max(1,docsPage),totalPages);
+                const from=(page-1)*pageSize;
+                const to=Math.min(from+pageSize,total);
+                const pageRows=serviciosFiltrados.slice(from,to);
+                const pages=Array.from({length:totalPages},(_,i)=>i+1).filter(p=>totalPages<=6||Math.abs(p-page)<=2||p===1||p===totalPages);
+                const groups=pageRows.reduce((acc,sv)=>{
+                  const g=temporalGroup(sv);
+                  if(!acc[g])acc[g]=[];
+                  acc[g].push(sv);
+                  return acc;
+                },{});
                 return(
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                    <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px 13px",boxShadow:EMPRESA_UI.shadow}}>
-                      <div style={{fontSize:12,fontWeight:850,color:"#0f172a",letterSpacing:.2}}>Expedientes operacionales</div>
-                      <div style={{fontSize:11.5,color:"#64748b",marginTop:3,lineHeight:1.35}}>Cada tarjeta representa un único PDF corporativo con timeline, evidencias, resumen e integridad del servicio.</div>
+                    <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",boxShadow:EMPRESA_UI.shadow}}>
+                      <div style={{fontSize:12,color:"#334155",fontWeight:750}}>
+                        Mostrando {from+1}-{to} de {total} informes
+                      </div>
+                      <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                        <button type="button" disabled={page<=1} onClick={()=>setDocsPage(page-1)}
+                          style={{background:page<=1?"#f1f5f9":"white",color:page<=1?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:page<=1?"default":"pointer"}}>
+                          ← Anterior
+                        </button>
+                        {pages.map((p,i)=>(
+                          <button key={`${p}-${i}`} type="button" onClick={()=>setDocsPage(p)}
+                            style={{background:p===page?"#0f172a":"white",color:p===page?"white":"#334155",border:"1px solid #cbd5e1",borderRadius:8,minWidth:30,padding:"6px 8px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                            {p}
+                          </button>
+                        ))}
+                        <button type="button" disabled={page>=totalPages} onClick={()=>setDocsPage(page+1)}
+                          style={{background:page>=totalPages?"#f1f5f9":"white",color:page>=totalPages?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:page>=totalPages?"default":"pointer"}}>
+                          Siguiente →
+                        </button>
+                      </div>
                     </div>
-                    {serviciosFiltrados.map(sv=>{
-                      const svStops=flotaStops[sv.id]||[];
-                      const totalEvs=countServiceDocuments(svStops,flotaEvs);
-                      const metrics=computeTripOperationalMetrics(sv,svStops);
-                      const planSnapshot=getOperationalPlanSnapshot(sv);
-                      const planSlot=etaSlotFromOperationalPlan(planSnapshot);
-                      const etaEntry=etaOperativaById[sv.id]||{planned:planSlot,operational:null};
-                      const etaCompact=getEtaLabelEmpresa(etaEntry);
-                      const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
-                      const expediente=buildServiceExpediente({
-                        servicio:sv,
-                        stops:svStops,
-                        evidenciasByStop:flotaEvs,
-                        metrics,
-                        nombreConductor,
-                        etaLabel:etaCompact,
-                        fmtDur,
-                        entries:conductor?.entries||[],
-                      });
-                      const refVisible=getServiceNumber(sv);
-                      const clienteDoc=getServiceClient(sv)||"—";
-                      const refClienteDoc=getServiceClientReference(sv);
-                      const fechaDoc=sv.fecha_inicio?new Date(sv.fecha_inicio).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"}):new Date(expediente.generatedAt).toLocaleDateString("es-ES",{day:"2-digit",month:"2-digit",year:"numeric"});
-                      const docName=`${refVisible} ${fechaDoc}`;
-                      const stateTone=empresaTone(ESTADO_COLOR[sv.estado]||su);
-                      return(
-                        <div key={sv.id} style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:13,padding:0,overflow:"hidden",boxShadow:"0 8px 22px rgba(15,23,42,.06)"}}>
-                          <div style={{height:4,background:"#64748b"}}/>
-                          <div style={{padding:"13px 14px 12px"}}>
-                            <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",marginBottom:9}}>
+                    {Object.entries(groups).map(([group,rows])=>(
+                      <div key={group} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,overflow:"hidden",boxShadow:EMPRESA_UI.shadow}}>
+                        <div style={{background:"#f8fafc",borderBottom:"1px solid #dbe2ea",padding:"8px 11px",fontSize:11,color:"#475569",fontWeight:850,textTransform:"uppercase",letterSpacing:.4}}>{group}</div>
+                        {rows.map(sv=>{
+                          const svStops=flotaStops[sv.id]||[];
+                          const totalEvs=countServiceDocuments(svStops,flotaEvs);
+                          const metrics=computeTripOperationalMetrics(sv,svStops);
+                          const planSnapshot=getOperationalPlanSnapshot(sv);
+                          const planSlot=etaSlotFromOperationalPlan(planSnapshot,sv);
+                          const operationalSlot=etaSlotFromOperationalEta(getOperationalEtaSnapshot(sv));
+                          const localEta=etaOperativaById[sv.id];
+                          const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+                          const ubicInfo=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
+                          const etaEntry=buildEtaEntryVisual({
+                            service:sv,
+                            planSlot,
+                            operationalSlot,
+                            localEta,
+                            conductor,
+                            ubicInfo,
+                            nowMs:etaHeartbeatNowMs,
+                          });
+                          const etaCompact=getEtaLabelEmpresa(etaEntry);
+                          const expediente=buildServiceExpediente({servicio:sv,stops:svStops,evidenciasByStop:flotaEvs,metrics,nombreConductor,etaLabel:etaCompact,fmtDur,entries:conductor?.entries||[]});
+                          const refVisible=getServiceNumber(sv);
+                          const clienteDoc=getServiceClient(sv)||"—";
+                          const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
+                          const isArchived=archivedExpedienteIds.has(sv.id);
+                          return(
+                            <div key={sv.id} style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(132px,1fr))",gap:10,alignItems:"center",padding:"10px 11px",borderBottom:"1px solid #eef2f7"}}>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:10,fontWeight:850,letterSpacing:1.1,color:"#64748b",marginBottom:4}}>DOCUMENTO OPERACIONAL ÚNICO</div>
-                                <div style={{fontSize:17,fontWeight:800,color:"#0f172a",lineHeight:1.25,overflow:"hidden",textOverflow:"ellipsis"}}>{docName}</div>
-                                <div style={{fontSize:12.5,color:"#475569",marginTop:3,lineHeight:1.35}}>Cliente: {clienteDoc}{refClienteDoc?` · Ref cliente: ${refClienteDoc}`:""}</div>
-                                <div style={{fontSize:12.5,color:"#475569",marginTop:2,lineHeight:1.35}}>{expediente.header.ruta}</div>
+                                <div style={{fontSize:13,fontWeight:850,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{refVisible}</div>
+                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{clienteDoc}</div>
                               </div>
-                              <span style={{background:stateTone.bg,color:stateTone.fg,border:`1px solid ${stateTone.border}`,borderRadius:999,padding:"3px 8px",fontSize:10.5,fontWeight:800,whiteSpace:"nowrap"}}>
-                                {ESTADO_LABEL[sv.estado]||sv.estado}
-                              </span>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:12.5,fontWeight:700,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.ruta}</div>
+                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>Docs {totalEvs} · Incidencias {incN}</div>
+                              </div>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:12,color:"#334155",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.conductor}</div>
+                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{sv.matricula||conductor?.matricula||"Sin matrícula"}</div>
+                              </div>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:12,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.eta}</div>
+                                <div style={{fontSize:10.5,color:"#166534",marginTop:2,fontWeight:750}}>✓ Integridad validada</div>
+                              </div>
+                              <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
+                                {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
+                                <button type="button" onClick={()=>setExpedientePreview(expediente)}
+                                  style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                                  Ver
+                                </button>
+                                <button type="button" onClick={()=>{
+                                  const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
+                                  setMailExpediente({servicio:sv,stops:svStops,evidenciasByStop:evs});
+                                }}
+                                  style={{background:"#2563eb",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                                  Correo
+                                </button>
+                                <button type="button" onClick={()=>descargarExpediente(expediente)}
+                                  style={{background:"#0f172a",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                                  PDF
+                                </button>
+                                {!isArchived&&(
+                                  <button type="button" onClick={()=>archivarMetadataExpediente(expediente)}
+                                    style={{background:"white",color:"#475569",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                                    Archivar
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(116px,1fr))",gap:7,marginBottom:10}}>
-                              {[
-                                ["Conductor",expediente.header.conductor],
-                                ["ETA",expediente.header.eta],
-                                ["Km",expediente.header.km!=null?`${expediente.header.km}`:"—"],
-                                ["Docs",String(totalEvs)],
-                                ["Eventos",String(expediente.integrity.eventCount)],
-                              ].map(([l,v])=>(
-                                <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:9,padding:"7px 8px"}}>
-                                  <div style={{fontSize:9.5,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:2}}>{l}</div>
-                                  <div style={{fontSize:12.5,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v}</div>
-                                </div>
-                              ))}
-                            </div>
-                            <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"10px 11px",marginBottom:10}}>
-                              <div style={{fontSize:11,color:"#64748b",fontWeight:800,marginBottom:8}}>TIMELINE VERTEBRAL</div>
-                              {(expediente.timeline.slice(0,4).length?expediente.timeline.slice(0,4):[{time:"—",title:"Sin eventos operacionales todavía"}]).map((ev,idx)=>(
-                                <div key={`${ev.time}-${ev.title}-${idx}`} style={{display:"grid",gridTemplateColumns:"44px 12px 1fr",gap:7,alignItems:"start",marginBottom:idx===Math.min(expediente.timeline.length||1,4)-1?0:7}}>
-                                  <div style={{fontSize:10.5,color:"#64748b",fontFamily:"monospace"}}>{ev.time}</div>
-                                  <div style={{width:7,height:7,borderRadius:99,background:"#94a3b8",marginTop:4}}/>
-                                  <div style={{fontSize:12,color:"#334155",fontWeight:650,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.title}</div>
-                                </div>
-                              ))}
-                            </div>
-                            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:11}}>
-                              {[
-                                ["CMR",expediente.cmr.length],
-                                ["Incidencias",expediente.incidencias.length],
-                                ["Fotos",expediente.fotos.length],
-                              ].map(([l,n])=>(
-                                <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:9,padding:"7px 8px",textAlign:"center"}}>
-                                  <div style={{fontSize:14,fontWeight:850,color:"#0f172a"}}>{n}</div>
-                                  <div style={{fontSize:9.5,color:"#64748b",fontWeight:800,textTransform:"uppercase"}}>{l}</div>
-                                </div>
-                              ))}
-                            </div>
-                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-                              <button type="button" onClick={()=>setExpedientePreview(expediente)}
-                                style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
-                                Ver expediente
-                              </button>
-                              <button type="button" onClick={()=>descargarExpediente(expediente)}
-                                style={{background:"#0f172a",color:"white",border:"none",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
-                                Descargar PDF
-                              </button>
-                              <button type="button" onClick={()=>archivarMetadataExpediente(expediente)}
-                                style={{background:"white",color:"#334155",border:"1px solid #cbd5e1",borderRadius:10,padding:"10px 8px",fontSize:12.5,fontWeight:850,cursor:"pointer"}}>
-                                Archivar y liberar espacio
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
+                      </div>
+                    ))}
                   </div>
                 );
               })()}
@@ -11514,6 +12288,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           conductorNombre={asignarModal.nombre}
           onClose={()=>setAsignarModal(null)}
           onCreado={()=>{setAsignarModal(null);showToast("✅ Servicio asignado a "+asignarModal.nombre);loadFlotaServicios();}}
+        />
+      )}
+
+      {mailExpediente&&(
+        <SendDocumentationModal
+          open
+          onClose={()=>setMailExpediente(null)}
+          servicio={mailExpediente.servicio}
+          stops={mailExpediente.stops}
+          evidenciasByStop={mailExpediente.evidenciasByStop}
+          showToast={showToast}
         />
       )}
 
@@ -12801,7 +13586,7 @@ function ServiciosTimelineView({uid}){
 // ─────────────────────────────────────────────────────────────
 //  HOOK — SERVICIO ACTIVO
 // ─────────────────────────────────────────────────────────────
-function useServicioActivo(uid){
+function useServicioActivo(uid,norma=null,showToast=null){
   const[servicio,setServicio]=useState(null);
   const[stops,setStops]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -12829,7 +13614,10 @@ function useServicioActivo(uid){
     const now=new Date().toISOString();
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
     if(!res.ok)throw new Error("No se pudo guardar la entrada en muelle");
-    setStops(prev=>prev.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s));
+    const updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
+    setStops(updated);
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
+    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId){
@@ -12853,6 +13641,9 @@ function useServicioActivo(uid){
       sbUpsert("entries",rows).catch(()=>{});
     }
 
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast});
+    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
       if(!doneRes.ok)throw new Error("No se pudo completar el servicio");
@@ -12861,8 +13652,12 @@ function useServicioActivo(uid){
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function iniciarServicio(servicioId){
-    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio:new Date().toISOString()})});
-    setServicio(prev=>({...prev,estado:"en_curso"}));
+    const fecha_inicio=new Date().toISOString();
+    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio})});
+    const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
+    setServicio(prev=>({...prev,estado:"en_curso",fecha_inicio}));
+    const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast});
+    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   async function iniciarViajeOperacional(servicioId){
@@ -12879,11 +13674,14 @@ function useServicioActivo(uid){
     const now=new Date().toISOString();
     const notas=mergeStopOperacionMeta(stop.notas||"",{inicio_operacion_at:now});
     await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
-    setStops(prev=>prev.map(s=>s.id===stopId?{...s,notas}:s));
+    const updated=stops.map(s=>s.id===stopId?{...s,notas}:s);
+    setStops(updated);
     if(uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
       const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
       sbUpsert("entries",[{id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:now,note:`Manual: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false}]).catch(()=>{});
     }
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"inicio_operacion_stop",stopId,showToast});
+    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar:cargar};
@@ -12969,7 +13767,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
-  const[fechaInicio,setFechaInicio]=useState(()=>{const d=new Date();d.setSeconds(0,0);return d.toISOString().slice(0,16);});
+  const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([{orden:1,tipo:"carga",nombre:"",direccion:"",notas:"",lat:null,lon:null},{orden:2,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
@@ -13025,6 +13823,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
       await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
       // Registrar asignación
       sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
+      void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
       onCreado(sv);
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
@@ -13164,6 +13963,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
                   if(!sv?.id)throw new Error("No se pudo crear el servicio");
                   await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
                   sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
+                  void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
                   onCreado(sv);
                 }catch(e){setError("Error: "+e.message);}
                 finally{setSaving(false);}
@@ -13181,156 +13981,432 @@ function CrearServicioModal({uid,onClose,onCreado}){
 }
 
 // ─────────────────────────────────────────────────────────────
-//  DOCS POR SERVICIO
+//  DOCS POR SERVICIO — vista conductor (premium / compacta)
 // ─────────────────────────────────────────────────────────────
-function ServicioDocsView({uid,showToast}){
-  const[servicios,setServicios]=useState([]);
-  const[stops,setStops]=useState({});
-  const[evidencias,setEvidencias]=useState({});
-  const[loading,setLoading]=useState(true);
-  const[expandido,setExpandido]=useState({});
-  const[visorEv,setVisorEv]=useState(null);
-  const bg="#0F172A",card="#1E293B",tx="#F1F5F9",su="#64748B";
-  const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",qr:"📱",nota:"📝"};
-  const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",qr:"#A78BFA",nota:"#64748B"};
-  const TIPO_LABEL=Object.freeze(
-    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo.toUpperCase();return acc;},{})
-  );
+function bucketServiceDocDate(sv, refDate) {
+  const d = new Date(sv.fecha_inicio || sv.created_at);
+  const today0 = new Date(refDate);
+  today0.setHours(0, 0, 0, 0);
+  const y0 = new Date(today0);
+  y0.setDate(y0.getDate() - 1);
+  const monday = new Date(today0);
+  const dow = (monday.getDay() + 6) % 7;
+  monday.setDate(monday.getDate() - dow);
+  monday.setHours(0, 0, 0, 0);
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(nextMonday.getDate() + 7);
+  if (sameDay(d, refDate)) return "hoy";
+  if (sameDay(d, y0)) return "ayer";
+  if (+d >= +monday && +d < +nextMonday) return "semana";
+  return "older";
+}
 
-  useEffect(()=>{
-    if(!uid){setLoading(false);return;}
-    async function cargar(){
-      try{
-        const sr=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=20`);
-        const svs=await sr.json();
-        setServicios(Array.isArray(svs)?svs:[]);
-        if(svs.length){
-          const ids=svs.map(s=>s.id).join(",");
-          const str=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`);
-          const stps=await str.json();
-          const stopsMap={};(Array.isArray(stps)?stps:[]).forEach(st=>{if(!stopsMap[st.servicio_id])stopsMap[st.servicio_id]=[];stopsMap[st.servicio_id].push(st);});
+function ServicioDocsView({ uid, showToast, onBack }) {
+  const [servicios, setServicios] = useState([]);
+  const [stops, setStops] = useState({});
+  const [evidencias, setEvidencias] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [expandido, setExpandido] = useState({});
+  const [visorEv, setVisorEv] = useState(null);
+
+  const shell = "#0F172A";
+  const card = "#1E293B";
+  const cardBorder = "rgba(148, 163, 184, 0.12)";
+  const tx = "#F8FAFC";
+  const su = "#94A3B8";
+  const accent = "#3B82F6";
+  const TIPO_ICON = { cmr: "📄", foto: "📸", incidencia: "⚠️", qr: "📱", nota: "📝" };
+  const TIPO_COLOR = { cmr: "#38BDF8", foto: "#4ADE80", incidencia: "#FB7185", qr: "#C4B5FD", nota: "#94A3B8" };
+  const TIPO_LABEL = Object.freeze(
+    DOCUMENT_TYPES.reduce((acc, tipo) => {
+      acc[tipo] = tipo.toUpperCase();
+      return acc;
+    }, {}),
+  );
+  useEffect(() => {
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
+    async function cargar() {
+      try {
+        const sr = await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=20`);
+        const svs = await sr.json();
+        setServicios(Array.isArray(svs) ? svs : []);
+        if (svs.length) {
+          const ids = svs.map((s) => s.id).join(",");
+          const str = await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`);
+          const stps = await str.json();
+          const stopsMap = {};
+          (Array.isArray(stps) ? stps : []).forEach((st) => {
+            if (!stopsMap[st.servicio_id]) stopsMap[st.servicio_id] = [];
+            stopsMap[st.servicio_id].push(st);
+          });
           setStops(stopsMap);
-          const stopIds=stps.map(s=>s.id).join(",");
-          if(stopIds){
-            const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=stop_id.asc,created_at.asc`);
-            const evs=await evr.json();
+          const stopIds = stps.map((s) => s.id).join(",");
+          if (stopIds) {
+            const evr = await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=stop_id.asc,created_at.asc`);
+            const evs = await evr.json();
             setEvidencias(groupDocumentsByStop(evs));
           }
         }
-      }catch(e){console.warn("ServicioDocsView:",e);}
-      finally{setLoading(false);}
+      } catch (e) {
+        console.warn("ServicioDocsView:", e);
+      } finally {
+        setLoading(false);
+      }
     }
     cargar();
-  },[uid]);
+  }, [uid]);
 
-  if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando documentos...</div>;
-  if(!servicios.length)return(<div style={{padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>📭</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin servicios aún</div><div style={{fontSize:13,color:su}}>Los CMR y evidencias aparecerán aquí organizados por servicio y parada.</div></div>);
+  const buckets = useMemo(() => {
+    const ref = new Date();
+    const hoy = [];
+    const ayer = [];
+    const semana = [];
+    const older = [];
+    servicios.forEach((sv) => {
+      const b = bucketServiceDocDate(sv, ref);
+      if (b === "hoy") hoy.push(sv);
+      else if (b === "ayer") ayer.push(sv);
+      else if (b === "semana") semana.push(sv);
+      else older.push(sv);
+    });
+    return { hoy, ayer, semana, older };
+  }, [servicios]);
 
-  return(
-    <div style={{padding:"16px 14px 80px",background:bg,minHeight:"calc(100vh - 160px)"}}>
-      {visorEv&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.9)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setVisorEv(null)}>
-          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"14px 16px 10px",borderBottom:"1px solid #334155",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:15,fontWeight:800,color:TIPO_COLOR[visorEv.tipo]||tx}}>{TIPO_ICON[visorEv.tipo]} {visorEv.tipo.toUpperCase()}</div>
-              <button onClick={()=>setVisorEv(null)} style={{background:"#334155",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
-            </div>
-            <div style={{padding:"16px 16px 40px"}}>
-              <div style={{fontSize:11,color:su,marginBottom:14}}>{new Date(visorEv.created_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
-              {visorEv.url&&<img src={visorEv.url} style={{width:"100%",maxHeight:260,objectFit:"cover",borderRadius:12,marginBottom:14}} alt="evidencia"/>}
-              {visorEv.tipo==="cmr"&&visorEv.datos&&(<div style={{display:"flex",flexDirection:"column",gap:8}}>{[["Nº CMR","num_cmr"],["Remitente","remitente"],["Destinatario","destinatario"],["Transportista","transportista"],["Lugar carga","lugar_carga"],["Lugar entrega","lugar_entrega"],["Mercancía","mercancia"],["Peso (kg)","peso_kg"],["Matrícula","matricula"],["Observaciones","observaciones"]].map(([lbl,key])=>visorEv.datos[key]?(<div key={key} style={{background:bg,borderRadius:8,padding:"9px 11px"}}><div style={{fontSize:10,color:su,fontWeight:700,marginBottom:2}}>{lbl.toUpperCase()}</div><div style={{fontSize:14,color:tx}}>{visorEv.datos[key]}</div></div>):null)}</div>)}
-              {visorEv.tipo==="incidencia"&&visorEv.datos?.texto&&(<div style={{background:"#450a0a",border:"1px solid #EF444440",borderRadius:10,padding:"12px 14px",fontSize:14,color:"#FCA5A5",lineHeight:1.6}}>{visorEv.datos.texto}</div>)}
-              {visorEv.nota&&<div style={{marginTop:12,fontSize:13,color:su,background:bg,borderRadius:8,padding:"9px 11px"}}>📝 {visorEv.nota}</div>}
-            </div>
-          </div>
+  function mergeStopEvidence(prev, stopId, ev) {
+    if (!ev?.id || !stopId) return prev;
+    const cur = prev[stopId] || [];
+    if (cur.some((x) => x.id === ev.id)) return prev;
+    return { ...prev, [stopId]: [...cur, ev] };
+  }
+
+  function badgeOperativo(sv) {
+    if (sv.estado === "completado")
+      return { label: "COMPLETADO", bg: "rgba(34, 197, 94, 0.14)", fg: "#86EFAC", bd: "rgba(34, 197, 94, 0.35)" };
+    if (sv.estado === "asignado")
+      return { label: "PENDIENTE", bg: "rgba(245, 158, 11, 0.12)", fg: "#FCD34D", bd: "rgba(245, 158, 11, 0.35)" };
+    return { label: "OPERATIVO", bg: "rgba(59, 130, 246, 0.14)", fg: "#93C5FD", bd: "rgba(59, 130, 246, 0.35)" };
+  }
+
+  function refHumano(sv) {
+    const r = getServiceNumber(sv);
+    if (!r) return null;
+    const s = String(r).trim();
+    if (/^[0-9a-f-]{36}$/i.test(s)) return null;
+    return s.length > 32 ? s.slice(0, 28) + "…" : s;
+  }
+
+  if (loading)
+    return (
+      <div style={{ minHeight: "50vh", background: shell, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ width: 28, height: 28, border: "2px solid rgba(59,130,246,.35)", borderTopColor: accent, borderRadius: "50%", margin: "0 auto 12px", animation: "crSpin 0.85s linear infinite" }} />
+          <div style={{ fontSize: 13, fontWeight: 600, color: su }}>Cargando documentos…</div>
         </div>
-      )}
-      {servicios.map(sv=>{
-        const svStops=stops[sv.id]||[];
-        const totalEvs=countServiceDocuments(svStops,evidencias);
-        const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias});
-        const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
-        const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias});
-        const attention=needsAttention({service:sv,stops:svStops,evidencias,lastActivity});
-        const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
-        const refVisible=getServiceNumber(sv);
-        const clienteVisible=getServiceClient(sv);
-        const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
-        const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
-        return(
-          <div key={sv.id} style={{marginBottom:16}}>
-            <div style={{background:card,borderRadius:14,padding:"14px 16px",marginBottom:8,boxShadow:attention?"0 0 0 1px rgba(251, 146, 60, 0.45)":"none"}}>
-              <div style={{fontSize:16,fontWeight:800,color:tx,marginBottom:2}}>{routeFrom} → {routeTo}</div>
-              {attention&&(
-                <div style={{marginBottom:6}}>
-                  <span style={{background:"#F59E0B22",color:"#FB923C",borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>⚠ Atención requerida</span>
-                  {attentionReason&&<div style={{fontSize:10,color:su,marginTop:3,lineHeight:1.3}}>{attentionReason}</div>}
+        <style>{`@keyframes crSpin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+
+  if (!servicios.length)
+    return (
+      <div style={{ minHeight: "55vh", background: shell, padding: "28px 18px 88px" }}>
+        <header style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <button type="button" onClick={() => onBack?.()} style={{ background: "rgba(255,255,255,.06)", border: `1px solid ${cardBorder}`, borderRadius: 10, width: 36, height: 36, color: su, cursor: "pointer", fontSize: 16 }}>
+            ←
+          </button>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: tx, letterSpacing: -0.3 }}>Documentos</div>
+            <div style={{ fontSize: 11, color: su, marginTop: 2 }}>Servicios y documentos pendientes</div>
+          </div>
+        </header>
+        <div style={{ textAlign: "center", padding: "36px 12px", borderRadius: 16, border: `1px solid ${cardBorder}`, background: card }}>
+          <div style={{ fontSize: 28, marginBottom: 10, opacity: 0.9 }}>📄</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: tx, marginBottom: 6 }}>Sin servicios</div>
+          <div style={{ fontSize: 12, color: su, lineHeight: 1.45, maxWidth: 280, margin: "0 auto" }}>Cuando tengas servicios asignados, verás aquí la ruta y los documentos por parada.</div>
+        </div>
+      </div>
+    );
+
+  function renderServiceCard(sv) {
+    const svStops = stops[sv.id] || [];
+    const totalEvs = countOperationalDocuments(svStops, evidencias);
+    const stopsConDoc = svStops.filter((s) => filterOperationalEvidencias(evidencias[s.id]).length > 0).length;
+    const nStops = svStops.length;
+    const docRatio = nStops ? Math.min(1, stopsConDoc / nStops) : 0;
+    const operationalStatus = getOperationalStatus({ service: sv, stops: svStops, evidencias });
+    const operationalMeta = OPERATIONAL_STATUS_META[operationalStatus];
+    const lastActivity = getLastServiceActivity({ service: sv, stops: svStops, evidencias });
+    const attention = needsAttention({ service: sv, stops: svStops, evidencias, lastActivity });
+    const attentionReason = attention ? getAttentionReason({ service: sv, stops: svStops, evidencias, lastActivity }) : "";
+    const routeFrom = safeOperationalPlaceName(sv.origen, "Origen");
+    const routeTo = safeOperationalPlaceName(sv.destino, "Destino");
+    const fecha = new Date(sv.fecha_inicio || sv.created_at);
+    const fechaStr = fecha.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
+    const rh = refHumano(sv);
+    const cliente = getServiceClient(sv);
+    const bd = badgeOperativo(sv);
+
+    return (
+      <div
+        key={sv.id}
+        style={{
+          marginBottom: 10,
+          borderRadius: 14,
+          background: card,
+          border: `1px solid ${cardBorder}`,
+          boxShadow: attention ? "0 0 0 1px rgba(251, 191, 36, 0.35), 0 8px 24px rgba(0,0,0,.18)" : "0 4px 18px rgba(0,0,0,.12)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "12px 12px 10px" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 13, opacity: 0.85 }}>◎</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: su, textTransform: "uppercase", letterSpacing: 0.6 }}>Ruta</span>
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: tx, letterSpacing: -0.2, lineHeight: 1.25 }}>
+                {routeFrom} → {routeTo}
+              </div>
+              {(rh || cliente) && (
+                <div style={{ fontSize: 10, color: su, marginTop: 4, opacity: 0.92 }}>
+                  {rh && <span>{rh}</span>}
+                  {rh && cliente ? " · " : ""}
+                  {cliente && <span>{cliente}</span>}
                 </div>
               )}
-              {refVisible&&<div style={{fontSize:12,color:"#F59E0B",fontWeight:600,marginBottom:4}}>{refVisible}{clienteVisible?` · Cliente: ${clienteVisible}`:""}</div>}
-              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <span style={{background:ESTADO_COLOR[sv.estado]+"20",color:ESTADO_COLOR[sv.estado],borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{ESTADO_LABEL[sv.estado]||sv.estado}</span>
-                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
-                  <span style={{background:operationalMeta.color+"20",color:operationalMeta.color,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{operationalMeta.icon} {operationalMeta.label.toUpperCase()}</span>
-                  <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
-                </div>
-                <span style={{fontSize:11,color:su}}>{svStops.length} stops · {totalEvs} docs</span>
-                <span style={{fontSize:11,color:su}}>{new Date(sv.created_at).toLocaleDateString("es-ES",{day:"numeric",month:"short"})}</span>
-              </div>
             </div>
-            {svStops.map(stop=>{
-              const evs=evidencias[stop.id]||[];
-              const isOpen=expandido[stop.id];
-              const colorStop=STOP_COLOR[stop.tipo]||"#06B6D4";
-              return(
-                <div key={stop.id} style={{marginBottom:6,marginLeft:8}}>
-                  <button onClick={()=>setExpandido(prev=>({...prev,[stop.id]:!prev[stop.id]}))}
-                    style={{width:"100%",background:"#151F2E",border:`1px solid ${isOpen?colorStop+"50":"#1E293B"}`,borderRadius:12,padding:"11px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:10,textAlign:"left"}}>
-                    <span style={{fontSize:20,flexShrink:0}}>{STOP_ICON[stop.tipo]||"📍"}</span>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:13,fontWeight:700,color:isOpen?colorStop:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stop.nombre}</div>
-                      <div style={{fontSize:11,color:su,marginTop:1}}>{stop.tipo.replace("_"," ").toUpperCase()} · Stop {stop.orden}</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, padding: "4px 8px", borderRadius: 8, background: bd.bg, color: bd.fg, border: `1px solid ${bd.bd}`, letterSpacing: 0.4 }}>
+                {bd.label}
+              </span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 7, background: `${operationalMeta.color}18`, color: operationalMeta.color, border: `1px solid ${operationalMeta.color}35` }}>
+                {operationalMeta.icon} {operationalMeta.label}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 11, color: su }}>{fechaStr}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: su }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span style={{ opacity: 0.8 }}>▥</span>
+                {nStops} stops
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700, color: tx }}>
+                <span style={{ opacity: 0.75 }}>📄</span>
+                {stopsConDoc}/{nStops || 1} paradas · {totalEvs} docs
+              </span>
+            </div>
+          </div>
+          <div style={{ height: 3, borderRadius: 99, background: "rgba(15,23,42,.5)", marginTop: 10, overflow: "hidden" }}>
+            <div style={{ width: `${Math.round(docRatio * 100)}%`, height: "100%", borderRadius: 99, background: docRatio >= 1 ? "#4ADE80" : `linear-gradient(90deg,${accent},#60A5FA)` }} />
+          </div>
+          {attention && (
+            <div style={{ marginTop: 8, fontSize: 10, color: "#FBBF24", lineHeight: 1.35 }}>
+              ⚠ {attentionReason}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "0 10px 10px" }}>
+          <div style={{ borderTop: `1px solid ${cardBorder}`, paddingTop: 8 }}>
+            {svStops.map((stop, idx) => {
+              const evs = filterOperationalEvidencias(evidencias[stop.id] || []);
+              const hasDoc = evs.length > 0;
+              const isOpen = expandido[stop.id];
+              const tipoLabel = formatStopTipoLabel(stop.tipo);
+              const icon = STOP_ICON[stop.tipo] || "📍";
+              const colorStop = STOP_COLOR[stop.tipo] || accent;
+              return (
+                <div key={stop.id} style={{ position: "relative", paddingLeft: 14 }}>
+                  {idx < svStops.length - 1 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: 5,
+                        top: 22,
+                        bottom: -4,
+                        width: 2,
+                        borderRadius: 2,
+                        background: "linear-gradient(180deg, rgba(148,163,184,.35), rgba(148,163,184,.08))",
+                      }}
+                    />
+                  )}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 10,
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      background: hasDoc ? "rgba(74,222,128,.25)" : "rgba(148,163,184,.2)",
+                      border: `2px solid ${hasDoc ? "#4ADE80" : "rgba(148,163,184,.45)"}`,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setExpandido((prev) => ({ ...prev, [stop.id]: !prev[stop.id] }))}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 8px 8px 4px",
+                      marginBottom: 2,
+                      background: "transparent",
+                      border: "none",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ fontSize: 15, flexShrink: 0 }}>{icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: tx, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ color: colorStop, fontWeight: 800 }}>{tipoLabel}</span>
+                        <span style={{ color: su, fontWeight: 600 }}> · </span>
+                        {stop.nombre || "Parada"}
+                      </div>
+                      <div style={{ fontSize: 10, color: su, marginTop: 1 }}>{hasDoc ? "✓ Documento subido" : "⏳ Pendiente"}</div>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                      {evs.length>0&&<span style={{background:colorStop+"20",color:colorStop,borderRadius:6,padding:"2px 7px",fontSize:11,fontWeight:700}}>{evs.length} doc{evs.length!==1?"s":""}</span>}
-                      {stop.estado==="completado"&&<span style={{fontSize:14}}>✅</span>}
-                      <span style={{color:su,fontSize:14,display:"inline-block",transform:isOpen?"rotate(90deg)":"none"}}>›</span>
-                    </div>
+                    <span style={{ color: su, fontSize: 12, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
                   </button>
-                  {isOpen&&(
-                    <div style={{background:"#0D1420",borderRadius:"0 0 12px 12px",border:"1px solid #1E293B",borderTop:"none",padding:"10px 12px"}}>
-                      {(stop.hora_llegada_real||stop.hora_salida_real)&&(
-                        <div style={{display:"flex",gap:16,marginBottom:10,paddingBottom:10,borderBottom:"1px solid #1E293B"}}>
-                          {stop.hora_llegada_real&&<div><div style={{fontSize:10,color:su,fontWeight:700}}>LLEGADA</div><div style={{fontSize:13,color:tx,fontFamily:"monospace"}}>{new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div></div>}
-                          {stop.hora_salida_real&&<div><div style={{fontSize:10,color:su,fontWeight:700}}>SALIDA</div><div style={{fontSize:13,color:tx,fontFamily:"monospace"}}>{new Date(stop.hora_salida_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div></div>}
-                          {stop.hora_llegada_real&&stop.hora_salida_real&&<div><div style={{fontSize:10,color:su,fontWeight:700}}>TIEMPO</div><div style={{fontSize:13,color:"#F59E0B",fontFamily:"monospace"}}>{fmtDur(Math.round((new Date(stop.hora_salida_real)-new Date(stop.hora_llegada_real))/60000))}</div></div>}
+                  {isOpen && (
+                    <div style={{ margin: "0 0 8px 2px", padding: "8px 8px 10px", borderRadius: 10, background: "rgba(15,23,42,.45)", border: `1px solid ${cardBorder}` }}>
+                      {(stop.hora_llegada_real || stop.hora_salida_real) && (
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 10, color: su, marginBottom: 8 }}>
+                          {stop.hora_llegada_real && <span>Llegada {new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span>}
+                          {stop.hora_salida_real && <span>Salida {new Date(stop.hora_salida_real).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span>}
                         </div>
                       )}
-                      {evs.length===0?(<div style={{textAlign:"center",padding:"12px 0",color:su,fontSize:13}}>Sin documentos en este stop</div>):(
-                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                          {evs.map(ev=>(
-                            <button key={ev.id} onClick={()=>setVisorEv(ev)} style={{background:"#1E293B",border:`1px solid ${TIPO_COLOR[ev.tipo]||"#334155"}30`,borderRadius:10,padding:"10px 12px",cursor:"pointer",display:"flex",gap:10,alignItems:"center",textAlign:"left",width:"100%"}}>
-                              <span style={{fontSize:22,flexShrink:0}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
-                                {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:11,color:su,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
-                                {isIncidentDocument(ev)&&ev.datos?.texto&&<div style={{fontSize:11,color:"#FCA5A5",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.texto}</div>}
-                                <div style={{fontSize:10,color:"#334155",marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
-                              </div>
-                              {ev.url&&<img src={ev.url} style={{width:40,height:40,objectFit:"cover",borderRadius:7,flexShrink:0}} alt="thumb"/>}
-                              <span style={{color:su,fontSize:14,flexShrink:0}}>›</span>
+                      {evs.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                          {evs.map((ev) => (
+                            <button
+                              key={ev.id}
+                              type="button"
+                              onClick={() => setVisorEv(ev)}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 5,
+                                padding: "5px 8px",
+                                borderRadius: 8,
+                                border: `1px solid ${(TIPO_COLOR[ev.tipo] || su) + "40"}`,
+                                background: "rgba(30,41,59,.65)",
+                                cursor: "pointer",
+                                fontSize: 10,
+                                fontWeight: 700,
+                                color: TIPO_COLOR[ev.tipo] || tx,
+                              }}
+                            >
+                              <span>{TIPO_ICON[ev.tipo] || "📎"}</span>
+                              <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{getDocumentLabel(ev) || TIPO_LABEL[ev.tipo]}</span>
                             </button>
                           ))}
                         </div>
                       )}
+                      <EvidenciasStop
+                        stopId={stop.id}
+                        showToast={showToast}
+                        variant="docsShell"
+                        tiposPermitidos={OPERATIONAL_SERVICIO_DOC_TIPOS}
+                        onEvidenciaSaved={(ev) => setEvidencias((p) => mergeStopEvidence(p, stop.id, ev))}
+                      />
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
-        );
-      })}
+        </div>
+      </div>
+    );
+  }
+
+  const secciones = [
+    { key: "hoy", titulo: "HOY", lista: buckets.hoy },
+    { key: "ayer", titulo: "AYER", lista: buckets.ayer },
+    { key: "semana", titulo: "ESTA SEMANA", lista: buckets.semana },
+    { key: "older", titulo: "ANTERIORES", lista: buckets.older },
+  ];
+
+  return (
+    <div style={{ minHeight: "calc(100vh - 120px)", background: shell, padding: "0 0 88px" }}>
+      {visorEv && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.92)", zIndex: 500, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setVisorEv(null)}>
+          <div style={{ background: card, borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 520, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${cardBorder}` }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ padding: "12px 14px", borderBottom: `1px solid ${cardBorder}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: TIPO_COLOR[visorEv.tipo] || tx }}>
+                {TIPO_ICON[visorEv.tipo]} {visorEv.tipo.toUpperCase()}
+              </div>
+              <button type="button" onClick={() => setVisorEv(null)} style={{ background: "rgba(255,255,255,.08)", border: `1px solid ${cardBorder}`, borderRadius: 8, width: 32, height: 32, color: tx, cursor: "pointer" }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: "14px 14px 32px" }}>
+              <div style={{ fontSize: 10, color: su, marginBottom: 12 }}>{new Date(visorEv.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+              {visorEv.url && <img src={visorEv.url} style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 12, marginBottom: 12 }} alt="evidencia" />}
+              {visorEv.tipo === "cmr" && visorEv.datos && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {[
+                    ["Nº CMR", "num_cmr"],
+                    ["Remitente", "remitente"],
+                    ["Destinatario", "destinatario"],
+                    ["Transportista", "transportista"],
+                    ["Lugar carga", "lugar_carga"],
+                    ["Lugar entrega", "lugar_entrega"],
+                    ["Mercancía", "mercancia"],
+                    ["Peso (kg)", "peso_kg"],
+                    ["Matrícula", "matricula"],
+                    ["Observaciones", "observaciones"],
+                  ].map(([lbl, key]) =>
+                    visorEv.datos[key] ? (
+                      <div key={key} style={{ background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>
+                        <div style={{ fontSize: 9, color: su, fontWeight: 700, marginBottom: 2 }}>{lbl.toUpperCase()}</div>
+                        <div style={{ fontSize: 13, color: tx }}>{visorEv.datos[key]}</div>
+                      </div>
+                    ) : null,
+                  )}
+                </div>
+              )}
+              {visorEv.tipo === "incidencia" && visorEv.datos?.texto && (
+                <div style={{ background: "rgba(127,29,29,.35)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#FECDD3", lineHeight: 1.55 }}>
+                  {visorEv.datos.texto}
+                </div>
+              )}
+              {visorEv.nota && <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>📝 {visorEv.nota}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <header style={{ position: "sticky", top: 0, zIndex: 5, background: `linear-gradient(180deg,${shell} 70%,transparent)`, padding: "12px 14px 10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button type="button" onClick={() => onBack?.()} style={{ background: "rgba(255,255,255,.06)", border: `1px solid ${cardBorder}`, borderRadius: 10, width: 36, height: 36, color: su, cursor: "pointer", fontSize: 15, flexShrink: 0 }}>
+            ←
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: tx, letterSpacing: -0.35 }}>Documentos</div>
+            <div style={{ fontSize: 11, color: su, marginTop: 2, lineHeight: 1.3 }}>Servicios y documentos pendientes</div>
+          </div>
+        </div>
+      </header>
+
+      <div style={{ padding: "4px 12px 0" }}>
+        {secciones.map(
+          (sec) =>
+            sec.lista.length > 0 && (
+              <section key={sec.key} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.1, color: su, opacity: 0.88, margin: "0 2px 8px", textTransform: "uppercase" }}>{sec.titulo}</div>
+                {sec.lista.map((sv) => renderServiceCard(sv))}
+              </section>
+            ),
+        )}
+      </div>
     </div>
   );
 }
@@ -13338,7 +14414,7 @@ function ServicioDocsView({uid,showToast}){
 // ─────────────────────────────────────────────────────────────
 //  EVIDENCIAS DEL STOP
 // ─────────────────────────────────────────────────────────────
-function EvidenciasStop({stopId,showToast}){
+function EvidenciasStop({stopId,showToast,variant="default",onEvidenciaSaved,tiposPermitidos=null}){
   const[evidencias,setEvidencias]=useState([]);
   const[modal,setModal]=useState(null);
   const[nota,setNota]=useState("");
@@ -13350,8 +14426,16 @@ function EvidenciasStop({stopId,showToast}){
   const[error,setError]=useState("");
   const fileRef=useRef(null);
   const fotoRef=useRef(null);
-  const card="#FFFFFF",bg="#F8FAFC",tx="#0F172A",su="#64748B";
-  const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
+  const allowedTipos=useMemo(()=>{
+    if(!Array.isArray(tiposPermitidos)||!tiposPermitidos.length)return null;
+    return new Set(tiposPermitidos.map((t)=>String(t||"").toLowerCase()));
+  },[tiposPermitidos]);
+  const isDocsShell=variant==="docsShell";
+  const LIGHT={card:"#FFFFFF",bg:"#F8FAFC",tx:"#0F172A",su:"#64748B"};
+  const panel=isDocsShell
+    ?{rowBg:"rgba(30,41,59,.78)",tx:"#F8FAFC",su:"#94A3B8",border:"rgba(148,163,184,0.14)",time:"#64748B",head:"rgba(248,250,252,.92)"}
+    :{rowBg:LIGHT.bg,tx:LIGHT.tx,su:LIGHT.su,border:"#E2E8F0",time:"#334155",head:LIGHT.su};
+  const iStyle={width:"100%",background:LIGHT.bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:LIGHT.tx,outline:"none",boxSizing:"border-box",marginBottom:8};
   const CMR_FIELDS=[{k:"num_cmr",l:"Nº CMR"},{k:"fecha",l:"Fecha"},{k:"remitente",l:"Remitente"},{k:"destinatario",l:"Destinatario"},{k:"transportista",l:"Transportista"},{k:"lugar_carga",l:"Lugar de carga"},{k:"lugar_entrega",l:"Lugar de entrega"},{k:"mercancia",l:"Mercancía"},{k:"peso_kg",l:"Peso (kg)"},{k:"matricula",l:"Matrícula"},{k:"observaciones",l:"Observaciones"}];
   const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",nota:"📝"};
   const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",nota:"#64748B"};
@@ -13365,12 +14449,19 @@ function EvidenciasStop({stopId,showToast}){
       .then(r=>r.json()).then(d=>setEvidencias(Array.isArray(d)?d:[])).catch(()=>{});
   },[stopId]);
 
+  const visibleEvs=useMemo(()=>{
+    if(!allowedTipos)return evidencias;
+    return evidencias.filter((ev)=>allowedTipos.has(String(ev?.tipo||"").toLowerCase()));
+  },[evidencias,allowedTipos]);
+  const canTipo=(t)=>!allowedTipos||allowedTipos.has(String(t||"").toLowerCase());
+
   async function guardarEvidencia(tipo,datos){
     setSaving(true);setError("");
     try{
       const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo,datos:datos||null,nota:nota||null})});
       const[saved]=await r.json();
       setEvidencias(prev=>[...prev,saved]);
+      onEvidenciaSaved?.(saved);
       setModal(null);setNota("");showToast("✅ Evidencia guardada");
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
@@ -13383,6 +14474,7 @@ function EvidenciasStop({stopId,showToast}){
       const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo:"foto",url,nota:nota||null})});
       const[saved]=await r.json();
       setEvidencias(prev=>[...prev,saved]);
+      onEvidenciaSaved?.(saved);
       setModal(null);setNota("");setFotoUrl(null);showToast("✅ Foto guardada");
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
@@ -13409,67 +14501,79 @@ function EvidenciasStop({stopId,showToast}){
       const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo:"cmr",url,datos:cmrCampos,nota:nota||null})});
       const[saved]=await r.json();
       setEvidencias(prev=>[...prev,saved]);
+      onEvidenciaSaved?.(saved);
       setModal(null);setNota("");setCmrFase("scan");setCmrCampos({});setCmrFotoB64(null);showToast("✅ CMR guardado");
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
 
+  const gBtn=(bg,bd,pd)=>({background:bg,border:bd,borderRadius:12,padding:pd,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:isDocsShell?3:4});
   return(
-    <div style={{marginTop:16}}>
+    <div style={{marginTop:isDocsShell?6:16}}>
       {evidencias.length>0&&(
-        <div style={{marginBottom:12}}>
-          <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>EVIDENCIAS ({evidencias.length})</div>
-          {evidencias.map(ev=>(
-            <div key={ev.id} style={{background:bg,border:"1px solid #E2E8F0",borderRadius:10,padding:"10px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"center"}}>
-              <span style={{fontSize:20}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
+        <div style={{marginBottom:isDocsShell?8:12}}>
+          <div style={{fontSize:10,color:panel.head,fontWeight:800,marginBottom:6,letterSpacing:isDocsShell?0.6:0,textTransform:isDocsShell?"uppercase":"none"}}>
+            {isDocsShell?"En esta parada":"EVIDENCIAS"} ({visibleEvs.length}{allowedTipos&&evidencias.length>visibleEvs.length?` / ${evidencias.length}`:""})
+          </div>
+          {visibleEvs.map(ev=>(
+            <div key={ev.id} style={{background:panel.rowBg,border:`1px solid ${panel.border}`,borderRadius:isDocsShell?8:10,padding:isDocsShell?"8px 10px":"10px 12px",marginBottom:isDocsShell?5:6,display:"flex",gap:isDocsShell?8:10,alignItems:"center"}}>
+              <span style={{fontSize:isDocsShell?18:20}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
-                {(ev.nota||ev.datos?.texto)&&<div style={{fontSize:12,color:su,marginTop:2}}>{ev.nota||ev.datos?.texto}</div>}
-                {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:11,color:su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
-                <div style={{fontSize:11,color:"#334155",marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
+                <div style={{fontSize:isDocsShell?12:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||panel.tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
+                {(ev.nota||ev.datos?.texto)&&<div style={{fontSize:11,color:panel.su,marginTop:2,lineHeight:1.35}}>{ev.nota||ev.datos?.texto}</div>}
+                {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:10,color:panel.su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
+                <div style={{fontSize:10,color:panel.time,marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
               </div>
-              {ev.url&&<img src={ev.url} style={{width:44,height:44,objectFit:"cover",borderRadius:7,flexShrink:0}} alt="ev"/>}
+              {ev.url&&<img src={ev.url} style={{width:isDocsShell?40:44,height:isDocsShell?40:44,objectFit:"cover",borderRadius:7,flexShrink:0,border:`1px solid ${panel.border}`}} alt="ev"/>}
             </div>
           ))}
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        <button onClick={()=>{setModal("foto");setError("");}} style={{background:"#22C55E20",border:"1.5px solid #22C55E50",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>📸</span><span style={{fontSize:12,fontWeight:700,color:"#22C55E"}}>Foto</span>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:isDocsShell?6:8}}>
+        {canTipo("foto")&&(
+        <button type="button" onClick={()=>{setModal("foto");setError("");}} style={gBtn(isDocsShell?"rgba(34,197,94,.14)":"#22C55E20",isDocsShell?"1px solid rgba(34,197,94,.38)":"1.5px solid #22C55E50",isDocsShell?"10px 4px":"12px 6px")}>
+          <span style={{fontSize:isDocsShell?22:24}}>📸</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#86EFAC":"#22C55E"}}>Foto</span>
         </button>
-        <button onClick={()=>{setModal("cmr");setCmrFase("scan");setError("");}} style={{background:"#0EA5E920",border:"1.5px solid #0EA5E950",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>📄</span><span style={{fontSize:12,fontWeight:700,color:"#0EA5E9"}}>Scanner CMR</span>
+        )}
+        {canTipo("cmr")&&(
+        <button type="button" onClick={()=>{setModal("cmr");setCmrFase("scan");setError("");}} style={gBtn(isDocsShell?"rgba(56,189,248,.12)":"#0EA5E920",isDocsShell?"1px solid rgba(56,189,248,.35)":"1.5px solid #0EA5E950",isDocsShell?"10px 4px":"12px 6px")}>
+          <span style={{fontSize:isDocsShell?22:24}}>📄</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#7DD3FC":"#0EA5E9"}}>Scanner CMR</span>
         </button>
-        <button onClick={()=>{setModal("incidencia");setNota("");setError("");}} style={{background:"#EF444420",border:"1.5px solid #EF444450",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>⚠️</span><span style={{fontSize:12,fontWeight:700,color:"#EF4444"}}>Incidencia</span>
+        )}
+        {canTipo("incidencia")&&(
+        <button type="button" onClick={()=>{setModal("incidencia");setNota("");setError("");}} style={gBtn(isDocsShell?"rgba(248,113,113,.12)":"#EF444420",isDocsShell?"1px solid rgba(248,113,113,.35)":"1.5px solid #EF444450",isDocsShell?"10px 4px":"12px 6px")}>
+          <span style={{fontSize:isDocsShell?22:24}}>⚠️</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#FCA5A5":"#EF4444"}}>Incidencia</span>
         </button>
-        <button onClick={()=>{setModal("nota");setNota("");setError("");}} style={{background:"#64748B20",border:"1.5px solid #64748B50",borderRadius:12,padding:"12px 6px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-          <span style={{fontSize:24}}>📝</span><span style={{fontSize:12,fontWeight:700,color:"#64748B"}}>Observación</span>
+        )}
+        {canTipo("nota")&&(
+        <button type="button" onClick={()=>{setModal("nota");setNota("");setError("");}} style={gBtn(isDocsShell?"rgba(148,163,184,.14)":"#64748B20",isDocsShell?"1px solid rgba(148,163,184,.28)":"1.5px solid #64748B50",isDocsShell?"10px 4px":"12px 6px")}>
+          <span style={{fontSize:isDocsShell?22:24}}>📝</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#CBD5E1":"#64748B"}}>Observación</span>
         </button>
+        )}
       </div>
       {modal==="cmr"&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#0EA5E9"}}>📄 ESCANEAR CMR</div>
-              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={escanearCmr} style={{display:"none"}}/>
-              {cmrFase==="scan"&&(<><button onClick={()=>fileRef.current?.click()} style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:16}}>📷 FOTOGRAFIAR CMR</button>
-                <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>O INTRODUCE MANUALMENTE</div>
-                {CMR_FIELDS.slice(0,4).map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
-                {Object.values(cmrCampos).some(v=>v)&&<button onClick={guardarCmr} disabled={saving} style={{width:"100%",background:saving?"#334155":"#0EA5E9",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",marginTop:4}}>{saving?"⏳...":"✅ Guardar CMR"}</button>}
+              {cmrFase==="scan"&&(<><button type="button" onClick={()=>fileRef.current?.click()} style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:16}}>📷 FOTOGRAFIAR CMR</button>
+                <div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:8}}>O INTRODUCE MANUALMENTE</div>
+                {CMR_FIELDS.slice(0,4).map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
+                {Object.values(cmrCampos).some(v=>v)&&<button type="button" onClick={guardarCmr} disabled={saving} style={{width:"100%",background:saving?"#334155":"#0EA5E9",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",marginTop:4}}>{saving?"⏳...":"✅ Guardar CMR"}</button>}
               </>)}
               {cmrFase==="procesando"&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{fontSize:40,marginBottom:12}}>🤖</div><div style={{fontSize:15,fontWeight:700,color:"#F59E0B"}}>Analizando CMR...</div></div>)}
               {cmrFase==="revisar"&&(<div>
                 <div style={{background:"#DCFCE7",border:"1px solid #86EFAC",borderRadius:9,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#16A34A"}}>✓ Datos extraídos — revisa y corrige</div>
-                {CMR_FIELDS.map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
+                {CMR_FIELDS.map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
                 <input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Nota opcional..." style={iStyle}/>
                 {error&&<div style={{background:"#FEE2E2",borderRadius:8,padding:"9px 12px",fontSize:13,color:"#DC2626",marginBottom:10}}>⚠️ {error}</div>}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:4}}>
-                  <button onClick={()=>{setCmrFase("scan");setError("");}} style={{background:"#F1F5F9",color:su,border:"1px solid #CBD5E1",borderRadius:10,padding:"13px",fontSize:14,cursor:"pointer"}}>✕ Cancelar</button>
-                  <button onClick={guardarCmr} disabled={saving} style={{background:saving?"#CBD5E1":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>{saving?"⏳...":"✅ Guardar"}</button>
+                  <button type="button" onClick={()=>{setCmrFase("scan");setError("");}} style={{background:"#F1F5F9",color:LIGHT.su,border:"1px solid #CBD5E1",borderRadius:10,padding:"13px",fontSize:14,cursor:"pointer"}}>✕ Cancelar</button>
+                  <button type="button" onClick={guardarCmr} disabled={saving} style={{background:saving?"#CBD5E1":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>{saving?"⏳...":"✅ Guardar"}</button>
                 </div>
               </div>)}
             </div>
@@ -13478,14 +14582,14 @@ function EvidenciasStop({stopId,showToast}){
       )}
       {modal==="foto"&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#22C55E"}}>📸 FOTO</div>
-              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <input ref={fotoRef} type="file" accept="image/*" capture="environment" onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setFotoUrl(URL.createObjectURL(file));await subirFoto(file);}} style={{display:"none"}}/>
-              {!fotoUrl?(<><div style={{marginBottom:10}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>NOTA (opcional)</div><input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Describe la foto..." style={iStyle}/></div><button onClick={()=>fotoRef.current?.click()} style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer"}}>📷 TOMAR FOTO</button></>)
+              {!fotoUrl?(<><div style={{marginBottom:10}}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:5}}>NOTA (opcional)</div><input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Describe la foto..." style={iStyle}/></div><button type="button" onClick={()=>fotoRef.current?.click()} style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer"}}>📷 TOMAR FOTO</button></>)
               :(<div style={{textAlign:"center",padding:"20px 0"}}><img src={fotoUrl} style={{width:"100%",maxHeight:200,objectFit:"cover",borderRadius:10,marginBottom:12}} alt="preview"/>{saving&&<div style={{fontSize:14,color:"#F59E0B",fontWeight:700}}>⏳ Subiendo...</div>}</div>)}
             </div>
           </div>
@@ -13493,14 +14597,14 @@ function EvidenciasStop({stopId,showToast}){
       )}
       {modal==="incidencia"&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#EF4444"}}>⚠️ INCIDENCIA</div>
-              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Mercancía dañada..." rows={4} style={{...iStyle,resize:"vertical"}}/>
-              <button onClick={()=>nota.trim()&&guardarEvidencia("incidencia",{texto:nota})} disabled={saving||!nota.trim()}
+              <button type="button" onClick={()=>nota.trim()&&guardarEvidencia("incidencia",{texto:nota})} disabled={saving||!nota.trim()}
                 style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#EF4444",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"⚠️ REGISTRAR INCIDENCIA"}
               </button>
@@ -13510,14 +14614,14 @@ function EvidenciasStop({stopId,showToast}){
       )}
       {modal==="nota"&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:16,fontWeight:800,color:"#64748B"}}>📝 OBSERVACIÓN</div>
-              <button onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:tx,cursor:"pointer"}}>✕</button>
+              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
             </div>
             <div style={{padding:"16px 18px 40px"}}>
               <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Precinto revisado, muelle saturado..." rows={4} style={{...iStyle,resize:"vertical"}}/>
-              <button onClick={()=>nota.trim()&&guardarEvidencia("nota",{texto:nota})} disabled={saving||!nota.trim()}
+              <button type="button" onClick={()=>nota.trim()&&guardarEvidencia("nota",{texto:nota})} disabled={saving||!nota.trim()}
                 style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#64748B",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"📝 GUARDAR OBSERVACIÓN"}
               </button>
@@ -13532,11 +14636,98 @@ function EvidenciasStop({stopId,showToast}){
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conductor",showToast,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid);
+function PushDebugRow({label,value,tx,su}){
+  const v=value===undefined||value===null?"—":typeof value==="object"?JSON.stringify(value,null,0):String(value);
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"minmax(0,44%) minmax(0,56%)",gap:6,alignItems:"start",marginBottom:7,fontSize:11}}>
+      <span style={{color:su,fontWeight:700,lineHeight:1.35}}>{label}</span>
+      <span style={{color:tx,fontWeight:600,lineHeight:1.35,wordBreak:"break-word",whiteSpace:"pre-wrap",fontFamily:"ui-monospace,Consolas,monospace",fontSize:10}}>{v}</span>
+    </div>
+  );
+}
+
+function PushDebugTraceView({pre,result,caught,tx,su}){
+  const t=result?.trace||{};
+  const reg=t.registerResponse;
+  const regDisplay=reg===undefined||reg===null?"—":JSON.stringify(reg,null,2);
+  return(
+    <div style={{marginTop:10}}>
+      {caught&&(
+        <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:10,marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#B91C1C"}}>Excepción</div>
+          <PushDebugRow label="message" value={caught.message} tx={tx} su={su}/>
+          <PushDebugRow label="stack" value={caught.stack} tx={tx} su={su}/>
+        </div>
+      )}
+      <div style={{fontSize:11,fontWeight:800,color:"#92400E",marginBottom:8}}>Resumen initFcmPush</div>
+      <PushDebugRow label="ok" value={result?.ok} tx={tx} su={su}/>
+      <PushDebugRow label="reason" value={result?.reason} tx={tx} su={su}/>
+      <PushDebugRow label="error" value={result?.error} tx={tx} su={su}/>
+      <PushDebugRow label="code (Firebase)" value={result?.code} tx={tx} su={su}/>
+      <div style={{fontSize:11,fontWeight:800,color:"#92400E",margin:"14px 0 8px"}}>Contexto previo</div>
+      <PushDebugRow label="uid parcial" value={pre?.uid} tx={tx} su={su}/>
+      <PushDebugRow label="Notification.permission" value={pre?.permission} tx={tx} su={su}/>
+      <PushDebugRow label="serviceWorker (API)" value={pre?.browser?.serviceWorker} tx={tx} su={su}/>
+      <PushDebugRow label="Notification (API)" value={pre?.browser?.Notification} tx={tx} su={su}/>
+      <PushDebugRow label="PushManager (API)" value={pre?.browser?.PushManager} tx={tx} su={su}/>
+      <PushDebugRow label="PWA display-mode standalone" value={pre?.pwa?.displayModeStandalone} tx={tx} su={su}/>
+      <PushDebugRow label="navigator.standalone" value={pre?.pwa?.navigatorStandalone} tx={tx} su={su}/>
+      <PushDebugRow label="iOS family" value={pre?.pwa?.iosFamily} tx={tx} su={su}/>
+      <PushDebugRow label="iOS PWA instalada" value={pre?.pwa?.iosPwaInstalled} tx={tx} su={su}/>
+      <PushDebugRow label="Safari-like UA" value={pre?.pwa?.safariLike} tx={tx} su={su}/>
+      <div style={{fontSize:11,fontWeight:800,color:"#92400E",margin:"14px 0 8px"}}>Traza initFcmPush</div>
+      <PushDebugRow label="permission (inicial)" value={t.permissionInitial} tx={tx} su={su}/>
+      <PushDebugRow label="permission (tras request)" value={t.permissionAfterRequest} tx={tx} su={su}/>
+      <PushDebugRow label="Firebase.messaging supported" value={t.messagingSupported} tx={tx} su={su}/>
+      <PushDebugRow label="missingConfig" value={t.missingConfig} tx={tx} su={su}/>
+      <PushDebugRow label="SW register" value={t.swRegister} tx={tx} su={su}/>
+      <PushDebugRow label="Firebase init" value={t.firebase} tx={tx} su={su}/>
+      <PushDebugRow label="getMessaging" value={t.getMessaging} tx={tx} su={su}/>
+      <PushDebugRow label="getToken (start)" value={t.getTokenStart} tx={tx} su={su}/>
+      <PushDebugRow label="getToken (resultado)" value={t.getToken} tx={tx} su={su}/>
+      <PushDebugRow label="Token parcial (éxito)" value={t.getToken?.tokenPartial} tx={tx} su={su}/>
+      <PushDebugRow label="register_fcm_token payload (sin token completo)" value={t.registerPayload} tx={tx} su={su}/>
+      <div style={{marginTop:8}}>
+        <div style={{fontSize:10,fontWeight:800,color:su,marginBottom:4}}>register_fcm_token response</div>
+        <pre style={{margin:0,maxHeight:160,overflow:"auto",fontSize:9,lineHeight:1.4,whiteSpace:"pre-wrap",wordBreak:"break-word",background:"#0F172A",color:"#E2E8F0",padding:8,borderRadius:6}}>{regDisplay}</pre>
+      </div>
+      <PushDebugRow label="registerBackendOk" value={t.registerBackendOk} tx={tx} su={su}/>
+    </div>
+  );
+}
+
+const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid,norma,showToast);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
+  const[pushDebugSession,setPushDebugSession]=useState(()=>isPushDebugSessionEnabled());
+  const showPushDebugPanel=isPushDebugEnvironmentEnabled()||pushDebugSession;
+  const[pushDiagOpen,setPushDiagOpen]=useState(false);
+  const[pushDiagLoading,setPushDiagLoading]=useState(false);
+  const[pushDiagText,setPushDiagText]=useState("");
+  const[pushDiagResult,setPushDiagResult]=useState(null);
   const card="#FFFFFF",tx="#0F172A",su="#64748B";
+
+  async function runTestPushInit(){
+    setPushDiagLoading(true);
+    setPushDiagOpen(true);
+    setPushDiagText("Ejecutando initFcmPush…");
+    setPushDiagResult(null);
+    let pre=null;
+    try{
+      pre={...getPushClientContext(),uid:uid?String(uid).slice(0,8)+"…":null};
+      const res=await initFcmPush({showToast});
+      setPushDiagResult({pre,result:res,caught:null});
+      const safe={...res,token:res.token?`${String(res.token).slice(0,12)}…${String(res.token).slice(-8)} (${res.token.length})`:null};
+      setPushDiagText(JSON.stringify({preInitContext:pre,result:safe},null,2));
+    }catch(e){
+      const preFail=pre||{...getPushClientContext(),uid:uid?String(uid).slice(0,8)+"…":null};
+      setPushDiagResult({pre:preFail,result:null,caught:{message:e?.message||String(e),stack:e?.stack}});
+      setPushDiagText(JSON.stringify({preInitContext:preFail,error:e?.message||String(e),stack:e?.stack},null,2));
+    }finally{
+      setPushDiagLoading(false);
+    }
+  }
 
   useEffect(()=>{
     if(!servicio?.id||!stops.length){
@@ -13571,10 +14762,53 @@ const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conducto
     });
   }
 
-  if(loading)return <div style={{padding:40,textAlign:"center",color:su,fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando...</div>;
+  const pushActivator=!showPushDebugPanel?(
+    <div style={{marginBottom:12,padding:12,background:"#F8FAFC",border:"1px solid #CBD5E1",borderRadius:12,fontSize:11,color:su,lineHeight:1.45}}>
+      <div style={{fontWeight:800,color:tx,marginBottom:6}}>Diagnóstico push (temporal)</div>
+      <div style={{marginBottom:10}}>Si no ves el panel amarillo de prueba, actívalo aquí o con URL / almacenamiento local.</div>
+      <button type="button" onClick={()=>{enablePushDebugSession();setPushDebugSession(true);setPushDiagOpen(true);setPushDiagText("Pulsa «Test Push Init» para ejecutar y ver la traza aquí.");setPushDiagResult(null);}} style={{background:"#2563EB",color:"#fff",border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        Activar panel diagnóstico push
+      </button>
+      <div style={{marginTop:10,fontSize:10,color:"#64748B"}}>
+        Alternativas: añade <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>?pushdebug=1</code> a la URL y recarga · variable Vercel{" "}
+        <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>VITE_SHOW_PUSH_DEBUG=true</code>
+        · consola:{" "}
+        <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>{`localStorage.setItem("${PUSH_DEBUG_LS_KEY}","1")`}</code>{" "}y recarga
+      </div>
+    </div>
+  ):null;
+
+  const pushDebugBar=showPushDebugPanel?(
+    <div style={{marginBottom:12,padding:12,background:"#FFFBEB",border:"1px solid #F59E0B",borderRadius:12}}>
+      <div style={{fontSize:11,fontWeight:800,color:"#92400E",letterSpacing:.4,marginBottom:8}}>DEBUG · Push FCM (visible en prod con ?pushdebug=1, localStorage o sesión)</div>
+      <button type="button" onClick={runTestPushInit} disabled={pushDiagLoading} style={{background:"#0F172A",color:"#fff",border:"none",borderRadius:8,padding:"10px 14px",fontSize:13,fontWeight:700,cursor:pushDiagLoading?"wait":"pointer",opacity:pushDiagLoading?0.65:1}}>
+        Test Push Init
+      </button>
+      <div style={{fontSize:10,color:"#78350F",marginTop:6}}>Consola: prefijo [push]. Abajo: estados y errores en pantalla.</div>
+      {pushDiagOpen&&(
+        <div style={{marginTop:12,background:"#fff",border:"1px solid #E2E8F0",borderRadius:8,padding:10,maxHeight:"70vh",overflow:"auto"}}>
+          {pushDiagLoading&&<div style={{fontSize:12,color:su,marginBottom:8}}>Ejecutando initFcmPush…</div>}
+          {pushDiagResult&&<PushDebugTraceView pre={pushDiagResult.pre} result={pushDiagResult.result} caught={pushDiagResult.caught} tx={tx} su={su}/>}
+          <div style={{fontSize:10,fontWeight:800,color:su,margin:"12px 0 4px"}}>JSON completo</div>
+          <pre style={{margin:0,fontSize:9,lineHeight:1.45,whiteSpace:"pre-wrap",wordBreak:"break-word",color:tx,maxHeight:220,overflow:"auto",background:"#F1F5F9",padding:8,borderRadius:6}}>{pushDiagText||"—"}</pre>
+          <button type="button" onClick={()=>{setPushDiagOpen(false);setPushDiagText("");setPushDiagResult(null);}} style={{marginTop:10,background:"#E2E8F0",color:"#0F172A",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,cursor:"pointer"}}>Cerrar panel</button>
+        </div>
+      )}
+    </div>
+  ):null;
+
+  if(loading)return(
+    <>
+      {pushActivator}
+      {pushDebugBar}
+      <div style={{padding:40,textAlign:"center",color:su,fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando...</div>
+    </>
+  );
 
   if(!servicio)return(
     <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+      {pushActivator}
+      {pushDebugBar}
       <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",marginBottom:16,boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
         <div style={{fontSize:12,fontWeight:800,color:"#64748B",letterSpacing:.8,marginBottom:10}}>SERVICIO</div>
         <div style={{fontSize:18,fontWeight:750,color:tx,marginBottom:6}}>Sin servicio activo</div>
@@ -13587,6 +14821,8 @@ const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conducto
 
   if(servicio.estado==="completado")return(
     <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+      {pushActivator}
+      {pushDebugBar}
       <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
         <div style={{fontSize:12,fontWeight:800,color:"#16A34A",letterSpacing:.8,marginBottom:10}}>COMPLETADO</div>
         <div style={{fontSize:18,fontWeight:750,color:"#16A34A",marginBottom:6}}>Servicio completado</div>
@@ -13598,7 +14834,10 @@ const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conducto
   );
 
   if(servicio.estado==="asignado")return(
-    <ActiveServicePanel
+    <>
+      {pushActivator}
+      {pushDebugBar}
+      <ActiveServicePanel
       mode="asignado"
       servicio={servicio}
       stops={stops}
@@ -13616,10 +14855,14 @@ const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conducto
       onOpenViajeModal={onOpenViajeModal}
       conductorNombre={conductorNombre}
     />
+    </>
   );
 
   return(
-    <ActiveServicePanel
+    <>
+      {pushActivator}
+      {pushDebugBar}
+      <ActiveServicePanel
       mode="en_curso"
       servicio={servicio}
       stops={stops}
@@ -13637,6 +14880,7 @@ const TabServicio=React.memo(function TabServicio({uid,conductorNombre="Conducto
       onOpenViajeModal={onOpenViajeModal}
       conductorNombre={conductorNombre}
     />
+    </>
   );
 });
 
@@ -13649,8 +14893,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
   const[servicios,setServicios]=useState([]);
+  const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
   const[viajeLocal,setViajeLocal]=useState(()=>readViajeActivoFromStorage());
+  const ubicacionDashLabelCacheRef=useRef(new Map());
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
 
   useEffect(()=>{
@@ -13668,14 +14914,16 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     async function cargar(){
       try{
         const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-        if(!emps.length){setLoading(false);return;}
-        const emp=emps[0];setEmpresa(emp);
+        const emp=emps[0];
+        if(!emp?.id){setLoading(false);return;}
+        setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);
         const uids=rels.filter(r=>r.user_id).map(r=>r.user_id);
         setConductores(rels);
         if(uids.length){
           const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&estado=in.(asignado,en_curso)&order=created_at.desc&limit=20`).then(r=>r.json());
           setServicios(Array.isArray(svs)?svs:[]);
+          void refreshDashboardUbicaciones(uids);
         }else setServicios([]);
       }catch(e){console.warn("EmpresaDashboard:",e);}
       finally{setLoading(false);}
@@ -13692,12 +14940,53 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     };
   },[]);
 
+  async function readDashboardLocation(uid){
+    if(!uid)return null;
+    const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
+    const j=await r.json();
+    const pos=validUbicacionRow(Array.isArray(j)?j[0]:null);
+    if(!pos)return{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
+    const key=`${pos.lat.toFixed(3)},${pos.lon.toFixed(3)}`;
+    let label=ubicacionDashLabelCacheRef.current.get(key);
+    if(!label){
+      label=await revGeoUbicacionLabel(pos.lat,pos.lon);
+      ubicacionDashLabelCacheRef.current.set(key,label);
+    }
+    return{...pos,label,updatedAt:pos.ts,recent:isRecentTrackingPoint(pos)};
+  }
+
+  async function refreshDashboardUbicaciones(uids=null){
+    const target=[...new Set((uids||[
+      ...conductores.map(c=>c.user_id),
+      ...servicios.map(s=>s.conductor_id),
+    ]).filter(Boolean))];
+    if(!target.length)return;
+    const locs={};
+    await Promise.all(target.map(async uid=>{
+      try{locs[uid]=await readDashboardLocation(uid);}catch(_){}
+    }));
+    setUbicacionDashByUid(prev=>({...prev,...locs}));
+  }
+
+  useEffect(()=>{
+    if(!empresa?.id)return;
+    const tick=()=>{
+      if(document.visibilityState==="hidden")return;
+      void refreshDashboardUbicaciones();
+    };
+    tick();
+    const id=setInterval(tick,75*1000);
+    return()=>clearInterval(id);
+  },[empresa?.id,conductores,servicios]);
+
   const primerCurso=servicios.find(s=>s.estado==="en_curso");
   const primerCursoPlan=getOperationalPlanSnapshot(primerCurso);
+  const primerCursoOpEta=getOperationalEtaSnapshot(primerCurso);
+  const primerCursoEtaActiva=primerCurso?isEtaActivationReady(primerCurso):false;
   const primerCursoRuta=primerCurso
     ? getFixedServiceRoute(primerCurso)
     : null;
-  const primerCursoEta=fmtOperationalEtaLabel(primerCursoPlan?.planned_eta)||(!isRelativeEtaLabel(primerCursoPlan?.planned_eta_label)?primerCursoPlan?.planned_eta_label:null);
+  const primerCursoEta=primerCursoEtaActiva?(fmtOperationalEtaLabel(primerCursoOpEta?.eta)||(!isRelativeEtaLabel(primerCursoOpEta?.label)?primerCursoOpEta?.label:null)||fmtOperationalEtaLabel(primerCursoPlan?.planned_eta)||(!isRelativeEtaLabel(primerCursoPlan?.planned_eta_label)?primerCursoPlan?.planned_eta_label:null)):null;
   const primerCursoKm=Number.isFinite(Number(primerCursoPlan?.planned_km))?Math.round(Number(primerCursoPlan.planned_km)):null;
   const tripPres=useMemo(
     ()=>getUnifiedTripPresentation({
@@ -13735,11 +15024,33 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
               {primerCursoKm!=null?<> · {primerCursoKm} km</>:tripPres.kmRestantes!=null&&<> · {tripPres.kmRestantes} km</>}
               {tripPres.etaPlanNormativoLabel&&<> · {tripPres.etaPlanNormativoLabel}</>}
               {primerCursoEta&&<> · ETA {primerCursoEta}</>}
+              {!primerCursoEtaActiva&&primerCurso&&<> · Pendiente de iniciar ruta</>}
               {tripPres.etaOperacionalLabel&&tripPres.etaOperacionalLabel!=="Sin ETA"&&<> · {tripPres.etaOperacionalLabel}</>}
               {viajeLocal&&<span style={{display:"block",marginTop:4,fontSize:11,color:"#475569"}}>Ruta guardada en este navegador (vista previa)</span>}
             </span>
           )}
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            onTabChange("documentos");
+            showToast?.("Expedientes y correo: pestaña Documentos");
+          }}
+          style={{
+            marginTop: 12,
+            width: "100%",
+            background: "#1e293b",
+            color: "#f8fafc",
+            border: "1px solid #334155",
+            borderRadius: 10,
+            padding: "10px 12px",
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Documentación y envío por correo →
+        </button>
       </div>
       <div style={{fontSize:12,color:su,marginBottom:18}}>
         {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
@@ -13783,13 +15094,17 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
             const refVisible=getServiceNumber(sv);
             const clienteVisible=getServiceClient(sv);
             const planSnapshot=getOperationalPlanSnapshot(sv);
+            const opEtaSnapshot=getOperationalEtaSnapshot(sv);
+            const etaActiva=isEtaActivationReady(sv);
             const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
             const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
-            const planEta=fmtOperationalEtaLabel(planSnapshot?.planned_eta)||(!isRelativeEtaLabel(planSnapshot?.planned_eta_label)?planSnapshot?.planned_eta_label:null);
+            const planEta=etaActiva?(fmtOperationalEtaLabel(opEtaSnapshot?.eta)||(!isRelativeEtaLabel(opEtaSnapshot?.label)?opEtaSnapshot?.label:null)||fmtOperationalEtaLabel(planSnapshot?.planned_eta)||(!isRelativeEtaLabel(planSnapshot?.planned_eta_label)?planSnapshot?.planned_eta_label:null)):null;
             const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
             const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
             const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
             const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
+            const ubic=sv.conductor_id?ubicacionDashByUid[sv.conductor_id]:null;
+            const ubicUpdated=fmtUbicacionActualizada(ubic);
             return(
             <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"11px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`,boxShadow:attention?`inset 3px 0 0 ${EMPRESA_UI.amber}`:"none",paddingLeft:attention?8:0}}>
               <div style={{minWidth:0,flex:1}}>
@@ -13800,11 +15115,22 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                     {planKm!=null&&<span>{planEta?" · ":""}{planKm} km</span>}
                   </div>
                 )}
-                {(planDrive||planBreaks!=null||planRestLabel)&&(
+                {!etaActiva&&(
+                  <div style={{fontSize:11,color:su,marginTop:3}}>
+                    Pendiente de iniciar ruta
+                  </div>
+                )}
+                {etaActiva&&(planDrive||planBreaks!=null||planRestLabel)&&(
                   <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.35}}>
                     Plan · {[planDrive,planBreaks!=null?`${planBreaks} pausa${planBreaks===1?"":"s"}`:null,planRestLabel].filter(Boolean).join(" · ")}
                   </div>
                 )}
+                <div style={{fontSize:10.5,color:su,marginTop:3,lineHeight:1.35}}>
+                  Última ubicación · <span style={{color:EMPRESA_UI.subtle,fontWeight:600}}>{fmtUbicacionConductorEmpresa(ubic)}</span>
+                </div>
+                <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.35,fontWeight:600}}>
+                  {ubicUpdated}
+                </div>
                 {attention&&(
                   <div style={{marginTop:4}}>
                     <span style={{background:EMPRESA_UI.amberSoft,color:EMPRESA_UI.amber,border:"1px solid #fed7aa",borderRadius:999,padding:"2px 7px",fontSize:9,fontWeight:600}}>Atención requerida</span>
@@ -13845,15 +15171,25 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                 </div>
               )}
             </div>
-          ):conductores.filter(c=>c.user_id).map(c=>(
-            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:600,color:tx}}>{c.nombre||"Conductor"}</div>
-                {c.matricula&&<div style={{fontSize:11,color:su,marginTop:1}}>Unidad {c.matricula}</div>}
+          ):conductores.filter(c=>c.user_id).map(c=>{
+            const ubic=ubicacionDashByUid[c.user_id];
+            const ubicUpdated=fmtUbicacionActualizada(ubic);
+            return(
+              <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
+                <div style={{minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:tx}}>{c.nombre||"Conductor"}</div>
+                  {c.matricula&&<div style={{fontSize:11,color:su,marginTop:1}}>Unidad {c.matricula}</div>}
+                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.3}}>
+                    Última ubicación · {fmtUbicacionConductorEmpresa(ubic)}
+                  </div>
+                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.3,fontWeight:600}}>
+                    {ubicUpdated}
+                  </div>
+                </div>
+                <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.green,flexShrink:0}}/>
               </div>
-              <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.green,flexShrink:0}}/>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

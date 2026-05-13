@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { SendDocumentationModal } from "../../mail/SendDocumentationModal";
+import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import {
   countServiceDocuments,
 } from "../../../domain/service/serviceDocuments";
@@ -543,6 +545,7 @@ export function ActiveServicePanel({
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
+  const [sendDocsOpen, setSendDocsOpen] = useState(false);
   const planSnapshot = useMemo(() => getOperationalPlanSnapshot(servicio), [servicio?.referencia]);
   const planConfirmed = !!getOperationalPlanConfirmedAt(servicio);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
@@ -691,6 +694,29 @@ export function ActiveServicePanel({
           <DestinationServiceCta servicio={servicio} onOpenViajeModal={onOpenViajeModal} />
         </CockpitSection>
 
+        <CockpitSection title="Documentación del viaje">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} />
+            <button
+              type="button"
+              onClick={() => setSendDocsOpen(true)}
+              style={{
+                width: "100%",
+                background: DRIVER_UI.soft,
+                color: DRIVER_UI.tx,
+                border: `1px solid ${DRIVER_UI.line}`,
+                borderRadius: 12,
+                padding: "12px 13px",
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Enviar documentación por correo
+            </button>
+          </div>
+        </CockpitSection>
+
         <CockpitSection title="Timeline">
           <SimpleTimeline items={timelineItems} currentStopId={stopMostrar?.id} />
         </CockpitSection>
@@ -718,6 +744,19 @@ export function ActiveServicePanel({
           </details>
         </CockpitSection>
       </CockpitShell>
+      {sendDocsOpen && (
+        <SendDocumentationModal
+          open
+          onClose={() => {
+            setSendDocsOpen(false);
+            recargar?.();
+          }}
+          servicio={servicio}
+          stops={sortedStops}
+          evidenciasByStop={evidenciasByStop}
+          showToast={showToast}
+        />
+      )}
       {confirmMuelleDialog}
     </div>
   );
