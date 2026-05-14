@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react";
-import { SendDocumentationModal } from "../../mail/SendDocumentationModal";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
-import {
-  countServiceDocuments,
-} from "../../../domain/service/serviceDocuments";
+import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
@@ -13,24 +10,28 @@ import {
   getOperationalPlanSnapshot,
 } from "../../../domain/service/serviceOperacionMeta.js";
 import { formatOperationalEtaLabel, isRelativeEtaLabel } from "../../../domain/service/etaFormatter.js";
-import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "../../../domain/service/serviceIdentity.js";
+import {
+  getFixedServiceRoute,
+  getServiceClient,
+  getServiceClientReference,
+  getServiceNumberForDisplay,
+} from "../../../domain/service/serviceIdentity.js";
 import { stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
 
+/** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
-  bg: "#f8fafc",
-  rail: "#e2e8f0",
-  card: "#ffffff",
-  soft: "#f1f5f9",
+  bg: "#eef2f7",
+  shell: "#ffffff",
+  surface: "#f8fafc",
+  surfaceHi: "#f1f5f9",
   tx: "#0f172a",
-  su: "#475569",
-  muted: "#64748b",
+  su: "#64748b",
+  muted: "#94a3b8",
   line: "#e2e8f0",
-  green: "#16a34a",
+  green: "#15803d",
   greenSoft: "#dcfce7",
-  amber: "#d97706",
+  amber: "#b45309",
   amberSoft: "#fffbeb",
-  red: "#dc2626",
-  redSoft: "#fee2e2",
   blue: "#2563eb",
   blueSoft: "#eff6ff",
 };
@@ -94,45 +95,19 @@ export function getCockpitSignals(servicio, stops, evidenciasByStop) {
   };
 }
 
-function CockpitSection({ title, children, first }) {
-  return (
-    <section
-      style={{
-        paddingTop: first ? 0 : 18,
-        marginTop: first ? 0 : 18,
-        borderTop: first ? "none" : `1px solid ${DRIVER_UI.line}`,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          color: DRIVER_UI.muted,
-          fontWeight: 800,
-          letterSpacing: 0.9,
-          marginBottom: 10,
-          textTransform: "uppercase",
-        }}
-      >
-        {title}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-export function CockpitShell({ children, dense = false }) {
+function CockpitShell({ children }) {
   return (
     <div
       style={{
-        background: DRIVER_UI.bg,
-        borderRadius: dense ? 14 : 18,
+        background: DRIVER_UI.shell,
+        borderRadius: 18,
         border: `1px solid ${DRIVER_UI.line}`,
-        boxShadow: "0 10px 30px rgba(15,23,42,.06)",
+        boxShadow: "0 8px 32px rgba(15,23,42,.06)",
         overflow: "hidden",
         position: "relative",
       }}
     >
-      <div style={{ padding: dense ? "10px 12px 12px" : "16px 14px 18px" }}>{children}</div>
+      <div style={{ padding: "18px 16px 20px" }}>{children}</div>
     </div>
   );
 }
@@ -252,6 +227,13 @@ function operationNameForStop(stop) {
   return "Parada";
 }
 
+function stopTimelineIcon(group) {
+  if (group === "carga") return "📦";
+  if (group === "descarga") return "📤";
+  if (group === "carga_descarga") return "📦";
+  return "📍";
+}
+
 function buildTimelineItems(stops) {
   const counters = { carga: 0, descarga: 0, carga_descarga: 0, otra: 0 };
   return sortStops(stops).map((stop) => {
@@ -261,78 +243,203 @@ function buildTimelineItems(stops) {
   });
 }
 
-function SimpleTimeline({ items, currentStopId }) {
-  if (!items.length) {
-    return (
-      <div style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 14, padding: "13px", color: DRIVER_UI.muted, fontSize: 13 }}>
-        Sin paradas definidas para este servicio.
-      </div>
-    );
-  }
+function fmtServiceSchedule(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const t = d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return `Hoy ${t}`;
+  return d.toLocaleString("es-ES", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
+function openOperationalRouteModal(servicio, onOpenViajeModal) {
+  const plan = getOperationalPlanSnapshot(servicio);
+  const planConfirmed = !!getOperationalPlanConfirmedAt(servicio);
+  onOpenViajeModal?.({
+    destino: servicio?.destino || "",
+    origen: servicio?.origen || "",
+    waypoint: planConfirmed ? plan?.input_waypoint || plan?.planned_waypoint || "" : "",
+    velocidad: plan?.velocidad || 80,
+    gpsOrigen:
+      planConfirmed && Number.isFinite(Number(plan?.input_origin_lat)) && Number.isFinite(Number(plan?.input_origin_lon))
+        ? { lat: Number(plan.input_origin_lat), lon: Number(plan.input_origin_lon) }
+        : null,
+    servicioId: servicio?.id,
+    origenActual: servicio?.origen || "",
+    destinoActual: servicio?.destino || "",
+    referenciaActual: servicio?.referencia ?? null,
+  });
+}
+
+function ServiceHero({
+  routeTitle,
+  operationalLabel,
+  scheduleLabel,
+  etaText,
+  serviceNumber,
+  attention,
+  attentionReason,
+  serviceAction,
+}) {
   return (
-    <div style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 14, padding: "12px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
-      {items.map((item) => {
-        const done = isStopCompleted(item.stop);
-        const current = item.stop.id === currentStopId && !done;
-        const symbol = done ? "✓" : current ? "●" : "○";
-        return (
-          <div key={item.stop.id} style={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 8, alignItems: "center" }}>
-            <span style={{ color: done ? DRIVER_UI.green : current ? DRIVER_UI.amber : "#94a3b8", fontSize: 15, lineHeight: 1 }}>{symbol}</span>
-            <span style={{ color: done || current ? DRIVER_UI.tx : DRIVER_UI.su, fontSize: 13, fontWeight: done || current ? 800 : 650, lineHeight: 1.3 }}>
-              {item.label} — {stopPlace(item.stop)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
+    <header style={{ marginBottom: 2 }}>
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 850,
+          letterSpacing: -0.45,
+          lineHeight: 1.22,
+          color: DRIVER_UI.tx,
+        }}
+      >
+        {routeTitle}
+      </div>
+      <div
+        style={{
+          marginTop: 12,
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "6px 10px",
+          fontSize: 13,
+          color: DRIVER_UI.su,
+        }}
+      >
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              background: DRIVER_UI.green,
+              border: "1px solid rgba(21,128,61,.35)",
+            }}
+          />
+          <span style={{ color: DRIVER_UI.tx, fontWeight: 750 }}>{operationalLabel}</span>
+        </span>
+        {scheduleLabel ? <span style={{ opacity: 0.95 }}>· {scheduleLabel}</span> : null}
+        {etaText && etaText !== "—" ? (
+          <span
+            style={{
+              marginLeft: "auto",
+              fontWeight: 800,
+              color: DRIVER_UI.tx,
+              fontVariantNumeric: "tabular-nums",
+              fontSize: 14,
+            }}
+          >
+            ETA {etaText}
+          </span>
+        ) : null}
+      </div>
+      {serviceNumber ? (
+        <div style={{ marginTop: 8, fontSize: 12, color: DRIVER_UI.muted, fontWeight: 600 }}>{serviceNumber}</div>
+      ) : null}
+      {attention ? (
+        <div
+          style={{
+            marginTop: 12,
+            background: DRIVER_UI.amberSoft,
+            border: "1px solid #fcd34d",
+            borderRadius: 12,
+            padding: "10px 11px",
+            color: DRIVER_UI.amber,
+            fontSize: 12,
+            fontWeight: 750,
+            lineHeight: 1.45,
+          }}
+        >
+          Atención{attentionReason ? `: ${attentionReason}` : ""}
+        </div>
+      ) : null}
+      {serviceAction ? (
+        <button type="button" onClick={serviceAction.onClick} style={{ ...actionButtonStyle("green"), marginTop: 14 }}>
+          {serviceAction.label}
+        </button>
+      ) : null}
+    </header>
   );
 }
 
-function DestinationServiceCta({ servicio, onOpenViajeModal }) {
-  const plan = getOperationalPlanSnapshot(servicio);
-  const planConfirmed = !!getOperationalPlanConfirmedAt(servicio);
-  const etaLabel = formatOperationalEtaLabel(plan?.planned_eta) || plan?.planned_eta_label;
-  const openRouteModal = () =>
-    onOpenViajeModal?.({
-      destino: servicio?.destino || "",
-      origen: servicio?.origen || "",
-      waypoint: planConfirmed ? plan?.input_waypoint || plan?.planned_waypoint || "" : "",
-      velocidad: plan?.velocidad || 80,
-      gpsOrigen:
-        planConfirmed && Number.isFinite(Number(plan?.input_origin_lat)) && Number.isFinite(Number(plan?.input_origin_lon))
-          ? { lat: Number(plan.input_origin_lat), lon: Number(plan.input_origin_lon) }
-          : null,
-      servicioId: servicio?.id,
-      origenActual: servicio?.origen || "",
-      destinoActual: servicio?.destino || "",
-      referenciaActual: servicio?.referencia ?? null,
-    });
-
+function ServiceDetailsCollapsible({ cliente, referenciaCliente, conductorNombre, goods, observations }) {
   return (
-    <div style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 16, padding: "13px 14px" }}>
-      <button
-        type="button"
-        onClick={openRouteModal}
-        style={{
-          width: "100%",
-          background: DRIVER_UI.blue,
-          color: "white",
-          border: "none",
-          borderRadius: 12,
-          padding: "12px 13px",
-          fontSize: 14,
-          fontWeight: 850,
-          cursor: "pointer",
-        }}
-      >
-        Añadir destino al servicio
-      </button>
-      <div style={{ fontSize: 11, color: DRIVER_UI.muted, marginTop: 8, lineHeight: 1.4 }}>
-        Recomendado tras la última carga.
-        {planConfirmed && etaLabel ? ` ETA confirmada: ${etaLabel}.` : ""}
+    <details
+      className="svc-details-coll"
+      style={{
+        marginTop: 14,
+        borderRadius: 12,
+        border: `1px solid ${DRIVER_UI.line}`,
+        background: DRIVER_UI.surface,
+        padding: "0 12px 4px",
+      }}
+    >
+      <style>{`
+        .svc-details-coll > summary {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          cursor: pointer;
+          list-style: none;
+          font-size: 13px;
+          font-weight: 650;
+          color: ${DRIVER_UI.tx};
+          padding: 12px 0 11px;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .svc-details-coll > summary::-webkit-details-marker { display: none; }
+        .svc-details-coll > summary::marker { content: ""; }
+        .svc-details-coll .svc-chev {
+          flex-shrink: 0;
+          font-size: 11px;
+          color: ${DRIVER_UI.muted};
+          font-weight: 700;
+          letter-spacing: 0.02em;
+          transition: transform 0.18s ease;
+        }
+        .svc-details-coll[open] .svc-chev { transform: rotate(180deg); }
+      `}</style>
+      <summary>
+        <span>Cliente, referencias y observaciones</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 650, color: DRIVER_UI.muted }}>Ver más</span>
+          <span className="svc-chev" aria-hidden>
+            ▼
+          </span>
+        </span>
+      </summary>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 12, fontSize: 13, color: DRIVER_UI.tx, borderTop: `1px solid ${DRIVER_UI.line}`, paddingTop: 12 }}>
+        <div>
+          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Cliente</div>
+          <div style={{ fontWeight: 650, lineHeight: 1.35 }}>{cliente || "—"}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Ref. cliente</div>
+          <div style={{ fontWeight: 650, lineHeight: 1.35 }}>{referenciaCliente || "—"}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Conductor</div>
+          <div style={{ fontWeight: 650 }}>{conductorNombre}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Mercancía / bultos</div>
+          <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{goods}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Observaciones</div>
+          <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{observations}</div>
+        </div>
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -344,182 +451,197 @@ function OperationalStopCard({
   onConfirmMuelle,
   EvidenciasStopComponent,
   showToast,
+  servicioId,
 }) {
-  const { stop, label } = item;
+  const { stop, label, group } = item;
   const entrada = !!stop.hora_llegada_real;
   const salida = isStopCompleted(stop);
   const docs = stopDocumentSummary(evidencias);
   const operationName = operationNameForStop(stop);
   const inOperation = entrada && !salida;
-  const stateText = salida ? "Completada" : inOperation ? "En operación" : "Pendiente";
+  const stateText = salida ? "Hecho" : inOperation ? "En planta" : "Pendiente";
   const stateTone = salida
     ? { bg: DRIVER_UI.greenSoft, fg: DRIVER_UI.green }
     : inOperation
       ? { bg: DRIVER_UI.amberSoft, fg: DRIVER_UI.amber }
-      : { bg: DRIVER_UI.soft, fg: DRIVER_UI.muted };
+      : { bg: DRIVER_UI.surfaceHi, fg: DRIVER_UI.su };
   const Ev = EvidenciasStopComponent;
+  const icon = stopTimelineIcon(group);
 
   return (
     <article
+      id={`stop-ops-${stop.id}`}
       style={{
-        background: DRIVER_UI.card,
-        border: `1px solid ${isCurrent ? "#fed7aa" : DRIVER_UI.line}`,
+        position: "relative",
+        background: isCurrent ? "#fffbeb" : DRIVER_UI.shell,
+        border: `1px solid ${isCurrent ? "#fcd34d" : DRIVER_UI.line}`,
         borderRadius: 16,
-        padding: "13px 13px 14px",
-        boxShadow: isCurrent ? "0 8px 22px rgba(217,119,6,.08)" : "none",
+        padding: "12px 12px 13px 14px",
+        boxShadow: isCurrent ? "0 4px 18px rgba(180,83,9,.08)" : "0 1px 2px rgba(15,23,42,.04)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 850, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-            {salida ? `✓ ${operationName} completada` : inOperation ? `${label} — En operación` : `${label} — ${stopPlace(stop)}`}
-          </div>
-          {(salida || inOperation) ? <div style={{ fontSize: 12, color: DRIVER_UI.muted, marginTop: 4 }}>{stopPlace(stop)}</div> : null}
-          {stop.direccion ? <div style={{ fontSize: 12, color: DRIVER_UI.muted, marginTop: 4 }}>{stop.direccion}</div> : null}
+      {isCurrent ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 10,
+            bottom: 10,
+            width: 3,
+            borderRadius: "0 4px 4px 0",
+            background: DRIVER_UI.amber,
+          }}
+        />
+      ) : null}
+      <div style={{ display: "flex", gap: 11, alignItems: "flex-start" }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            background: DRIVER_UI.surfaceHi,
+            border: `1px solid ${DRIVER_UI.line}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 20,
+            flexShrink: 0,
+          }}
+        >
+          {icon}
         </div>
-        <span style={{ background: stateTone.bg, color: stateTone.fg, borderRadius: 999, padding: "4px 8px", fontSize: 10, fontWeight: 800, whiteSpace: "nowrap" }}>
-          {stateText}
-        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
+                {salida ? `${operationName} · completada` : inOperation ? `${label}` : `${label}`}
+              </div>
+              <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 3, fontWeight: 650, lineHeight: 1.35 }}>
+                {stopPlace(stop)}
+              </div>
+              {stop.direccion && stop.direccion !== stop.nombre ? (
+                <div style={{ fontSize: 12, color: DRIVER_UI.muted, marginTop: 3 }}>{stop.direccion}</div>
+              ) : null}
+            </div>
+            <span
+              style={{
+                background: stateTone.bg,
+                color: stateTone.fg,
+                borderRadius: 999,
+                padding: "4px 9px",
+                fontSize: 10,
+                fontWeight: 800,
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {stateText}
+            </span>
+          </div>
+
+          {!entrada ? (
+            <div style={{ marginTop: 12 }}>
+              {canOperate ? (
+                <button type="button" onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })} style={actionButtonStyle("green")}>
+                  Entrada en muelle
+                </button>
+              ) : (
+                <div
+                  style={{
+                    background: DRIVER_UI.surfaceHi,
+                    borderRadius: 11,
+                    padding: "10px 11px",
+                    color: DRIVER_UI.su,
+                    fontSize: 12,
+                    fontWeight: 650,
+                    border: `1px solid ${DRIVER_UI.line}`,
+                  }}
+                >
+                  Pendiente de turno operacional
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {inOperation ? (
+            <div style={{ marginTop: 12 }}>
+              {Ev ? <Ev key={stop.id} stopId={stop.id} servicioId={servicioId} showToast={showToast} /> : null}
+              <button
+                type="button"
+                onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
+                disabled={!canOperate}
+                style={{
+                  ...actionButtonStyle("amber"),
+                  marginTop: 12,
+                  opacity: canOperate ? 1 : 0.55,
+                  cursor: canOperate ? "pointer" : "default",
+                }}
+              >
+                {operationName} finalizada
+              </button>
+            </div>
+          ) : null}
+
+          {salida ? (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${DRIVER_UI.line}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
+                <div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Entrada</div>
+                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
+                </div>
+                <div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida</div>
+                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
+                </div>
+              </div>
+              {docs.total > 0 ? (
+                <div style={{ color: docs.incidencias ? DRIVER_UI.amber : DRIVER_UI.su, fontSize: 12, fontWeight: 700, marginTop: 8 }}>{docs.label}</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
-
-      {!entrada ? (
-        <div style={{ marginTop: 13 }}>
-          {canOperate ? (
-            <button type="button" onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })} style={actionButtonStyle("green")}>
-              Entrada en muelle
-            </button>
-          ) : (
-            <div style={{ background: DRIVER_UI.soft, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 12, padding: "10px 11px", color: DRIVER_UI.muted, fontSize: 12, fontWeight: 650 }}>
-              Pendiente de turno operacional
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {inOperation ? (
-        <div style={{ marginTop: 13 }}>
-          <div style={{ fontSize: 11, color: DRIVER_UI.muted, fontWeight: 850, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 }}>
-            Acciones disponibles
-          </div>
-          {Ev ? <Ev key={stop.id} stopId={stop.id} showToast={showToast} /> : null}
-          <button
-            type="button"
-            onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
-            disabled={!canOperate}
-            style={{
-              ...actionButtonStyle("amber"),
-              marginTop: 12,
-              opacity: canOperate ? 1 : 0.6,
-              cursor: canOperate ? "pointer" : "default",
-            }}
-          >
-            {operationName} finalizada
-          </button>
-        </div>
-      ) : null}
-
-      {salida ? (
-        <div style={{ marginTop: 13, background: DRIVER_UI.greenSoft, border: "1px solid #bbf7d0", borderRadius: 12, padding: "10px 11px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
-            <div>
-              <div style={{ color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Entrada</div>
-              <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontFamily: "monospace" }}>{stopTime(stop.hora_llegada_real)}</div>
-            </div>
-            <div>
-              <div style={{ color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Salida</div>
-              <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontFamily: "monospace" }}>{stopTime(stop.hora_salida_real)}</div>
-            </div>
-          </div>
-          <div style={{ color: docs.incidencias ? DRIVER_UI.amber : DRIVER_UI.su, fontSize: 12, fontWeight: 700, marginTop: 8 }}>
-            {docs.label}
-          </div>
-        </div>
-      ) : null}
     </article>
   );
 }
 
-function ServiceSummary({
-  serviceNumber,
-  conductorNombre,
-  etaHeader,
-  routeTitle,
-  cliente,
-  referenciaCliente,
-  goods,
-  observations,
-  attention,
-  attentionReason,
-  serviceAction,
-}) {
-  const row = (label, value) => (
-    <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, letterSpacing: 0.5, marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 14, color: DRIVER_UI.tx, fontWeight: 700, lineHeight: 1.3 }}>{value || "—"}</div>
-    </div>
-  );
-
-  return (
-    <div style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 16, padding: "15px 14px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: etaHeader ? "1fr auto" : "1fr", gap: 12, alignItems: "start" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 850, color: DRIVER_UI.tx, lineHeight: 1.3 }}>{routeTitle}</div>
-          <div style={{ fontSize: 12, color: DRIVER_UI.muted, marginTop: 4 }}>Origen → destino</div>
-        </div>
-        {etaHeader ? (
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 17, fontWeight: 900, color: DRIVER_UI.tx, lineHeight: 1.15, fontVariantNumeric: "tabular-nums" }}>{etaHeader}</div>
-            <div style={{ fontSize: 11, color: DRIVER_UI.muted, marginTop: 4 }}>ETA confirmada</div>
-          </div>
-        ) : null}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 13, marginTop: 16 }}>
-        {row("Servicio", serviceNumber)}
-        {row("Cliente", cliente)}
-        {row("Ref cliente", referenciaCliente)}
-        {row("Conductor", conductorNombre)}
-        {row("Palets / mercancía", goods)}
-        {row("Observaciones", observations)}
-      </div>
-
-      {attention ? (
-        <div style={{ marginTop: 14, background: DRIVER_UI.amberSoft, border: "1px solid #fed7aa", borderRadius: 12, padding: "10px 11px", color: DRIVER_UI.amber, fontSize: 12, fontWeight: 750, lineHeight: 1.4 }}>
-          Atención requerida{attentionReason ? `: ${attentionReason}` : ""}
-        </div>
-      ) : null}
-
-      {serviceAction ? (
-        <button type="button" onClick={serviceAction.onClick} style={{ ...actionButtonStyle("green"), marginTop: 14 }}>
-          {serviceAction.label}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function OperationalStops({ items, currentStopId, evidenciasByStop, canOperate, onConfirmMuelle, EvidenciasStopComponent, showToast }) {
+function OperationalStops({ items, currentStopId, evidenciasByStop, canOperate, onConfirmMuelle, EvidenciasStopComponent, showToast, servicioId }) {
   if (!items.length) {
     return (
-      <div style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 14, padding: "13px", color: DRIVER_UI.muted, fontSize: 13 }}>
+      <div style={{ borderRadius: 14, padding: "14px", color: DRIVER_UI.su, fontSize: 13, border: `1px dashed ${DRIVER_UI.line}` }}>
         Sin paradas definidas para este servicio.
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {items.map((item) => (
-        <OperationalStopCard
-          key={item.stop.id}
-          item={item}
-          isCurrent={item.stop.id === currentStopId}
-          evidencias={evidenciasByStop?.[item.stop.id]}
-          canOperate={canOperate && item.stop.id === currentStopId}
-          onConfirmMuelle={onConfirmMuelle}
-          EvidenciasStopComponent={EvidenciasStopComponent}
-          showToast={showToast}
-        />
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {items.map((item, idx) => (
+        <div key={item.stop.id} style={{ position: "relative" }}>
+          {idx > 0 ? (
+            <div
+              style={{
+                position: "absolute",
+                left: 19,
+                top: -10,
+                width: 2,
+                height: 10,
+                background: "linear-gradient(180deg, rgba(148,163,184,.35), rgba(148,163,184,.12))",
+                borderRadius: 1,
+              }}
+            />
+          ) : null}
+          <OperationalStopCard
+            item={item}
+            isCurrent={item.stop.id === currentStopId}
+            evidencias={evidenciasByStop?.[item.stop.id]}
+            canOperate={canOperate && item.stop.id === currentStopId}
+            onConfirmMuelle={onConfirmMuelle}
+            EvidenciasStopComponent={EvidenciasStopComponent}
+            showToast={showToast}
+            servicioId={servicioId}
+          />
+        </div>
       ))}
     </div>
   );
@@ -545,20 +667,21 @@ export function ActiveServicePanel({
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
-  const [sendDocsOpen, setSendDocsOpen] = useState(false);
   const planSnapshot = useMemo(() => getOperationalPlanSnapshot(servicio), [servicio?.referencia]);
   const planConfirmed = !!getOperationalPlanConfirmedAt(servicio);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
   const routeTitle = getFixedServiceRoute(servicio);
-  const serviceNumber = getServiceNumber(servicio);
+  const serviceNumber = getServiceNumberForDisplay(servicio);
   const cliente = getServiceClient(servicio) || "—";
   const referenciaCliente = getServiceClientReference(servicio) || "—";
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
   const etaHeader = planConfirmed ? primaryEtaText(formatOperationalEtaLabel(planSnapshot?.planned_eta) || planSnapshot?.planned_eta_label) : null;
   const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso";
+  const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
+  const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
 
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
@@ -599,7 +722,7 @@ export function ActiveServicePanel({
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(15,23,42,.35)",
+        background: "rgba(15,23,42,.4)",
         zIndex: 400,
         display: "flex",
         alignItems: "center",
@@ -611,13 +734,13 @@ export function ActiveServicePanel({
       <div
         role="dialog"
         style={{
-          background: DRIVER_UI.card,
-          borderRadius: 16,
+          background: "#ffffff",
+          borderRadius: 18,
           padding: "20px 18px",
           maxWidth: 400,
           width: "100%",
           border: `1px solid ${DRIVER_UI.line}`,
-          boxShadow: "0 20px 50px rgba(15,23,42,.22)",
+          boxShadow: "0 20px 50px rgba(15,23,42,.12)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -636,7 +759,7 @@ export function ActiveServicePanel({
             onClick={() => setConfirmMuelle(null)}
             style={{
               flex: 1,
-              background: DRIVER_UI.soft,
+              background: DRIVER_UI.surfaceHi,
               color: DRIVER_UI.su,
               border: `1px solid ${DRIVER_UI.line}`,
               borderRadius: 12,
@@ -672,56 +795,36 @@ export function ActiveServicePanel({
   ) : null;
 
   return (
-    <div style={{ padding: "12px 10px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg }}>
+    <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
       <CockpitShell>
-        <CockpitSection title="Resumen del servicio" first>
-          <ServiceSummary
-            conductorNombre={conductorNombre}
-            serviceNumber={serviceNumber}
-            etaHeader={etaHeader}
-            routeTitle={routeTitle}
-            cliente={cliente}
-            referenciaCliente={referenciaCliente}
-            goods={goods}
-            observations={observations}
-            attention={sig.attention}
-            attentionReason={sig.attentionReason}
-            serviceAction={serviceAction}
-          />
-        </CockpitSection>
+        <ServiceHero
+          routeTitle={routeTitle}
+          operationalLabel={sig.operationalMeta.label}
+          scheduleLabel={scheduleLabel}
+          etaText={etaHeader}
+          serviceNumber={serviceNumber}
+          attention={sig.attention}
+          attentionReason={sig.attentionReason}
+          serviceAction={serviceAction}
+        />
 
-        <CockpitSection title="Destino del servicio">
-          <DestinationServiceCta servicio={servicio} onOpenViajeModal={onOpenViajeModal} />
-        </CockpitSection>
+        <ServiceDetailsCollapsible
+          cliente={cliente}
+          referenciaCliente={referenciaCliente}
+          conductorNombre={conductorNombre}
+          goods={goods}
+          observations={observations}
+        />
 
-        <CockpitSection title="Documentación del viaje">
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} />
-            <button
-              type="button"
-              onClick={() => setSendDocsOpen(true)}
-              style={{
-                width: "100%",
-                background: DRIVER_UI.soft,
-                color: DRIVER_UI.tx,
-                border: `1px solid ${DRIVER_UI.line}`,
-                borderRadius: 12,
-                padding: "12px 13px",
-                fontSize: 14,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              Enviar documentación por correo
-            </button>
+        <div style={{ marginTop: 22 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 850, color: DRIVER_UI.tx, letterSpacing: -0.2 }}>Recorrido</div>
+            {activeTimelineItem ? (
+              <div style={{ fontSize: 11, color: DRIVER_UI.su, fontWeight: 700, textAlign: "right" }}>
+                Parada activa · {activeTimelineItem.label}
+              </div>
+            ) : null}
           </div>
-        </CockpitSection>
-
-        <CockpitSection title="Timeline">
-          <SimpleTimeline items={timelineItems} currentStopId={stopMostrar?.id} />
-        </CockpitSection>
-
-        <CockpitSection title="Acciones operacionales">
           <OperationalStops
             items={timelineItems}
             currentStopId={stopMostrar?.id}
@@ -730,33 +833,37 @@ export function ActiveServicePanel({
             onConfirmMuelle={setConfirmMuelle}
             EvidenciasStopComponent={EvidenciasStopComponent}
             showToast={showToast}
+            servicioId={servicio?.id}
           />
-        </CockpitSection>
+        </div>
 
-        <CockpitSection title="Tacógrafo">
-          <details style={{ background: DRIVER_UI.card, border: `1px solid ${DRIVER_UI.line}`, borderRadius: 14, padding: "10px 12px" }}>
-            <summary style={{ cursor: "pointer", color: DRIVER_UI.su, fontSize: 12, fontWeight: 800 }}>
-              Normativa y tiempos, secundario
-            </summary>
-            <div style={{ marginTop: 8, fontSize: 12, color: DRIVER_UI.muted, lineHeight: 1.45 }}>
-              El tacógrafo queda fuera del flujo de destino. La operación se gestiona desde cada parada.
-            </div>
-          </details>
-        </CockpitSection>
+        <div style={{ marginTop: 20 }}>
+          <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
+        </div>
+        {servicio && typeof onOpenViajeModal === "function" ? (
+          <button
+            type="button"
+            title="Ruta, destino y ETA"
+            aria-label="Ajustar ruta o destino"
+            onClick={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              minHeight: 46,
+              padding: "11px 14px",
+              borderRadius: 12,
+              border: `1px dashed ${DRIVER_UI.line}`,
+              background: DRIVER_UI.surfaceHi,
+              color: DRIVER_UI.su,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            🗺 Ajustar ruta o destino
+          </button>
+        ) : null}
       </CockpitShell>
-      {sendDocsOpen && (
-        <SendDocumentationModal
-          open
-          onClose={() => {
-            setSendDocsOpen(false);
-            recargar?.();
-          }}
-          servicio={servicio}
-          stops={sortedStops}
-          evidenciasByStop={evidenciasByStop}
-          showToast={showToast}
-        />
-      )}
       {confirmMuelleDialog}
     </div>
   );

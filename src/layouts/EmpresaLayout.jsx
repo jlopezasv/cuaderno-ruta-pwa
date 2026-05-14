@@ -39,6 +39,12 @@ export default function EmpresaLayout({
       .then(async (rows) => {
         if (rows.length) {
           const p = rows[0];
+          if (p.is_archived) {
+            showToast("Esta cuenta está archivada. Contacta con administración.");
+            await sbSignOut();
+            window.location.reload();
+            return;
+          }
           setProf((prev) => ({
             ...prev,
             nombre: p.nombre || "",

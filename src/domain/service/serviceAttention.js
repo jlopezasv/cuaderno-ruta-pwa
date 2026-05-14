@@ -22,17 +22,6 @@ function hasIncidencia(evidencias, stops) {
   return false;
 }
 
-function countAllEvidencias(evidencias) {
-  if (Array.isArray(evidencias)) return evidencias.length;
-  let n = 0;
-  if (evidencias && typeof evidencias === "object") {
-    for (const arr of Object.values(evidencias)) {
-      if (Array.isArray(arr)) n += arr.length;
-    }
-  }
-  return n;
-}
-
 function isStale(service, lastActivity) {
   const ts = lastActivity?.ts;
   if (ts == null || !Number.isFinite(ts)) return false;
@@ -46,10 +35,6 @@ export function needsAttention({ service, stops, evidencias, lastActivity }) {
   if (hasIncidencia(evidencias, st)) return true;
   if (service?.estado === "asignado") return true;
 
-  const pendientes = st.some((s) => s.estado === "pendiente");
-  const totalEv = countAllEvidencias(evidencias);
-  if (pendientes && totalEv === 0) return true;
-
   if (isStale(service, lastActivity)) return true;
 
   return false;
@@ -60,10 +45,6 @@ export function getAttentionReason({ service, stops, evidencias, lastActivity })
 
   if (hasIncidencia(evidencias, st)) return "Incidencia registrada";
   if (service?.estado === "asignado") return "Servicio sin iniciar";
-
-  const pendientes = st.some((s) => s.estado === "pendiente");
-  const totalEv = countAllEvidencias(evidencias);
-  if (pendientes && totalEv === 0) return "Sin evidencias registradas";
 
   if (isStale(service, lastActivity)) return "Sin actividad reciente";
 

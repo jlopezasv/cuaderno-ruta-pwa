@@ -1,7 +1,287 @@
 // api/admin.js — Vercel Serverless Function
-// Gestiona emails transaccionales (Brevo)
+// Gestiona emails transaccionales (Brevo) y archivado lógico de perfiles (service_role).
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
+const SUPABASE_URL =
+  process.env.SUPABASE_URL || "https://glyexutcypmhkndvmcxd.supabase.co";
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdseWV4dXRjeXBtaGtuZHZtY3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5OTg1MzQsImV4cCI6MjA5MTU3NDUzNH0.hYcNca-LxPz9KrTP65OFDp0WUiWx7fqR8uxYdl2ByLA";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+const DEFAULT_ADMIN_UIDS = "ca5dd314-2e37-4f08-86d7-09103cb8e510";
+const ADMIN_PANEL_USER_IDS = (process.env.ADMIN_PANEL_USER_IDS || DEFAULT_ADMIN_UIDS)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function supabaseAuthUserId(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || !d?.id) return null;
+  return d.id;
+}
+
+async function archiveProfileById(userId) {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ is_archived: true }),
+    },
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    return { ok: false, status: res.status, detail: t };
+  }
+  return { ok: true };
+}
+
+const PURGE_TEST_COMPANY_CONFIRM =
+  process.env.PURGE_TEST_COMPANY_CONFIRM || "PURGO_EMPRESA_PRUEBA";
+
+const PRIMARY_PURGE_ADMIN_UID = (
+  process.env.PRIMARY_PURGE_ADMIN_UID ||
+  ADMIN_PANEL_USER_IDS[0] ||
+  ""
+).trim();
+
+function isPurgeTestCompanyServerAllowed() {
+  if (process.env.VERCEL_ENV === "production") return false;
+  const v = String(process.env.ALLOW_PURGE_TEST_COMPANY || "").toLowerCase();
+  return v === "1" || v === "true";
+}
+
+function srRestHeaders(json = true) {
+  const h = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  };
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+
+async function restSelect(pathWithQuery) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${pathWithQuery}`, {
+    headers: {
+      ...srRestHeaders(false),
+      Accept: "application/json",
+    },
+  });
+  if (!r.ok) return [];
+  return r.json().catch(() => []);
+}
+
+async function restDelete(pathWithQuery) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${pathWithQuery}`, {
+    method: "DELETE",
+    headers: { ...srRestHeaders(true), Prefer: "return=minimal" },
+  });
+  return r.ok || r.status === 404;
+}
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/** Lista objetos recursivamente bajo el prefijo de un usuario (uid/…). */
+async function storageListAll(bucket, userId) {
+  const root = String(userId || "").replace(/\/$/, "");
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const prefix = stack.pop();
+    const prefixSlash = prefix ? `${prefix}/` : "";
+    const r = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/list/${encodeURIComponent(bucket)}`,
+      {
+        method: "POST",
+        headers: srRestHeaders(true),
+        body: JSON.stringify({
+          prefix: prefixSlash,
+          limit: 1000,
+          offset: 0,
+        }),
+      },
+    );
+    if (!r.ok) break;
+    const rows = await r.json().catch(() => []);
+    if (!Array.isArray(rows)) break;
+    for (const row of rows) {
+      const name = row?.name;
+      if (!name) continue;
+      const full = prefix ? `${prefix}/${name}` : name;
+      const size = row?.metadata?.size;
+      if (row.id || (size != null && Number(size) >= 0)) {
+        out.push({ bucket, path: full });
+      } else {
+        stack.push(full);
+      }
+    }
+  }
+  return out;
+}
+
+async function storageRemoveObjects(items) {
+  for (const { bucket, path } of items) {
+    const enc = path
+      .split("/")
+      .map((s) => encodeURIComponent(s))
+      .join("/");
+    await fetch(
+      `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(bucket)}/${enc}`,
+      { method: "DELETE", headers: srRestHeaders(false) },
+    ).catch(() => {});
+  }
+}
+
+async function purgeStorageForUserIds(userIds) {
+  const buckets = ["user-photos", "cmr"];
+  for (const uid of userIds) {
+    for (const bucket of buckets) {
+      const listed = await storageListAll(bucket, uid);
+      await storageRemoveObjects(
+        listed.map((x) => ({ bucket: x.bucket, path: x.path })),
+      );
+    }
+  }
+}
+
+async function authAdminDeleteUser(userId) {
+  const r = await fetch(
+    `${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    {
+      method: "DELETE",
+      headers: srRestHeaders(false),
+    },
+  );
+  return r.ok || r.status === 404;
+}
+
+/**
+ * Purga total datos ligados a una empresa (solo dev/staging + flags).
+ * Orden pensado para FKs habituales en el proyecto.
+ */
+async function purgeTestCompanyData(empresaId, { killAuth = true } = {}) {
+  const empRows = await restSelect(
+    `empresas?id=eq.${encodeURIComponent(empresaId)}&select=id,owner_id,nombre`,
+  );
+  if (!empRows.length) return { ok: false, error: "Empresa no encontrada" };
+
+  const ownerId = empRows[0].owner_id;
+  const ceRows = await restSelect(
+    `conductor_empresa?empresa_id=eq.${encodeURIComponent(empresaId)}&select=user_id,activo`,
+  );
+  const driverUids = [
+    ...new Set(
+      (ceRows || [])
+        .map((r) => r.user_id)
+        .filter((id) => id && id !== ownerId),
+    ),
+  ];
+
+  let servicioIds = [];
+  const byEmpresa = await restSelect(
+    `servicios?empresa_id=eq.${encodeURIComponent(empresaId)}&select=id`,
+  );
+  servicioIds.push(...(byEmpresa || []).map((s) => s.id).filter(Boolean));
+  if (driverUids.length) {
+    for (const part of chunk(driverUids, 40)) {
+      const inList = part.join(",");
+      const byCond = await restSelect(
+        `servicios?conductor_id=in.(${inList})&select=id`,
+      );
+      servicioIds.push(...(byCond || []).map((s) => s.id).filter(Boolean));
+    }
+  }
+  servicioIds = [...new Set(servicioIds)];
+
+  let stopIds = [];
+  if (servicioIds.length) {
+    for (const part of chunk(servicioIds, 40)) {
+      const inList = part.join(",");
+      const stops = await restSelect(
+        `stops?servicio_id=in.(${inList})&select=id`,
+      );
+      stopIds.push(...(stops || []).map((s) => s.id).filter(Boolean));
+    }
+  }
+  stopIds = [...new Set(stopIds)];
+
+  if (stopIds.length) {
+    for (const part of chunk(stopIds, 80)) {
+      await restDelete(`evidencias?stop_id=in.(${part.join(",")})`);
+    }
+  }
+
+  if (servicioIds.length) {
+    for (const part of chunk(servicioIds, 40)) {
+      const inList = part.join(",");
+      await restDelete(`asignaciones?servicio_id=in.(${inList})`);
+      await restDelete(`servicio_documentos_extra?servicio_id=in.(${inList})`);
+      await restDelete(`documentacion_envios?servicio_id=in.(${inList})`);
+      await restDelete(`stops?servicio_id=in.(${inList})`);
+      await restDelete(`servicios?id=in.(${inList})`);
+    }
+  }
+
+  const trackingUids = [...new Set([...driverUids, ownerId].filter(Boolean))];
+  if (trackingUids.length) {
+    for (const part of chunk(trackingUids, 40)) {
+      await restDelete(`ubicaciones?user_id=in.(${part.join(",")})`);
+    }
+  }
+
+  await restDelete(
+    `conductor_empresa?empresa_id=eq.${encodeURIComponent(empresaId)}`,
+  );
+
+  if (driverUids.length) {
+    await purgeStorageForUserIds(driverUids);
+    for (const part of chunk(driverUids, 40)) {
+      const inList = part.join(",");
+      await restDelete(`push_tokens?user_id=in.(${inList})`);
+      await restDelete(`subscriptions?user_id=in.(${inList})`);
+      await restDelete(`entries?user_id=in.(${inList})`);
+      await restDelete(`documentos?user_id=in.(${inList})`);
+    }
+    if (killAuth) {
+      for (const uid of driverUids) {
+        await authAdminDeleteUser(uid);
+      }
+    }
+  }
+
+  await restDelete(`empresas?id=eq.${encodeURIComponent(empresaId)}`);
+
+  return {
+    ok: true,
+    deleted: {
+      servicios: servicioIds.length,
+      stops: stopIds.length,
+      conductor_links: ceRows.length,
+      driver_accounts: driverUids.length,
+    },
+  };
+}
+
 const ADMIN_EMAIL = "axiskeelb2b@gmail.com";
 const APP_NAME = "Cuaderno de Ruta";
 const APP_URL = "https://tacografo-pro.vercel.app";
@@ -27,7 +307,10 @@ async function sendEmail(to, subject, html) {
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization",
+  );
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") {
     return res.status(405).json({
@@ -146,8 +429,164 @@ export default async function handler(req, res) {
     return res.json({ ok: true });
   }
 
+  // ── Archivar usuario/conductor (UPDATE is_archived, sin DELETE) ──
+  if (action === "archive_user" || action === "delete_user") {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+    const { admin_uid, user_id } = req.body || {};
+    if (!token) {
+      return res.status(401).json({
+        ok: false,
+        error: "Falta Authorization: Bearer (sesión del administrador)",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "Servidor sin SUPABASE_SERVICE_ROLE_KEY: no se puede archivar desde API",
+        code: "ADMIN_MISCONFIGURED",
+      });
+    }
+    if (!admin_uid || !user_id || !UUID_RE.test(user_id) || !UUID_RE.test(admin_uid)) {
+      return res.status(400).json({
+        ok: false,
+        error: "admin_uid y user_id UUID obligatorios",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    const jwtUid = await supabaseAuthUserId(token);
+    if (!jwtUid || jwtUid !== admin_uid) {
+      return res.status(403).json({
+        ok: false,
+        error: "Token no coincide con admin_uid",
+        code: "ADMIN_FORBIDDEN",
+      });
+    }
+    if (!ADMIN_PANEL_USER_IDS.includes(admin_uid)) {
+      return res.status(403).json({
+        ok: false,
+        error: "Esta cuenta no puede archivar usuarios",
+        code: "ADMIN_FORBIDDEN",
+      });
+    }
+    if (user_id === admin_uid) {
+      return res.status(400).json({
+        ok: false,
+        error: "No puedes archivar tu propia cuenta",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    const ar = await archiveProfileById(user_id);
+    if (!ar.ok) {
+      return res.status(502).json({
+        ok: false,
+        error: "No se pudo archivar el perfil en Supabase",
+        code: "ADMIN_SUPABASE_ERROR",
+        detail: ar.detail,
+      });
+    }
+    return res.json({ ok: true, archived: true });
+  }
+
+  // ── Purga total empresa de PRUEBA (solo dev/staging; no sustituye archivado) ──
+  if (action === "purge_test_company") {
+    if (!isPurgeTestCompanyServerAllowed()) {
+      return res.status(403).json({
+        ok: false,
+        error:
+          "Purga desactivada: en producción Vercel no está permitida, o falta ALLOW_PURGE_TEST_COMPANY=1",
+        code: "PURGE_ENV_FORBIDDEN",
+      });
+    }
+    if (!PRIMARY_PURGE_ADMIN_UID) {
+      return res.status(503).json({
+        ok: false,
+        error: "Falta PRIMARY_PURGE_ADMIN_UID o ADMIN_PANEL_USER_IDS",
+        code: "ADMIN_MISCONFIGURED",
+      });
+    }
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+    const {
+      admin_uid,
+      empresa_id,
+      confirm_text,
+      purge_conductor_accounts,
+    } = req.body || {};
+    if (!token) {
+      return res.status(401).json({
+        ok: false,
+        error: "Falta Authorization: Bearer",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(503).json({
+        ok: false,
+        error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY",
+        code: "ADMIN_MISCONFIGURED",
+      });
+    }
+    if (
+      !admin_uid ||
+      !empresa_id ||
+      !UUID_RE.test(empresa_id) ||
+      !UUID_RE.test(admin_uid)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "admin_uid y empresa_id UUID obligatorios",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    const jwtUid = await supabaseAuthUserId(token);
+    if (!jwtUid || jwtUid !== admin_uid) {
+      return res.status(403).json({
+        ok: false,
+        error: "Token no coincide con admin_uid",
+        code: "ADMIN_FORBIDDEN",
+      });
+    }
+    if (!ADMIN_PANEL_USER_IDS.includes(admin_uid)) {
+      return res.status(403).json({
+        ok: false,
+        error: "Cuenta no autorizada para el panel",
+        code: "ADMIN_FORBIDDEN",
+      });
+    }
+    if (admin_uid !== PRIMARY_PURGE_ADMIN_UID) {
+      return res.status(403).json({
+        ok: false,
+        error: "Solo el admin principal puede ejecutar purge_test_company",
+        code: "PURGE_PRIMARY_ADMIN_ONLY",
+      });
+    }
+    if (String(confirm_text || "").trim() !== PURGE_TEST_COMPANY_CONFIRM) {
+      return res.status(400).json({
+        ok: false,
+        error: `Confirmación incorrecta. Escribe exactamente: ${PURGE_TEST_COMPANY_CONFIRM}`,
+        code: "PURGE_CONFIRM_BAD",
+      });
+    }
+    const killAuth = purge_conductor_accounts !== false;
+    const pr = await purgeTestCompanyData(empresa_id, { killAuth });
+    if (!pr.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: pr.error || "Purga fallida",
+        code: "PURGE_FAILED",
+      });
+    }
+    return res.json({ ok: true, ...pr });
+  }
+
   if (
-    action === "delete_user" ||
     action === "delete_empresa" ||
     action === "create_user" ||
     action === "reset_password" ||

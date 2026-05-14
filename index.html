@@ -12,6 +12,12 @@
   <meta name="apple-mobile-web-app-title" content="Cuaderno Ruta" />
   <meta name="format-detection" content="telephone=no" />
 
+  <!--
+    Cámara (QR muelle): la app es PWA web; el permiso lo pide el navegador con getUserMedia.
+    Si en el futuro envuelves la web en un WKWebView / app nativa Expo, añade en Info.plist:
+    NSCameraUsageDescription = texto claro para el usuario (obligatorio en iOS).
+  -->
+
   <!-- iOS icons — PNG obligatorio -->
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png" />

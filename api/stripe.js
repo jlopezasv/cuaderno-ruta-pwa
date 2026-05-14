@@ -1,14 +1,41 @@
 import Stripe from 'stripe';
+import { createClient } from '@supabase/supabase-js';
 
 const PRICE_MONTHLY = 'price_1TNpMxC03Kg4wBdS3eqhhVsg';
 const PRICE_ANNUAL  = 'price_1TNpNyC03Kg4wBdSHfAUkSeB';
-const SB_URL        = 'https://glyexutcypmhkndvmcxd.supabase.co';
+const SB_URL        = process.env.SUPABASE_URL || 'https://glyexutcypmhkndvmcxd.supabase.co';
 const APP_URL       = 'https://tacografo-pro.vercel.app';
+
+/** Anon key: validar JWT de usuario (getUser). No usar service_role para eso. */
+function resolveAnonKey() {
+  return process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+}
+
+function resolveServiceKey() {
+  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '';
+}
+
+/**
+ * service_role bypassa RLS: cualquier acción REST con service key debe ir precedida
+ * de comprobar que el Bearer es del mismo usuario que se va a leer/escribir.
+ */
+async function getUserIdFromAuthorizationHeader(req) {
+  const raw = req.headers?.authorization || req.headers?.Authorization || '';
+  const m = String(raw).match(/^Bearer\s+(.+)$/i);
+  if (!m) return { userId: null, error: 'missing_authorization_bearer' };
+  const jwt = m[1].trim();
+  const anon = resolveAnonKey();
+  if (!anon) return { userId: null, error: 'supabase_anon_not_configured' };
+  const sb = createClient(SB_URL, anon);
+  const { data, error } = await sb.auth.getUser(jwt);
+  if (error || !data?.user?.id) return { userId: null, error: error?.message || 'invalid_bearer' };
+  return { userId: data.user.id, error: null };
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
     return res.status(405).json({
@@ -19,7 +46,7 @@ export default async function handler(req, res) {
   }
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-  const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+  const SERVICE_KEY = resolveServiceKey();
 
   let body = req.body;
   if (typeof body === 'string') {
@@ -38,13 +65,29 @@ export default async function handler(req, res) {
 
   // ── CREAR SESIÓN DE PAGO ──
   if (action === 'create_checkout') {
-    if (!user_id || !email || !plan) {
+    const auth = await getUserIdFromAuthorizationHeader(req);
+    if (!auth.userId) {
+      return res.status(401).json({
+        ok: false,
+        error: auth.error || 'No autorizado',
+        code: 'STRIPE_UNAUTHORIZED',
+      });
+    }
+    if (!email || !plan) {
       return res.status(400).json({
         ok: false,
         error: 'Faltan datos',
         code: 'STRIPE_BAD_REQUEST',
       });
     }
+    if (user_id && user_id !== auth.userId) {
+      return res.status(403).json({
+        ok: false,
+        error: 'user_id no coincide con la sesión',
+        code: 'STRIPE_FORBIDDEN',
+      });
+    }
+    const uid = auth.userId;
     const priceId = plan === 'annual' ? PRICE_ANNUAL : PRICE_MONTHLY;
     try {
       const session = await stripe.checkout.sessions.create({
@@ -54,7 +97,7 @@ export default async function handler(req, res) {
         line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${APP_URL}?pago=ok&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url:  `${APP_URL}?pago=cancelado`,
-        metadata: { user_id, plan },
+        metadata: { user_id: uid, plan },
         locale: 'es',
       });
       return res.status(200).json({ ok: true, url: session.url });
@@ -69,15 +112,31 @@ export default async function handler(req, res) {
 
   // ── VERIFICAR SUSCRIPCIÓN ──
   if (action === 'check_subscription') {
-    if (!user_id) {
-      return res.status(400).json({
+    const auth = await getUserIdFromAuthorizationHeader(req);
+    if (!auth.userId) {
+      return res.status(401).json({
         ok: false,
-        error: 'Falta user_id',
-        code: 'STRIPE_BAD_REQUEST',
+        error: auth.error || 'No autorizado',
+        code: 'STRIPE_UNAUTHORIZED',
+      });
+    }
+    if (user_id && user_id !== auth.userId) {
+      return res.status(403).json({
+        ok: false,
+        error: 'user_id no coincide con la sesión',
+        code: 'STRIPE_FORBIDDEN',
+      });
+    }
+    const uid = auth.userId;
+    if (!SERVICE_KEY) {
+      return res.status(503).json({
+        ok: false,
+        error: 'SUPABASE_SERVICE_ROLE_KEY no configurada',
+        code: 'STRIPE_NOT_CONFIGURED',
       });
     }
     try {
-      const r = await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${user_id}`, {
+      const r = await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${uid}`, {
         headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }
       });
       const rows = await r.json();
@@ -87,7 +146,7 @@ export default async function handler(req, res) {
         await fetch(`${SB_URL}/rest/v1/subscriptions`, {
           method: 'POST',
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
-          body: JSON.stringify({ user_id, plan: 'trial', status: 'trial', trial_ends_at: trialEnd })
+          body: JSON.stringify({ user_id: uid, plan: 'trial', status: 'trial', trial_ends_at: trialEnd })
         });
         return res.status(200).json({ ok: true, status: 'trial', trial_ends_at: trialEnd, days_left: 14 });
       }
@@ -114,6 +173,13 @@ export default async function handler(req, res) {
 
   // ── WEBHOOK DE STRIPE ──
   if (action === 'webhook') {
+    if (!SERVICE_KEY) {
+      return res.status(503).json({
+        ok: false,
+        error: 'SUPABASE_SERVICE_ROLE_KEY no configurada',
+        code: 'STRIPE_NOT_CONFIGURED',
+      });
+    }
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     let event;

@@ -220,6 +220,59 @@ function getServiceSupabase(sbUrl, sbServiceKey) {
   });
 }
 
+function bearerToken(req) {
+  const h = req.headers.authorization || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : null;
+}
+
+async function authUserIdFromBearer(supabase, accessToken) {
+  if (!accessToken) return { userId: null, error: "missing_authorization_bearer" };
+  const { data, error } = await supabase.auth.getUser(accessToken);
+  if (error || !data?.user?.id) return { userId: null, error: error?.message || "invalid_bearer" };
+  return { userId: data.user.id, error: null };
+}
+
+/**
+ * Solo el jefe de flota (owner del servicio vía empresa_id o flota conductor_empresa)
+ * puede disparar push de asignación hacia el conductor del servicio.
+ * service_role bypassa RLS: obligatorio validar aquí.
+ */
+async function assertCallerMayNotifyAssignment(supabase, callerUserId, servicioId, conductorId) {
+  if (!servicioId || !callerUserId || !conductorId) return false;
+  const { data: s, error } = await supabase
+    .from("servicios")
+    .select("id, conductor_id, empresa_id")
+    .eq("id", servicioId)
+    .maybeSingle();
+  if (error || !s || s.conductor_id !== conductorId) return false;
+  if (s.empresa_id) {
+    const { data: emp } = await supabase
+      .from("empresas")
+      .select("id")
+      .eq("id", s.empresa_id)
+      .eq("owner_id", callerUserId)
+      .maybeSingle();
+    if (emp) return true;
+  }
+  const { data: memberships, error: ceErr } = await supabase
+    .from("conductor_empresa")
+    .select("empresa_id")
+    .eq("user_id", s.conductor_id)
+    .or("activo.eq.true,activo.is.null");
+  if (ceErr || !memberships?.length) return false;
+  for (const row of memberships) {
+    const { data: own } = await supabase
+      .from("empresas")
+      .select("id")
+      .eq("id", row.empresa_id)
+      .eq("owner_id", callerUserId)
+      .maybeSingle();
+    if (own) return true;
+  }
+  return false;
+}
+
 function resolveActionAndPayload(req) {
   const raw = req.body && typeof req.body === "object" ? req.body : {};
   const action = req.query?.action || raw.action;
@@ -286,10 +339,9 @@ export default async function handler(req, res) {
     }
 
     if (action === "register_fcm_token") {
-      const userId = payload?.user_id;
       const token = payload?.token;
       const platform = payload?.platform || "web";
-      if (!userId || !token) {
+      if (!token) {
         return res.status(400).json({
           ok: false,
           error: "Invalid token payload",
@@ -303,6 +355,16 @@ export default async function handler(req, res) {
           code: "PUSH_NOT_CONFIGURED",
         });
       }
+      const supabase = getServiceSupabase(sbUrl, sbServiceKey);
+      const accessToken = bearerToken(req);
+      const { userId, error: authErr } = await authUserIdFromBearer(supabase, accessToken);
+      if (!userId) {
+        return res.status(401).json({
+          ok: false,
+          error: authErr || "Authorization: Bearer <access_token> requerido",
+          code: "PUSH_UNAUTHORIZED",
+        });
+      }
       const row = {
         user_id: userId,
         token,
@@ -311,7 +373,6 @@ export default async function handler(req, res) {
         ua: payload?.ua || null,
         updated_at: new Date().toISOString(),
       };
-      const supabase = getServiceSupabase(sbUrl, sbServiceKey);
       const { error } = await supabase.from("push_tokens").upsert(row, { onConflict: "token" });
       if (error) {
         return res.status(500).json({
@@ -326,15 +387,23 @@ export default async function handler(req, res) {
     }
 
     if (action === "revoke_fcm_token") {
-      const userId = payload?.user_id;
       const token = payload?.token;
-      if (!userId || !token) {
+      if (!token) {
         return res.status(400).json({ ok: false, error: "Invalid revoke payload", code: "PUSH_BAD_REQUEST" });
       }
       if (!sbServiceKey) {
         return res.status(503).json({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY not configured", code: "PUSH_NOT_CONFIGURED" });
       }
       const supabase = getServiceSupabase(sbUrl, sbServiceKey);
+      const accessToken = bearerToken(req);
+      const { userId, error: authErr } = await authUserIdFromBearer(supabase, accessToken);
+      if (!userId) {
+        return res.status(401).json({
+          ok: false,
+          error: authErr || "Authorization: Bearer <access_token> requerido",
+          code: "PUSH_UNAUTHORIZED",
+        });
+      }
       const { error } = await supabase.from("push_tokens").delete().eq("user_id", userId).eq("token", token);
       if (error) {
         return res.status(500).json({ ok: false, error: error.message, code: "PUSH_TOKEN_REVOKE_FAILED" });
@@ -354,6 +423,25 @@ export default async function handler(req, res) {
           ok: false,
           error: "SUPABASE_SERVICE_ROLE_KEY not configured",
           code: "PUSH_NOT_CONFIGURED",
+        });
+      }
+      const supabaseAuth = getServiceSupabase(sbUrl, sbServiceKey);
+      const accessToken = bearerToken(req);
+      const { userId: callerId, error: authErr } = await authUserIdFromBearer(supabaseAuth, accessToken);
+      if (!callerId) {
+        return res.status(401).json({
+          ok: false,
+          error: authErr || "Authorization: Bearer <access_token> requerido",
+          code: "PUSH_UNAUTHORIZED",
+        });
+      }
+      const allowed = await assertCallerMayNotifyAssignment(supabaseAuth, callerId, servicioId, conductorId);
+      if (!allowed) {
+        pushSendLog("notify_assignment forbidden", { caller_partial: String(callerId).slice(0, 8) });
+        return res.status(403).json({
+          ok: false,
+          error: "No autorizado para notificar este servicio",
+          code: "PUSH_FORBIDDEN",
         });
       }
       const { method } = resolveFcmSendMethod();

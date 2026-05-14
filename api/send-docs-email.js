@@ -1,7 +1,27 @@
 /**
  * Envío de documentación por email (Resend HTTP API).
  * Variables: RESEND_API_KEY, EMAIL_FROM (ej. Cuaderno <onboarding@resend.dev>)
+ * Opcional: SUPABASE_URL — restringe adjuntos a Storage del proyecto (mitiga SSRF).
  */
+const SB_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+
+function isAllowedAttachmentFetchUrl(urlStr) {
+  try {
+    const u = new URL(String(urlStr));
+    if (u.protocol !== "https:") return false;
+    const h = u.hostname.toLowerCase();
+    if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0" || h.endsWith(".local")) return false;
+    if (h.endsWith(".supabase.co") && /\/storage\/v1\//.test(u.pathname)) return true;
+    if (SB_URL) {
+      const base = new URL(SB_URL);
+      if (h === base.hostname.toLowerCase() && /\/storage\/v1\//.test(u.pathname)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -35,6 +55,7 @@ export default async function handler(req, res) {
   const att = [];
   for (const a of attachments) {
     if (!a?.url || !a?.filename) continue;
+    if (!isAllowedAttachmentFetchUrl(a.url)) continue;
     try {
       const r = await fetch(a.url, { signal: AbortSignal.timeout(25000) });
       if (!r.ok) continue;

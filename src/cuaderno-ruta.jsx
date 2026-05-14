@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import React from "react";
 import {
   SB_URL,
   SB_KEY,
   getSession,
   getUserId,
+  getAccessToken,
   setSessionExpiredHandler,
   sbFetch,
   sbSelect,
@@ -59,11 +60,20 @@ import {
   isIncidentDocument,
 } from "./domain/service/serviceDocuments";
 import {
-  OPERATIONAL_SERVICIO_DOC_TIPOS,
   countOperationalDocuments,
   filterOperationalEvidencias,
 } from "./domain/service/operationalServicioDocs";
 import { uploadUserPhoto as uploadPhoto } from "./data/uploadUserPhoto";
+import {
+  getDriverMediaDisplayBlob,
+  runRetentionSweep,
+  syncArchivedServicesFromList,
+  markServiceArchived,
+  getConductorStorageStats,
+  purgeAllConductorLocalMediaCaches,
+  formatStorageMb,
+  touchServiceDocumentAccess,
+} from "./data/conductorLocalMediaRetention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "./domain/service/serviceOperationalStatus";
 import { getLastServiceActivity } from "./domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "./domain/service/serviceAttention";
@@ -98,6 +108,7 @@ import {
 } from "./domain/service/serviceIdentity.js";
 import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
+import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
 import {
   LIM,
@@ -146,7 +157,8 @@ function PaywallScreen({status,user,email}){
   async function checkout(plan){
     setLoading(plan);setError("");
     try{
-      const r=await fetch("/api/stripe",{method:"POST",headers:{"Content-Type":"application/json"},
+      const tok=getAccessToken();
+      const r=await fetch("/api/stripe",{method:"POST",headers:{"Content-Type":"application/json",...(tok?{Authorization:`Bearer ${tok}`}:{})},
         body:JSON.stringify({action:"create_checkout",user_id:user,email,plan})});
       const d=await r.json();
       if(d.url)window.location.href=d.url;
@@ -316,6 +328,11 @@ function AuthScreen({ onAuth }) {
       } else {
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
+        const profLogin = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
+        if (profLogin[0]?.is_archived) {
+          await sbSignOut();
+          throw new Error("Esta cuenta está archivada. Contacta con administración.");
+        }
         const authContext = loginContext === "empresa" ? await resolveAuthContextForUid(uid) : "conductor";
         if (loginContext === "empresa" && authContext !== "empresa") {
           throw new Error("Esta cuenta no es de empresa");
@@ -1366,15 +1383,32 @@ function CmrScanner({prof,dark}){
         const ext="jpg";
         const path=`${uid}/${Date.now()}.${ext}`;
         const bytes=Uint8Array.from(atob(foto),c=>c.charCodeAt(0));
+        const session=getSession();
+        const token=session?.access_token||"";
         const uploadRes=await fetch(`${SB_URL}/storage/v1/object/cmr/${path}`,{
           method:"POST",
           headers:{
             "Content-Type":"image/jpeg",
-            "Authorization":`Bearer ${window.__SB_TOKEN__||""}`,
+            "Authorization":`Bearer ${token}`,
+            "apikey":SB_KEY,
           },
           body:bytes,
         });
-        if(uploadRes.ok)foto_url=`${SB_URL}/storage/v1/object/public/cmr/${path}`;
+        if(uploadRes.ok){
+          const signRes=await fetch(`${SB_URL}/storage/v1/object/sign/cmr/${path}`,{
+            method:"POST",
+            headers:{
+              "Authorization":`Bearer ${token}`,
+              "apikey":SB_KEY,
+              "Content-Type":"application/json",
+            },
+            body:JSON.stringify({expiresIn:60*60*24*7}),
+          });
+          if(signRes.ok){
+            const sd=await signRes.json();
+            foto_url=`${SB_URL}/storage/v1${sd.signedURL}`;
+          }
+        }
       }
       // Guardar en tabla cmr_docs
       const doc={
@@ -1527,6 +1561,9 @@ function playClick(){
 function QrMuelleModal({onClose,showToast,setDb}){
   const[fase,setFase]=useState("inicio");
   const[camError,setCamError]=useState("");
+  const[camLoading,setCamLoading]=useState(false);
+  const[camDenied,setCamDenied]=useState(false);
+  const[activeStream,setActiveStream]=useState(null);
   const[manual,setManual]=useState("");
   const[muelleActivo,setMuelleActivo]=useState(()=>{
     try{const v=localStorage.getItem("muelle_activo");return v?JSON.parse(v):null;}catch{return null;}
@@ -1534,6 +1571,9 @@ function QrMuelleModal({onClose,showToast,setDb}){
   const videoRef=useRef(null);
   const streamRef=useRef(null);
   const activeRef=useRef(true);
+  const detectRafRef=useRef(null);
+  const modalLiveRef=useRef(true);
+  const procesarQRRef=useRef(()=>{});
 
   function parsearQR(txt){
     const d={raw:txt,muelle:"",referencia:"",empresa:"",mercancia:""};
@@ -1588,35 +1628,113 @@ function QrMuelleModal({onClose,showToast,setDb}){
     if(!muelleActivo)registrarLlegada(parsearQR(txt.trim()));
     else registrarSalida();
   }
+  procesarQRRef.current=procesarQR;
 
   function stopCam(){
     activeRef.current=false;
-    if(streamRef.current)streamRef.current.getTracks().forEach(function(t){t.stop();});
+    if(detectRafRef.current){
+      cancelAnimationFrame(detectRafRef.current);
+      detectRafRef.current=null;
+    }
+    if(streamRef.current){
+      streamRef.current.getTracks().forEach(function(t){t.stop();});
+      streamRef.current=null;
+    }
+    setActiveStream(null);
+    if(videoRef.current){
+      try{videoRef.current.srcObject=null;}catch(_){}
+    }
   }
 
   useEffect(function(){
-    if(fase!=="scan")return;
-    activeRef.current=true;
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setCamError("Camara no disponible");return;}
-    navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}})
-      .then(function(stream){
-        streamRef.current=stream;
-        if(videoRef.current)videoRef.current.srcObject=stream;
-        if(!window.BarcodeDetector){setCamError("Tu navegador no detecta QR automaticamente. Usa el campo manual.");return;}
-        var bd=new window.BarcodeDetector({formats:["qr_code"]});
-        function check(){
-          if(!activeRef.current)return;
-          bd.detect(videoRef.current).then(function(codes){
-            if(codes&&codes.length>0){procesarQR(codes[0].rawValue);}
-            else requestAnimationFrame(check);
-          }).catch(function(){requestAnimationFrame(check);});
-        }
-        if(videoRef.current)videoRef.current.onloadedmetadata=check;
-        else check();
+    modalLiveRef.current=true;
+    return function(){
+      modalLiveRef.current=false;
+      activeRef.current=false;
+      stopCam();
+    };
+  },[]);
+
+  function openScannerFromUserGesture(){
+    playClick();
+    setCamError("");
+    setCamDenied(false);
+    const gUM=navigator.mediaDevices&&navigator.mediaDevices.getUserMedia;
+    if(typeof gUM!=="function"){
+      setCamError("Cámara no disponible en este navegador.");
+      return;
+    }
+    setCamLoading(true);
+    gUM
+      .call(navigator.mediaDevices,{
+        video:{
+          facingMode:{ideal:"environment"},
+          width:{ideal:1280},
+          height:{ideal:720},
+        },
+        audio:false,
       })
-      .catch(function(e){setCamError("Sin acceso a camara: "+e.message);});
-    return stopCam;
-  },[fase]);
+      .then(function(stream){
+        if(!modalLiveRef.current){
+          stream.getTracks().forEach(function(t){t.stop();});
+          return;
+        }
+        streamRef.current=stream;
+        setActiveStream(stream);
+        setFase("scan");
+      })
+      .catch(function(e){
+        const n=e&&e.name||"";
+        if(n==="NotAllowedError"||n==="PermissionDeniedError"){
+          setCamDenied(true);
+          setCamError("Permiso cancelado o denegado. Pulsa de nuevo para reintentar o usa el campo manual.");
+        }else if(n==="NotFoundError"||n==="DevicesNotFoundError"){
+          setCamError("No se encontró cámara en este dispositivo.");
+        }else{
+          setCamError("No se pudo abrir la cámara: "+(e&&e.message||n||"error"));
+        }
+        setFase("inicio");
+      })
+      .finally(function(){setCamLoading(false);});
+  }
+
+  useLayoutEffect(function(){
+    if(fase!=="scan"||!activeStream)return undefined;
+    const v=videoRef.current;
+    if(!v)return undefined;
+    v.srcObject=activeStream;
+    v.muted=true;
+    v.defaultMuted=true;
+    v.setAttribute("playsinline","");
+    v.setAttribute("webkit-playsinline","");
+    void v.play().catch(function(){});
+    activeRef.current=true;
+    if(!window.BarcodeDetector){
+      setCamError("Tu navegador no detecta QR automáticamente. Usa el campo manual.");
+      return undefined;
+    }
+    const bd=new window.BarcodeDetector({formats:["qr_code"]});
+    function tick(){
+      if(!activeRef.current||!videoRef.current)return;
+      bd.detect(videoRef.current).then(function(codes){
+        if(codes&&codes.length>0){procesarQRRef.current(codes[0].rawValue);}
+        else{detectRafRef.current=requestAnimationFrame(tick);}
+      }).catch(function(){detectRafRef.current=requestAnimationFrame(tick);});
+    }
+    function onLoaded(){
+      if(activeRef.current)tick();
+    }
+    v.addEventListener("loadeddata",onLoaded,{once:true});
+    if(v.readyState>=2)onLoaded();
+    return function(){
+      activeRef.current=false;
+      if(detectRafRef.current){
+        cancelAnimationFrame(detectRafRef.current);
+        detectRafRef.current=null;
+      }
+      v.removeEventListener("loadeddata",onLoaded);
+    };
+  },[fase,activeStream]);
 
   var esLlegada=!muelleActivo;
   var col=esLlegada?"#84CC16":"#14B8A6";
@@ -1643,18 +1761,37 @@ function QrMuelleModal({onClose,showToast,setDb}){
           </div>
         )}
 
-        {(fase==="inicio"||fase==="scan")&&(
+        {(fase==="inicio"||fase==="scan"||camLoading)&&(
           <div style={{flex:1,display:"flex",flexDirection:"column",padding:16,gap:12,overflowY:"auto"}}>
-            {fase==="inicio"&&(
-              <button onClick={function(){playClick();setFase("scan");}}
+            {fase==="inicio"&&!camLoading&&(
+              <button type="button" onClick={openScannerFromUserGesture}
                 style={{background:col,color:"#0A0A0A",border:"none",borderRadius:16,padding:"22px",fontSize:18,fontWeight:900,cursor:"pointer",flexShrink:0}}>
                 ABRIR CAMARA Y ESCANEAR
               </button>
             )}
-            {fase==="scan"&&(
+            {camLoading&&(
+              <div style={{background:"#1E293B",borderRadius:14,padding:"20px 16px",flexShrink:0,textAlign:"center",border:"1px solid #334155"}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#E2E8F0",marginBottom:8}}>Solicitando acceso a la cámara…</div>
+                <div style={{fontSize:12,color:"#94A3B8",lineHeight:1.5}}>
+                  Si aparece el aviso del sistema, pulsa <strong style={{color:"#FCD34D"}}>Permitir</strong>. En iPhone, el permiso se gestiona en Ajustes → Safari → Cámara (o la app instalada).
+                </div>
+              </div>
+            )}
+            {camDenied&&!camLoading&&fase==="inicio"&&(
+              <div style={{background:"#422006",border:"1px solid #F59E0B55",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#FDE68A",lineHeight:1.45,flexShrink:0}}>
+                Sin permiso de cámara no se puede mostrar el visor. Reintenta con el botón o pega el texto del QR abajo.
+              </div>
+            )}
+            {fase==="scan"&&activeStream&&(
               <div style={{position:"relative",flexShrink:0}}>
-                <video ref={videoRef} autoPlay playsInline muted
-                  style={{width:"100%",maxHeight:280,objectFit:"cover",borderRadius:16,background:"#000"}}/>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  controls={false}
+                  style={{width:"100%",maxHeight:280,objectFit:"cover",borderRadius:16,background:"#000"}}
+                />
                 <div style={{position:"absolute",inset:"10%",border:"3px solid "+col,borderRadius:12,pointerEvents:"none"}}/>
                 <div style={{textAlign:"center",marginTop:10,fontSize:12,color:"#64748B"}}>Centra el QR en el recuadro</div>
               </div>
@@ -1761,6 +1898,14 @@ function AppInner(){
     return()=>navigator.serviceWorker.removeEventListener("message",onSwMessage);
   },[]);
   useEffect(()=>{
+    function sweep(){void runRetentionSweep().catch(()=>{});}
+    sweep();
+    const t=setInterval(sweep,6*60*60*1000);
+    function onVis(){if(document.visibilityState==="visible")sweep();}
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
+  },[]);
+  useEffect(()=>{
     function onStorage(e){
       if(e.key!=="viaje_activo")return;
       try{setViajeActivo(e.newValue?JSON.parse(e.newValue):null);}
@@ -1774,7 +1919,12 @@ function AppInner(){
   const viajePrefillRef=useRef(null);
   useEffect(()=>{viajePrefillRef.current=viajePrefill;},[viajePrefill]);
   const[clock,setClock]=useState(new Date());
-  const[dark,setDark]=useState(()=>localStorage.getItem("dark")==="1");
+  const[dark,setDark]=useState(()=>{
+    const d=localStorage.getItem("dark");
+    if(d==="1")return true;
+    if(d==="0")return false;
+    return false;
+  });
   const[modal,setModal]=useState(null);
   const[editId,setEditId]=useState(null);
   const[evType,setEvType]=useState(null);
@@ -1791,12 +1941,19 @@ function AppInner(){
     setAuthChecked(true);
     // Si viene de Stripe con pago ok, refrescar suscripción
     const params=new URLSearchParams(window.location.search);
-    if(params.get("pago")==="ok"){
-      window.history.replaceState({},document.title,window.location.pathname);
-      // Marcar como activo inmediatamente (el webhook confirmará después)
-      const uid=getUserId();
-      if(uid){
-        fetch(`https://glyexutcypmhkndvmcxd.supabase.co/rest/v1/subscriptions?user_id=eq.${uid}`,{
+    const pagoOk=params.get("pago")==="ok";
+    const equipoJoin=params.get("equipo")||params.get("join")||params.get("code");
+    if(equipoJoin){
+      sessionStorage.setItem("cuaderno_pending_equipo_vinculo", normalizeEmpresaVinculoCode(equipoJoin));
+      params.delete("equipo");
+      params.delete("join");
+      params.delete("code");
+    }
+    if(pagoOk){
+      params.delete("pago");
+      const uidPay=getUserId();
+      if(uidPay){
+        fetch(`https://glyexutcypmhkndvmcxd.supabase.co/rest/v1/subscriptions?user_id=eq.${uidPay}`,{
           method:"PATCH",
           headers:{apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdsex11dGN5cG1oa25kdm1jeGQiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc0NDIxMzM4MSwiZXhwIjoyMDU5Nzg5MzgxfQ.0q_DhkD3fFBST4G0K9UBGYIhbFVhDkEBnX-yPEByLA","Content-Type":"application/json"},
           body:JSON.stringify({status:"active",plan:"monthly"})
@@ -1805,6 +1962,11 @@ function AppInner(){
         setSubStatus({status:"active"});
       }
     }
+    if(pagoOk||equipoJoin){
+      const qs=params.toString();
+      window.history.replaceState({},document.title,`${window.location.pathname}${qs?`?${qs}`:""}`);
+    }
+    if(equipoJoin&&getUserId())setTab("perfil");
     setSessionExpiredHandler(()=>{
       setUser(null);
       setTab("servicio");
@@ -1829,7 +1991,7 @@ function AppInner(){
   const[equipoModal,setEquipoModal]=useState(false);
   const[equipoConductor,setEquipoConductor]=useState("");
   const[pendingJornada,setPendingJornada]=useState(null);
-  const[resumenTab,setResumenTab]=useState("semana");
+  const[resumenTab,setResumenTab]=useState("resumen");
   const[rolEmpresa,setRolEmpresa]=useState(null);
   const[docsTab,setDocsTab]=useState("home");
   const[stopO,setStopO]=useState("");
@@ -1841,6 +2003,7 @@ function AppInner(){
   const geoRef=useRef(null);
   const jStateRef=useRef("none");
   const width=useWidth(),isWide=width>=768;
+  const showToast=useCallback((m,color="#1E293B",ms=2500)=>{setToast(m);setToastColor(color);setTimeout(()=>setToast(""),ms);},[]);
 
   // Cargar datos — Supabase si hay sesión, local si no
   const syncingRef=useRef(false); // evita que el save se dispare durante un sync
@@ -1852,6 +2015,12 @@ function AppInner(){
       syncingRef.current=true;
       await sbRefreshSession().catch(()=>{});
       const profRows=await sbSelect("profiles",`id=eq.${uid}`);
+      if(profRows[0]?.is_archived){
+        showToast("Esta cuenta está archivada y no puede usarse. Contacta con administración.","#B91C1C",5200);
+        await sbSignOut();
+        setUser(null);
+        return;
+      }
       if(profRows.length){
         const p=profRows[0];
         setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||""}));
@@ -2030,7 +2199,6 @@ function AppInner(){
   const prevTs=tMode==="now"?clock:tMode==="offset"?new Date(+clock-tOff*60000):(tExact?new Date(tExact):clock);
   const isLate=tMode!=="now";
 
-  const showToast=useCallback((m,color="#1E293B",ms=2500)=>{setToast(m);setToastColor(color);setTimeout(()=>setToast(""),ms);},[]);
   const openServicioViajeModal=useCallback((hint)=>{
     setViajePrefill(hint||null);
     setModalViaje(true);
@@ -2271,13 +2439,30 @@ function AppInner(){
     if(type==="__nora__"){setModal("nora");return;}
     if(type==="__parking_cercano__"){setModal("parking_cercano");return;}
     if(type==="__fin_silencioso__"){
-      // Registra el fin del estado activo sin modal + abre accion
       if(active&&EV[active.type]?.pair){
         const paisInfo=prof.abroadNow?prof.paisBase||"EU":`ES-${prof.ccaa||""}`;
-        const ne={id:Date.now()+Math.random(),type:EV[active.type].pair,ts:new Date(),note:"",location:"",photo:null,late:false,pais:paisInfo};
+        const pairType=EV[active.type].pair;
+        const ne={id:Date.now()+Math.random(),type:pairType,ts:new Date(),note:"",location:"",photo:null,late:false,pais:paisInfo};
         setDb(p=>({...p,entries:[...p.entries,ne]}));
         if(getUserId()) sbUpsert("entries",[{id:ne.id,user_id:getUserId(),type:ne.type,ts:(ne.ts instanceof Date?(toDate(ne.ts).toISOString()):ne.ts),note:"",location:"",photo:null,late:false,pais:paisInfo}]).catch(()=>{});
-        setTimeout(()=>setModal("accion_modal"),100);
+        if(navigator.geolocation){
+          navigator.geolocation.getCurrentPosition(
+            async pos=>{
+              const{latitude:lat,longitude:lon}=pos.coords;
+              let loc=`${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+              try{const r=await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
+                if(r.ok){const d=await r.json();const p=d.features?.[0]?.properties;loc=p?.city||p?.town||p?.village||p?.name||loc;}
+              }catch(_){}
+              setDb(p=>({...p,entries:p.entries.map(e=>String(e.id)===String(ne.id)?{...e,location:loc}:e)}));
+              if(getUserId())sbFetch(`/rest/v1/entries?id=eq.${ne.id}`,{method:"PATCH",body:JSON.stringify({location:loc})}).catch(()=>{});
+            },
+            ()=>{},
+            {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
+          );
+        }
+        const lab=evLabel(pairType,prof.lang||"es")||EV[pairType]?.label||"";
+        showToast(lab?`✅ ${lab}`:"✅ Registrado","#166534",2400);
+        void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:pairType,showToast});
       }
       return;
     }
@@ -2310,27 +2495,30 @@ function AppInner(){
       askNotifPermission();
       return;
     }
-    setEditId(null);setEvType(type);setEvPhoto(null);setTMode("now");setTOff(0);setTExact(toDTL(new Date()));
-    setEvNote(type==="art12"?"Motivo Art.12: ":type==="continuar_jornada"?"Reanudación de jornada":type==="inicio_conduccion"?(prof.matricula?`Matrícula: ${prof.matricula}${equipoActivo?` · 2C con ${equipoConductor}`:""}`:equipoActivo?`2C con ${equipoConductor}`:""):"");
-    if(!editId){setTMode("now");setTOff(0);setTExact("");}
-    setEvLoc("");setModal("event");
-    // GPS automático para todos los eventos
-    if(navigator.geolocation){
-      setGpsLoading(true);
-      navigator.geolocation.getCurrentPosition(
-        async pos=>{
-          const{latitude:lat,longitude:lon}=pos.coords;
-          try{
-            const r=await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
-            if(r.ok){const d=await r.json();const p=d.features?.[0]?.properties;const name=p?.city||p?.town||p?.village||p?.name||`${lat.toFixed(4)},${lon.toFixed(4)}`;setEvLoc(name);}
-            else setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
-          }catch(_){setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);}
-          setGpsLoading(false);
-        },
-        ()=>{setGpsLoading(false);},
-        {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
-      );
+    if(type==="art12"){
+      setEditId(null);setEvType(type);setEvPhoto(null);setTMode("now");setTOff(0);setTExact(toDTL(new Date()));
+      setEvNote("Motivo Art.12: ");
+      setEvLoc("");
+      setModal("event");
+      if(navigator.geolocation){
+        setGpsLoading(true);
+        navigator.geolocation.getCurrentPosition(
+          async pos=>{
+            const{latitude:lat,longitude:lon}=pos.coords;
+            try{
+              const r=await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
+              if(r.ok){const d=await r.json();const p=d.features?.[0]?.properties;const name=p?.city||p?.town||p?.village||p?.name||`${lat.toFixed(4)},${lon.toFixed(4)}`;setEvLoc(name);}
+              else setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+            }catch(_){setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);}
+            setGpsLoading(false);
+          },
+          ()=>{setGpsLoading(false);},
+          {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
+        );
+      }
+      return;
     }
+    registerEventInstant(type);
   }
   function confirmCountry(country){
     const isAbroad=country!=="ES"&&country!=="";
@@ -2370,25 +2558,8 @@ function AppInner(){
       }
     }
 
-    setEditId(null);setEvType(type);setEvPhoto(null);setTMode("now");setTOff(0);setTExact(toDTL(new Date()));
-    setEvNote(notaDescanso||`País: ${country||"ES"}`);setEvLoc("");setModal("event");
-    // GPS automático para inicio/fin jornada
-    if(navigator.geolocation){
-      setGpsLoading(true);
-      navigator.geolocation.getCurrentPosition(
-        async pos=>{
-          const{latitude:lat,longitude:lon}=pos.coords;
-          try{
-            const r=await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
-            if(r.ok){const d=await r.json();const p=d.features?.[0]?.properties;const name=p?.city||p?.town||p?.village||p?.name||`${lat.toFixed(4)},${lon.toFixed(4)}`;setEvLoc(name);}
-            else setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
-          }catch(_){setEvLoc(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);}
-          setGpsLoading(false);
-        },
-        ()=>{setGpsLoading(false);},
-        {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
-      );
-    }
+    const noteJ=notaDescanso||`País: ${country||"ES"}`;
+    setTimeout(()=>registerEventInstant(type,{note:noteJ}),80);
   }
   const[nextModal,setNextModal]=useState(false);
   const[descansoModal,setDescansoModal]=useState(false);
@@ -2624,29 +2795,114 @@ function AppInner(){
     const triggers=["fin_conduccion","fin_pausa","fin_descanso","fin_disponibilidad","fin_otros","fin_carga","fin_descarga","fin_carga_descarga","fin_repostaje","fin_inspeccion","fin_pasajero","fin_ferry"];
     if(triggers.includes(evType)) setTimeout(()=>setNextModal(evType),interp?1500:150);
   }
+
+  /** Registro inmediato (sin modal): GPS en segundo plano, nota opcional editable después. */
+  function registerEventInstant(type, opts = {}){
+    const ts = opts.ts != null ? (opts.ts instanceof Date ? opts.ts : new Date(opts.ts)) : new Date();
+    const late = !!opts.late;
+    let note = "";
+    if (opts.note !== undefined) note = String(opts.note);
+    else if (type === "continuar_jornada") note = "Reanudación de jornada";
+    else if (type === "inicio_conduccion") {
+      note = prof.matricula
+        ? `Matrícula: ${prof.matricula}${equipoActivo ? ` · 2C con ${equipoConductor}` : ""}`
+        : equipoActivo
+          ? `2C con ${equipoConductor}`
+          : "";
+    }
+    note = note.trim();
+    const photo = opts.photo != null ? opts.photo : null;
+    const paisInfo = prof.abroadNow ? prof.paisBase || "EU" : `ES-${prof.ccaa || ""}`;
+    const ne = {
+      id: Date.now() + Math.random(),
+      type,
+      ts,
+      note,
+      location: "",
+      photo,
+      late,
+      pais: paisInfo,
+    };
+    const currentEntries = [...db.entries, ne];
+    setDb((p) => ({ ...p, entries: [...p.entries, ne] }));
+    if (getUserId()) {
+      sbUpsert("entries", [
+        {
+          id: ne.id,
+          user_id: getUserId(),
+          type: ne.type,
+          ts: toDate(ne.ts).toISOString(),
+          note: ne.note || null,
+          location: null,
+          photo: ne.photo || null,
+          late: ne.late || false,
+          pais: paisInfo,
+        },
+      ]).catch(() => {});
+    }
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude: lat, longitude: lon } = pos.coords;
+          let loc = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+          try {
+            const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
+            if (r.ok) {
+              const d = await r.json();
+              const p = d.features?.[0]?.properties;
+              loc = p?.city || p?.town || p?.village || p?.name || loc;
+            }
+          } catch (_) {}
+          setDb((p) => ({
+            ...p,
+            entries: p.entries.map((e) => (String(e.id) === String(ne.id) ? { ...e, location: loc } : e)),
+          }));
+          if (getUserId())
+            sbFetch(`/rest/v1/entries?id=eq.${ne.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ location: loc }),
+            }).catch(() => {});
+        },
+        () => {},
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+      );
+    }
+    const lab = evLabel(type, prof.lang || "es") || EV[type]?.label || type;
+    showToast(opts.toastText || `✅ ${lab}`, "#166534", 2600);
+    void registerDriverEventOperationalPoint({
+      uid: getUserId(),
+      norma,
+      eventType: type,
+      showToast,
+    });
+    const interp = interpretarDescanso(type, currentEntries);
+    if (interp) setTimeout(() => showToast(interp.msg, interp.color, 5000), 200);
+    const triggers = [
+      "fin_conduccion",
+      "fin_pausa",
+      "fin_descanso",
+      "fin_disponibilidad",
+      "fin_otros",
+      "fin_carga",
+      "fin_descarga",
+      "fin_carga_descarga",
+      "fin_repostaje",
+      "fin_inspeccion",
+      "fin_pasajero",
+      "fin_ferry",
+    ];
+    if (triggers.includes(type)) setTimeout(() => setNextModal(type), interp ? 1500 : 150);
+  }
+
   function quickNext(type){
     setNextModal(false);
     if(type==="inicio_descanso"){setDescansoModal(true);return;}
-    const ne={id:Date.now()+Math.random(),type,ts:new Date(),note:"",location:"",photo:null,late:false};
-    setDb(p=>({...p,entries:[...p.entries,ne]}));
-    showToast(`${EV[type]?.icon} ${EV[type]?.label} iniciado`);
-    void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:type,showToast});
-    // GPS en segundo plano — actualiza la ubicación cuando llegue
-    if(navigator.geolocation){
-      navigator.geolocation.getCurrentPosition(
-        async pos=>{
-          const{latitude:lat,longitude:lon}=pos.coords;
-          let loc=`${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-          try{const r=await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
-            if(r.ok){const d=await r.json();const p=d.features?.[0]?.properties;loc=p?.city||p?.town||p?.village||p?.name||loc;}
-          }catch(_){}
-          setDb(p=>({...p,entries:p.entries.map(e=>String(e.id)===String(ne.id)?{...e,location:loc}:e)}));
-          if(getUserId())sbFetch(`/rest/v1/entries?id=eq.${ne.id}`,{method:"PATCH",body:JSON.stringify({location:loc})}).catch(()=>{});
-        },
-        ()=>{},
-        {enableHighAccuracy:false,timeout:8000,maximumAge:60000}
-      );
-    }
+    const icon = EV[type]?.icon || "";
+    const label = EV[type]?.label || type;
+    registerEventInstant(type, {
+      note: "",
+      toastText: `${icon} ${label} iniciado`.trim(),
+    });
   }
   function deleteEntry(id){
     // Toggle: si ya está eliminado, restaurar; si no, marcar como eliminado
@@ -2770,7 +3026,8 @@ function AppInner(){
             ⏰ {subStatus.days_left<=0?"Prueba terminada":`Prueba: ${subStatus.days_left} día${subStatus.days_left===1?"":"s"} restante${subStatus.days_left===1?"":"s"}`}
           </span>
           <button onClick={async()=>{
-            const r=await fetch("/api/stripe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_checkout",user_id:getUserId(),email:prof.email||getSession()?.user?.email||"",plan:"monthly"})});
+            const tok=getAccessToken();
+            const r=await fetch("/api/stripe",{method:"POST",headers:{"Content-Type":"application/json",...(tok?{Authorization:`Bearer ${tok}`}:{})},body:JSON.stringify({action:"create_checkout",user_id:getUserId(),email:prof.email||getSession()?.user?.email||"",plan:"monthly"})});
             const d=await r.json();if(d.url)window.location.href=d.url;
           }} style={{background:"white",color:"#0F172A",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:800,cursor:"pointer"}}>
             Suscribirse
@@ -2794,72 +3051,70 @@ function AppInner(){
       <main style={s.main}>
         {tab==="hoy"&&(
           <div className="pw">
-            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} tl={tl} todayEnts={todayEnts} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></div>}
+            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={()=>setTab("servicio")}/><Alerts alerts={norma.alerts}/></div>}
             <div className="mc">
-              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} tl={tl} todayEnts={todayEnts} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></>}
-              {todayEnts.length>0&&(
-                <>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"8px 0 10px",gap:6}}>
-                    <span style={{fontSize:10,fontWeight:800,color:"#64748B",letterSpacing:1.8}}>REGISTRO — {fmtD(today)}</span>
-                    <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setTMode("offset");setTOff(60);setEditId(null);setModal("entrada");}}
-                        style={{...s.shareBtn,background:"#7C3AED",color:"white",border:"none"}} title="Añadir entrada manual">
+              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={()=>setTab("servicio")}/><Alerts alerts={norma.alerts}/></>}
+              <div style={{ padding: "0 14px 14px" }}>
+                {todayEnts.length > 0 ? (
+                  <div
+                    style={{
+                      background: "white",
+                      borderRadius: 12,
+                      padding: "12px 14px",
+                      border: "1px solid #e2e8f0",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      gap: 10,
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", letterSpacing: 0.6 }}>Registro del día</div>
+                      <div style={{ fontSize: 13, color: "#0f172a", fontWeight: 650, marginTop: 4 }}>
+                        {todayEnts.length} movimiento{todayEnts.length === 1 ? "" : "s"} · línea temporal en Resumen
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTMode("offset");
+                          setTOff(60);
+                          setEditId(null);
+                          setModal("entrada");
+                        }}
+                        title="Añadir entrada manual"
+                        style={{ ...s.shareBtn, background: "#7c3aed", color: "white", border: "none", minWidth: 44, minHeight: 44 }}
+                      >
                         ➕
                       </button>
-                      <button onClick={()=>exportPDF(todayEnts,norma,prof,fmtD(today))} style={{...s.shareBtn,background:"#1E293B",color:"white",border:"none"}}>📄</button>
-                      <button onClick={()=>shareWhatsApp(buildTxt(todayEnts,fmtD(today)))} style={{...s.shareBtn,background:"#25D366",color:"white",border:"none"}}>📱</button>
-                      <button onClick={()=>doShare(buildTxt(todayEnts,fmtD(today)))} style={s.shareBtn}>↗</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTab("resumen");
+                          setResumenTab("resumen");
+                        }}
+                        style={{
+                          minHeight: 44,
+                          padding: "0 14px",
+                          borderRadius: 10,
+                          border: "1px solid #cbd5e1",
+                          background: "#f8fafc",
+                          fontSize: 13,
+                          fontWeight: 800,
+                          color: "#0f172a",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Ver registro →
+                      </button>
                     </div>
                   </div>
-                  {/* Registro en lenguaje natural */}
-                  <div style={{background:"white",borderRadius:13,padding:"12px 14px",marginBottom:8,boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
-                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                      {(()=>{
-                        const shown=new Set();
-                        return [...todayEnts].sort((a,b)=>new Date(a.ts)-new Date(b.ts)).map(e=>{
-                          if(shown.has(e.id))return null;
-                          const T=EV[e.type];
-                          if(!T)return null;
-                          if(T.kind==="close"){
-                            const inics=todayEnts.filter(x=>x.type===T.pair&&new Date(x.ts)<new Date(e.ts)&&!shown.has(x.id));
-                            const inicio=inics.length?inics[inics.length-1]:null;
-                            if(inicio){
-                              shown.add(inicio.id);shown.add(e.id);
-                              const dur=diffMin(new Date(inicio.ts),new Date(e.ts));
-                              const Ti=EV[inicio.type];
-                              const isDeleted=inicio.deleted||e.deleted;
-                              return(
-                                <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0",borderBottom:"1px solid #F8FAFC",opacity:isDeleted?.5:1}}>
-                                  <span style={{fontSize:16,flexShrink:0}}>{Ti?.icon}</span>
-                                  <div style={{flex:1,minWidth:0}}>
-                                    <span style={{fontSize:13,fontWeight:600,color:isDeleted?"#94A3B8":Ti?.color,textDecoration:isDeleted?"line-through":"none"}}>{Ti?.label}</span>
-                                    <span style={{fontSize:12,color:"#94A3B8",marginLeft:8,fontFamily:"monospace"}}>{fmtT(inicio.ts)} → {fmtT(e.ts)}</span>
-                                    {inicio.note&&<div style={{fontSize:11,color:"#64748B",marginTop:1}}>📝 {inicio.note}</div>}
-                                  </div>
-                                  <div style={{textAlign:"right",flexShrink:0}}>
-                                    <div style={{fontSize:14,fontWeight:800,color:isDeleted?"#94A3B8":Ti?.color,fontFamily:"monospace",textDecoration:isDeleted?"line-through":"none"}}>{fmtDur(dur)}</div>
-                                    <div style={{display:"flex",gap:3,marginTop:3,justifyContent:"flex-end"}}>
-                                      <button onClick={()=>openEdit(inicio)} style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:5,padding:"2px 6px",fontSize:10,color:"#64748B",cursor:"pointer"}}>✏️</button>
-                                      <button onClick={()=>{deleteEntry(inicio.id);deleteEntry(e.id);}} style={{background:isDeleted?"#F0FDF4":"#F8FAFC",border:`1px solid ${isDeleted?"#BBF7D0":"#E2E8F0"}`,borderRadius:5,padding:"2px 6px",fontSize:10,color:isDeleted?"#16A34A":"#64748B",cursor:"pointer"}}>{isDeleted?"↩":"🗑"}</button>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            }
-                          }
-                          if(T.kind==="open"&&!shown.has(e.id)){
-                            shown.add(e.id);
-                            return <LogCard key={e.id} entry={e} all={todayEnts} onEdit={()=>openEdit(e)} onDel={()=>deleteEntry(e.id)}/>;
-                          }
-                          if(!shown.has(e.id)){shown.add(e.id);return <LogCard key={e.id} entry={e} all={todayEnts} onEdit={()=>openEdit(e)} onDel={()=>deleteEntry(e.id)}/>;}
-                          return null;
-                        }).filter(Boolean);
-                      })()}
-                    </div>
-                  </div>
-                </>
-              )}
-              {todayEnts.length===0&&<Empty icon="🚛" title="Empieza tu jornada" sub={`Pulsa "Iniciar Jornada" para comenzar`}/>}
+                ) : (
+                  <div style={{ fontSize: 13, color: "#64748b", textAlign: "center", padding: "10px 8px 4px" }}>Sin movimientos registrados hoy. Usa «Comenzar jornada» arriba cuando empieces.</div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -2886,7 +3141,80 @@ function AppInner(){
                 </button>
               ))}
             </div>
-            {resumenTab==="resumen"&&<ResumenView db={db} norma={norma} prof={prof} clock={clock}/>}
+            {resumenTab==="resumen"&&(
+              <>
+                <div style={{ padding: "12px 14px 8px", background: "#f1f5f9", borderBottom: "1px solid #e2e8f0" }}>
+                  <style>{`
+                    .res-act-hoy > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; font-size: 14px; font-weight: 800; color: #0f172a; user-select: none; -webkit-tap-highlight-color: transparent; }
+                    .res-act-hoy > summary::-webkit-details-marker { display: none; }
+                    .res-act-hoy > summary::marker { content: ""; }
+                    .res-act-hoy .res-act-chev { font-size: 12px; font-weight: 700; color: #64748b; }
+                    .res-act-hoy[open] .res-act-chev { transform: rotate(180deg); display: inline-block; }
+                  `}</style>
+                  <details className="res-act-hoy" style={{ background: "#fff", borderRadius: 12, border: "1px solid #e2e8f0", marginBottom: 10 }}>
+                    <summary>
+                      <span>Actividad de hoy</span>
+                      <span className="res-act-chev" aria-hidden>
+                        ▼ Ver actividad
+                      </span>
+                    </summary>
+                    <div style={{ padding: "0 12px 14px", borderTop: "1px solid #f1f5f9" }}>
+                      <DayTL tl={tl} />
+                      <RegistroDiaCronologico
+                        todayEnts={todayEnts}
+                        today={today}
+                        fmtD={fmtD}
+                        norma={norma}
+                        prof={prof}
+                        s={s}
+                        setTMode={setTMode}
+                        setTOff={setTOff}
+                        setEditId={setEditId}
+                        setModal={setModal}
+                        openEdit={openEdit}
+                        deleteEntry={deleteEntry}
+                        exportPDF={exportPDF}
+                        shareWhatsApp={shareWhatsApp}
+                        buildTxt={buildTxt}
+                        doShare={doShare}
+                      />
+                    </div>
+                  </details>
+                  <details className="res-act-hoy" style={{ background: "#fff", borderRadius: 12, border: "1px solid #e2e8f0", marginBottom: 10 }}>
+                    <summary>
+                      <span>Límites y desglose</span>
+                      <span className="res-act-chev" aria-hidden>
+                        ▼ Ver detalle
+                      </span>
+                    </summary>
+                    <div style={{ padding: "0 12px 14px", borderTop: "1px solid #f1f5f9" }}>
+                      <ResumenDetalleTiemposTecnico norma={norma} />
+                    </div>
+                  </details>
+                </div>
+                <details
+                  className="res-semana-sum"
+                  style={{ margin: "0 14px 14px", borderRadius: 14, border: "1px solid #1e293b", overflow: "hidden", background: "#080e1a" }}
+                >
+                  <style>{`
+                    .res-semana-sum > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; font-size: 15px; font-weight: 800; color: #e2e8f0; user-select: none; -webkit-tap-highlight-color: transparent; background: #0f172a; border-bottom: 1px solid #1e293b; }
+                    .res-semana-sum > summary::-webkit-details-marker { display: none; }
+                    .res-semana-sum > summary::marker { content: ""; }
+                    .res-semana-sum .res-sem-chev { font-size: 12px; font-weight: 700; color: #94a3b8; }
+                    .res-semana-sum[open] .res-sem-chev { transform: rotate(180deg); display: inline-block; }
+                  `}</style>
+                  <summary>
+                    <span>Esta semana</span>
+                    <span className="res-sem-chev" aria-hidden>
+                      ▼ Ver resumen semanal
+                    </span>
+                  </summary>
+                  <div>
+                    <ResumenView db={db} norma={norma} prof={prof} clock={clock} />
+                  </div>
+                </details>
+              </>
+            )}
             {resumenTab==="ia"&&<ChatTab norma={norma} prof={prof} todayEnts={todayEnts} clock={clock}/>}
             {resumenTab==="historial"&&<HistorialView db={db} norma={norma} prof={prof} allSorted={allSorted} dayMap={dayMap} days={days} srch={srch} searchQ={searchQ} setSearchQ={setSearchQ} openEdit={openEdit} deleteEntry={deleteEntry}/>}
           </div>
@@ -2898,28 +3226,31 @@ function AppInner(){
         {tab==="docs"&&(
           <div>
             {docsTab==="home"&&(
-              <div style={{padding:"20px 14px 80px",background:"#0F172A",minHeight:"calc(100vh - 120px)"}}>
-                <div style={{fontSize:11,color:"#475569",fontWeight:700,letterSpacing:1.5,marginBottom:20}}>MIS DOCUMENTOS</div>
+              <div style={{padding:"20px 14px max(80px, calc(72px + env(safe-area-inset-bottom)))",background:"#0F172A",minHeight:"calc(100vh - 120px)"}}>
+                <div style={{fontSize:11,color:"#475569",fontWeight:700,letterSpacing:1.5,marginBottom:20}}>DOCUMENTOS</div>
+                <div style={{fontSize:14,color:"#94a3b8",lineHeight:1.55,marginBottom:22,maxWidth:480}}>
+                  Aquí solo consultas y abres archivos ya guardados. La subida en parada (foto, CMR, etc.) va en la pestaña <strong style={{color:"#e2e8f0"}}>Servicio</strong>, dentro del flujo de cada carga o descarga.
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-                  <button onClick={()=>setDocsTab("servicio_docs")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
-                    <div style={{fontSize:40,marginBottom:10}}>📦</div>
-                    <div style={{fontSize:18,fontWeight:800,color:"#22C55E",letterSpacing:.5}}>DOCS POR SERVICIO</div>
-                    <div style={{fontSize:12,color:"#475569",marginTop:4}}>CMR · Fotos · Incidencias por stop</div>
+                  <button onClick={()=>setDocsTab("servicio_docs")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
+                    <div style={{fontSize:32,marginBottom:8}}>📦</div>
+                    <div style={{fontSize:16,fontWeight:800,color:"#22C55E",letterSpacing:.3}}>Por servicio</div>
+                    <div style={{fontSize:12,color:"#64748b",marginTop:6,lineHeight:1.4}}>Ver documentos del servicio en curso o recientes</div>
                   </button>
-                  <button onClick={()=>setDocsTab("gastos")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
-                    <div style={{fontSize:40,marginBottom:10}}>💰</div>
-                    <div style={{fontSize:18,fontWeight:800,color:"#22C55E",letterSpacing:.5}}>GASTOS</div>
-                    <div style={{fontSize:12,color:"#475569",marginTop:4}}>Combustible · Peajes · Dietas</div>
+                  <button onClick={()=>setDocsTab("gastos")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
+                    <div style={{fontSize:32,marginBottom:8}}>💰</div>
+                    <div style={{fontSize:16,fontWeight:800,color:"#22C55E",letterSpacing:.3}}>Gastos</div>
+                    <div style={{fontSize:12,color:"#64748b",marginTop:6,lineHeight:1.4}}>Consultar combustible, peajes y dietas</div>
                   </button>
-                  <button onClick={()=>setDocsTab("documentos")} style={{background:"#1E293B",border:"1px solid #3B82F630",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center"}}>
-                    <div style={{fontSize:36,marginBottom:8}}>📄</div>
-                    <div style={{fontSize:15,fontWeight:800,color:"#3B82F6"}}>DOCUMENTOS</div>
-                    <div style={{fontSize:11,color:"#475569",marginTop:3}}>CMR · Partes · Incidencias</div>
+                  <button onClick={()=>setDocsTab("documentos")} style={{background:"#1E293B",border:"1px solid #3B82F630",borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center"}}>
+                    <div style={{fontSize:28,marginBottom:6}}>📄</div>
+                    <div style={{fontSize:14,fontWeight:800,color:"#3B82F6"}}>Plantillas</div>
+                    <div style={{fontSize:11,color:"#64748b",marginTop:4,lineHeight:1.35}}>Partes e informes guardados</div>
                   </button>
-                  <button onClick={()=>setDocsTab("empresa_home")} style={{background:"#1E293B",border:"1px solid #F59E0B30",borderRadius:18,padding:"24px 16px",cursor:"pointer",textAlign:"center"}}>
-                    <div style={{fontSize:36,marginBottom:8}}>🏢</div>
-                    <div style={{fontSize:15,fontWeight:800,color:"#F59E0B"}}>EMPRESA</div>
-                    <div style={{fontSize:11,color:"#475569",marginTop:3}}>Cargas · Informe · Auditoría</div>
+                  <button onClick={()=>setDocsTab("empresa_home")} style={{background:"#1E293B",border:"1px solid #F59E0B30",borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center"}}>
+                    <div style={{fontSize:28,marginBottom:6}}>🏢</div>
+                    <div style={{fontSize:14,fontWeight:800,color:"#F59E0B"}}>Empresa</div>
+                    <div style={{fontSize:11,color:"#64748b",marginTop:4,lineHeight:1.35}}>Cargas e informes de empresa</div>
                   </button>
                 </div>
                 <button onClick={()=>setDocsTab("km")} style={{width:"100%",background:"#1E293B",border:"1px solid #7C3AED30",borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14,marginBottom:8}}>
@@ -3419,10 +3750,7 @@ function AppInner(){
               {/* Con camarote */}
               <button onClick={()=>{
                 setModal(null);
-                setEvNote("Ferry con camarote/litera — Art.9 EU 561/2006");
-                setEvType("inicio_ferry");
-                setEvLoc("");setEvPhoto(null);setEditId(null);
-                setModal("event");
+                registerEventInstant("inicio_ferry",{note:"Ferry con camarote/litera — Art.9 EU 561/2006"});
               }} style={{background:"#F0F9FF",border:"2px solid #0EA5E9",borderRadius:14,padding:"16px",textAlign:"left",cursor:"pointer"}}>
                 <div style={{fontSize:15,fontWeight:800,color:"#0369A1"}}>🛏 Con camarote o litera</div>
                 <div style={{fontSize:13,color:"#0EA5E9",marginTop:4,lineHeight:1.5}}>
@@ -3435,10 +3763,7 @@ function AppInner(){
               {/* Sin camarote */}
               <button onClick={()=>{
                 setModal(null);
-                setEvNote("Ferry sin camarote — cuenta como disponible");
-                setEvType("inicio_ferry");
-                setEvLoc("");setEvPhoto(null);setEditId(null);
-                setModal("event");
+                registerEventInstant("inicio_ferry",{note:"Ferry sin camarote — cuenta como disponible"});
               }} style={{background:"#F8FAFC",border:"2px solid #CBD5E1",borderRadius:14,padding:"16px",textAlign:"left",cursor:"pointer"}}>
                 <div style={{fontSize:15,fontWeight:800,color:"#475569"}}>🚢 Sin camarote / asiento</div>
                 <div style={{fontSize:13,color:"#64748B",marginTop:4,lineHeight:1.5}}>
@@ -3735,71 +4060,91 @@ function AppInner(){
       {/* ════ MODAL DATOS ACTUALES ════ */}
       {modal==="datos_actuales"&&<DatosActualesModal onClose={()=>setModal(null)} setDb={setDb} setManualOffset={v=>{setManualOffset(v);localStorage.setItem("manual_offset",JSON.stringify(v));}} showToast={showToast}/>}
 
-      {/* Modal ACCIÓN — mosaico general */}
-      {modal==="accion_modal"&&(
-        <div style={s.overlay} onClick={()=>setModal(null)}>
-          <div style={{...s.sheet,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{...s.shHd,background:"#F59E0B22",borderBottom:"2px solid #F59E0B40"}}>
-              <span style={{fontSize:24}}>⚡</span>
-              <div style={{flex:1}}><div style={{...s.shT,color:"#F59E0B"}}>¿QUÉ HACES?</div></div>
-              <button onClick={()=>setModal(null)} style={s.xBtn}>✕</button>
-            </div>
-            <div style={{padding:"14px 16px 32px",display:"flex",flexDirection:"column",gap:10}}>
-              {/* CONDUCIR — primero y grande */}
-              <button onClick={()=>{setModal(null);openAdd("inicio_conduccion");}}
-                style={{background:"#FFF7ED",border:"2px solid #F59E0B",borderRadius:14,padding:"18px 16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
-                <span style={{fontSize:32}}>⊙</span>
-                <div>
-                  <div style={{fontSize:17,fontWeight:800,color:"#92400E"}}>CONDUCIR</div>
-                  <div style={{fontSize:12,color:"#D97706",marginTop:2}}>Iniciar conducción</div>
+      {/* Modal ACCIÓN — normativa inmediata */}
+      {modal==="accion_modal"&&(()=>{
+        const isDrivingM = active?.type === "inicio_conduccion";
+        const isPausingM =
+          active &&
+          ["inicio_pausa", "inicio_descanso", "inicio_descanso_frac", "inicio_descanso_semanal", "inicio_descanso_semanal_r"].includes(active.type);
+        const rContM = norma.rCont ?? norma.canDrive ?? 0;
+        let accionHint = "Indica qué vas a hacer ahora: conducir, pausa o descanso.";
+        if (jState === "open" && isDrivingM && rContM > 0) accionHint = `Sigues conduciendo: te quedan hasta ${fmtDur(rContM)} antes de pausa obligatoria.`;
+        else if (jState === "open" && !active && norma.canDrive > 0 && norma.canDrive <= 60) accionHint = `Próxima obligación en ${fmtDur(norma.canDrive)} — conviene pausa o descanso.`;
+        else if (jState === "open" && !active && norma.canDrive <= 0) accionHint = "Límite de conducción alcanzado: registra pausa o descanso antes de volver a conducir.";
+        else if (jState === "open" && isPausingM) accionHint = "Cuando termines pausa o descanso, ciérralo en la pantalla principal antes de conducir.";
+        return (
+          <div style={s.overlay} onClick={() => setModal(null)}>
+            <div style={{ ...s.sheet, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ ...s.shHd, background: "#F59E0B22", borderBottom: "2px solid #F59E0B40" }}>
+                <span style={{ fontSize: 24 }}>⚡</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ ...s.shT, color: "#F59E0B" }}>SIGUIENTE ACCIÓN</div>
+                  <div style={{ fontSize: 11, color: "#92400e", fontWeight: 600, marginTop: 4, lineHeight: 1.35 }}>Conducción, pausa o descanso</div>
                 </div>
-              </button>
-              {/* PAUSA */}
-              <button onClick={()=>{setModal("pausa_sel");}}
-                style={{background:"#EEF2FF",border:"2px solid #6366F1",borderRadius:14,padding:"16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
-                <span style={{fontSize:28}}>⏸</span>
-                <div>
-                  <div style={{fontSize:16,fontWeight:800,color:"#4338CA"}}>PAUSA</div>
-                  <div style={{fontSize:12,color:"#6366F1",marginTop:2}}>15 min · 30 min · 45 min · 3h</div>
-                </div>
-              </button>
-              {/* DESCANSO */}
-              <button onClick={()=>{setModal(null);openAdd("inicio_descanso");}}
-                style={{background:"#F5F3FF",border:"2px solid #7C3AED",borderRadius:14,padding:"16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
-                <span style={{fontSize:28}}>🛌</span>
-                <div>
-                  <div style={{fontSize:16,fontWeight:800,color:"#5B21B6"}}>DESCANSO</div>
-                  <div style={{fontSize:12,color:"#7C3AED",marginTop:2}}>9h reducido · 11h completo</div>
-                </div>
-              </button>
-              {/* DISPONIBLE */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <button onClick={()=>{setModal(null);openAdd("inicio_disponibilidad");}}
-                  style={{background:"#ECFEFF",border:"2px solid #06B6D4",borderRadius:14,padding:"14px",textAlign:"center",cursor:"pointer"}}>
-                  <span style={{fontSize:26,display:"block",marginBottom:4}}>▨</span>
-                  <div style={{fontSize:14,fontWeight:800,color:"#0E7490"}}>DISPONIBLE</div>
-                  <div style={{fontSize:11,color:"#06B6D4",marginTop:2}}>Espera, frontera...</div>
-                </button>
-                <button onClick={()=>{setModal("ferry_sel");}}
-                  style={{background:"#F0F9FF",border:"2px solid #0EA5E9",borderRadius:14,padding:"14px",textAlign:"center",cursor:"pointer"}}>
-                  <span style={{fontSize:26,display:"block",marginBottom:4}}>⛴</span>
-                  <div style={{fontSize:14,fontWeight:800,color:"#0369A1"}}>FERRY / TREN</div>
-                  <div style={{fontSize:11,color:"#0EA5E9",marginTop:2}}>Art. 9 EU 561/2006</div>
+                <button type="button" onClick={() => setModal(null)} style={s.xBtn}>
+                  ✕
                 </button>
               </div>
-              {/* OTROS */}
-              <button onClick={()=>{setModal("otros");}}
-                style={{background:"#FFF7ED",border:"2px solid #F97316",borderRadius:14,padding:"16px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
-                <span style={{fontSize:28}}>⚒</span>
-                <div>
-                  <div style={{fontSize:16,fontWeight:800,color:"#C2410C"}}>OTROS TRABAJOS</div>
-                  <div style={{fontSize:12,color:"#F97316",marginTop:2}}>Carga · Descarga · Repostaje · Ferry...</div>
+              <div style={{ padding: "14px 16px max(20px, env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "10px 12px", fontSize: 13, color: "#78350f", lineHeight: 1.45, fontWeight: 600 }}>{accionHint}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModal(null);
+                    openAdd("inicio_conduccion");
+                  }}
+                  style={{ background: "#FFF7ED", border: "2px solid #F59E0B", borderRadius: 14, padding: "14px 14px", textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, minHeight: 52 }}
+                >
+                  <span style={{ fontSize: 28 }}>⊙</span>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#92400E" }}>Conducir</div>
+                    <div style={{ fontSize: 12, color: "#D97706", marginTop: 2 }}>Iniciar conducción</div>
+                  </div>
+                </button>
+                <button type="button" onClick={() => setModal("pausa_sel")} style={{ background: "#EEF2FF", border: "2px solid #6366F1", borderRadius: 14, padding: "14px", textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, minHeight: 52 }}>
+                  <span style={{ fontSize: 26 }}>⏸</span>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#4338CA" }}>Pausa</div>
+                    <div style={{ fontSize: 12, color: "#6366F1", marginTop: 2 }}>15 · 30 · 45 min · 3 h</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModal(null);
+                    openAdd("inicio_descanso");
+                  }}
+                  style={{ background: "#F5F3FF", border: "2px solid #7C3AED", borderRadius: 14, padding: "14px", textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, minHeight: 52 }}
+                >
+                  <span style={{ fontSize: 26 }}>🛌</span>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#5B21B6" }}>Descanso</div>
+                    <div style={{ fontSize: 12, color: "#7C3AED", marginTop: 2 }}>9 h reducido · 11 h completo</div>
+                  </div>
+                </button>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModal(null);
+                      openAdd("inicio_disponibilidad");
+                    }}
+                    style={{ flex: "1 1 140px", minHeight: 44, background: "#ECFEFF", border: "1px solid #06B6D4", borderRadius: 12, padding: "10px 8px", cursor: "pointer", fontSize: 13, fontWeight: 800, color: "#0E7490" }}
+                  >
+                    Disponible
+                  </button>
+                  <button type="button" onClick={() => setModal("ferry_sel")} style={{ flex: "1 1 140px", minHeight: 44, background: "#F0F9FF", border: "1px solid #0EA5E9", borderRadius: 12, padding: "10px 8px", cursor: "pointer", fontSize: 13, fontWeight: 800, color: "#0369A1" }}>
+                    Ferry / tren
+                  </button>
                 </div>
-              </button>
+                <button type="button" onClick={() => setModal("otros")} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 12, padding: "12px", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#64748b", marginTop: 2 }}>
+                  Más: carga, QR muelle, repostaje…
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Modal PARAR — tras detener conducción */}
       {modal==="parar_modal"&&(
@@ -4238,32 +4583,82 @@ function getDriverActionGps(){
   });
 }
 
-async function saveDriverActionLocation(uid,point,{servicio=null,eventType=null,stopId=null}={}){
+/** empresa_id: servicio primero; fallback conductor_empresa activo. */
+async function resolveEmpresaIdForUbicacion(uid,servicio){
+  const fromServicio=servicio?.empresa_id;
+  if(fromServicio)return fromServicio;
+  if(!uid)return null;
+  try{
+    const rels=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true&select=empresa_id&limit=1`);
+    return rels?.[0]?.empresa_id||null;
+  }catch{
+    return null;
+  }
+}
+
+/**
+ * Snapshot operativo para fila ubicaciones: siempre resuelve servicio activo del conductor
+ * y empresa_id (servicio → conductor_empresa). Autónomo sin servicio ni flota → ids null.
+ */
+async function resolveOperationalUbicacionSnapshot(uid,servicioHint=null,stopsHint=null){
+  const out={servicio:null,stops:[],empresa_id:null,servicio_id:null};
+  if(!uid)return out;
+  const active=await readActiveServiceForDriver(uid);
+  let svc=active.servicio;
+  let depStops=Array.isArray(active.stops)?active.stops:[];
+  const hintId=servicioHint?.id||null;
+  if(hintId&&(!svc?.id||svc.id===hintId)){
+    svc={...(svc||{}),...servicioHint};
+    if(Array.isArray(stopsHint)&&stopsHint.length)depStops=stopsHint;
+  }else if(hintId&&svc?.id&&hintId!==svc.id){
+    trackingLog("operativa ubicacion servicio_hint_mismatch",{uid,hintId,active_id:svc.id});
+  }
+  if(!svc?.id){
+    trackingLog("operativa ubicacion resolve",{uid,servicio_hint_id:hintId||null,resolved_servicio_id:null,resolved_empresa_id:null,source:"no_active_service"});
+    return out;
+  }
+  let empresaId=svc.empresa_id||null;
+  if(!empresaId)empresaId=await resolveEmpresaIdForUbicacion(uid,svc);
+  if(empresaId&&!svc.empresa_id)svc={...svc,empresa_id:empresaId};
+  out.servicio=svc;
+  out.stops=depStops;
+  out.empresa_id=empresaId||null;
+  out.servicio_id=svc.id;
+  if(out.servicio_id&&!out.empresa_id){
+    trackingLog("operativa ubicacion warn_sin_empresa_id",{uid,servicio_id:out.servicio_id,msg:"servicio sin empresa_id y sin conductor_empresa activo"});
+  }
+  trackingLog("operativa ubicacion resolve",{
+    uid,
+    servicio_hint_id:hintId||null,
+    resolved_servicio_id:out.servicio_id,
+    resolved_empresa_id:out.empresa_id,
+    servicio_estado:svc.estado||null,
+    source:"readActiveService_hint_merge",
+  });
+  return out;
+}
+
+async function saveDriverActionLocation(uid,point,{servicio=null,stops=null,eventType=null,stopId=null,preResolved=null}={}){
   if(!uid||!point||!Number.isFinite(point.lat)||!Number.isFinite(point.lon))return null;
-  const payload={
+  const snap=preResolved||(await resolveOperationalUbicacionSnapshot(uid,servicio,stops));
+  const row={
+    user_id:uid,
     lat:point.lat,
     lon:point.lon,
     ts:point.ts||new Date().toISOString(),
     precision_m:Math.round(point.accuracy||0),
     velocidad:point.speed!=null?Math.round(point.speed*3.6):null,
-    conductor_id:uid||null,
-    empresa_id:servicio?.empresa_id||null,
-    servicio_id:servicio?.id||null,
+    empresa_id:snap.empresa_id??null,
+    servicio_id:snap.servicio_id??null,
     event_type:eventType||null,
     stop_id:stopId||null,
   };
-  trackingLog("insert start",payload);
-  const res=await sbFetch("/rest/v1/ubicaciones",{
+  trackingLog("operativa ubicacion payload",row);
+  trackingLog("upsert start",row);
+  const res=await sbFetch("/rest/v1/ubicaciones?on_conflict=user_id",{
     method:"POST",
-    headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},
-    body:JSON.stringify({
-      user_id:uid,
-      lat:payload.lat,
-      lon:payload.lon,
-      velocidad:payload.velocidad,
-      precision_m:payload.precision_m,
-      ts:payload.ts,
-    }),
+    headers:{"Prefer":"resolution=merge-duplicates,return=minimal","Content-Type":"application/json"},
+    body:JSON.stringify([row]),
   });
   if(!res.ok){
     let raw="";
@@ -4278,25 +4673,29 @@ async function saveDriverActionLocation(uid,point,{servicio=null,eventType=null,
       detail:parsed?.details||parsed?.detail||null,
       hint:parsed?.hint||null,
       uid,
-      servicio_id:servicio?.id||null,
+      servicio_id:row.servicio_id||null,
+      empresa_id:row.empresa_id||null,
       event_type:eventType||null,
     };
-    trackingLog("insert failed",errorDetail);
+    trackingLog("operativa ubicacion upsert_failed",errorDetail);
+    trackingLog("upsert failed",errorDetail);
     throw new Error(errorDetail.message||`Supabase ${res.status}`);
   }
-  trackingLog("insert success",{uid,status:res.status,servicio_id:servicio?.id||null,event_type:eventType||null});
+  trackingLog("upsert success",{uid,status:res.status,servicio_id:row.servicio_id,event_type:eventType||null,empresa_id:row.empresa_id||null});
   try{
     const verify=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
     if(verify.ok){
       const rows=await verify.json();
-      const row=Array.isArray(rows)?rows[0]:null;
+      const vrow=Array.isArray(rows)?rows[0]:null;
       trackingLog("persist verify latest row",{
         uid,
-        ts:row?.ts||null,
-        lat:row?.lat??null,
-        lon:row?.lon??null,
-        precision_m:row?.precision_m??null,
-        velocidad:row?.velocidad??null,
+        ts:vrow?.ts||null,
+        lat:vrow?.lat??null,
+        lon:vrow?.lon??null,
+        precision_m:vrow?.precision_m??null,
+        velocidad:vrow?.velocidad??null,
+        empresa_id:vrow?.empresa_id??null,
+        servicio_id:vrow?.servicio_id??null,
       });
     }else{
       trackingLog("persist verify failed",{uid,status:verify.status,status_text:verify.statusText||null});
@@ -4335,13 +4734,19 @@ async function persistServiceOperationalEta({servicio,stops,norma,point,eventTyp
   if(!servicio?.id||!point||!Number.isFinite(point.lat)||!Number.isFinite(point.lon))return null;
   if(!servicio.destino?.trim()||!servicio.origen?.trim())return null;
   if(!isEtaActivationReady(servicio))return null;
+  trackingLog("operativa persist_eta_start",{servicio_id:servicio.id,empresa_id:servicio.empresa_id||null,event_type:eventType||null});
   const serviceForEta={...servicio,estado:servicio.estado==="asignado"?"en_curso":servicio.estado};
+  const planSnap=getOperationalPlanSnapshot(servicio);
+  const truckSpeedKmh=Number.isFinite(Number(planSnap?.velocidad))
+    ?Math.min(100,Math.max(60,Math.round(Number(planSnap.velocidad))))
+    :undefined;
   const eta=await getServiceEta({
     service:serviceForEta,
     stops,
     norma:norma||null,
     currentPosition:{lat:point.lat,lon:point.lon},
     operationalTripStarted:true,
+    truckSpeedKmh,
   });
   if(!eta?.eta)return null;
   const operationalEta=buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId});
@@ -4350,12 +4755,21 @@ async function persistServiceOperationalEta({servicio,stops,norma,point,eventTyp
     operational_eta:operationalEta,
   });
   const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
-  if(!res.ok)throw new Error(`No se pudo guardar la ETA operacional`);
+  if(!res.ok){
+    let errTxt="";
+    try{errTxt=await res.text();}catch(_){}
+    trackingLog("operativa persist_eta_failed",{servicio_id:servicio.id,status:res.status,detail:String(errTxt).slice(0,400)});
+    throw new Error(`No se pudo guardar la ETA operacional`);
+  }
+  trackingLog("operativa persist_eta_ok",{servicio_id:servicio.id});
+  try{window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));}catch(_){/* SSR */}
   return{referencia,operationalEta};
 }
 
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
-  trackingLog("event dispatch",{event_type:eventType||null,uid,servicio_id:servicio?.id||null,stop_id:stopId||null});
+  const depStopsIn=Array.isArray(stops)?stops:[];
+  const snap=await resolveOperationalUbicacionSnapshot(uid,servicio,depStopsIn);
+  trackingLog("event dispatch",{event_type:eventType||null,uid,servicio_id:snap.servicio_id,empresa_id:snap.empresa_id,stop_id:stopId||null});
   const gps=await getDriverActionGps();
   if(!gps.ok){
     showToast?.(`${gps.error}. ETA no recalculada`,"#F97316",3500);
@@ -4363,14 +4777,15 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   }
   const point=gps.point;
   try{
-    await saveDriverActionLocation(uid,point,{servicio,eventType,stopId});
+    await saveDriverActionLocation(uid,point,{preResolved:snap,eventType,stopId});
   }catch(e){
     console.warn("ubicacion evento save failed:",e);
+    trackingLog("operativa ubicacion save_exception",{uid,error:String(e?.message||e)});
     const msg=e?.message?String(e.message).slice(0,120):"Error desconocido";
     showToast?.(`GPS obtenido, pero no se pudo guardar la ubicación: ${msg}`,"#F97316",4200);
   }
   try{
-    const etaRes=await persistServiceOperationalEta({servicio,stops,norma,point,eventType,stopId});
+    const etaRes=await persistServiceOperationalEta({servicio:snap.servicio,stops:snap.stops,norma,point,eventType,stopId});
     if(etaRes?.operationalEta?.label){
       showToast?.(`ETA actualizada: ${etaRes.operationalEta.label}`,"#2563EB",3000);
     }
@@ -4384,10 +4799,14 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
 async function readActiveServiceForDriver(uid){
   if(!uid)return{servicio:null,stops:[]};
-  const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
-  if(!r.ok)return{servicio:null,stops:[]};
-  const data=await r.json();
-  const servicio=Array.isArray(data)?data[0]:null;
+  async function fetchOne(estadoEq){
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=eq.${estadoEq}&order=created_at.desc&limit=1`);
+    if(!r.ok)return null;
+    const data=await r.json();
+    return Array.isArray(data)?data[0]:null;
+  }
+  let servicio=await fetchOne("en_curso");
+  if(!servicio?.id)servicio=await fetchOne("asignado");
   if(!servicio?.id)return{servicio:null,stops:[]};
   const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicio.id}&order=orden.asc`);
   const stops=sr.ok?await sr.json():[];
@@ -5139,10 +5558,238 @@ function DatosActualesModal({onClose,setDb,setManualOffset,showToast}){
     </div>
   );
 }
-function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equipoConductor,clock,lang="es",showToast,tl,todayEnts=[],activeEntries=[]}){
-  const T=useT(lang);
-  const[registroOpen,setRegistroOpen]=useState(false);
-  const[normOpen,setNormOpen]=useState(false);
+
+/** Registro cronológico del día (Resumen); mantiene edición y exportación. */
+function RegistroDiaCronologico({
+  todayEnts,
+  today,
+  fmtD,
+  norma,
+  prof,
+  s,
+  setTMode,
+  setTOff,
+  setEditId,
+  setModal,
+  openEdit,
+  deleteEntry,
+  exportPDF,
+  shareWhatsApp,
+  buildTxt,
+  doShare,
+}) {
+  if (!todayEnts?.length) return null;
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "8px 0 10px", gap: 6 }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: "#64748B", letterSpacing: 1.8 }}>REGISTRO — {fmtD(today)}</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={() => {
+              setTMode("offset");
+              setTOff(60);
+              setEditId(null);
+              setModal("entrada");
+            }}
+            style={{ ...s.shareBtn, background: "#7C3AED", color: "white", border: "none" }}
+            title="Añadir entrada manual"
+            type="button"
+          >
+            ➕
+          </button>
+          <button onClick={() => exportPDF(todayEnts, norma, prof, fmtD(today))} style={{ ...s.shareBtn, background: "#1E293B", color: "white", border: "none" }} type="button">
+            📄
+          </button>
+          <button onClick={() => shareWhatsApp(buildTxt(todayEnts, fmtD(today)))} style={{ ...s.shareBtn, background: "#25D366", color: "white", border: "none" }} type="button">
+            📱
+          </button>
+          <button onClick={() => doShare(buildTxt(todayEnts, fmtD(today)))} style={s.shareBtn} type="button">
+            ↗
+          </button>
+        </div>
+      </div>
+      <div style={{ background: "white", borderRadius: 13, padding: "12px 14px", marginBottom: 8, boxShadow: "0 2px 6px rgba(0,0,0,.04)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {(() => {
+            const shown = new Set();
+            return [...todayEnts]
+              .sort((a, b) => new Date(a.ts) - new Date(b.ts))
+              .map((e) => {
+                if (shown.has(e.id)) return null;
+                const T = EV[e.type];
+                if (!T) return null;
+                if (T.kind === "close") {
+                  const inics = todayEnts.filter((x) => x.type === T.pair && new Date(x.ts) < new Date(e.ts) && !shown.has(x.id));
+                  const inicio = inics.length ? inics[inics.length - 1] : null;
+                  if (inicio) {
+                    shown.add(inicio.id);
+                    shown.add(e.id);
+                    const dur = diffMin(new Date(inicio.ts), new Date(e.ts));
+                    const Ti = EV[inicio.type];
+                    const isDeleted = inicio.deleted || e.deleted;
+                    return (
+                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid #F8FAFC", opacity: isDeleted ? 0.5 : 1 }}>
+                        <span style={{ fontSize: 16, flexShrink: 0 }}>{Ti?.icon}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: isDeleted ? "#94A3B8" : Ti?.color, textDecoration: isDeleted ? "line-through" : "none" }}>{Ti?.label}</span>
+                          <span style={{ fontSize: 12, color: "#94A3B8", marginLeft: 8, fontFamily: "monospace" }}>
+                            {fmtT(inicio.ts)} → {fmtT(e.ts)}
+                          </span>
+                          {inicio.note && <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>📝 {inicio.note}</div>}
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: isDeleted ? "#94A3B8" : Ti?.color, fontFamily: "monospace", textDecoration: isDeleted ? "line-through" : "none" }}>{fmtDur(dur)}</div>
+                          <div style={{ display: "flex", gap: 3, marginTop: 3, justifyContent: "flex-end" }}>
+                            <button onClick={() => openEdit(inicio)} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 5, padding: "2px 6px", fontSize: 10, color: "#64748B", cursor: "pointer" }} type="button">
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => {
+                                deleteEntry(inicio.id);
+                                deleteEntry(e.id);
+                              }}
+                              style={{ background: isDeleted ? "#F0FDF4" : "#F8FAFC", border: `1px solid ${isDeleted ? "#BBF7D0" : "#E2E8F0"}`, borderRadius: 5, padding: "2px 6px", fontSize: 10, color: isDeleted ? "#16A34A" : "#64748B", cursor: "pointer" }}
+                              type="button"
+                            >
+                              {isDeleted ? "↩" : "🗑"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                }
+                if (T.kind === "open" && !shown.has(e.id)) {
+                  shown.add(e.id);
+                  return <LogCard key={e.id} entry={e} all={todayEnts} onEdit={() => openEdit(e)} onDel={() => deleteEntry(e.id)} />;
+                }
+                if (!shown.has(e.id)) {
+                  shown.add(e.id);
+                  return <LogCard key={e.id} entry={e} all={todayEnts} onEdit={() => openEdit(e)} onDel={() => deleteEntry(e.id)} />;
+                }
+                return null;
+              })
+              .filter(Boolean);
+          })()}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Desglose de límites (antes desplegable en HOY); solo en Resumen. */
+function ResumenDetalleTiemposTecnico({ norma }) {
+  const C = { soft: "#f8fafc", line: "#e2e8f0", tx: "#0f172a", su: "#64748b", card: "#ffffff" };
+  const rCont = norma.rCont ?? norma.canDrive ?? 0;
+  const rDay = norma.rDay ?? norma.canDrive ?? 0;
+  const semC = norma.weekDrive >= LIM.WEEK * 0.9 ? "#EF4444" : norma.weekDrive >= LIM.WEEK * 0.75 ? "#F97316" : "#22C55E";
+  const contC = rCont <= 30 ? "#EF4444" : rCont <= 90 ? "#F97316" : "#22C55E";
+  const dayC = rDay <= 60 ? "#EF4444" : rDay <= 120 ? "#F97316" : "#22C55E";
+  return (
+    <div style={{ background: C.card, borderRadius: 14, padding: "14px 14px 12px", border: `1px solid ${C.line}` }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: C.su, letterSpacing: 1, marginBottom: 10 }}>DESGLOSE DE TIEMPOS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 10 }}>
+        {[
+          { v: norma.jornadaCount || 0, max: 6, l: "Jornadas", c: (norma.jornadaCount || 0) >= 6 ? "#EF4444" : (norma.jornadaCount || 0) >= 5 ? "#F97316" : "#22C55E" },
+          { v: norma.extUsed || 0, max: 2, l: "10h", c: (norma.extUsed || 0) >= 2 ? "#EF4444" : "#F59E0B" },
+          { v: norma.redRests || 0, max: 3, l: "9h", c: (norma.redRests || 0) >= 3 ? "#EF4444" : "#22C55E" },
+        ].map(({ v, max, l, c }) => (
+          <div key={l} style={{ background: C.soft, borderRadius: 8, padding: "8px", textAlign: "center" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: c, fontFamily: "monospace" }}>
+              {v}
+              <span style={{ fontSize: 10, color: C.su }}>/{max}</span>
+            </div>
+            <div style={{ fontSize: 9, color: C.su, marginTop: 2 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      {[
+        { l: "Conducción hoy", v: norma.todayDrive || 0, max: norma.maxDay || 540, c: dayC },
+        { l: "Conducción continua", v: norma.cont || 0, max: 270, c: contC },
+        { l: "Semana", v: norma.weekDrive || 0, max: LIM.WEEK, c: semC },
+        { l: "Bisemanal", v: norma.biweekDrive || 0, max: LIM.BIWEEK, c: "#818CF8" },
+      ].map(({ l, v, max, c }) => {
+        const pct = Math.min(100, Math.round((v / Math.max(1, max)) * 100));
+        const cc = pct >= 95 ? "#EF4444" : pct >= 80 ? "#F97316" : c;
+        return (
+          <div key={l} style={{ background: C.soft, borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: C.su, fontWeight: 600 }}>{l}</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: cc, fontFamily: "monospace" }}>
+                {fmtDur(v)}
+                <span style={{ fontSize: 10, color: C.su }}>/{fmtDur(max)}</span>
+              </span>
+            </div>
+            <div style={{ background: "#e2e8f0", borderRadius: 99, height: 4, overflow: "hidden" }}>
+              <div style={{ background: cc, width: `${pct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Resumen servicio activo para copiloto en pestaña HOY (misma fuente que TabServicio). */
+function useCopilotServicio(uid){
+  const[servicio,setServicio]=useState(null);
+  const[stops,setStops]=useState([]);
+  const[evidenciasByStop,setEvidenciasByStop]=useState({});
+  const cargar=useCallback(async()=>{
+    if(!uid){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
+    try{
+      const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
+      const data=await r.json();
+      if(!data.length){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
+      setServicio(data[0]);
+      const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${data[0].id}&order=orden.asc`);
+      const st=await sr.json();
+      const list=Array.isArray(st)?st:[];
+      setStops(list);
+      const ids=list.map(s=>s.id).filter(Boolean).join(",");
+      if(!ids){setEvidenciasByStop({});return;}
+      const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${ids})&order=created_at.desc`);
+      const evs=await evr.json();
+      setEvidenciasByStop(groupDocumentsByStop(Array.isArray(evs)?evs:[]));
+    }catch(_){
+      setServicio(null);setStops([]);setEvidenciasByStop({});
+    }
+  },[uid]);
+  useEffect(()=>{void cargar();},[cargar]);
+  useEffect(()=>{
+    function onRecarga(){void cargar();}
+    window.addEventListener("cuaderno-recargar-servicio",onRecarga);
+    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
+  },[cargar]);
+  return{servicio,stops,evidenciasByStop,recargar:cargar};
+}
+
+function copilotStopGroup(tipo){
+  const t=String(tipo||"").toLowerCase();
+  if(t==="carga")return"carga";
+  if(t==="descarga")return"descarga";
+  if(t.includes("carga")&&t.includes("descarga"))return"carga_descarga";
+  return"otra";
+}
+function copilotStopLabel(tipo){
+  const g=copilotStopGroup(tipo);
+  if(g==="carga")return"Carga";
+  if(g==="descarga")return"Descarga";
+  if(g==="carga_descarga")return"Carga/descarga";
+  return"Parada";
+}
+function copilotPlaceName(stop){
+  const n=String(stop?.nombre||"").trim();
+  const d=String(stop?.direccion||"").trim();
+  if(n)return n;
+  if(d)return d;
+  return`Parada ${stop?.orden??""}`.trim();
+}
+function copilotStopDone(stop){
+  return!!stop?.hora_salida_real||stop?.estado==="completado";
+}
+
+function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equipoConductor,clock,lang="es",showToast,activeEntries=[],onOpenServicio}){
   const TE=active?EV[active.type]:null;
   const isDriving=active?.type==="inicio_conduccion";
   const isPausing=active&&["inicio_pausa","inicio_descanso","inicio_descanso_frac","inicio_descanso_semanal","inicio_descanso_semanal_r"].includes(active.type);
@@ -5159,361 +5806,519 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
   const ventana=norma.dispInfo?.dispRemain??norma.ventanaDisp?.restante??ventanaMax;
   const ventanaCol=ventana<=60?"#EF4444":ventana<=120?"#F97316":"#22C55E";
 
-  const R=88,CIRC=2*Math.PI*R;
-  let pctRing,ringCol;
-  if(isPausing){
-    const cr=norma.crDur||0;
-    let minP=norma.crType==="inicio_descanso"?540:norma.sp===1?30:cr<20?15:45;
-    pctRing=Math.min(1,cr/minP); ringCol=pctRing>=1?"#22C55E":"#818CF8";
-  } else {
-    pctRing=Math.max(0,1-(rCont/270)); ringCol=contC;
+  const uidCop = getUserId();
+  const { servicio: cpSv, stops: cpStops, evidenciasByStop: cpEvs } = useCopilotServicio(uidCop);
+  const sortedCp = [...(cpStops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  const cpCurrent = sortedCp.length ? getCurrentStop(sortedCp) : null;
+  const cpPlan = cpSv ? getOperationalPlanSnapshot(cpSv) : null;
+  const cpOpEta = cpSv ? getOperationalEtaSnapshot(cpSv) : null;
+  const cpEtaReady = cpSv ? isEtaActivationReady(cpSv) : false;
+  const cpEta =
+    cpEtaReady
+      ? formatOperationalEtaLabel(cpOpEta?.eta) ||
+        (!isRelativeEtaLabel(cpOpEta?.label) ? cpOpEta?.label : null) ||
+        formatOperationalEtaLabel(cpPlan?.planned_eta) ||
+        (!isRelativeEtaLabel(cpPlan?.planned_eta_label) ? cpPlan?.planned_eta_label : null)
+      : null;
+  const cpKm = Number.isFinite(Number(cpPlan?.planned_km)) ? Math.round(Number(cpPlan.planned_km)) : null;
+  const evsCur = cpCurrent?.id ? cpEvs?.[cpCurrent.id] : null;
+  const cmrN = Array.isArray(evsCur) ? evsCur.filter((e) => e?.tipo === "cmr").length : 0;
+  const incN = Array.isArray(evsCur) ? evsCur.filter((e) => e?.tipo === "incidencia").length : 0;
+
+  const estadoHumano =
+    jState === "none"
+      ? "Disponible"
+      : jState === "closed"
+        ? "Descansando"
+        : isDriving
+          ? "Conduciendo"
+          : isPausing
+            ? norma.crType === "inicio_descanso"
+              ? "Descansando"
+              : "En pausa"
+            : "Jornada abierta";
+
+  let normPill = { icon: "✅", text: "Vas bien", bg: "#dcfce7", fg: "#15803d", br: "#bbf7d0" };
+  if (jState === "open" && (norma.canDrive <= 0 || (isDriving && rCont <= 0)))
+    normPill = { icon: "🔴", text: "Límite próximo", bg: "#fee2e2", fg: "#b91c1c", br: "#fecaca" };
+  else if (jState === "open" && isDriving && rCont > 0 && rCont <= 35)
+    normPill = { icon: "⚠", text: `Descanso en ${fmtDur(rCont)}`, bg: "#ffedd5", fg: "#c2410c", br: "#fed7aa" };
+  else if (jState === "open" && norma.canDrive > 0 && norma.canDrive <= 60 && !isPausing)
+    normPill = { icon: "⚠", text: `Para en ${fmtDur(norma.canDrive)}`, bg: "#ffedd5", fg: "#c2410c", br: "#fed7aa" };
+
+  let svcHead = "Sin servicio activo";
+  let svcSub = "Aquí verás la siguiente parada y documentos pendientes.";
+  let svcCta = "Ir al servicio";
+  if (cpSv) {
+    const ruta = getFixedServiceRoute(cpSv);
+    if (cpSv.estado === "asignado") {
+      svcHead = "Servicio asignado";
+      svcSub = ruta || "Pendiente de iniciar";
+      svcCta = "Iniciar servicio";
+    } else if (!getOperationalPlanConfirmedAt(cpSv)) {
+      svcHead = "Confirma ruta y destino";
+      svcSub = ruta || "Servicio en curso";
+      svcCta = "Añadir destino";
+    } else if (cpCurrent && !cpCurrent.hora_llegada_real) {
+      svcHead = `Próxima parada · ${copilotStopLabel(cpCurrent.tipo)}`;
+      svcSub = copilotPlaceName(cpCurrent);
+      svcCta = "Confirmar llegada";
+    } else if (cpCurrent && !copilotStopDone(cpCurrent)) {
+      svcHead = `En operación · ${copilotStopLabel(cpCurrent.tipo)}`;
+      svcSub = copilotPlaceName(cpCurrent);
+      svcCta = cmrN ? "Subir o revisar CMR" : "Finalizar operación";
+    } else {
+      svcHead = "Servicio en curso";
+      svcSub = ruta || "Sigue el plan en Servicio";
+      svcCta = "Ver servicio";
+    }
   }
-  const dash=CIRC*(1-pctRing);
 
-  // Texto anillo — pausa cuenta POSITIVA (tiempo hecho)
-  let ringBig,ringSmall,ringLabel;
-  if(isPausing){
-    const cr=norma.crDur||0;
-    let minP=norma.crType==="inicio_descanso"?540:norma.sp===1?30:cr<20?15:45;
-    const rest=Math.max(0,minP-cr);
-    ringBig=fmtDur(cr);      // tiempo hecho — contador positivo
-    ringSmall=rest>0?`mínimo ${fmtDur(minP)}`:"✓ Mínimo completado";
-    ringLabel=norma.crType==="inicio_descanso"?"DESCANSANDO":"EN PAUSA";
-  } else if(jState==="open"){
-    ringBig=rCont<=0?"¡PARA!":fmtDur(rCont);
-    ringSmall=rCont<=0?"Límite alcanzado":"antes de parar";
-    ringLabel="CONDUCCIÓN CONTINUA";
-  } else { ringBig=""; ringSmall=""; ringLabel=""; }
+  const openSvc = () => {
+    if (typeof onOpenServicio === "function") onOpenServicio();
+  };
 
-  return(
-    <div style={{background:"#0d1424",minHeight:"calc(100vh - 124px)",display:"flex",flexDirection:"column",fontFamily:"system-ui,sans-serif"}}>
+  let pauseProg = null;
+  if (jState === "closed") {
+    const lastClose = activeEntries.slice().reverse().find((e) => e.type === "fin_jornada");
+    const lastDescansoInicio = activeEntries.slice().reverse().find(
+      (e) => e.type === "inicio_descanso" && (!lastClose || toDate(e.ts) >= toDate(lastClose.ts)),
+    );
+    const descansoStart = lastDescansoInicio?.ts || lastClose?.ts;
+    if (descansoStart) {
+      const minHecho = Math.max(0, diffMin(toDate(descansoStart), clock));
+      const puedeReducir = (norma.redRests || 0) < 3;
+      const minNecesario = puedeReducir ? 540 : 660;
+      const pct = Math.min(100, Math.round((minHecho / minNecesario) * 100));
+      pauseProg = { minHecho, minNecesario, pct, puedeReducir, ok: minHecho >= minNecesario };
+    }
+  }
 
-      {/* HEADER */}
-      <div style={{padding:"14px 18px 10px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:"1px solid #0D1420"}}>
-        <div>
-          <div style={{fontSize:11,color:"#334155",fontWeight:700,letterSpacing:1.5}}>
-            {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"}).toUpperCase()}
-          </div>
-          <div style={{fontSize:24,fontWeight:900,color:"#F8FAFC",fontFamily:"monospace",letterSpacing:1,lineHeight:1.1,marginTop:2}}>{fmtT(clock)}</div>
-          {matricula&&<div style={{fontSize:10,color:"#1E3A5F",fontFamily:"monospace",letterSpacing:2,marginTop:3}}>{matricula}</div>}
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{display:"flex",alignItems:"center",gap:6,justifyContent:"flex-end",marginBottom:4}}>
-            <div style={{width:7,height:7,borderRadius:"50%",background:jState==="open"?"#22C55E":jState==="closed"?"#EF4444":"#334155",boxShadow:jState==="open"?"0 0 8px #22C55E":"none"}}/>
-            <div style={{fontSize:10,fontWeight:800,letterSpacing:1,color:jState==="open"?"#22C55E":jState==="closed"?"#EF4444":"#334155"}}>
-              {jState==="open"?"ACTIVA":jState==="closed"?"CERRADA":"INACTIVA"}
+  const C = {
+    bg: "#f1f5f9",
+    card: "#ffffff",
+    line: "#e2e8f0",
+    tx: "#0f172a",
+    su: "#64748b",
+    soft: "#f8fafc",
+  };
+
+  let proxPausaEtiqueta = "Próxima pausa";
+  let proxPausaTexto = "—";
+  if (jState === "open") {
+    if (isPausing) {
+      proxPausaEtiqueta = norma.crType === "inicio_descanso" ? "Descanso en curso" : "Pausa en curso";
+      proxPausaTexto = `Llevas ${fmtDur(norma.crDur || 0)}`;
+    } else if (isDriving) {
+      proxPausaEtiqueta = "Tiempo hasta pausa";
+      proxPausaTexto = rCont <= 0 ? "Conviene parar ya" : fmtDur(rCont);
+    } else {
+      proxPausaEtiqueta = "Próxima pausa";
+      proxPausaTexto =
+        norma.canDrive > 0 ? `Al conducir, hasta ${fmtDur(norma.canDrive)}` : "Antes de seguir, pausa o descanso";
+    }
+  }
+
+  return (
+    <div
+      style={{
+        background: C.bg,
+        minHeight: "calc(100vh - 124px)",
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "system-ui,sans-serif",
+        paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+      }}
+    >
+      {/* Cabecera copiloto */}
+      <div
+        style={{
+          padding: "14px 16px 12px",
+          background: C.card,
+          borderBottom: `1px solid ${C.line}`,
+          boxShadow: "0 1px 0 rgba(15,23,42,.04)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: C.tx, fontVariantNumeric: "tabular-nums", letterSpacing: -0.5 }}>
+              {fmtT(clock)}
             </div>
+            <div style={{ fontSize: 12, color: C.su, marginTop: 4, fontWeight: 600 }}>{estadoHumano}</div>
+            {matricula ? (
+              <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "monospace", marginTop: 4 }}>{matricula}</div>
+            ) : null}
           </div>
-          {jState==="open"&&(
-            <div style={{textAlign:"right"}}>
-              <div style={{fontWeight:900,color:ventanaCol,fontFamily:"monospace",fontSize:18,lineHeight:1}}>
-                {fmtDur(ventana)}
-              </div>
-              <div style={{fontSize:9,color:"#334155",marginTop:2}}>
-                de {fmtDur(ventanaMax)} ventana
-              </div>
+          <div style={{ textAlign: "right", minWidth: 0 }}>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                background: normPill.bg,
+                color: normPill.fg,
+                border: `1px solid ${normPill.br}`,
+                borderRadius: 999,
+                padding: "6px 11px",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              <span>{normPill.icon}</span>
+              <span>{normPill.text}</span>
             </div>
-          )}
+            {jState === "open" ? (
+              <div style={{ fontSize: 11, color: C.su, marginTop: 8, fontWeight: 600 }}>
+                Ventana · <span style={{ color: ventanaCol, fontWeight: 800 }}>{fmtDur(ventana)}</span> / {fmtDur(ventanaMax)}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
-      {/* ALERTA DESCANSO INSUFICIENTE */}
-      {jState==="open"&&(()=>{
-        const lastClose=activeEntries.slice().reverse().find(e=>e.type==="fin_jornada");
-        const lastOpen=activeEntries.slice().reverse().find(e=>e.type==="inicio_jornada");
-        if(!lastClose||!lastOpen)return null;
-        if(toDate(lastOpen.ts)<=toDate(lastClose.ts))return null;
-        const minDesc=diffMin(toDate(lastClose.ts),toDate(lastOpen.ts));
-        if(minDesc>=9*60)return null;
-        const minFaltan=Math.round(9*60-minDesc);
-        return(
-          <div style={{margin:"6px 14px 0",background:"#450a0a",borderRadius:12,padding:"10px 14px",border:"1px solid #EF4444",flexShrink:0}}>
-            <div style={{fontSize:13,fontWeight:800,color:"#FCA5A5"}}>⚠️ Descanso insuficiente</div>
-            <div style={{fontSize:12,color:"#FCA5A580",marginTop:3,lineHeight:1.5}}>
-              Descansaste {fmtDur(minDesc)} — necesitas al menos 9h. Faltan {fmtDur(minFaltan)}. Los contadores del día anterior se mantienen.
-            </div>
-          </div>
-        );
-      })()}
-      {norma.canDrive<=0&&jState==="open"&&(
-        <div style={{margin:"10px 14px 0",background:"#7F1D1D",borderRadius:12,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0,border:"1px solid #EF4444"}}>
-          <span style={{fontSize:22}}>🚨</span>
-          <div><div style={{fontSize:14,fontWeight:900,color:"white"}}>PARA AHORA</div>
-          <div style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>Límite de conducción alcanzado</div></div>
-        </div>
-      )}
-      {isDriving&&rCont>0&&rCont<=30&&norma.canDrive>0&&(
-        <div style={{margin:"10px 14px 0",background:"#78350F",borderRadius:12,padding:"10px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0,border:"1px solid #F97316"}}>
-          <span style={{fontSize:20}}>⏰</span>
-          <div style={{fontSize:13,fontWeight:800,color:"white"}}>Para en {fmtDur(rCont)} — busca área</div>
-        </div>
-      )}
-
-      {/* ANILLO */}
-      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"8px 0 0",minHeight:200}}>
-        {jState==="open"?(
-          <div style={{position:"relative",width:240,height:240}}>
-            <svg width="240" height="240" viewBox="0 0 240 240" style={{position:"absolute",inset:0}}>
-              <circle cx="120" cy="120" r={R} fill="none" stroke="#0D1420" strokeWidth="12"/>
-              <circle cx="120" cy="120" r={R} fill="none" stroke={ringCol} strokeWidth="12"
-                strokeDasharray={CIRC} strokeDashoffset={dash}
-                strokeLinecap="round" transform="rotate(-90 120 120)"
-                style={{transition:"stroke-dashoffset 1s ease,stroke .4s"}}/>
-            </svg>
-            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2}}>
-              <div style={{fontSize:10,fontWeight:800,color:"#94A3B8",letterSpacing:2}}>{ringLabel}</div>
-              <div style={{fontSize:ringBig.length>5?30:ringBig==="✓"?52:40,fontWeight:900,color:ringCol,fontFamily:"monospace",lineHeight:1,textAlign:"center",marginTop:2}}>
-                {ringBig}
+      <div style={{ padding: "14px 16px 0", flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
+        {jState === "open" &&
+          (() => {
+            const lastClose = activeEntries.slice().reverse().find((e) => e.type === "fin_jornada");
+            const lastOpen = activeEntries.slice().reverse().find((e) => e.type === "inicio_jornada");
+            if (!lastClose || !lastOpen) return null;
+            if (toDate(lastOpen.ts) <= toDate(lastClose.ts)) return null;
+            const minDesc = diffMin(toDate(lastClose.ts), toDate(lastOpen.ts));
+            if (minDesc >= 9 * 60) return null;
+            const minFaltan = Math.round(9 * 60 - minDesc);
+            return (
+              <div
+                style={{
+                  background: "#fef2f2",
+                  borderRadius: 14,
+                  padding: "12px 14px",
+                  border: "1px solid #fecaca",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#b91c1c" }}>⚠️ Descanso insuficiente</div>
+                <div style={{ fontSize: 12, color: "#991b1b", marginTop: 4, lineHeight: 1.45 }}>
+                  Descansaste {fmtDur(minDesc)} — necesitas al menos 9h. Faltan {fmtDur(minFaltan)}.
+                </div>
               </div>
-              <div style={{fontSize:13,color:"#CBD5E1",marginTop:4,fontWeight:600}}>{ringSmall}</div>
-              {isDriving&&actMins>0&&(
-                <div style={{marginTop:6,background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.15)",borderRadius:20,padding:"3px 10px"}}>
-                  <span style={{fontSize:11,color:"#F59E0B",fontWeight:700}}>{fmtDur(actMins)} conduciendo</span>
-                </div>
-              )}
-              {isPausing&&(()=>{
-                const cr=norma.crDur||0;
-                let minP=norma.crType==="inicio_descanso"?540:norma.sp===1?30:cr<20?15:45;
-                const rest=Math.max(0,minP-cr);
-                return rest>0?(
-                  <div style={{marginTop:6,background:"rgba(129,140,248,.08)",border:"1px solid rgba(129,140,248,.15)",borderRadius:20,padding:"3px 10px"}}>
-                    <span style={{fontSize:11,color:"#818CF8",fontWeight:700}}>faltan {fmtDur(rest)}</span>
-                  </div>
-                ):(
-                  <div style={{marginTop:6,background:"rgba(34,197,94,.08)",border:"1px solid rgba(34,197,94,.15)",borderRadius:20,padding:"3px 10px"}}>
-                    <span style={{fontSize:11,color:"#22C55E",fontWeight:700}}>✓ Mínimo completado</span>
-                  </div>
-                );
-              })()}
+            );
+          })()}
+
+        {norma.canDrive <= 0 && jState === "open" && (
+          <div
+            style={{
+              background: "#fef2f2",
+              borderRadius: 14,
+              padding: "12px 14px",
+              border: "1px solid #fecaca",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <span style={{ fontSize: 22 }}>🚨</span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#b91c1c" }}>Para ahora</div>
+              <div style={{ fontSize: 12, color: "#991b1b" }}>Límite de conducción alcanzado</div>
             </div>
           </div>
-        ):(
-          <div style={{textAlign:"center",padding:"16px 20px",width:"100%",maxWidth:280}}>
-            <div style={{fontSize:48,marginBottom:8}}>🛌</div>
-            <div style={{fontSize:14,color:"#64748B",fontWeight:600,marginBottom:16}}>
-              {jState==="closed"?"Descansando":"Sin jornada activa"}
-            </div>
-            {jState==="closed"&&(()=>{
-              // Calcular tiempo de descanso actual
-              const lastClose=activeEntries.slice().reverse().find(e=>e.type==="fin_jornada");
-              const lastDescansoInicio=activeEntries.slice().reverse().find(e=>
-                e.type==="inicio_descanso"&&(!lastClose||toDate(e.ts)>=toDate(lastClose.ts))
-              );
-              const descansoStart=lastDescansoInicio?.ts||lastClose?.ts;
-              if(!descansoStart)return null;
-              const minHecho=Math.max(0,diffMin(toDate(descansoStart),clock));
-              // ¿Puede hacer reducido? solo si redRests < MAX_RED
-              const puedeReducir=(norma.redRests||0)<3;
-              const minNecesario=puedeReducir?540:660; // 9h o 11h
-              const pct=Math.min(100,Math.round(minHecho/minNecesario*100));
-              const completado=minHecho>=minNecesario;
-              const col=completado?"#22C55E":pct>60?"#F59E0B":"#818CF8";
-              const minRestante=Math.max(0,minNecesario-minHecho);
-              const R=70,CIRC=2*Math.PI*R;
-              const dash=CIRC*(1-pct/100);
-              return(
-                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
-                  {/* Mini anillo de descanso */}
-                  <div style={{position:"relative",width:180,height:180}}>
-                    <svg width="180" height="180" viewBox="0 0 180 180" style={{position:"absolute",inset:0}}>
-                      <circle cx="90" cy="90" r={R} fill="none" stroke="#0D1420" strokeWidth="10"/>
-                      <circle cx="90" cy="90" r={R} fill="none" stroke={col} strokeWidth="10"
-                        strokeDasharray={CIRC} strokeDashoffset={dash}
-                        strokeLinecap="round" transform="rotate(-90 90 90)"
-                        style={{transition:"stroke-dashoffset 1s ease"}}/>
-                    </svg>
-                    <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-                      <div style={{fontSize:8,color:"#334155",fontWeight:700,letterSpacing:1.5,marginBottom:2}}>DESCANSANDO</div>
-                      <div style={{fontSize:completado?20:28,fontWeight:900,color:col,fontFamily:"monospace",lineHeight:1}}>
-                        {completado?"✓":fmtDur(minHecho)}
-                      </div>
-                      <div style={{fontSize:10,color:"#475569",marginTop:2}}>
-                        de {fmtDur(minNecesario)}
-                      </div>
-                    </div>
-                  </div>
-                  {/* Estado */}
-                  {completado?(
-                    <div style={{background:"rgba(34,197,94,.1)",border:"1px solid rgba(34,197,94,.2)",borderRadius:12,padding:"10px 18px",textAlign:"center"}}>
-                      <div style={{fontSize:14,fontWeight:800,color:"#22C55E"}}>✓ Descanso completado</div>
-                      <div style={{fontSize:11,color:"#64748B",marginTop:2}}>
-                        {puedeReducir?"Descanso reducido (9h)":"Descanso completo (11h)"}
-                      </div>
-                    </div>
-                  ):(
-                    <div style={{background:"#0D1420",borderRadius:12,padding:"10px 18px",textAlign:"center",width:"100%",maxWidth:220}}>
-                      <div style={{fontSize:13,fontWeight:700,color:col}}>Faltan {fmtDur(minRestante)}</div>
-                      <div style={{fontSize:10,color:"#475569",marginTop:2}}>
-                        {puedeReducir?`Descanso reducido · mín. 9h (${norma.redRests||0}/3 usados)`:"Descanso completo · mín. 11h"}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+        )}
+
+        {isDriving && rCont > 0 && rCont <= 30 && norma.canDrive > 0 && (
+          <div
+            style={{
+              background: "#fff7ed",
+              borderRadius: 14,
+              padding: "11px 14px",
+              border: "1px solid #fed7aa",
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#9a3412",
+            }}
+          >
+            ⏰ Para en {fmtDur(rCont)} — busca área
           </div>
+        )}
+
+        {/* Tiempo disponible — prioridad alta */}
+        <div
+          style={{
+            background: C.card,
+            borderRadius: 16,
+            padding: "16px 16px 15px",
+            border: `1px solid ${C.line}`,
+            boxShadow: "0 6px 24px rgba(15,23,42,.07)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", letterSpacing: 0.8, marginBottom: 12 }}>TIEMPO DISPONIBLE</div>
+          {jState === "open" ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Jornada disponible</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: dayC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(rDay)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Conducción restante</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: contC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(rCont)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Jornada hoy</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: dayC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(norma.todayDrive || 0)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>{proxPausaEtiqueta}</div>
+                <div style={{ fontSize: 15, fontWeight: 750, color: C.tx, marginTop: 4, lineHeight: 1.35 }}>{proxPausaTexto}</div>
+              </div>
+            </div>
+          ) : jState === "closed" && pauseProg ? (
+            <div>
+              <div style={{ fontSize: 13, color: C.su, fontWeight: 650, marginBottom: 8 }}>Descanso entre jornadas</div>
+              <div style={{ height: 8, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{ width: `${pauseProg.pct}%`, height: "100%", background: pauseProg.ok ? "#22c55e" : "#818cf8", borderRadius: 99, transition: "width .4s" }} />
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx, marginTop: 10 }}>
+                {pauseProg.ok ? "✓ Mínimo cumplido" : `${fmtDur(pauseProg.minHecho)} de ${fmtDur(pauseProg.minNecesario)}`}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 14, color: C.su, fontWeight: 650 }}>Inicia jornada para ver cuánto puedes conducir.</div>
+          )}
+        </div>
+
+        {jState === "open" && active && TE ? (
+          <div
+            style={{
+              background: C.card,
+              border: `1px solid ${C.line}`,
+              borderRadius: 12,
+              padding: "10px 12px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: TE.color, flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: TE.color }}>{TE.label}</div>
+              <div style={{ fontSize: 11, color: C.su, marginTop: 2 }}>desde {fmtT(toDate(active.ts))}</div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Acciones jornada y conducción — justo después del tiempo */}
+        <div style={{ padding: "2px 0 0", display: "flex", flexDirection: "column", gap: 10 }}>
+          {jState === "none" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button
+                onClick={() => {
+                  playClick();
+                  onAct("inicio_jornada");
+                }}
+                style={{
+                  width: "100%",
+                  background: "#16a34a",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 14,
+                  padding: "16px",
+                  fontSize: 16,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Comenzar jornada
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  onAct("__datos_actuales__");
+                }}
+                style={{
+                  width: "100%",
+                  background: C.card,
+                  color: C.tx,
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 12,
+                  padding: "14px 16px",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  textAlign: "center",
+                }}
+              >
+                Iniciar jornada con horas
+              </button>
+            </div>
+          )}
+          {jState === "closed" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    onAct("inicio_jornada");
+                  }}
+                  style={{ background: "#16a34a", color: "white", border: "none", borderRadius: 12, padding: "14px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}
+                >
+                  Nueva jornada
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    onAct("continuar_jornada");
+                  }}
+                  style={{ background: C.card, color: C.su, border: `1px solid ${C.line}`, borderRadius: 12, padding: "14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+                >
+                  Continuar
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  onAct("__datos_actuales__");
+                }}
+                style={{
+                  width: "100%",
+                  background: C.card,
+                  color: C.tx,
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 12,
+                  padding: "14px 16px",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  textAlign: "center",
+                }}
+              >
+                Iniciar jornada con horas
+              </button>
+            </div>
+          )}
+          {jState === "open" && !active && (
+            <button
+              type="button"
+              onClick={() => {
+                playClick();
+                onAct("__accion__");
+              }}
+              style={{
+                width: "100%",
+                background: "#f59e0b",
+                color: "#0f172a",
+                border: "none",
+                borderRadius: 14,
+                padding: "16px",
+                fontSize: 16,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Siguiente paso
+            </button>
+          )}
+          {jState === "open" && active && (
+            <button
+              type="button"
+              onClick={() => {
+                if (isDriving) onAct("__parar__");
+                else onAct("__fin_silencioso__");
+              }}
+              style={{
+                width: "100%",
+                background: isDriving ? "#dc2626" : TE?.color || "#64748b",
+                color: "white",
+                border: "none",
+                borderRadius: 14,
+                padding: "15px",
+                fontSize: 15,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              {isDriving ? "Parar conducción" : `Fin de ${TE?.label || "actividad"}`}
+            </button>
+          )}
+        </div>
+
+        {/* Contexto operativo — después de las acciones, tono secundario */}
+        <div
+          style={{
+            background: C.soft,
+            borderRadius: 14,
+            padding: "12px 14px",
+            border: `1px solid ${C.line}`,
+          }}
+        >
+          <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", letterSpacing: 1, marginBottom: 6 }}>CONTEXTO OPERATIVO</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.tx, lineHeight: 1.28 }}>{svcHead}</div>
+          <div style={{ fontSize: 13, color: C.su, marginTop: 5, fontWeight: 600, lineHeight: 1.4 }}>{svcSub}</div>
+          {cpEta || cpKm != null ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 14px", marginTop: 8, fontSize: 12, color: C.tx, fontWeight: 700 }}>
+              {cpEta ? (
+                <span>
+                  ⏱ ETA <span style={{ fontVariantNumeric: "tabular-nums" }}>{cpEta}</span>
+                </span>
+              ) : null}
+              {cpKm != null ? (
+                <span>
+                  🚛 {cpKm} km
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {(cmrN === 0 && cpCurrent && cpCurrent.hora_llegada_real && !copilotStopDone(cpCurrent)) || incN > 0 ? (
+            <div style={{ fontSize: 11, color: incN > 0 ? "#c2410c" : C.su, marginTop: 8, fontWeight: 650 }}>
+              {incN > 0 ? `⚠ ${incN} incidencia(s)` : "📦 Documento pendiente: CMR"}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              playClick();
+              openSvc();
+            }}
+            style={{
+              marginTop: 10,
+              minHeight: 44,
+              maxWidth: "100%",
+              padding: "9px 14px",
+              background: "transparent",
+              color: C.su,
+              border: `1px solid ${C.line}`,
+              borderRadius: 10,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+              alignSelf: "flex-start",
+            }}
+          >
+            {svcCta} →
+          </button>
+        </div>
+
+        {jState === "open" && (
+          <button
+            type="button"
+            onClick={() => onAct("__inspeccion__")}
+            style={{
+              width: "100%",
+              background: "transparent",
+              border: `1px dashed ${C.line}`,
+              borderRadius: 10,
+              padding: "8px",
+              cursor: "pointer",
+              color: C.su,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            👁 Inspección
+          </button>
         )}
       </div>
-
-      {/* FILA 3 DATOS */}
-      {jState==="open"&&(
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,padding:"0 14px",margin:"4px 0 10px",flexShrink:0}}>
-          {[
-            {label:"JORNADA",val:fmtDur(norma.todayDrive||0),sub:"resto "+fmtDur(rDay),col:dayC,cur:norma.todayDrive||0,max:norma.maxDay||540},
-            {label:"SEMANA",val:fmtDur(norma.weekDrive||0),sub:"resto "+fmtDur(rWeek),col:semC,cur:norma.weekDrive||0,max:LIM.WEEK},
-            {label:"BISEMANAL",val:fmtDur(norma.biweekDrive||0),sub:"máx 90h",col:(norma.biweekDrive||0)>=(LIM.BIWEEK*0.9)?"#EF4444":(norma.biweekDrive||0)>=(LIM.BIWEEK*0.75)?"#F97316":"#818CF8",cur:norma.biweekDrive||0,max:LIM.BIWEEK},
-          ].map(({label,val,sub,col,cur,max})=>(
-            <div key={label} style={{background:"#0D1420",border:"1px solid #0F172A",borderRadius:12,padding:"10px 8px",textAlign:"center"}}>
-              <div style={{fontSize:9,fontWeight:800,color:"#64748B",letterSpacing:1.2,marginBottom:5}}>{label}</div>
-              <div style={{fontSize:15,fontWeight:900,color:col,fontFamily:"monospace",lineHeight:1}}>{val}</div>
-              <div style={{fontSize:10,color:"#64748B",marginTop:3,fontWeight:500}}>{sub}</div>
-              <div style={{height:3,background:"#080E1A",borderRadius:2,marginTop:5,overflow:"hidden"}}>
-                <div style={{width:Math.min(100,(cur/Math.max(1,max)*100))+"%",height:"100%",background:col,borderRadius:2,transition:"width .4s"}}/>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ACTIVIDAD ACTUAL */}
-      {jState==="open"&&active&&TE&&(
-        <div style={{margin:"0 14px 8px",background:TE.color+"0C",border:"1px solid "+TE.color+"20",borderRadius:12,padding:"10px 14px",flexShrink:0,display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:8,height:8,borderRadius:"50%",background:TE.color,flexShrink:0}}/>
-          <div style={{flex:1}}>
-            <div style={{fontSize:13,fontWeight:800,color:TE.color,letterSpacing:.5}}>{TE.label.toUpperCase()}</div>
-            <div style={{fontSize:11,color:"#64748B",marginTop:1}}>desde {fmtT(toDate(active.ts))}</div>
-          </div>
-          {isDriving&&rCont<=60&&rCont>0&&(
-            <div style={{fontSize:12,color:rCont<=30?"#EF4444":"#F97316",fontWeight:800,background:rCont<=30?"rgba(239,68,68,.08)":"rgba(249,115,22,.08)",padding:"4px 8px",borderRadius:8}}>
-              ⚠ {fmtDur(rCont)}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* BOTÓN PRINCIPAL */}
-      <div style={{padding:"0 14px",flexShrink:0}}>
-        {jState==="none"&&(
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <button onClick={()=>{playClick();onAct("inicio_jornada");}}
-              style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:16,padding:"19px",fontSize:17,fontWeight:900,cursor:"pointer",boxShadow:"0 6px 24px rgba(34,197,94,.2)"}}>
-              ▶ COMENZAR JORNADA
-            </button>
-            <button onClick={()=>onAct("__datos_actuales__")}
-              style={{width:"100%",background:"#1E293B",color:"#F59E0B",border:"2px solid #F59E0B40",borderRadius:14,padding:"18px 16px",fontSize:16,fontWeight:800,cursor:"pointer",textAlign:"left",display:"flex",flexDirection:"column",gap:4}}>
-              <span style={{fontSize:17,fontWeight:900}}>🔄 ¿Llevas horas encima?</span>
-              <span style={{fontSize:13,color:"#94A3B8",fontWeight:500,lineHeight:1.4}}>Toca aquí si ya has conducido hoy o esta semana — la app calculará tus límites reales</span>
-            </button>
-          </div>
-        )}
-        {jState==="closed"&&(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <button onClick={()=>{playClick();onAct("inicio_jornada");}} style={{background:"#22C55E",color:"white",border:"none",borderRadius:14,padding:"17px",fontSize:15,fontWeight:800,cursor:"pointer"}}>▶ Nueva jornada</button>
-            <button onClick={()=>{playClick();onAct("continuar_jornada");}} style={{background:"#0D1420",color:"#475569",border:"1px solid #0F172A",borderRadius:14,padding:"17px",fontSize:13,fontWeight:700,cursor:"pointer"}}>↩ Continuar jornada actual</button>
-          </div>
-        )}
-        {jState==="open"&&!active&&(
-          <button onClick={()=>{playClick();onAct("__accion__");}}
-            style={{width:"100%",background:"#F59E0B",color:"#0A0A0A",border:"none",borderRadius:16,padding:"19px",fontSize:17,fontWeight:900,cursor:"pointer",boxShadow:"0 6px 24px rgba(245,158,11,.15)"}}>
-            ¿QUÉ HAGO AHORA?
-          </button>
-        )}
-        {jState==="open"&&active&&(
-          <button onClick={()=>{if(isDriving)onAct("__parar__");else onAct("__fin_silencioso__");}}
-            style={{width:"100%",background:isDriving?"#EF4444":TE?.color||"#EF4444",color:"white",border:"none",borderRadius:14,padding:"15px",fontSize:15,fontWeight:800,cursor:"pointer",boxShadow:"0 4px 16px rgba(239,68,68,.15)"}}>
-            {isDriving?"⏹ CONDUCIENDO — PARAR":"⏹ FIN DE "+(TE?.label?.toUpperCase()||"ACTIVIDAD")}
-          </button>
-        )}
-
-      {/* 👁 OJO CONTROL */}
-      {jState==="open"&&(
-        <div style={{padding:"4px 14px 4px",flexShrink:0}}>
-          <button onClick={()=>onAct("__inspeccion__")}
-            style={{width:"100%",background:"transparent",border:"1px solid #0D1420",borderRadius:10,padding:"9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",opacity:.4}}>
-            <span style={{fontSize:20}}>👁</span>
-          </button>
-        </div>
-      )}
-
-      {/* RESUMEN + REGISTRO — un solo desplegable */}
-      {jState==="open"&&(
-        <div style={{margin:"4px 14px 0",background:"#080E1A",border:"1px solid #0D1420",borderRadius:12,overflow:"hidden",flexShrink:0}}>
-          <button onClick={()=>setNormOpen(v=>!v)}
-            style={{width:"100%",background:"transparent",border:"none",padding:"13px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div style={{fontSize:14,fontWeight:700,color:norma.canDrive<=0?"#EF4444":norma.canDrive<=60?"#F97316":"#22C55E"}}>
-                {norma.canDrive<=0?"⛔ Límite alcanzado":norma.canDrive<=60?"⚠ Para en "+fmtDur(norma.canDrive):"✓ "+fmtDur(norma.canDrive)+" disponibles"}
-              </div>
-              {todayEnts.length>0&&<div style={{background:"#1E293B",borderRadius:8,padding:"2px 8px",fontSize:11,color:"#64748B",fontWeight:700}}>{todayEnts.length}</div>}
-            </div>
-            <span style={{fontSize:14,color:"#334155"}}>{normOpen?"▲":"▼"}</span>
-          </button>
-
-          {normOpen&&(
-            <div style={{borderTop:"1px solid #0D1420",padding:"10px 12px 12px"}}>
-
-              {/* Contadores: jornadas, horas ext, descansos reducidos */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
-                {[
-                  {v:norma.jornadaCount||0,max:6,l:"Jornadas",c:(norma.jornadaCount||0)>=6?"#EF4444":(norma.jornadaCount||0)>=5?"#F97316":"#22C55E"},
-                  {v:norma.extUsed||0,max:2,l:"Jorn. 10h",c:(norma.extUsed||0)>=2?"#EF4444":"#F59E0B"},
-                  {v:norma.redRests||0,max:3,l:"Desc. 9h",c:(norma.redRests||0)>=3?"#EF4444":"#22C55E"},
-                ].map(({v,max,l,c})=>(
-                  <div key={l} style={{background:"#0D1420",borderRadius:9,padding:"8px",textAlign:"center"}}>
-                    <div style={{fontSize:20,fontWeight:900,color:c,fontFamily:"monospace",lineHeight:1}}>{v}<span style={{fontSize:10,color:"#1E293B"}}>/{max}</span></div>
-                    <div style={{fontSize:9,color:"#334155",marginTop:3}}>{l}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Barras de horas */}
-              {[
-                {l:"Conducción hoy",v:norma.todayDrive||0,max:norma.maxDay||540,c:dayC},
-                {l:"Conducción continua",v:norma.cont||0,max:270,c:contC},
-                {l:"Semana",v:norma.weekDrive||0,max:LIM.WEEK,c:semC},
-                {l:"Bisemanal",v:norma.biweekDrive||0,max:LIM.BIWEEK,c:"#818CF8"},
-              ].map(({l,v,max,c})=>{
-                const pct=Math.min(100,Math.round(v/Math.max(1,max)*100));
-                const cc=pct>=95?"#EF4444":pct>=80?"#F97316":c;
-                return(
-                  <div key={l} style={{background:"#0D1420",borderRadius:9,padding:"9px 10px",marginBottom:5}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                      <span style={{fontSize:13,color:"#64748B",fontWeight:600}}>{l}</span>
-                      <span style={{fontSize:14,fontWeight:800,color:cc,fontFamily:"monospace"}}>{fmtDur(v)}<span style={{fontSize:10,color:"#334155"}}>/{fmtDur(max)}</span></span>
-                    </div>
-                    <div style={{background:"#080E1A",borderRadius:3,height:3,overflow:"hidden"}}>
-                      <div style={{background:cc,width:pct+"%",height:"100%",borderRadius:3,transition:"width .4s"}}/>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Registro diario */}
-              {todayEnts.length>0&&(
-                <div style={{marginTop:8}}>
-                  <div style={{fontSize:9,fontWeight:800,color:"#1E293B",letterSpacing:1.5,marginBottom:6}}>REGISTRO DE HOY</div>
-                  <div style={{maxHeight:200,overflowY:"auto"}}>
-                    {[...todayEnts].reverse().map((e,i)=>{
-                      const EI=EV[e.type];
-                      return(
-                        <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:8,marginBottom:2,background:"#0D1420"}}>
-                          <div style={{width:6,height:6,borderRadius:"50%",background:EI?.color||"#334155",flexShrink:0}}/>
-                          <div style={{fontSize:11,color:"#475569",fontFamily:"monospace",flexShrink:0}}>{fmtT(toDate(e.ts))}</div>
-                          <div style={{flex:1,fontSize:12,fontWeight:600,color:"#334155"}}>{EI?.label||e.type}</div>
-                          {e.manual&&<div style={{fontSize:9,color:"#F59E0B",fontWeight:700,flexShrink:0}}>MANUAL</div>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div style={{height:"max(16px,env(safe-area-inset-bottom))",flexShrink:0}}/>
-    </div>
     </div>
   );
 }
@@ -6466,6 +7271,7 @@ function ProfView({prof,onSave,norma,db,showToast}){
       </div>}
 
       {/* NOTIFICACIONES */}
+      <ConductorAlmacenamientoCard showToast={showToast} />
       <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>
         <div style={{fontSize:11,fontWeight:800,color:"#64748B",letterSpacing:1.5,marginBottom:10}}>🔔 NOTIFICACIONES</div>
         {typeof Notification!=="undefined"?(
@@ -6520,6 +7326,57 @@ function ProfView({prof,onSave,norma,db,showToast}){
 }
 
 // ── BLOQUE EMPRESA en perfil ──────────────────────────────────
+function normalizeEmpresaVinculoCode(raw){
+  return String(raw||"").trim().toUpperCase().replace(/\s+/g,"");
+}
+/** Código real de equipo (sin TMP). Vacío si aún no hay migración / trigger. */
+function getEmpresaEquipoCodeStrict(emp){
+  if(!emp)return"";
+  const a=String(emp.codigo_equipo||"").trim();
+  if(a)return a;
+  return String(emp.codigo_corto||"").trim();
+}
+/** Código visible para vincular conductores: codigo_equipo > codigo_corto > TMP- (solo fallback legacy). */
+function getEmpresaCodigoEquipoDisplay(emp){
+  if(!emp)return"";
+  const strict=getEmpresaEquipoCodeStrict(emp);
+  if(strict)return strict;
+  if(emp.id){
+    const h=String(emp.id).replace(/-/g,"").slice(0,6).toUpperCase();
+    return h?`TMP-${h}`:"";
+  }
+  return"";
+}
+function empresaNombreInitial(nombre){
+  const t=String(nombre||"").trim();
+  if(!t)return"?";
+  const ch=t.charAt(0).toUpperCase();
+  return/[A-ZÁÉÍÓÚÑ0-9]/i.test(ch)?ch:"?";
+}
+async function humanizeConductorEmpresaJoinError(res){
+  if(res?.ok)return"";
+  let raw="";
+  try{raw=await res.text();}catch{raw=""}
+  let code=null;
+  try{code=JSON.parse(raw).code;}catch{}
+  if(res?.status===409||code==="23505")return"Ya perteneces a este equipo.";
+  if(res?.status===401||res?.status===403)return"No se ha podido completar. Vuelve a iniciar sesión e inténtalo de nuevo.";
+  if(code==="23503"||/foreign key/i.test(raw))return"Ese código no existe o ya no es válido.";
+  if(/PGRST|postgres|supabase|violates|constraint|SQLSTATE|relation /i.test(raw))return"No se ha podido unir al equipo. Revisa el código o inténtalo más tarde.";
+  return"No se ha podido unir al equipo. Revisa el código o inténtalo más tarde.";
+}
+async function fetchEmpresasByVinculoCode(raw){
+  const cod=normalizeEmpresaVinculoCode(raw);
+  if(!cod)return[];
+  const enc=encodeURIComponent(cod);
+  let emps=await sbSelect("empresas",`codigo_equipo=eq.${enc}`);
+  if(emps?.length)return emps;
+  emps=await sbSelect("empresas",`codigo_corto=eq.${enc}`);
+  if(emps?.length)return emps;
+  const uuidRe=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(uuidRe.test(cod)&&cod.length===36)return sbSelect("empresas",`id=eq.${encodeURIComponent(cod)}`);
+  return[];
+}
 function EmpresaPerfilBlock({tipoCuentaProp=null}){
   const[tipoCuenta,setTipoCuenta]=useState(tipoCuentaProp);
   const[empresa,setEmpresa]=useState(null);
@@ -6529,11 +7386,14 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
   const[cif,setCif]=useState("");
   const[msg,setMsg]=useState("");
   const[copied,setCopied]=useState(false);
+  const[inviteOpen,setInviteOpen]=useState(false);
+
+  const codigoLegible=empresa?getEmpresaEquipoCodeStrict(empresa):"";
+  const generandoCodigo=!!empresa&&!codigoLegible;
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setLoading(false);return;}
-    // Si ya sabemos el tipo, solo cargamos la empresa
     if(tipoCuentaProp==="empresa"){
       sbSelect("empresas",`owner_id=eq.${uid}`).then(emps=>{
         if(emps.length)setEmpresa(emps[0]);
@@ -6557,10 +7417,23 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
         setLoading(false);
       }).catch(()=>{setTipoCuenta("autonomo");setLoading(false);});
     });
-  },[]);
+  },[tipoCuentaProp]);
+
+  useEffect(()=>{
+    if(!generandoCodigo||!empresa?.id)return undefined;
+    let n=0;
+    const id=setInterval(()=>{
+      n+=1;
+      if(n>12){clearInterval(id);return;}
+      sbSelect("empresas",`id=eq.${empresa.id}`).then(rows=>{
+        if(rows?.length&&getEmpresaEquipoCodeStrict(rows[0]))setEmpresa(rows[0]);
+      }).catch(()=>{});
+    },650);
+    return()=>clearInterval(id);
+  },[generandoCodigo,empresa?.id]);
 
   async function crear(){
-    if(!nombre.trim()){setMsg("Introduce el nombre");return;}
+    if(!nombre.trim()){setMsg("Escribe el nombre de la empresa");return;}
     setCreando(true);setMsg("");
     const uid=getUserId();
     const codigo=nombre.trim().slice(0,3).toUpperCase().replace(/\s/g,"")+Math.floor(1000+Math.random()*9000);
@@ -6573,78 +7446,154 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
       const text=await res.text();
       if(res.ok){
         const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-        if(emps.length){setEmpresa(emps[0]);setMsg("✅ Empresa creada");setTimeout(()=>window.location.reload(),1500);}
-        else{setMsg("✅ Creada — recargando...");setTimeout(()=>window.location.reload(),1000);}
+        if(emps.length){setEmpresa(emps[0]);setMsg("Listo. Ya puedes invitar a tu equipo.");}
+        else{setMsg("Empresa creada. Recargando…");setTimeout(()=>window.location.reload(),900);}
       } else {
-        let errMsg=text;
-        try{const d=JSON.parse(text);errMsg=d.message||d.error||d.hint||text;}catch{}
-        setMsg("Error: "+errMsg);
+        setMsg("No se pudo crear la empresa. Revisa el nombre e inténtalo de nuevo.");
       }
-    }catch(e){setMsg("Error: "+e.message);}
+    }catch{setMsg("No se pudo crear la empresa. Comprueba la conexión.");}
     finally{setCreando(false);}
   }
 
-  function copiar(){
-    navigator.clipboard?.writeText(empresa?.codigo_corto||"").then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);}).catch(()=>{});
+  function copiarCodigo(){
+    const t=codigoLegible||getEmpresaCodigoEquipoDisplay(empresa);
+    if(!t)return;
+    navigator.clipboard?.writeText(t).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2200);}).catch(()=>{});
+  }
+
+  async function compartirCodigo(){
+    const code=codigoLegible||getEmpresaCodigoEquipoDisplay(empresa);
+    if(!code)return;
+    const url=buildEquipoDeepLink(code);
+    const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
+    const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
+    try{
+      if(navigator.share)await navigator.share({title,text,url});
+      else await navigator.clipboard.writeText(`${text}\n${url}`);
+      setCopied(true);
+      setTimeout(()=>setCopied(false),2200);
+    }catch{/* cancelado o no disponible */}
   }
 
   if(loading)return null;
   if(tipoCuenta!=="empresa")return null;
 
   return(
-    <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12,border:"2px solid #F59E0B40"}}>
-      <div style={{fontSize:11,fontWeight:800,color:"#64748B",letterSpacing:1.5,marginBottom:12}}>🏢 MI EMPRESA</div>
+    <div style={{background:"linear-gradient(180deg,#ffffff 0%,#fafaf9 100%)",borderRadius:18,padding:"18px 16px 16px",boxShadow:"0 8px 32px rgba(15,23,42,.08)",marginBottom:14,border:"1px solid #e7e5e4"}}>
+      <div style={{fontSize:10,fontWeight:800,color:"#78716c",letterSpacing:1.6,marginBottom:10}}>MI EMPRESA</div>
       {empresa?(
         <div>
-          <div style={{background:"#FFF7ED",borderRadius:10,padding:"14px",marginBottom:12}}>
-            <div style={{fontSize:17,fontWeight:800,color:"#92400E"}}>{empresa.nombre}</div>
-            {empresa.cif&&<div style={{fontSize:13,color:"#64748B",marginTop:2}}>CIF: {empresa.cif}</div>}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+            <div style={{
+              width:48,height:48,borderRadius:14,
+              background:"linear-gradient(135deg,#f59e0b,#ea580c)",
+              color:"white",fontSize:20,fontWeight:850,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              flexShrink:0,boxShadow:"0 8px 22px rgba(234,88,12,.28)",
+            }}>{empresaNombreInitial(empresa.nombre)}</div>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:17,fontWeight:800,color:"#1c1917",lineHeight:1.2}}>{empresa.nombre}</div>
+              {empresa.cif&&<div style={{fontSize:12,color:"#78716c",marginTop:3}}>{empresa.cif}</div>}
+            </div>
           </div>
-          <div style={{fontSize:12,color:"#64748B",marginBottom:8,lineHeight:1.5}}>
-            Código equipo:{" "}
-            <button type="button" title="Copiar" onClick={copiar} style={{background:"none",border:"none",color:"#92400E",fontFamily:"monospace",fontSize:13,fontWeight:800,cursor:"pointer",padding:0,textDecoration:"underline dotted"}}>
-              {empresa.codigo_corto}{copied?" ✓":""}
+
+          <div style={{background:"#fff",borderRadius:16,padding:"16px 14px",border:"1px solid #e7e5e4",marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#78716c",letterSpacing:.6,marginBottom:8}}>Código de equipo</div>
+            {generandoCodigo?(
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{width:10,height:10,borderRadius:"50%",background:"#f59e0b",animation:"pulse 1s ease-in-out infinite"}}/>
+                <span style={{fontSize:15,fontWeight:700,color:"#57534e"}}>Generando código…</span>
+              </div>
+            ):(
+              <div style={{fontFamily:"'JetBrains Mono',ui-monospace,monospace",fontSize:26,fontWeight:800,color:"#c2410c",letterSpacing:1,lineHeight:1.1}}>
+                {codigoLegible}
+              </div>
+            )}
+            <div style={{fontSize:12,color:"#a8a29e",marginTop:10,lineHeight:1.45}}>
+              Lo compartes con tus conductores. Ellos lo pegan en perfil y listo.
+            </div>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <button type="button" onClick={copiarCodigo} disabled={generandoCodigo}
+              style={{
+                borderRadius:12,padding:"12px 8px",fontSize:13,fontWeight:750,border:"1px solid #e7e5e4",
+                background:generandoCodigo?"#f5f5f4":"#fff",color:generandoCodigo?"#a8a29e":"#292524",cursor:generandoCodigo?"default":"pointer",
+              }}>
+              {copied?"Copiado ✓":"Copiar"}
             </button>
-          </div>
-          <div style={{fontSize:11,color:"#64748B",lineHeight:1.45}}>
-            Los conductores lo introducen en Perfil → vincular empresa.
+            <button type="button" onClick={compartirCodigo} disabled={generandoCodigo}
+              style={{
+                borderRadius:12,padding:"12px 8px",fontSize:13,fontWeight:750,border:"1px solid #e7e5e4",
+                background:generandoCodigo?"#f5f5f4":"#fff",color:generandoCodigo?"#a8a29e":"#292524",cursor:generandoCodigo?"default":"pointer",
+              }}>
+              Compartir
+            </button>
+            <button type="button" onClick={()=>setInviteOpen(true)} disabled={generandoCodigo}
+              style={{
+                borderRadius:12,padding:"12px 8px",fontSize:13,fontWeight:750,border:"none",
+                background:generandoCodigo?"#e7e5e4":"linear-gradient(135deg,#0f172a,#334155)",color:"#fff",cursor:generandoCodigo?"default":"pointer",
+              }}>
+              QR invitar
+            </button>
           </div>
         </div>
       ):(
         <div>
-          <div style={{fontSize:13,color:"#64748B",marginBottom:14,lineHeight:1.5}}>Crea tu empresa para gestionar tu flota y ver a tus conductores en tiempo real.</div>
+          <div style={{fontSize:14,color:"#57534e",marginBottom:14,lineHeight:1.55,fontWeight:500}}>
+            Crea tu espacio de flota: conductores, servicios y seguimiento en un solo sitio.
+          </div>
           <div style={{marginBottom:10}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#64748B",marginBottom:5}}>NOMBRE DE LA EMPRESA *</div>
-            <input value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Transportes García S.L."
-              style={{width:"100%",border:"1.5px solid #E2E8F0",borderRadius:9,padding:"12px 13px",fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+            <div style={{fontSize:10,fontWeight:700,color:"#78716c",marginBottom:5}}>NOMBRE DE LA EMPRESA</div>
+            <input value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej. Transportes García"
+              style={{width:"100%",border:"1.5px solid #e7e5e4",borderRadius:12,padding:"12px 14px",fontSize:15,outline:"none",boxSizing:"border-box",background:"#fff"}}/>
           </div>
           <div style={{marginBottom:14}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#64748B",marginBottom:5}}>CIF / NIF (opcional)</div>
+            <div style={{fontSize:10,fontWeight:700,color:"#78716c",marginBottom:5}}>CIF / NIF (opcional)</div>
             <input value={cif} onChange={e=>setCif(e.target.value)} placeholder="B12345678"
-              style={{width:"100%",border:"1.5px solid #E2E8F0",borderRadius:9,padding:"12px 13px",fontSize:15,outline:"none",boxSizing:"border-box"}}/>
+              style={{width:"100%",border:"1.5px solid #e7e5e4",borderRadius:12,padding:"12px 14px",fontSize:15,outline:"none",boxSizing:"border-box",background:"#fff"}}/>
           </div>
-          {msg&&<div style={{fontSize:13,color:msg.startsWith("✅")?"#22C55E":"#EF4444",marginBottom:10,fontWeight:600}}>{msg}</div>}
+          {msg&&<div style={{fontSize:13,color:msg.includes("Listo")||msg.includes("creada")?"#15803d":"#b45309",marginBottom:10,fontWeight:600,lineHeight:1.4}}>{msg}</div>}
           <button onClick={crear} disabled={creando||!nombre.trim()}
-            style={{width:"100%",background:creando||!nombre.trim()?"#94A3B8":"#F59E0B",color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:15,fontWeight:800,cursor:creando?"default":"pointer"}}>
-            {creando?"⏳ Creando empresa...":"🏢 Crear mi empresa"}
+            style={{width:"100%",background:creando||!nombre.trim()?"#d6d3d1":"linear-gradient(135deg,#f59e0b,#ea580c)",color:"white",border:"none",borderRadius:14,padding:"15px",fontSize:15,fontWeight:800,cursor:creando?"default":"pointer",boxShadow:"0 10px 28px rgba(234,88,12,.25)"}}>
+            {creando?"Creando…":"Crear mi empresa"}
           </button>
         </div>
       )}
+      {inviteOpen&&empresa&&(
+        <EquipoInvitacionModal
+          onClose={()=>setInviteOpen(false)}
+          equipoNombre={empresa.nombre}
+          equipoCode={codigoLegible||getEmpresaCodigoEquipoDisplay(empresa)}
+          linkUrl={buildEquipoDeepLink(codigoLegible||getEmpresaCodigoEquipoDisplay(empresa))}
+        />
+      )}
+      <style>{`@keyframes pulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.15)}}`}</style>
     </div>
   );
 }
 
 
 function CampoEmpresa({prof}){
-  const[estado,setEstado]=useState(null); // null=cargando, false=libre, {id,nombre}=vinculado
+  const[estado,setEstado]=useState(null);
   const[codigo,setCodigo]=useState("");
   const[loading,setLoading]=useState(false);
   const[msg,setMsg]=useState("");
+  const[preview,setPreview]=useState(null);
+  const[previewLoading,setPreviewLoading]=useState(false);
+  const debRef=useRef(null);
+
+  useEffect(()=>{
+    const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
+    if(p){
+      setCodigo(p);
+      sessionStorage.removeItem("cuaderno_pending_equipo_vinculo");
+    }
+  },[]);
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setEstado(false);return;}
-    // Jefe — no mostrar campo
     sbSelect("empresas",`owner_id=eq.${uid}`)
       .then(emps=>{
         if(emps.length){setEstado({esJefe:true});return null;}
@@ -6658,16 +7607,28 @@ function CampoEmpresa({prof}){
       .catch(()=>setEstado(false));
   },[]);
 
+  useEffect(()=>{
+    if(estado?.esJefe||estado?.id)return;
+    const raw=codigo.trim();
+    if(!raw){setPreview(null);setPreviewLoading(false);return;}
+    if(debRef.current)clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      setPreviewLoading(true);
+      const emps=await fetchEmpresasByVinculoCode(raw);
+      setPreview(emps?.[0]||null);
+      setPreviewLoading(false);
+    },320);
+    return()=>{if(debRef.current)clearTimeout(debRef.current);};
+  },[codigo,estado]);
+
   async function vincular(){
     const uid=getUserId();
-    if(!uid){setMsg("❌ Inicia sesión primero");return;}
-    if(!codigo.trim()){setMsg("❌ Introduce el código");return;}
+    if(!uid){setMsg("Inicia sesión para continuar");return;}
+    if(!codigo.trim()){setMsg("Escribe el código de equipo");return;}
     setLoading(true);setMsg("");
     try{
-      const cod=codigo.trim().toUpperCase();
-      let emps=await sbSelect("empresas",`codigo_corto=eq.${cod}`);
-      if(!emps.length)emps=await sbSelect("empresas",`id=eq.${codigo.trim()}`);
-      if(!emps.length){setMsg("❌ Código incorrecto");setLoading(false);return;}
+      const emps=await fetchEmpresasByVinculoCode(codigo);
+      if(!emps.length){setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;}
       const emp=emps[0];
       const res=await sbFetch("/rest/v1/conductor_empresa",{
         method:"POST",
@@ -6683,13 +7644,15 @@ function CampoEmpresa({prof}){
       });
       if(res.ok){
         setEstado({id:emp.id,nombre:emp.nombre});
-        setMsg("✅ ¡Vinculado a "+emp.nombre+"!");
+        setMsg("");
+        setCodigo("");
+        setPreview(null);
       } else {
-        const err=await res.json().catch(()=>({}));
-        if(err.code==="23505")setMsg("✅ Ya estás vinculado a "+emp.nombre);
-        else setMsg("❌ Error al vincularse");
+        setMsg(await humanizeConductorEmpresaJoinError(res));
       }
-    }catch(e){setMsg("❌ "+e.message);}
+    }catch{
+      setMsg("No se ha podido completar. Inténtalo en un momento.");
+    }
     setLoading(false);
   }
 
@@ -6698,39 +7661,82 @@ function CampoEmpresa({prof}){
     if(!uid||!estado?.id)return;
     try{
       await sbFetch(`/rest/v1/conductor_empresa?user_id=eq.${uid}&empresa_id=eq.${estado.id}`,{method:"DELETE"});
-      setEstado(false);setCodigo("");setMsg("");
-    }catch(_){}
+      setEstado(false);setCodigo("");setMsg("");setPreview(null);
+    }catch{setMsg("No se pudo salir del equipo. Inténtalo de nuevo.");}
   }
 
   if(estado?.esJefe)return null;
 
+  const card="#fafaf9",line="#e7e5e4",tx="#1c1917",su="#78716c";
+
   return(
-    <div style={{marginTop:4,paddingTop:12,borderTop:"1px solid #F1F5F9"}}>
-      <label style={{fontSize:11,fontWeight:700,color:"#64748B",letterSpacing:.8,marginBottom:6,display:"block"}}>EMPRESA</label>
+    <div style={{marginTop:8,paddingTop:16,borderTop:`1px solid ${line}`}}>
+      <div style={{fontSize:10,fontWeight:800,color:su,letterSpacing:1.4,marginBottom:10}}>AÑADIR EQUIPO (OPCIONAL)</div>
       {estado===null?(
-        <div style={{...s.tIn,color:"#94A3B8",display:"flex",alignItems:"center"}}>Cargando...</div>
+        <div style={{...s.tIn,color:"#94A3B8",display:"flex",alignItems:"center",fontSize:14}}>Un momento…</div>
       ):estado===false?(
-        <div style={{display:"flex",gap:8}}>
-          <input value={codigo} onChange={e=>setCodigo(e.target.value)} onKeyDown={e=>e.key==="Enter"&&vincular()}
-            placeholder="Código de empresa del jefe"
-            style={{...s.tIn,flex:1,fontFamily:"monospace"}}/>
-          <button onClick={vincular} disabled={loading||!codigo.trim()}
-            style={{background:loading||!codigo.trim()?"#E2E8F0":"#22C55E",color:loading||!codigo.trim()?"#94A3B8":"white",border:"none",borderRadius:10,padding:"0 16px",fontSize:13,fontWeight:800,cursor:loading||!codigo.trim()?"default":"pointer",flexShrink:0,whiteSpace:"nowrap"}}>
-            {loading?"⏳":"✓ Vincular"}
+        <div style={{background:card,border:`1px solid ${line}`,borderRadius:16,padding:"14px 14px 16px"}}>
+          <div style={{fontSize:13,color:"#57534e",lineHeight:1.5,marginBottom:12,fontWeight:500}}>
+            Si trabajas con una flota, pega aquí el código. Si eres autónomo, puedes dejarlo vacío.
+          </div>
+          <input
+            value={codigo}
+            onChange={e=>setCodigo(e.target.value.toUpperCase())}
+            onKeyDown={e=>e.key==="Enter"&&vincular()}
+            placeholder="Ej. TC-4821"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{
+              width:"100%",boxSizing:"border-box",
+              border:`1.5px solid ${preview?"#bbf7d0":"#e7e5e4"}`,
+              borderRadius:14,padding:"14px 16px",fontSize:18,fontWeight:800,
+              fontFamily:"'JetBrains Mono',ui-monospace,monospace",letterSpacing:1,color:tx,
+              outline:"none",background:"#fff",marginBottom:10,
+            }}
+          />
+          {(previewLoading||preview)&&codigo.trim()&&(
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,minHeight:52}}>
+              <div style={{
+                width:44,height:44,borderRadius:12,
+                background:"linear-gradient(135deg,#f59e0b,#ea580c)",color:"#fff",
+                fontSize:18,fontWeight:850,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+              }}>{preview?empresaNombreInitial(preview.nombre):"…"}</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:2}}>Te unirás a</div>
+                <div style={{fontSize:16,fontWeight:800,color:tx,lineHeight:1.2}}>
+                  {previewLoading?"Buscando…":preview?.nombre||"—"}
+                </div>
+              </div>
+            </div>
+          )}
+          <button type="button" onClick={vincular} disabled={loading||!codigo.trim()||!preview}
+            style={{
+              width:"100%",border:"none",borderRadius:14,padding:"15px",fontSize:16,fontWeight:800,
+              background:loading||!codigo.trim()||!preview?"#d6d3d1":"linear-gradient(135deg,#0f172a,#334155)",
+              color:"#fff",cursor:loading||!codigo.trim()||!preview?"default":"pointer",
+              boxShadow:!loading&&codigo.trim()&&preview?"0 12px 28px rgba(15,23,42,.2)":"none",
+            }}>
+            {loading?"Uniendo…":"Unirme al equipo"}
           </button>
         </div>
       ):(
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <div style={{...s.tIn,flex:1,color:"#22C55E",fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
-            <span>✅</span><span>{estado.nombre}</span>
+        <div style={{display:"flex",gap:10,alignItems:"center",background:card,border:`1px solid ${line}`,borderRadius:14,padding:"12px 14px"}}>
+          <div style={{
+            width:40,height:40,borderRadius:10,background:"linear-gradient(135deg,#22c55e,#15803d)",
+            color:"#fff",fontSize:16,fontWeight:850,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+          }}>{empresaNombreInitial(estado.nombre)}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:11,color:su,fontWeight:700}}>Equipo activo</div>
+            <div style={{fontSize:15,fontWeight:800,color:"#15803d"}}>{estado.nombre}</div>
           </div>
-          <button onClick={desvincular}
-            style={{background:"#FEF2F2",color:"#EF4444",border:"1.5px solid #FECACA",borderRadius:10,padding:"0 14px",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0,height:44}}>
+          <button type="button" onClick={desvincular}
+            style={{background:"#fff",color:"#b91c1c",border:`1px solid #fecaca`,borderRadius:10,padding:"10px 14px",fontSize:12,fontWeight:800,cursor:"pointer",flexShrink:0}}>
             Salir
           </button>
         </div>
       )}
-      {msg&&<div style={{fontSize:12,marginTop:6,color:msg.startsWith("✅")?"#22C55E":"#EF4444",fontWeight:700}}>{msg}</div>}
+      {msg&&<div style={{fontSize:13,marginTop:10,color:"#b45309",fontWeight:650,lineHeight:1.4}}>{msg}</div>}
     </div>
   );
 }
@@ -8731,6 +9737,78 @@ function NoraModal({norma,viajeActivo,onClose}){
 }
 
 
+/**
+ * Convierte el plan local de la pestaña Ruta (`finalizePlanFromRoute`) al mismo shape que
+ * `buildOperationalPlanSnapshot`, para persistir en `servicios.referencia` y que flota vea
+ * km, ETA planificada y velocidad alineados con el conductor.
+ */
+function operationalPlanSnapshotFromMapTabPlan(plan,velocidad,split,mode,startDT){
+  if(!plan?.route?.coords?.length)return null;
+  const arrivalDate=plan.arrival instanceof Date?plan.arrival:new Date(plan.arrival);
+  if(Number.isNaN(arrivalDate.getTime()))return null;
+  const arrivalIso=arrivalDate.toISOString();
+  const rests=(plan.segs||[]).filter(s=>s.type!=="conduccion");
+  const breaks=rests.filter(s=>String(s.type).startsWith("pausa"));
+  const dailyRest=rests.find(s=>s.type==="descanso");
+  const weeklyRest=rests.find(s=>s.type==="descanso_semana");
+  const driveMins=Math.round(Number(plan.route?.mins)||0);
+  const legs=[];
+  if(plan.wp){
+    legs.push({
+      from:safeOperationalPlaceName(plan.from?.name,"Origen"),
+      to:safeOperationalPlaceName(plan.wp?.name,"Punto intermedio"),
+      real:!!plan.route.real,
+    });
+    legs.push({
+      from:safeOperationalPlaceName(plan.wp?.name,"Punto intermedio"),
+      to:safeOperationalPlaceName(plan.to?.name,"Destino"),
+      real:!!plan.route.real,
+    });
+  }else{
+    legs.push({
+      from:safeOperationalPlaceName(plan.from?.name,"Origen"),
+      to:safeOperationalPlaceName(plan.to?.name,"Destino"),
+      km:plan.route.km,
+      mins:driveMins,
+      real:!!plan.route.real,
+    });
+  }
+  return{
+    status:"ok",
+    route_plan_status:"ready",
+    snapshot_at:new Date().toISOString(),
+    input_origin:String(plan.from?.name||""),
+    input_origin_lat:Number.isFinite(Number(plan.from?.lat))?Number(plan.from.lat):null,
+    input_origin_lon:Number.isFinite(Number(plan.from?.lon))?Number(plan.from.lon):null,
+    input_destination:String(plan.to?.name||""),
+    input_waypoint:plan.wp?String(plan.wp.name||""):null,
+    planned_origin:safeOperationalPlaceName(plan.from?.name,"Ubicación actual"),
+    planned_destination:safeOperationalPlaceName(plan.to?.name,"Destino"),
+    planned_waypoint:plan.wp?String(plan.wp.name||""):null,
+    planned_km:Math.round(plan.route.km*10)/10,
+    planned_drive_min:driveMins,
+    planned_drive_time:fmtDur(driveMins),
+    planned_eta:arrivalIso,
+    planned_eta_label:fmtOperationalEtaLabel(arrivalIso),
+    planned_breaks:breaks.length,
+    planned_daily_rest:!!dailyRest,
+    planned_daily_rest_label:dailyRest?"Descanso diario previsto":weeklyRest?"Descanso semanal previsto":"Sin descanso diario previsto",
+    planned_rest_plan:rests.map(seg=>({
+      type:seg.type,
+      start:seg.start instanceof Date?seg.start.toISOString():new Date(seg.start).toISOString(),
+      dur:seg.dur,
+    })),
+    planned_summary:`${Math.round(plan.route.km)} km · ${fmtDur(driveMins)} conducción · ${breaks.length} pausa${breaks.length===1?"":"s"} · ${dailyRest?"descanso diario":"sin descanso diario"}`,
+    planned_route:{legs,coords:thinRouteCoords(plan.route.coords)},
+    confidence:plan.route.real?"high":"medium",
+    velocidad:Math.min(100,Math.max(60,Math.round(Number(velocidad)||80))),
+    map_tab_sync_at:new Date().toISOString(),
+    map_tab_mode:String(mode||"now"),
+    map_tab_start_dt:String(startDT||""),
+    map_tab_split:!!split,
+  };
+}
+
 function MapTab({norma,prof,dark,viajeActivo}){
   const[noraActive,setNoraActive]=useState(true); // activa al entrar en RUTA
   const RUTA_KEY="cuaderno_ruta_v2";
@@ -8777,6 +9855,30 @@ function MapTab({norma,prof,dark,viajeActivo}){
     }catch(_){return 80;}
   });
   const mapRef=useRef(null),mapDivRef=useRef(null),leafMapRef=useRef(null);
+  const servicioActivoRef=useRef(null);
+  const persistMapTabTimerRef=useRef(null);
+  useEffect(()=>{servicioActivoRef.current=servicioActivo;},[servicioActivo]);
+  useEffect(()=>()=>{if(persistMapTabTimerRef.current)clearTimeout(persistMapTabTimerRef.current);},[]);
+
+  function schedulePersistMapTabOperationalPlan(planPayload,velArg,spl,mod,sdt){
+    if(!planPayload?.route?.coords?.length)return;
+    if(persistMapTabTimerRef.current)clearTimeout(persistMapTabTimerRef.current);
+    persistMapTabTimerRef.current=setTimeout(async()=>{
+      persistMapTabTimerRef.current=null;
+      const sv=servicioActivoRef.current;
+      if(!sv?.id)return;
+      try{
+        const snap=operationalPlanSnapshotFromMapTabPlan(planPayload,velArg,spl,mod,sdt);
+        if(!snap)return;
+        const referencia=mergeReferenciaOperacional(sv.referencia||null,{operational_plan:snap});
+        const res=await sbFetch(`/rest/v1/servicios?id=eq.${sv.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
+        if(res.ok){
+          window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+          setServicioActivo(p=>(p&&p.id===sv.id?{...p,referencia}:p));
+        }
+      }catch(_){/* offline / red */}
+    },900);
+  }
 
   useEffect(()=>{try{localStorage.setItem(RUTA_KEY+"_vel",String(velocidad));}catch(_){}},[ velocidad]);
 
@@ -8853,6 +9955,7 @@ function MapTab({norma,prof,dark,viajeActivo}){
       try{
         const next=await finalizePlanFromRoute(route,from,to,wp);
         if(cancelled)return;
+        schedulePersistMapTabOperationalPlan(next,velocidad,split,mode,startDT);
         setPlan(p=>{
           if(!p?.route?.coords?.length)return p;
           if(p.route.km!==route.km||p.route.coords.length!==route.coords.length)return p;
@@ -9723,6 +10826,12 @@ function AdminPanel({dark}){
   const[addCondForm,setAddCondForm]=useState({nombre:"",email:""});
   const[addCondLoading,setAddCondLoading]=useState(false);
   const[toast,setToast]=useState("");
+  const showPurgeTestUi=import.meta.env.DEV||import.meta.env.VITE_ENABLE_PURGE_TEST_COMPANY==="1";
+  const[purgeModal,setPurgeModal]=useState(null);
+  const[purgePhrase,setPurgePhrase]=useState("");
+  const[purgeKillAuth,setPurgeKillAuth]=useState(true);
+  const[purgeBusy,setPurgeBusy]=useState(false);
+  const PURGE_PHRASE="PURGO_EMPRESA_PRUEBA";
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),4000);};
   const bg=dark?"#0F172A":"#F0F4F8";
   const cardBg=dark?"#1E293B":"white";
@@ -9792,18 +10901,19 @@ function AdminPanel({dark}){
       const emps=await sbSelect("empresas","order=created_at.desc");
       const empsConConds=await Promise.all(emps.map(async emp=>{
         const conds=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);
-        // Cargar nombres reales desde profiles
-        const condConNombre=await Promise.all(conds.map(async c=>{
+        const condConNombreParts=await Promise.all(conds.map(async c=>{
           try{
             const p=await sbSelect("profiles",`id=eq.${c.user_id}`);
+            if(p[0]?.is_archived)return null;
             return{...c,nombreReal:p[0]?.nombre||c.nombre||"Sin nombre"};
           }catch(_){return{...c,nombreReal:c.nombre||"Sin nombre"};}
         }));
+        const condConNombre=condConNombreParts.filter(Boolean);
         const entries=await sbSelect("entries",`user_id=eq.${emp.owner_id}&order=ts.desc&limit=1`);
         return{...emp,conductoresList:condConNombre,conductores:condConNombre.length,ultimaActividad:entries[0]?.ts||null};
       }));
       setEmpresas(empsConConds);
-      const perfiles=await sbSelect("profiles","order=updated_at.desc&limit=100");
+      const perfiles=await sbSelect("profiles","is_archived=eq.false&order=updated_at.desc&limit=100");
       // Enriquecer perfiles con empresa
       const ceAll=await sbSelect("conductor_empresa","activo=eq.true");
       const perfilesConEmp=perfiles.map(p=>{
@@ -9812,9 +10922,17 @@ function AdminPanel({dark}){
         return{...p,empresaNombre:emp?.nombre||null};
       });
       setUsuarios(perfilesConEmp);
-      const totalConds=await sbSelect("conductor_empresa","activo=eq.true");
+      const totalCondsRaw=await sbSelect("conductor_empresa","activo=eq.true");
+      const condUids=[...new Set(totalCondsRaw.map(c=>c.user_id).filter(Boolean))];
+      let conductoresActivos=0;
+      if(condUids.length){
+        const idList=condUids.join(",");
+        const profFlags=await sbSelect("profiles",`id=in.(${idList})&select=id,is_archived`).catch(()=>[]);
+        const archSet=new Set((profFlags||[]).filter(p=>p.is_archived).map(p=>p.id));
+        conductoresActivos=totalCondsRaw.filter(c=>c.user_id&&!archSet.has(c.user_id)).length;
+      }
       const totalEntries=await sbSelect("entries","order=ts.desc&limit=1");
-      setStats({empresas:emps.length,conductores:totalConds.length,usuarios:perfiles.length,ultimaEntry:totalEntries[0]?.ts||null});
+      setStats({empresas:emps.length,conductores:conductoresActivos,usuarios:perfiles.length,ultimaEntry:totalEntries[0]?.ts||null});
     }catch(e){console.error(e);}
     setLoading(false);
   }
@@ -9950,7 +11068,7 @@ function AdminPanel({dark}){
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
                 <div style={{background:dark?"#0F172A":"#F8FAFC",borderRadius:9,padding:"8px 10px"}}>
                   <div style={{fontSize:10,color:sub,fontWeight:700}}>CÓDIGO</div>
-                  <div style={{fontSize:14,fontWeight:800,color:"#F59E0B",fontFamily:"monospace"}}>{e.codigo_corto||"—"}</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"#F59E0B",fontFamily:"monospace"}}>{getEmpresaCodigoEquipoDisplay(e)||"—"}</div>
                 </div>
                 <div style={{background:dark?"#0F172A":"#F8FAFC",borderRadius:9,padding:"8px 10px"}}>
                   <div style={{fontSize:10,color:sub,fontWeight:700}}>ÚLTIMA ACTIVIDAD</div>
@@ -9969,14 +11087,15 @@ function AdminPanel({dark}){
                           <div style={{fontSize:11,color:sub}}>{c.matricula||"Sin matrícula"}</div>
                         </div>
                         <button onClick={async()=>{
-                          if(!confirm(`¿Eliminar conductor "${c.nombreReal}" de esta empresa?`))return;
-                          const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete_user",admin_uid:getUserId(),user_id:c.user_id})});
+                          if(!confirm(`¿Archivar conductor "${c.nombreReal}"? Dejará de aparecer en la app y no podrá iniciar sesión; los datos y expedientes se conservan.`))return;
+                          const tok=getAccessToken();
+                          const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json",...(tok?{Authorization:`Bearer ${tok}`}:{})},body:JSON.stringify({action:"archive_user",admin_uid:getUserId(),user_id:c.user_id})});
                           const d=await r.json();
-                          if(r.ok)showToast("✅ Conductor eliminado");
-                          else showToast("❌ "+d.error);
+                          if(r.ok)showToast("✅ Conductor archivado");
+                          else showToast("❌ "+(d.error||"Error"));
                           await load();
-                        }} style={{background:"#FEF2F2",color:"#EF4444",border:"1px solid #FECACA",borderRadius:7,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
-                          🗑
+                        }} style={{background:"#FFFBEB",color:"#B45309",border:"1px solid #FDE68A",borderRadius:7,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                          📦
                         </button>
                       </div>
                     ))}
@@ -9998,6 +11117,12 @@ function AdminPanel({dark}){
               }} style={{width:"100%",background:"#FEF2F2",color:"#EF4444",border:"1.5px solid #FECACA",borderRadius:9,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
                 🗑 Eliminar empresa
               </button>
+              {showPurgeTestUi&&(
+                <button type="button" onClick={()=>{setPurgeModal({id:e.id,nombre:e.nombre||""});setPurgePhrase("");setPurgeKillAuth(true);}}
+                  style={{width:"100%",marginTop:8,background:"#431407",color:"#FED7AA",border:"1.5px solid #9A3412",borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,cursor:"pointer"}}>
+                  ⚠ Purgar empresa de prueba (DEV/STAGING)
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -10030,14 +11155,15 @@ function AdminPanel({dark}){
               </div>
               {u.id!=="ca5dd314-2e37-4f08-86d7-09103cb8e510"&&(
                 <button onClick={async()=>{
-                  if(!confirm(`¿Eliminar usuario "${u.nombre||u.id}"? La empresa NO se borrará.`))return;
-                  const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete_user",admin_uid:getUserId(),user_id:u.id})});
+                  if(!confirm(`¿Archivar usuario "${u.nombre||u.id}"? No podrá iniciar sesión; expedientes y relaciones se conservan.`))return;
+                  const tok=getAccessToken();
+                  const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json",...(tok?{Authorization:`Bearer ${tok}`}:{})},body:JSON.stringify({action:"archive_user",admin_uid:getUserId(),user_id:u.id})});
                   const d=await r.json();
-                  if(r.ok)showToast("✅ Usuario eliminado");
-                  else showToast("❌ "+d.error);
+                  if(r.ok)showToast("✅ Usuario archivado");
+                  else showToast("❌ "+(d.error||"Error"));
                   await load();
-                }} style={{width:"100%",background:"#FEF2F2",color:"#EF4444",border:"1.5px solid #FECACA",borderRadius:9,padding:"7px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                  🗑 Eliminar usuario
+                }} style={{width:"100%",background:"#FFFBEB",color:"#B45309",border:"1.5px solid #FDE68A",borderRadius:9,padding:"7px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                  📦 Archivar usuario
                 </button>
               )}
             </div>
@@ -10048,6 +11174,45 @@ function AdminPanel({dark}){
       <button onClick={load} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
         🔄 Actualizar datos
       </button>
+      {purgeModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>!purgeBusy&&setPurgeModal(null)}>
+          <div style={{maxWidth:420,width:"100%",background:cardBg,borderRadius:16,padding:20,boxShadow:"0 16px 48px rgba(0,0,0,.45)",border:"2px solid #9A3412"}} onClick={ev=>ev.stopPropagation()}>
+            <div style={{fontSize:12,fontWeight:800,color:"#B45309",letterSpacing:1,marginBottom:6}}>DEV / STAGING — PURGA TOTAL</div>
+            <div style={{fontSize:17,fontWeight:800,color:txt,marginBottom:10}}>{purgeModal.nombre||"Empresa"}</div>
+            <p style={{fontSize:13,color:sub,lineHeight:1.55,margin:"0 0 12px"}}>
+              Esto eliminará <strong style={{color:"#B91C1C"}}>permanentemente</strong> todos los datos relacionados con esta empresa de prueba: servicios, evidencias, tracking, relaciones flota, conductores de prueba (cuentas Auth) y la empresa. No usar en producción.
+            </p>
+            <p style={{fontSize:12,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,padding:10,margin:"0 0 12px",lineHeight:1.45}}>
+              El archivado lógico de producción no se ve afectado por esta herramienta; esta acción es distinta y es irreversible.
+            </p>
+            <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,cursor:"pointer",fontSize:13,color:txt}}>
+              <input type="checkbox" checked={purgeKillAuth} onChange={ev=>setPurgeKillAuth(ev.target.checked)} disabled={purgeBusy}/>
+              Eliminar también cuentas Auth de conductores vinculados (recomendado en pruebas)
+            </label>
+            <div style={{fontSize:11,color:sub,marginBottom:6,fontWeight:700}}>Escribe la frase exacta para confirmar:</div>
+            <code style={{display:"block",fontSize:12,background:dark?"#0F172A":"#F1F5F9",padding:"8px 10px",borderRadius:8,marginBottom:8,color:"#B45309",fontWeight:700}}>{PURGE_PHRASE}</code>
+            <input value={purgePhrase} onChange={ev=>setPurgePhrase(ev.target.value)} disabled={purgeBusy} placeholder={PURGE_PHRASE}
+              style={{width:"100%",boxSizing:"border-box",marginBottom:14,padding:"11px 12px",fontSize:14,borderRadius:9,border:`2px solid ${dark?"#334155":"#CBD5E1"}`,background:dark?"#0F172A":"#fff",color:txt}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <button type="button" disabled={purgeBusy} onClick={()=>setPurgeModal(null)} style={{padding:11,borderRadius:9,border:`1px solid ${dark?"#475569":"#CBD5E1"}`,background:"transparent",color:sub,fontWeight:700,cursor:purgeBusy?"default":"pointer"}}>Cancelar</button>
+              <button type="button" disabled={purgeBusy||purgePhrase.trim()!==PURGE_PHRASE} onClick={async()=>{
+                if(purgePhrase.trim()!==PURGE_PHRASE)return;
+                setPurgeBusy(true);
+                try{
+                  const tok=getAccessToken();
+                  const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json",...(tok?{Authorization:`Bearer ${tok}`}:{})},body:JSON.stringify({action:"purge_test_company",admin_uid:getUserId(),empresa_id:purgeModal.id,confirm_text:purgePhrase.trim(),purge_conductor_accounts:purgeKillAuth})});
+                  const d=await r.json().catch(()=>({}));
+                  if(r.ok){showToast(`✅ Purga completada · ${JSON.stringify(d.deleted||{})}`);setPurgeModal(null);await load();}
+                  else showToast("❌ "+(d.error||d.code||"Error"));
+                }catch(err){showToast("❌ "+err.message);}
+                setPurgeBusy(false);
+              }} style={{padding:11,borderRadius:9,border:"none",background:purgeBusy||purgePhrase.trim()!==PURGE_PHRASE?"#94A3B8":"#B91C1C",color:"white",fontWeight:800,cursor:purgeBusy||purgePhrase.trim()!==PURGE_PHRASE?"default":"pointer"}}>
+                {purgeBusy?"…":"Purgar definitivamente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"#1E293B",color:"white",padding:"13px 20px",borderRadius:12,fontSize:13,fontWeight:700,zIndex:999,maxWidth:"90vw",textAlign:"center"}}>{toast}</div>}
     </div>
   );
@@ -10124,12 +11289,20 @@ function useModalLayout(){
 // ─────────────────────────────────────────────────────────────
 //  ASIGNAR SERVICIO A CONDUCTOR — modal para el jefe de flota
 // ─────────────────────────────────────────────────────────────
+function normalizeServicioEmpresaId(value){
+  if(value===undefined||value===null)return null;
+  const s=String(value).trim();
+  return s?s:null;
+}
+
 async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, ...basePayload }) {
   const referenciaBase = serviceNumber?.trim() || null;
   const identityMeta = buildServiceIdentityMeta({ cliente, referenciaCliente });
   const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
+  const empresaId = normalizeServicioEmpresaId(basePayload.empresa_id);
   const fullPayload = {
     ...basePayload,
+    empresa_id: empresaId,
     service_number: referenciaBase,
     cliente: cliente?.trim() || null,
     referencia_cliente: referenciaCliente?.trim() || null,
@@ -10149,7 +11322,7 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   const fallbackRes = await sbFetch("/rest/v1/servicios", {
     method: "POST",
     headers: { "Prefer": "return=representation" },
-    body: JSON.stringify({ ...basePayload, referencia }),
+    body: JSON.stringify({ ...basePayload, empresa_id: empresaId, referencia }),
   });
   if (!fallbackRes.ok) throw new Error(await fallbackRes.text().catch(() => `Supabase ${fallbackRes.status}`));
   return fallbackRes.json();
@@ -10158,9 +11331,12 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
   if(!conductorId)return;
   const salidaLabel=fechaInicio?new Date(fechaInicio).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}):"";
+  const access=getAccessToken();
+  const headers={"Content-Type":"application/json"};
+  if(access)headers.Authorization=`Bearer ${access}`;
   await fetch("/api/push",{
     method:"POST",
-    headers:{"Content-Type":"application/json"},
+    headers,
     body:JSON.stringify({
       action:"notify_assignment",
       payload:{
@@ -10173,7 +11349,7 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
-function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
+function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClose,onCreado}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
@@ -10224,6 +11400,7 @@ function AsignarServicioModal({conductorId,conductorNombre,onClose,onCreado}){
     setSaving(true);setError("");
     try{
       const srData=await crearServicioConIdentidad({
+        ...(empresaId?{empresa_id:empresaId}:{}),
         conductor_id:conductorId,
         estado:"asignado",
         origen:origen.trim(),
@@ -10430,7 +11607,10 @@ function validUbicacionRow(row){
   const lat=Number(row?.lat),lon=Number(row?.lon);
   if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;
   if(Math.abs(lat)>90||Math.abs(lon)>180)return null;
-  return{lat,lon,ts:row?.ts||null,velocidad:row?.velocidad,precision_m:row?.precision_m};
+  return{
+    lat,lon,ts:row?.ts||null,velocidad:row?.velocidad,precision_m:row?.precision_m,
+    empresa_id:row?.empresa_id??null,servicio_id:row?.servicio_id??null,event_type:row?.event_type??null,
+  };
 }
 
 const TRACKING_RECENT_MAX_AGE_MS=45*60*1000;
@@ -10590,7 +11770,7 @@ function shiftEtaSlotVisual(slot,{nowMs,conductor,ubicInfo}={}){
 function buildEtaEntryVisual({service,planSlot,operationalSlot,localEta,conductor,ubicInfo,nowMs}){
   if(service?.estado==="anulado")return{planned:null,operational:null};
   if(!isEtaActivationReady(service))return{planned:null,operational:null,phase:"pre_route",label:"Pendiente de iniciar ruta"};
-  const planned=localEta?.planned||planSlot;
+  const planned=planSlot;
   const operationalBase=localEta?.operational||operationalSlot;
   const operational=operationalBase?shiftEtaSlotVisual(operationalBase,{nowMs,conductor,ubicInfo}):null;
   return{planned,operational};
@@ -10676,6 +11856,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
   const[ubicacionRefreshByUid,setUbicacionRefreshByUid]=useState({});
   const[etaHeartbeatNowMs,setEtaHeartbeatNowMs]=useState(()=>Date.now());
+  const[inviteEquipoOpen,setInviteEquipoOpen]=useState(false);
   const flotaLoadingRef=useRef(false);
   const ubicacionLabelCacheRef=useRef(new Map());
   const ubicacionLastSeenRef=useRef(new Map());
@@ -10862,6 +12043,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const uid=getUserId();
     if(!uid){setLoading(false);return;}
     try{
+      const perfilesSelf=await sbSelect("profiles",`id=eq.${uid}`);
+      if(perfilesSelf[0]?.is_archived){
+        await sbSignOut();
+        window.location.reload();
+        return;
+      }
       const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
       if(emps.length){
         setEmpresa(emps[0]);setModo("jefe");
@@ -10870,9 +12057,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return;
       }
       const relsAll=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-      // Si el perfil es tipo empresa pero sin empresa creada aún → modo crear
-      const perfiles=await sbSelect("profiles",`id=eq.${uid}`);
-      if(perfiles[0]?.tipo_cuenta==="empresa"){
+      if(perfilesSelf[0]?.tipo_cuenta==="empresa"){
         setModo("crear_empresa");
         setLoading(false);
         return;
@@ -10890,6 +12075,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         if(!r.user_id)return{...r,norma:null,entries:[],pendiente:true};
         try{
           const perfil=await sbSelect("profiles",`id=eq.${r.user_id}`);
+          if(perfil[0]?.is_archived)return null;
           const nombreReal=perfil[0]?.nombre||r.nombre||"Conductor";
           const matriculaReal=perfil[0]?.matricula||r.matricula||"";
           const entries=await sbSelect("entries",`user_id=eq.${r.user_id}&order=ts.asc&limit=2000`);
@@ -10898,7 +12084,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           return{...r,nombre:nombreReal,matricula:matriculaReal,norma:normaC,entries:ents};
         }catch(_){return{...r,norma:null,entries:[]};}
       }));
-      setConductores(conds);
+      setConductores(conds.filter(Boolean));
     }catch(_){}
     setLoading(false);
   }
@@ -10964,6 +12150,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     window.addEventListener("cuaderno-recargar-servicio",onRecargaServicio);
     return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecargaServicio);
   },[empresa?.id]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe")return undefined;
+    if(getEmpresaEquipoCodeStrict(empresa))return undefined;
+    let n=0;
+    const timer=setInterval(()=>{
+      n+=1;
+      if(n>12){clearInterval(timer);return;}
+      sbSelect("empresas",`id=eq.${empresa.id}`).then(rows=>{
+        if(rows?.length&&getEmpresaEquipoCodeStrict(rows[0]))setEmpresa(rows[0]);
+      }).catch(()=>{});
+    },650);
+    return()=>clearInterval(timer);
+  },[empresa?.id,modo,empresa?.codigo_equipo,empresa?.codigo_corto]);
 
   useEffect(()=>{
     if(!empresa?.id)return;
@@ -11114,7 +12314,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     if(!sv?.conductor_id)return;
     const cond=conductores.find(c=>c.user_id===sv.conductor_id);
     const loc=await actualizarConductorUbicacion(sv.conductor_id,{allowStale:true,requireOpen:false,showResult});
-    const planned=etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv),sv);
     let operational=null;
     if(loc?.recent!==false&&loc&&sv.estado==="en_curso"&&getOperationalTripStartedAt(sv)){
       try{
@@ -11128,7 +12327,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         operational=saved?.operationalEta?etaSlotFromOperationalEta(saved.operationalEta):null;
       }catch(_){/* noop */}
     }
-    setEtaOperativaById(prev=>({...prev,[sv.id]:{planned,operational}}));
+    setEtaOperativaById(prev=>({...prev,[sv.id]:{...prev[sv.id],operational}}));
   }
 
   useEffect(()=>{
@@ -11138,7 +12337,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     }
     const etas={};
     serviciosListaOperativa.forEach(sv=>{
-      if(sv.estado!=="anulado")etas[sv.id]={planned:etaSlotFromOperationalPlan(getOperationalPlanSnapshot(sv),sv),operational:null,phase:isEtaActivationReady(sv)?null:"pre_route"};
+      if(sv.estado!=="anulado")etas[sv.id]={operational:null,phase:isEtaActivationReady(sv)?null:"pre_route"};
     });
     setEtaOperativaById(etas);
     void refreshUbicacionConductores([...new Set(serviciosListaOperativa.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id).filter(Boolean))],{allowStale:true,requireOpen:false});
@@ -11154,6 +12353,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const refreshLigero=()=>{
       if(document.visibilityState==="hidden")return;
       setEtaHeartbeatNowMs(Date.now());
+      void loadFlotaRef.current(true);
       const uids=[
         ...conductores.map(c=>c.user_id),
         ...serviciosListaRef.current.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id),
@@ -11161,7 +12361,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       void refreshUbicacionConductores(uids,{allowStale:true,requireOpen:false});
     };
     refreshLigero();
-    const id=setInterval(refreshLigero,75*1000);
+    const id=setInterval(refreshLigero,45*1000);
     return()=>clearInterval(id);
   },[empresa?.id,modo,conductores]);
 
@@ -11177,7 +12377,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     try{
       const res=await sbFetch("/rest/v1/empresas",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({nombre,cif:cif||null,owner_id:uid})});
       const data=await res.json();
-      const emp=Array.isArray(data)?data[0]:data;
+      let emp=Array.isArray(data)?data[0]:data;
+      if(emp?.id){
+        const again=await sbSelect("empresas",`id=eq.${emp.id}`);
+        if(again?.length)emp=again[0];
+      }
       setEmpresa(emp);setModo("jefe");setConductores([]);
       showToast("Empresa creada ✓");
     }catch(_){showToast("Error al crear empresa");}
@@ -11233,18 +12437,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           <div style={{fontSize:14,color:su,marginBottom:24}}>¿Eres jefe de flota o conductor?</div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             <SetupJefe onCreate={crearEmpresa} dark={dark}/>
-            <SetupConductor onJoin={async(codigo)=>{
-              const uid=getUserId();if(!uid)return;
-              try{
-                const cod=codigo.trim().toUpperCase();
-                let emps=await sbSelect("empresas",`codigo_corto=eq.${cod}`);
-                if(!emps.length)emps=await sbSelect("empresas",`id=eq.${codigo.trim()}`);
-                if(!emps.length){showToast("Código incorrecto");return;}
-                const res=await sbFetch("/rest/v1/conductor_empresa",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({user_id:uid,empresa_id:emps[0].id,rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||""})});
-                if(res.ok){setModo("conductor");showToast("¡Te has unido a "+emps[0].nombre+"!");}
-                else showToast("Error — puede que ya estés en esta empresa");
-              }catch(e){showToast("Error: "+e.message);}
-            }} dark={dark}/>
+            <SetupConductor
+              prof={prof}
+              dark={dark}
+              onJoined={()=>{
+                setModo("conductor");
+                onRoleChange?.("conductor");
+                showToast("Listo. Ya formas parte del equipo.");
+              }}
+            />
           </div>
         </>
       )}
@@ -11280,6 +12481,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   };
 
   const serviciosEnRuta=flotaServicios.filter(s=>s.estado==="en_curso").length;
+  const codigoEquipoStrict=empresa?getEmpresaEquipoCodeStrict(empresa):"";
+  const codigoEquipoShow=empresa?getEmpresaCodigoEquipoDisplay(empresa):"";
+  const generandoCodigoEquipo=!!empresa&&!codigoEquipoStrict;
 
   return(
     <div style={{background:bg,minHeight:"100vh",paddingBottom:72,color:tx}}>
@@ -11370,19 +12574,65 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         </div>
       )}
 
-      {/* Identidad empresa — compacto */}
-      <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"8px 14px",display:"flex",flexWrap:"wrap",alignItems:"center",justifyContent:"space-between",gap:8}}>
+      {inviteEquipoOpen&&empresa&&(
+        <EquipoInvitacionModal
+          onClose={()=>setInviteEquipoOpen(false)}
+          equipoNombre={empresa.nombre}
+          equipoCode={codigoEquipoStrict||codigoEquipoShow}
+          linkUrl={buildEquipoDeepLink(codigoEquipoStrict||codigoEquipoShow)}
+        />
+      )}
+
+      {/* Identidad empresa + código de equipo */}
+      <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"10px 14px 12px",display:"flex",flexDirection:"column",gap:10}}>
         <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
           <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
           {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}
           <span style={{marginLeft:8,color:su}}>
-            · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> activos
+            · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> en ruta
           </span>
         </div>
-        <button type="button" onClick={()=>{navigator.clipboard?.writeText(empresa?.codigo_corto||empresa?.id?.slice(0,6).toUpperCase()||"");showToast("Copiado ✓");}}
-          style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:999,color:EMPRESA_UI.subtle,fontFamily:"monospace",fontSize:10,cursor:"pointer",padding:"3px 8px"}}>
-          {empresa?.codigo_corto||empresa?.id?.slice(0,6).toUpperCase()||"—"}
-        </button>
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"flex-end",justifyContent:"space-between",gap:10}}>
+          <div style={{minWidth:0,flex:"1 1 160px"}}>
+            <div style={{fontSize:10,color:su,fontWeight:750,letterSpacing:.6,marginBottom:4}}>Código de equipo</div>
+            {generandoCodigoEquipo?(
+              <div style={{fontSize:14,fontWeight:700,color:tx,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.accent,opacity:.85}}/>
+                Generando código…
+              </div>
+            ):(
+              <div style={{fontFamily:"ui-monospace,monospace",fontSize:17,fontWeight:850,color:tx,letterSpacing:.5}}>{codigoEquipoShow}</div>
+            )}
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+              onClick={()=>{navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));}}
+              style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+              Copiar
+            </button>
+            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+              onClick={async()=>{
+                const code=codigoEquipoStrict||codigoEquipoShow;
+                if(!code)return;
+                const url=buildEquipoDeepLink(code);
+                const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
+                const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
+                try{
+                  if(navigator.share)await navigator.share({title,text,url});
+                  else await navigator.clipboard.writeText(`${text}\n${url}`);
+                  showToast("Listo para compartir");
+                }catch{/* cancelado */}
+              }}
+              style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+              Compartir
+            </button>
+            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+              onClick={()=>setInviteEquipoOpen(true)}
+              style={{background:EMPRESA_UI.tx,color:"#fff",border:"none",borderRadius:10,fontSize:12,fontWeight:750,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+              QR invitar
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Tabs flota — navegación secundaria */}
@@ -12286,6 +13536,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <AsignarServicioModal
           conductorId={asignarModal.id}
           conductorNombre={asignarModal.nombre}
+          empresaId={empresa?.id||null}
           onClose={()=>setAsignarModal(null)}
           onCreado={()=>{setAsignarModal(null);showToast("✅ Servicio asignado a "+asignarModal.nombre);loadFlotaServicios();}}
         />
@@ -12336,78 +13587,149 @@ function FlotaMap({conductores}){
   return <div ref={divRef} style={{height:280,background:"#dde8f0"}}/>;
 }
 
-function SetupConductorPerfil({prof,dark}){ // false = mostrar form por defecto
+function SetupConductorPerfil({prof,dark}){
+  const[rel,setRel]=useState(null);
   const[codigo,setCodigo]=useState("");
   const[loading,setLoading]=useState(false);
   const[toast,setToast]=useState("");
-  const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
+  const[preview,setPreview]=useState(null);
+  const[previewLoading,setPreviewLoading]=useState(false);
+  const debRef=useRef(null);
+  const showToast=(m)=>{setToast(m);setTimeout(()=>setToast(""),3200);};
+
+  useEffect(()=>{
+    const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
+    if(p){setCodigo(p);sessionStorage.removeItem("cuaderno_pending_equipo_vinculo");}
+  },[]);
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid)return;
-    // Comprobar si ya está vinculado (en background, no bloquea)
     sbSelect("empresas",`owner_id=eq.${uid}`)
       .then(emps=>{
         if(emps.length){setRel({esJefe:true,nombre:emps[0].nombre});return null;}
-        return sbSelect("conductor_empresa",`user_id=eq.${uid}`);
+        return sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
       })
       .then(rels=>{
         if(!rels)return;
-        if(rels.length)setRel({esJefe:false,nombre:rels[0].nombre||"Conductor"});
+        if(rels.length)setRel({esJefe:false,nombre:rels[0].nombre||"Empresa"});
       })
-      .catch(()=>{}); // si falla no importa, se muestra el form
+      .catch(()=>{});
   },[]);
+
+  useEffect(()=>{
+    if(rel?.esJefe)return;
+    if(rel?.nombre)return;
+    const raw=codigo.trim();
+    if(!raw){setPreview(null);setPreviewLoading(false);return;}
+    if(debRef.current)clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      setPreviewLoading(true);
+      const emps=await fetchEmpresasByVinculoCode(raw);
+      setPreview(emps?.[0]||null);
+      setPreviewLoading(false);
+    },320);
+    return()=>{if(debRef.current)clearTimeout(debRef.current);};
+  },[codigo,rel]);
 
   async function unirse(){
     const uid=getUserId();
-    if(!uid){showToast("❌ Inicia sesión primero");return;}
-    if(!codigo.trim()){showToast("❌ Introduce el código");return;}
+    if(!uid){showToast("Inicia sesión para continuar");return;}
+    if(!codigo.trim()){showToast("Escribe el código de equipo");return;}
     setLoading(true);
     try{
-      const emps=await sbSelect("empresas",`id=eq.${codigo.trim()}`);
-      if(!emps.length){showToast("❌ Código incorrecto");setLoading(false);return;}
+      const emps=await fetchEmpresasByVinculoCode(codigo);
+      if(!emps.length){showToast("Ese código no existe");setLoading(false);return;}
+      const emp=emps[0];
       const res=await sbFetch("/rest/v1/conductor_empresa",{
         method:"POST",
         headers:{"Prefer":"return=representation"},
-        body:JSON.stringify({user_id:uid,empresa_id:codigo.trim(),rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||""})
+        body:JSON.stringify({user_id:uid,empresa_id:emp.id,rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||"",activo:true})
       });
-      if(res.ok){setRel({esJefe:false,nombre:emps[0].nombre});showToast("✅ ¡Vinculado a "+emps[0].nombre+"!");}
-      else showToast("Error — puede que ya estés en esta empresa");
-    }catch(e){showToast("❌ Error: "+e.message);}
+      if(res.ok){
+        setRel({esJefe:false,nombre:emp.nombre});
+        setCodigo("");
+        setPreview(null);
+        showToast("Listo. Ya formas parte del equipo.");
+      } else {
+        showToast(await humanizeConductorEmpresaJoinError(res));
+      }
+    }catch{
+      showToast("No se ha podido completar. Inténtalo en un momento.");
+    }
     setLoading(false);
   }
 
-  // Jefe ya tiene pestaña FLOTA
   if(rel?.esJefe)return null;
 
+  const card=dark?"#1e293b":"#fff";
+  const line=dark?"#334155":"#e7e5e4";
+  const tx=dark?"#f1f5f9":"#1c1917";
+  const su=dark?"#94a3b8":"#78716c";
+
   return(
-    <div style={{marginTop:16,background:"#0F172A",borderRadius:14,padding:"18px",border:"1.5px solid #334155"}}>
-      <div style={{fontSize:14,fontWeight:800,color:"#F59E0B",marginBottom:12}}>🏢 EMPRESA</div>
+    <div style={{marginTop:16,background:card,borderRadius:18,padding:"18px 16px",border:`1px solid ${line}`,boxShadow:"0 8px 28px rgba(15,23,42,.08)"}}>
+      <div style={{fontSize:10,fontWeight:800,color:su,letterSpacing:1.4,marginBottom:10}}>AÑADIR EQUIPO (OPCIONAL)</div>
       {rel&&!rel.esJefe?(
-        <div>
-          <div style={{fontSize:15,fontWeight:700,color:"#22C55E",marginBottom:4}}>✅ Vinculado</div>
-          <div style={{fontSize:14,color:"#94A3B8"}}>{rel.nombre}</div>
-          <div style={{fontSize:12,color:"#475569",marginTop:6}}>Tus registros son visibles para el jefe de flota.</div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{
+            width:48,height:48,borderRadius:14,
+            background:"linear-gradient(135deg,#22c55e,#15803d)",color:"#fff",
+            fontSize:20,fontWeight:850,display:"flex",alignItems:"center",justifyContent:"center",
+          }}>{empresaNombreInitial(rel.nombre)}</div>
+          <div>
+            <div style={{fontSize:12,color:su,fontWeight:700}}>Equipo activo</div>
+            <div style={{fontSize:17,fontWeight:800,color:"#15803d"}}>{rel.nombre}</div>
+            <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.4}}>Tu jefe puede ver tus servicios y ubicación operativa.</div>
+          </div>
         </div>
       ):(
         <div>
-          <div style={{fontSize:13,color:"#94A3B8",marginBottom:12,lineHeight:1.5}}>
-            Tu jefe te dará un código. Introdúcelo aquí para vincularte a su empresa.
+          <div style={{fontSize:13,color:su,marginBottom:12,lineHeight:1.55,fontWeight:500}}>
+            Opcional: si tu flota usa Cuaderno, pega el código que te han pasado.
           </div>
           <input
             value={codigo}
-            onChange={e=>setCodigo(e.target.value)}
+            onChange={e=>setCodigo(e.target.value.toUpperCase())}
             onKeyDown={e=>e.key==="Enter"&&unirse()}
-            placeholder="Código de empresa"
-            style={{width:"100%",background:"#1E293B",border:"2px solid #475569",borderRadius:10,padding:"14px",fontSize:16,color:"#F1F5F9",marginBottom:10,outline:"none",fontFamily:"monospace"}}
+            placeholder="Ej. TC-4821"
+            autoCapitalize="characters"
+            spellCheck={false}
+            style={{
+              width:"100%",boxSizing:"border-box",
+              background:dark?"#0f172a":"#fff",
+              border:`1.5px solid ${preview?"#4ade80":line}`,
+              borderRadius:14,padding:"14px 16px",fontSize:18,fontWeight:800,
+              fontFamily:"'JetBrains Mono',ui-monospace,monospace",letterSpacing:1,color:tx,
+              outline:"none",marginBottom:10,
+            }}
           />
-          <button onClick={unirse} disabled={loading||!codigo.trim()}
-            style={{width:"100%",background:loading||!codigo.trim()?"#334155":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"14px",fontSize:16,fontWeight:800,cursor:loading||!codigo.trim()?"default":"pointer"}}>
-            {loading?"⏳ Vinculando...":"✓ UNIRME A LA EMPRESA"}
+          {(previewLoading||preview)&&codigo.trim()&&(
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,minHeight:52}}>
+              <div style={{
+                width:44,height:44,borderRadius:12,
+                background:"linear-gradient(135deg,#f59e0b,#ea580c)",color:"#fff",
+                fontSize:18,fontWeight:850,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+              }}>{preview?empresaNombreInitial(preview.nombre):"…"}</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:2}}>Te unirás a</div>
+                <div style={{fontSize:16,fontWeight:800,color:tx,lineHeight:1.2}}>
+                  {previewLoading?"Buscando…":preview?.nombre||"—"}
+                </div>
+              </div>
+            </div>
+          )}
+          <button type="button" onClick={unirse} disabled={loading||!codigo.trim()||!preview}
+            style={{
+              width:"100%",border:"none",borderRadius:14,padding:"15px",fontSize:16,fontWeight:800,
+              background:loading||!codigo.trim()||!preview?"#475569":"linear-gradient(135deg,#0f172a,#334155)",
+              color:"#fff",cursor:loading||!codigo.trim()||!preview?"default":"pointer",
+            }}>
+            {loading?"Uniendo…":"Unirme al equipo"}
           </button>
         </div>
       )}
-      {toast&&<div style={{fontSize:13,color:"#F59E0B",marginTop:10,fontWeight:700,textAlign:"center"}}>{toast}</div>}
+      {toast&&<div style={{fontSize:13,color:"#b45309",marginTop:12,fontWeight:650,textAlign:"center",lineHeight:1.4}}>{toast}</div>}
     </div>
   );
 }
@@ -12441,29 +13763,118 @@ function SetupJefe({onCreate,dark}){
   );
 }
 
-function SetupConductor({onJoin,dark}){
-  const[open,setOpen]=useState(false);
+function SetupConductor({prof,dark,onJoined}){
   const[codigo,setCodigo]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[msg,setMsg]=useState("");
+  const[preview,setPreview]=useState(null);
+  const[previewLoading,setPreviewLoading]=useState(false);
+  const debRef=useRef(null);
   const cardBg=dark?"#1E293B":"white";
   const txt=dark?"#F1F5F9":"#0F172A";
   const sub=dark?"#94A3B8":"#64748B";
+  const line=dark?"#334155":"#e7e5e4";
+
+  useEffect(()=>{
+    const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
+    if(p){setCodigo(p);sessionStorage.removeItem("cuaderno_pending_equipo_vinculo");}
+  },[]);
+
+  useEffect(()=>{
+    const raw=codigo.trim();
+    if(!raw){setPreview(null);setPreviewLoading(false);return;}
+    if(debRef.current)clearTimeout(debRef.current);
+    debRef.current=setTimeout(async()=>{
+      setPreviewLoading(true);
+      const emps=await fetchEmpresasByVinculoCode(raw);
+      setPreview(emps?.[0]||null);
+      setPreviewLoading(false);
+    },320);
+    return()=>{if(debRef.current)clearTimeout(debRef.current);};
+  },[codigo]);
+
+  async function unirse(){
+    const uid=getUserId();
+    if(!uid){setMsg("Inicia sesión para continuar");return;}
+    if(!codigo.trim()){setMsg("Escribe el código de equipo");return;}
+    setLoading(true);setMsg("");
+    try{
+      const emps=await fetchEmpresasByVinculoCode(codigo);
+      if(!emps.length){setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;}
+      const emp=emps[0];
+      const res=await sbFetch("/rest/v1/conductor_empresa",{
+        method:"POST",
+        headers:{"Prefer":"return=representation"},
+        body:JSON.stringify({
+          user_id:uid,
+          empresa_id:emp.id,
+          rol:"conductor",
+          nombre:prof?.nombre||"Conductor",
+          matricula:prof?.matricula||"",
+          activo:true,
+        }),
+      });
+      if(res.ok){
+        setCodigo("");
+        setPreview(null);
+        onJoined?.();
+      }else{
+        setMsg(await humanizeConductorEmpresaJoinError(res));
+      }
+    }catch{
+      setMsg("No se ha podido completar. Inténtalo en un momento.");
+    }
+    setLoading(false);
+  }
+
   return(
-    <div style={{background:cardBg,borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)"}}>
-      <div style={{fontSize:16,fontWeight:800,color:txt,marginBottom:4}}>🚛 Soy conductor</div>
-      <div style={{fontSize:13,color:sub,marginBottom:12}}>Introduce el código que te ha dado tu jefe para vincularte a su empresa</div>
-      {!open?(
-        <button onClick={()=>setOpen(true)} style={{width:"100%",background:"#334155",color:"white",border:"none",borderRadius:11,padding:"13px",fontSize:15,fontWeight:700,cursor:"pointer"}}>
-          Unirme a una empresa
-        </button>
-      ):(
-        <div>
-          <input value={codigo} onChange={e=>setCodigo(e.target.value)} placeholder="Código de empresa" style={{width:"100%",background:dark?"#0F172A":"#F8FAFC",border:"2px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:txt,marginBottom:12,outline:"none",fontFamily:"monospace"}}/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
-            <button onClick={()=>setOpen(false)} style={{background:"#334155",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:14,cursor:"pointer"}}>Cancelar</button>
-            <button onClick={()=>codigo.trim()&&onJoin(codigo.trim())} style={{background:"#22C55E",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:14,fontWeight:800,cursor:"pointer"}}>✓ Unirme</button>
+    <div style={{background:cardBg,borderRadius:16,padding:"16px",boxShadow:"0 8px 28px rgba(15,23,42,.08)",border:`1px solid ${line}`}}>
+      <div style={{fontSize:10,fontWeight:800,color:sub,letterSpacing:1.3,marginBottom:8}}>AÑADIR EQUIPO (OPCIONAL)</div>
+      <div style={{fontSize:15,fontWeight:800,color:txt,marginBottom:4}}>Soy conductor</div>
+      <div style={{fontSize:13,color:sub,marginBottom:14,lineHeight:1.5,fontWeight:500}}>
+        Si tu flota usa Cuaderno, pega el código que te han pasado. Puedes seguir sin equipo.
+      </div>
+      <input
+        value={codigo}
+        onChange={e=>setCodigo(e.target.value.toUpperCase())}
+        onKeyDown={e=>e.key==="Enter"&&unirse()}
+        placeholder="Ej. TC-4821"
+        autoCapitalize="characters"
+        autoCorrect="off"
+        spellCheck={false}
+        style={{
+          width:"100%",boxSizing:"border-box",
+          background:dark?"#0F172A":"#F8FAFC",
+          border:`1.5px solid ${preview?"#4ade80":"#334155"}`,
+          borderRadius:14,padding:"14px 16px",fontSize:18,fontWeight:800,
+          fontFamily:"'JetBrains Mono',ui-monospace,monospace",letterSpacing:1,color:txt,
+          outline:"none",marginBottom:10,
+        }}
+      />
+      {(previewLoading||preview)&&codigo.trim()&&(
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,minHeight:52}}>
+          <div style={{
+            width:44,height:44,borderRadius:12,
+            background:"linear-gradient(135deg,#f59e0b,#ea580c)",color:"#fff",
+            fontSize:18,fontWeight:850,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+          }}>{preview?empresaNombreInitial(preview.nombre):"…"}</div>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:11,color:sub,fontWeight:700,marginBottom:2}}>Te unirás a</div>
+            <div style={{fontSize:16,fontWeight:800,color:txt,lineHeight:1.2}}>
+              {previewLoading?"Buscando…":preview?.nombre||"—"}
+            </div>
           </div>
         </div>
       )}
+      <button type="button" onClick={unirse} disabled={loading||!codigo.trim()||!preview}
+        style={{
+          width:"100%",border:"none",borderRadius:14,padding:"15px",fontSize:16,fontWeight:800,
+          background:loading||!codigo.trim()||!preview?"#475569":"linear-gradient(135deg,#0f172a,#334155)",
+          color:"#fff",cursor:loading||!codigo.trim()||!preview?"default":"pointer",
+        }}>
+        {loading?"Uniendo…":"Unirme al equipo"}
+      </button>
+      {msg&&<div style={{fontSize:13,marginTop:12,color:"#fbbf24",fontWeight:650,lineHeight:1.45}}>{msg}</div>}
     </div>
   );
 }
@@ -13983,6 +15394,135 @@ function CrearServicioModal({uid,onClose,onCreado}){
 // ─────────────────────────────────────────────────────────────
 //  DOCS POR SERVICIO — vista conductor (premium / compacta)
 // ─────────────────────────────────────────────────────────────
+function DriverCachedMediaImg({ servicioId, evidenciaId, src, alt, style }) {
+  const [display, setDisplay] = useState({ kind: "load" });
+  useEffect(() => {
+    let revoked = null;
+    let cancelled = false;
+    if (!src) {
+      setDisplay({ kind: "empty" });
+      return undefined;
+    }
+    if (String(src).startsWith("data:")) {
+      setDisplay({ kind: "url", url: src });
+      return undefined;
+    }
+    setDisplay({ kind: "load" });
+    void (async () => {
+      try {
+        const got = await getDriverMediaDisplayBlob(servicioId, evidenciaId, src);
+        if (cancelled) return;
+        if (got?.blob) {
+          const u = URL.createObjectURL(got.blob);
+          revoked = u;
+          setDisplay({ kind: "url", url: u });
+        } else {
+          setDisplay({ kind: "url", url: src });
+        }
+      } catch {
+        if (!cancelled) setDisplay({ kind: "url", url: src });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [servicioId, evidenciaId, src]);
+  if (display.kind === "load" || display.kind === "empty") {
+    const ph = Number.isFinite(Number(style?.height)) ? Number(style.height) : 120;
+    const pw = Number.isFinite(Number(style?.width)) ? Number(style.width) : undefined;
+    return (
+      <div
+        style={{
+          ...(style || {}),
+          background: "rgba(148,163,184,.12)",
+          minHeight: ph,
+          width: pw ?? style?.width,
+          borderRadius: (style && style.borderRadius) || 12,
+        }}
+      />
+    );
+  }
+  return <img src={display.url} alt={alt || ""} style={style} />;
+}
+
+function ConductorAlmacenamientoCard({ showToast }) {
+  const [stats, setStats] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = () => {
+    void getConductorStorageStats()
+      .then(setStats)
+      .catch(() => setStats({ idbBytes: 0, cachedFiles: 0, retentionServices: 0 }));
+  };
+  useEffect(() => {
+    refresh();
+  }, []);
+  const mb = stats ? formatStorageMb(stats.idbBytes) : "—";
+  return (
+    <div style={{ background: "white", borderRadius: 14, padding: 16, boxShadow: "0 2px 6px rgba(0,0,0,.05)", marginBottom: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#64748B", letterSpacing: 1.5, marginBottom: 10 }}>ALMACENAMIENTO</div>
+      <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.5, marginBottom: 8 }}>
+        <div>
+          <strong>{mb} MB</strong> · caché documental en este dispositivo
+        </div>
+        <div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>
+          Archivos en caché: <strong>{stats?.cachedFiles ?? "—"}</strong>
+          {stats?.retentionServices != null ? (
+            <span>
+              {" "}
+              · Servicios en retención local: {stats.retentionServices}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "#64748B",
+          lineHeight: 1.45,
+          marginBottom: 12,
+          background: "#F8FAFC",
+          borderRadius: 10,
+          padding: "10px 12px",
+          border: "1px solid #E2E8F0",
+        }}
+      >
+        Los documentos siguen disponibles para la empresa y podrán descargarse de nuevo cuando los necesites. Esto solo borra copias locales en el móvil o tablet.
+      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await purgeAllConductorLocalMediaCaches();
+            showToast?.("Espacio liberado en el dispositivo · los documentos siguen en empresa");
+            refresh();
+          } catch {
+            showToast?.("No se pudo completar la limpieza");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        style={{
+          width: "100%",
+          background: "#0EA5E9",
+          color: "white",
+          border: "none",
+          borderRadius: 11,
+          padding: "13px",
+          fontSize: 14,
+          fontWeight: 800,
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy ? 0.7 : 1,
+        }}
+      >
+        {busy ? "Liberando…" : "Liberar espacio"}
+      </button>
+    </div>
+  );
+}
+
 function bucketServiceDocDate(sv, refDate) {
   const d = new Date(sv.fecha_inicio || sv.created_at);
   const today0 = new Date(refDate);
@@ -14007,7 +15547,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
   const [evidencias, setEvidencias] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandido, setExpandido] = useState({});
-  const [visorEv, setVisorEv] = useState(null);
+  const [visorCtx, setVisorCtx] = useState(null);
 
   const shell = "#0F172A";
   const card = "#1E293B";
@@ -14033,7 +15573,9 @@ function ServicioDocsView({ uid, showToast, onBack }) {
         const sr = await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=20`);
         const svs = await sr.json();
         setServicios(Array.isArray(svs) ? svs : []);
-        if (svs.length) {
+        if (Array.isArray(svs) && svs.length) {
+          syncArchivedServicesFromList(svs);
+          void runRetentionSweep();
           const ids = svs.map((s) => s.id).join(",");
           const str = await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`);
           const stps = await str.json();
@@ -14118,7 +15660,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
           </button>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: tx, letterSpacing: -0.3 }}>Documentos</div>
-            <div style={{ fontSize: 11, color: su, marginTop: 2 }}>Servicios y documentos pendientes</div>
+            <div style={{ fontSize: 11, color: su, marginTop: 2 }}>Solo consulta · abre Servicio para subir en la parada</div>
           </div>
         </header>
         <div style={{ textAlign: "center", padding: "36px 12px", borderRadius: 16, border: `1px solid ${cardBorder}`, background: card }}>
@@ -14288,7 +15830,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                             <button
                               key={ev.id}
                               type="button"
-                              onClick={() => setVisorEv(ev)}
+                              onClick={() => setVisorCtx({ ev, servicioId: sv.id })}
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
@@ -14309,13 +15851,11 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                           ))}
                         </div>
                       )}
-                      <EvidenciasStop
-                        stopId={stop.id}
-                        showToast={showToast}
-                        variant="docsShell"
-                        tiposPermitidos={OPERATIONAL_SERVICIO_DOC_TIPOS}
-                        onEvidenciaSaved={(ev) => setEvidencias((p) => mergeStopEvidence(p, stop.id, ev))}
-                      />
+                      {evs.length === 0 ? (
+                        <div style={{ fontSize: 11, color: su, lineHeight: 1.45, paddingBottom: 4 }}>
+                          Sin archivos aquí. Para foto o CMR usa <strong style={{ color: tx }}>Servicio</strong> en la parada en operación.
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -14336,21 +15876,53 @@ function ServicioDocsView({ uid, showToast, onBack }) {
 
   return (
     <div style={{ minHeight: "calc(100vh - 120px)", background: shell, padding: "0 0 88px" }}>
-      {visorEv && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.92)", zIndex: 500, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setVisorEv(null)}>
+      {visorCtx && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.92)", zIndex: 500, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setVisorCtx(null)}>
           <div style={{ background: card, borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 520, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${cardBorder}` }} onClick={(e) => e.stopPropagation()}>
             <div style={{ padding: "12px 14px", borderBottom: `1px solid ${cardBorder}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: TIPO_COLOR[visorEv.tipo] || tx }}>
-                {TIPO_ICON[visorEv.tipo]} {visorEv.tipo.toUpperCase()}
+              <div style={{ fontSize: 14, fontWeight: 800, color: TIPO_COLOR[visorCtx.ev.tipo] || tx }}>
+                {TIPO_ICON[visorCtx.ev.tipo]} {visorCtx.ev.tipo.toUpperCase()}
               </div>
-              <button type="button" onClick={() => setVisorEv(null)} style={{ background: "rgba(255,255,255,.08)", border: `1px solid ${cardBorder}`, borderRadius: 8, width: 32, height: 32, color: tx, cursor: "pointer" }}>
+              <button type="button" onClick={() => setVisorCtx(null)} style={{ background: "rgba(255,255,255,.08)", border: `1px solid ${cardBorder}`, borderRadius: 8, width: 32, height: 32, color: tx, cursor: "pointer" }}>
                 ✕
               </button>
             </div>
             <div style={{ padding: "14px 14px 32px" }}>
-              <div style={{ fontSize: 10, color: su, marginBottom: 12 }}>{new Date(visorEv.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
-              {visorEv.url && <img src={visorEv.url} style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 12, marginBottom: 12 }} alt="evidencia" />}
-              {visorEv.tipo === "cmr" && visorEv.datos && (
+              <div style={{ fontSize: 10, color: su, marginBottom: 12 }}>{new Date(visorCtx.ev.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+              {visorCtx.ev.url && (
+                <DriverCachedMediaImg
+                  servicioId={visorCtx.servicioId}
+                  evidenciaId={visorCtx.ev.id}
+                  src={visorCtx.ev.url}
+                  alt="evidencia"
+                  style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 12, marginBottom: 12 }}
+                />
+              )}
+              {visorCtx.ev.url && (
+                <a
+                  href={visorCtx.ev.url}
+                  download
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => visorCtx.servicioId && touchServiceDocumentAccess(visorCtx.servicioId)}
+                  style={{
+                    display: "block",
+                    background: "rgba(59,130,246,.25)",
+                    color: "#E0F2FE",
+                    borderRadius: 10,
+                    padding: "10px",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textAlign: "center",
+                    textDecoration: "none",
+                    marginBottom: 12,
+                    border: `1px solid ${cardBorder}`,
+                  }}
+                >
+                  ⬇️ Descargar / abrir en nueva pestaña
+                </a>
+              )}
+              {visorCtx.ev.tipo === "cmr" && visorCtx.ev.datos && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
                     ["Nº CMR", "num_cmr"],
@@ -14364,21 +15936,21 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                     ["Matrícula", "matricula"],
                     ["Observaciones", "observaciones"],
                   ].map(([lbl, key]) =>
-                    visorEv.datos[key] ? (
+                    visorCtx.ev.datos[key] ? (
                       <div key={key} style={{ background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>
                         <div style={{ fontSize: 9, color: su, fontWeight: 700, marginBottom: 2 }}>{lbl.toUpperCase()}</div>
-                        <div style={{ fontSize: 13, color: tx }}>{visorEv.datos[key]}</div>
+                        <div style={{ fontSize: 13, color: tx }}>{visorCtx.ev.datos[key]}</div>
                       </div>
                     ) : null,
                   )}
                 </div>
               )}
-              {visorEv.tipo === "incidencia" && visorEv.datos?.texto && (
+              {visorCtx.ev.tipo === "incidencia" && visorCtx.ev.datos?.texto && (
                 <div style={{ background: "rgba(127,29,29,.35)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 10, padding: "10px 12px", fontSize: 13, color: "#FECDD3", lineHeight: 1.55 }}>
-                  {visorEv.datos.texto}
+                  {visorCtx.ev.datos.texto}
                 </div>
               )}
-              {visorEv.nota && <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>📝 {visorEv.nota}</div>}
+              {visorCtx.ev.nota && <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>📝 {visorCtx.ev.nota}</div>}
             </div>
           </div>
         </div>
@@ -14391,7 +15963,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
           </button>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: tx, letterSpacing: -0.35 }}>Documentos</div>
-            <div style={{ fontSize: 11, color: su, marginTop: 2, lineHeight: 1.3 }}>Servicios y documentos pendientes</div>
+            <div style={{ fontSize: 11, color: su, marginTop: 2, lineHeight: 1.3 }}>Solo consulta · sube en Servicio, en la parada activa</div>
           </div>
         </div>
       </header>
@@ -14414,7 +15986,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
 // ─────────────────────────────────────────────────────────────
 //  EVIDENCIAS DEL STOP
 // ─────────────────────────────────────────────────────────────
-function EvidenciasStop({stopId,showToast,variant="default",onEvidenciaSaved,tiposPermitidos=null}){
+function EvidenciasStop({ stopId, servicioId = null, showToast, variant = "default", onEvidenciaSaved, tiposPermitidos = null }) {
   const[evidencias,setEvidencias]=useState([]);
   const[modal,setModal]=useState(null);
   const[nota,setNota]=useState("");
@@ -14524,7 +16096,22 @@ function EvidenciasStop({stopId,showToast,variant="default",onEvidenciaSaved,tip
                 {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:10,color:panel.su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
                 <div style={{fontSize:10,color:panel.time,marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
               </div>
-              {ev.url&&<img src={ev.url} style={{width:isDocsShell?40:44,height:isDocsShell?40:44,objectFit:"cover",borderRadius:7,flexShrink:0,border:`1px solid ${panel.border}`}} alt="ev"/>}
+              {ev.url ? (
+              <DriverCachedMediaImg
+                servicioId={servicioId}
+                evidenciaId={ev.id}
+                src={ev.url}
+                alt="ev"
+                style={{
+                  width: isDocsShell ? 40 : 44,
+                  height: isDocsShell ? 40 : 44,
+                  objectFit: "cover",
+                  borderRadius: 7,
+                  flexShrink: 0,
+                  border: `1px solid ${panel.border}`,
+                }}
+              />
+            ) : null}
             </div>
           ))}
         </div>
@@ -14753,6 +16340,13 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     return()=>{cancelled=true;};
   },[servicio?.id,stops]);
 
+  useEffect(()=>{
+    if(servicio?.id&&["completado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
+      markServiceArchived(servicio.id);
+      void runRetentionSweep();
+    }
+  },[servicio?.id,servicio?.estado]);
+
   if(import.meta.env.DEV){
     console.log("[AUDIT PR-22B] TabServicio",{
       loading,
@@ -14918,8 +16512,14 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         if(!emp?.id){setLoading(false);return;}
         setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);
-        const uids=rels.filter(r=>r.user_id).map(r=>r.user_id);
-        setConductores(rels);
+        const relsWithProf=await Promise.all(rels.map(async(r)=>{
+          if(!r.user_id)return r;
+          const pr=await sbSelect("profiles",`id=eq.${r.user_id}`);
+          return pr[0]?.is_archived?null:r;
+        }));
+        const relsActivos=relsWithProf.filter(Boolean);
+        const uids=relsActivos.filter(r=>r.user_id).map(r=>r.user_id);
+        setConductores(relsActivos);
         if(uids.length){
           const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&estado=in.(asignado,en_curso)&order=created_at.desc&limit=20`).then(r=>r.json());
           setServicios(Array.isArray(svs)?svs:[]);
@@ -15167,7 +16767,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
               {empresa&&(
                 <div style={{marginTop:10,fontSize:11,color:"#475569"}}>
                   Código equipo:{" "}
-                  <span style={{fontFamily:"monospace",color:tx}}>{empresa.codigo_corto}</span>
+                  <span style={{fontFamily:"monospace",color:tx}}>{getEmpresaCodigoEquipoDisplay(empresa)}</span>
                 </div>
               )}
             </div>

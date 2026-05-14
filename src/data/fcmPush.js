@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getMessaging, getToken, isSupported, onMessage } from "firebase/messaging";
-import { getUserId, sbFetch } from "./supabaseClient";
+import { getUserId, sbFetch, getAccessToken } from "./supabaseClient";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -153,9 +153,12 @@ async function registerTokenOnBackend(token, context = {}, trace) {
     pwa_installed: payload.pwa_installed,
   };
   try {
+    const access = getAccessToken();
+    const headers = { "Content-Type": "application/json" };
+    if (access) headers.Authorization = `Bearer ${access}`;
     const res = await fetch("/api/push", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ action: "register_fcm_token", payload }),
     });
     const text = await res.text().catch(() => "");
@@ -184,12 +187,15 @@ async function registerTokenOnBackend(token, context = {}, trace) {
 async function revokeTokenOnBackend(token) {
   const uid = getUserId();
   if (!uid || !token) return;
+  const access = getAccessToken();
+  const headers = { "Content-Type": "application/json" };
+  if (access) headers.Authorization = `Bearer ${access}`;
   await fetch("/api/push", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       action: "revoke_fcm_token",
-      payload: { user_id: uid, token },
+      payload: { token },
     }),
   }).catch(() => {});
 }

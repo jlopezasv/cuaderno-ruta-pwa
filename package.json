@@ -7,12 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && vercel --prod"
+    "deploy": "vite build && vercel --prod",
+    "validate:operativa": "node scripts/validar-sync-operativa.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
     "firebase": "^12.0.0",
     "google-auth-library": "^9.15.1",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^22.0.2",

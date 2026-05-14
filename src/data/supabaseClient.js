@@ -49,6 +49,12 @@ export function getUserId() {
   return s?.user?.id || null;
 }
 
+/** JWT de sesión (para Authorization en APIs propias como /api/push). */
+export function getAccessToken() {
+  const s = getSession();
+  return s?.access_token || null;
+}
+
 // Data sync — upsert batch
 export async function sbUpsert(table, rows) {
   if (!rows.length) return;

@@ -1,5 +1,9 @@
 import { SB_KEY, SB_URL, getUserId } from "./supabaseClient";
 
+/** Firmas cortas; evitar URLs públicas permanentes para CMR/fotos/PDF. */
+const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7; // 7 días
+const SIGNED_URL_FALLBACK_SEC = 60 * 60 * 24; // 1 día (reintento)
+
 function fileToBase64(blob) {
   return new Promise((resolve) => {
     const r = new FileReader();
@@ -59,20 +63,23 @@ async function uploadBlobToUserPhotos(blob, mime, folder, originalName) {
       body: blob,
     });
     if (res.ok) {
-      const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/user-photos/${name}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          apikey: SB_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ expiresIn: 315360000 }),
-      });
+      const signOnce = (expiresIn) =>
+        fetch(`${SB_URL}/storage/v1/object/sign/user-photos/${name}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: SB_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ expiresIn }),
+        });
+      let signRes = await signOnce(SIGNED_URL_TTL_SEC);
+      if (!signRes.ok) signRes = await signOnce(SIGNED_URL_FALLBACK_SEC);
       if (signRes.ok) {
         const sd = await signRes.json();
         return `${SB_URL}/storage/v1${sd.signedURL}`;
       }
-      return `${SB_URL}/storage/v1/object/public/user-photos/${name}`;
+      console.warn("Storage: no se pudo firmar URL; se evita URL /public permanente.");
     }
   } catch (e) {
     console.warn("Storage upload failed, using base64:", e.message);

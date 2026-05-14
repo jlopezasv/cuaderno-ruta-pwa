@@ -1,5 +1,7 @@
 -- Documentación extra por servicio (no ligada a stop) + historial de envíos por email.
 -- Ejecutar en Supabase SQL Editor si no usas migraciones CLI.
+-- RLS unificada por servicio + función user_can_access_servicio: aplicar también
+-- supabase/migrations/20260514120000_rls_servicio_ownership_core.sql
 
 CREATE TABLE IF NOT EXISTS public.servicio_documentos_extra (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

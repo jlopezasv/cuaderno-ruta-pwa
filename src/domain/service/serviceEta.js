@@ -1,4 +1,4 @@
-import { geocode, getRoute, buildPlan } from "../route/routePlanning.js";
+import { geocode, getRoute, buildPlan, TRUCK_KMH } from "../route/routePlanning.js";
 import { formatOperationalEtaLabel } from "./etaFormatter.js";
 
 /**
@@ -31,6 +31,7 @@ function resolveConfidence(routeReals, skippedStops) {
  * @param {object|null} params.norma — mismo objeto que calcNorma (opcional)
  * @param {{ lat: number, lon: number }|null} params.currentPosition
  * @param {boolean} [params.operationalTripStarted=true] — si es false en servicio en_curso, ETA planificada (sin GPS vivo).
+ * @param {number} [params.truckSpeedKmh] — km/h para legs OSRM; por defecto TRUCK_KMH (80), o convive con `operational_plan.velocidad` si se pasa explícito.
  * @returns {Promise<{ eta: string, label: string, confidence: 'high'|'medium'|'low' }|null>}
  */
 export async function getServiceEta({
@@ -39,9 +40,16 @@ export async function getServiceEta({
   norma,
   currentPosition,
   operationalTripStarted = true,
+  /** Alineado con planificador / snapshot (`operational_plan.velocidad`). Por defecto 80. */
+  truckSpeedKmh,
 }) {
   try {
     if (!service?.origen?.trim() || !service?.destino?.trim()) return null;
+
+    const speed =
+      truckSpeedKmh != null && Number.isFinite(Number(truckSpeedKmh))
+        ? Math.min(100, Math.max(60, Math.round(Number(truckSpeedKmh))))
+        : TRUCK_KMH;
 
     const gpsOk =
       currentPosition &&
@@ -75,7 +83,7 @@ export async function getServiceEta({
       if (!q) continue;
       try {
         const pt = await geocode(q);
-        const leg = await getRoute(cursor, pt);
+        const leg = await getRoute(cursor, pt, speed);
         totalKm += leg.km;
         totalMins += leg.mins;
         routeReals.push(leg.real);
@@ -87,7 +95,7 @@ export async function getServiceEta({
 
     try {
       const dest = await geocode(service.destino.trim());
-      const lastLeg = await getRoute(cursor, dest);
+      const lastLeg = await getRoute(cursor, dest, speed);
       totalKm += lastLeg.km;
       totalMins += lastLeg.mins;
       routeReals.push(lastLeg.real);

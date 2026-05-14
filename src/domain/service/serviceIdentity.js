@@ -1,5 +1,21 @@
 import { getServicioOperacionMeta, stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
 
+/** UUID v4 (no mostrar al conductor como “número de servicio”). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuidLike(value) {
+  return typeof value === "string" && UUID_RE.test(value.trim());
+}
+
+/** Referencia humana para UI; nunca devuelve UUID crudo. */
+export function getServiceNumberForDisplay(servicio) {
+  const fromRef = stripServicioOperacionDisplay(servicio?.referencia);
+  const sn = servicio?.service_number;
+  if (sn != null && String(sn).trim() && !isUuidLike(String(sn))) return String(sn).trim();
+  if (fromRef != null && String(fromRef).trim() && !isUuidLike(String(fromRef))) return String(fromRef).trim();
+  return null;
+}
+
 export function getServiceNumber(servicio) {
   return servicio?.service_number || stripServicioOperacionDisplay(servicio?.referencia) || servicio?.id || "SERVICIO";
 }
