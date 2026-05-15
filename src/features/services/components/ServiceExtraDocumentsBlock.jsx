@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { uploadUserFile } from "../../../data/uploadUserPhoto";
-import { EXTRA_DOC_TIPOS, fetchServicioDocumentosExtra, insertServicioDocumentoExtra } from "../../../domain/service/serviceExtraDocuments";
+import {
+  EXTRA_DOC_TIPOS,
+  extraDocFileUrl,
+  fetchServicioDocumentosExtra,
+  isExtraDocUrlOpenable,
+  uploadServicioDocumentoExtra,
+} from "../../../domain/service/serviceExtraDocuments.js";
+import { logExtraDoc } from "../../../domain/documents/extraDocumentUploadLog.js";
+import { getCameraInputProps, isMobileCaptureDevice } from "../../../domain/documents/universalCamera.js";
 
 export function ServiceExtraDocumentsBlock({
   servicio,
@@ -16,7 +23,12 @@ export function ServiceExtraDocumentsBlock({
   const [tipo, setTipo] = useState("ticket");
   const [desc, setDesc] = useState("");
   const [saving, setSaving] = useState(false);
+  const [lastError, setLastError] = useState("");
   const lastOpenReq = useRef(0);
+  const cameraRef = useRef(null);
+  const galleryRef = useRef(null);
+  const pdfRef = useRef(null);
+  const mobile = isMobileCaptureDevice();
 
   const sid = servicio?.id;
 
@@ -27,10 +39,15 @@ export function ServiceExtraDocumentsBlock({
       return;
     }
     setLoading(true);
+    setLastError("");
     try {
-      setRows(await fetchServicioDocumentosExtra(sid));
-    } catch {
+      const list = await fetchServicioDocumentosExtra(sid);
+      setRows(list);
+    } catch (e) {
       setRows([]);
+      const msg = e?.message || "No se pudo cargar la lista";
+      setLastError(msg);
+      showToast?.(msg);
     } finally {
       setLoading(false);
     }
@@ -46,26 +63,42 @@ export function ServiceExtraDocumentsBlock({
     setModal(true);
   }, [openAddRequestVersion]);
 
+  function openDocument(row) {
+    const url = extraDocFileUrl(row);
+    if (!isExtraDocUrlOpenable(url)) {
+      showToast?.("Documento sin URL valida — vuelve a subirlo");
+      logExtraDoc("DOCUMENT_VER_FAIL", { id: row?.id, url: url ? String(url).slice(0, 40) : null });
+      return;
+    }
+    logExtraDoc("DOCUMENT_VER_OK", { id: row?.id, urlPrefix: String(url).slice(0, 72) });
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   async function onPickFile(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file || !sid) return;
+    if (!file || !sid || !servicio) return;
     setSaving(true);
+    setLastError("");
     try {
-      const url = await uploadUserFile(file, "servicio_extra");
-      await insertServicioDocumentoExtra({
-        servicioId: sid,
+      const row = await uploadServicioDocumentoExtra({
+        servicio,
+        file,
         tipo,
         descripcion: desc,
-        url,
-        archivoNombre: file.name,
       });
       setModal(false);
       setDesc("");
+      setRows((prev) => {
+        if (prev.some((x) => x.id === row.id)) return prev;
+        return [row, ...prev];
+      });
       showToast?.("Documento extra guardado");
       await reload();
     } catch (err) {
-      showToast?.(err?.message || "No se pudo subir (¿migración SQL en Supabase?)");
+      const msg = err?.message || "No se pudo guardar el documento";
+      setLastError(msg);
+      showToast?.(msg);
     } finally {
       setSaving(false);
     }
@@ -102,6 +135,19 @@ export function ServiceExtraDocumentsBlock({
         btnBg: "#0f172a",
       };
 
+  const pickBtn = {
+    width: "100%",
+    padding: "12px",
+    borderRadius: 12,
+    border: "1px solid #cbd5e1",
+    background: "#f8fafc",
+    fontSize: 14,
+    fontWeight: 700,
+    color: "#0f172a",
+    cursor: saving ? "default" : "pointer",
+    opacity: saving ? 0.65 : 1,
+  };
+
   return (
     <div
       style={{
@@ -136,47 +182,66 @@ export function ServiceExtraDocumentsBlock({
             cursor: "pointer",
           }}
         >
-          + Añadir
+          + Anadir
         </button>
       </div>
+      {lastError ? (
+        <div style={{ fontSize: 11, color: "#b91c1c", marginBottom: 8, lineHeight: 1.35 }}>{lastError}</div>
+      ) : null}
       {loading ? (
         <div style={{ fontSize: 12, color: shell.sub, padding: "8px 0" }}>Cargando…</div>
       ) : rows.length === 0 ? (
-        <div style={{ fontSize: 12, color: shell.sub, padding: compact ? "4px 0" : "6px 0", opacity: 0.9 }}>Ningún archivo</div>
+        <div style={{ fontSize: 12, color: shell.sub, padding: compact ? "4px 0" : "6px 0", opacity: 0.9 }}>Ningun archivo</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: compact ? 6 : 8 }}>
-          {rows.map((r) => (
-            <div
-              key={r.id}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 10,
-                alignItems: "center",
-                border: `1px solid ${shell.rowBorder}`,
-                borderRadius: 12,
-                padding: compact ? "7px 9px" : "8px 10px",
-                background: shell.rowBg,
-              }}
-            >
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: shell.rowTitle }}>
-                  {tipoLabel(r.tipo)}
-                  {r.archivo_nombre ? <span style={{ color: shell.rowMeta, fontWeight: 600 }}> · {r.archivo_nombre}</span> : null}
+          {rows.map((r) => {
+            const canOpen = isExtraDocUrlOpenable(extraDocFileUrl(r));
+            return (
+              <div
+                key={r.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  alignItems: "center",
+                  border: `1px solid ${shell.rowBorder}`,
+                  borderRadius: 12,
+                  padding: compact ? "7px 9px" : "8px 10px",
+                  background: shell.rowBg,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: shell.rowTitle }}>
+                    {tipoLabel(r.tipo)}
+                    {r.archivo_nombre ? <span style={{ color: shell.rowMeta, fontWeight: 600 }}> · {r.archivo_nombre}</span> : null}
+                  </div>
+                  <div style={{ fontSize: 10, color: shell.rowMeta, marginTop: 2 }}>
+                    {new Date(r.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    {uploaderName ? ` · ${uploaderName}` : ""}
+                  </div>
+                  {r.descripcion ? <div style={{ fontSize: 11, color: shell.desc, marginTop: 4, lineHeight: 1.35 }}>{r.descripcion}</div> : null}
                 </div>
-                <div style={{ fontSize: 10, color: shell.rowMeta, marginTop: 2 }}>
-                  {new Date(r.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                  {uploaderName ? ` · ${uploaderName}` : ""}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    disabled={!canOpen}
+                    onClick={() => openDocument(r)}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      color: canOpen ? shell.link : shell.rowMeta,
+                      background: "transparent",
+                      border: "none",
+                      cursor: canOpen ? "pointer" : "default",
+                      padding: 0,
+                    }}
+                  >
+                    Ver
+                  </button>
                 </div>
-                {r.descripcion ? <div style={{ fontSize: 11, color: shell.desc, marginTop: 4, lineHeight: 1.35 }}>{r.descripcion}</div> : null}
               </div>
-              {r.url && String(r.url).startsWith("http") ? (
-                <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontWeight: 800, color: shell.link, flexShrink: 0 }}>
-                  Abrir
-                </a>
-              ) : null}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -212,14 +277,32 @@ export function ServiceExtraDocumentsBlock({
                 </option>
               ))}
             </select>
-            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>DESCRIPCIÓN (opcional)</div>
-            <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Ej. ticket repostaje, parking, peaje…" style={{ width: "100%", marginBottom: 12, padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", fontSize: 14, boxSizing: "border-box" }} />
-            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>ARCHIVO</div>
-            <label style={{ display: "block", width: "100%", textAlign: "center", padding: "14px", borderRadius: 12, border: "2px dashed #cbd5e1", cursor: saving ? "default" : "pointer", opacity: saving ? 0.65 : 1 }}>
-              <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} disabled={saving} onChange={onPickFile} />
-              {saving ? "Subiendo…" : "Elegir foto o PDF"}
-            </label>
-            <button type="button" onClick={() => setModal(false)} style={{ width: "100%", marginTop: 12, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 10, padding: 11, fontWeight: 700, cursor: "pointer" }}>
+            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>DESCRIPCION (opcional)</div>
+            <input
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              placeholder="Ej. ticket repostaje, parking, peaje…"
+              style={{ width: "100%", marginBottom: 12, padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", fontSize: 14, boxSizing: "border-box" }}
+            />
+            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 8 }}>ARCHIVO</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              {mobile ? (
+                <button type="button" disabled={saving} style={pickBtn} onClick={() => cameraRef.current?.click()}>
+                  Hacer foto
+                </button>
+              ) : null}
+              <button type="button" disabled={saving} style={pickBtn} onClick={() => galleryRef.current?.click()}>
+                {mobile ? "Galeria (foto)" : "Elegir foto"}
+              </button>
+              <button type="button" disabled={saving} style={pickBtn} onClick={() => pdfRef.current?.click()}>
+                Elegir PDF
+              </button>
+              {saving ? <div style={{ fontSize: 12, color: "#64748b", textAlign: "center" }}>Subiendo…</div> : null}
+            </div>
+            <input ref={cameraRef} {...getCameraInputProps({ facing: "environment" })} style={{ display: "none" }} disabled={saving} onChange={onPickFile} />
+            <input ref={galleryRef} type="file" accept="image/*" style={{ display: "none" }} disabled={saving} onChange={onPickFile} />
+            <input ref={pdfRef} type="file" accept="application/pdf,.pdf" style={{ display: "none" }} disabled={saving} onChange={onPickFile} />
+            <button type="button" onClick={() => setModal(false)} style={{ width: "100%", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 10, padding: 11, fontWeight: 700, cursor: "pointer" }}>
               Cancelar
             </button>
           </div>

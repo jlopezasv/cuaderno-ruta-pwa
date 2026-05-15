@@ -5,11 +5,8 @@ import { getCurrentStop } from "../../../domain/service/serviceStops";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
-import {
-  getOperationalPlanConfirmedAt,
-  getOperationalPlanSnapshot,
-} from "../../../domain/service/serviceOperacionMeta.js";
-import { formatOperationalEtaLabel, isRelativeEtaLabel } from "../../../domain/service/etaFormatter.js";
+import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
+import { OperationalEtaSnapshotBlock } from "./OperationalEtaSnapshotBlock.jsx";
 import {
   getFixedServiceRoute,
   getServiceClient,
@@ -133,13 +130,6 @@ function stopOperationalGroup(stop) {
 function stopTime(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
-}
-
-function primaryEtaText(label) {
-  const value = String(label || "").trim();
-  if (!value || value === "Sin ETA" || value === "…") return "—";
-  if (isRelativeEtaLabel(value)) return "—";
-  return value;
 }
 
 function sortStops(stops) {
@@ -283,7 +273,6 @@ function ServiceHero({
   routeTitle,
   operationalLabel,
   scheduleLabel,
-  etaText,
   serviceNumber,
   attention,
   attentionReason,
@@ -326,19 +315,6 @@ function ServiceHero({
           <span style={{ color: DRIVER_UI.tx, fontWeight: 750 }}>{operationalLabel}</span>
         </span>
         {scheduleLabel ? <span style={{ opacity: 0.95 }}>· {scheduleLabel}</span> : null}
-        {etaText && etaText !== "—" ? (
-          <span
-            style={{
-              marginLeft: "auto",
-              fontWeight: 800,
-              color: DRIVER_UI.tx,
-              fontVariantNumeric: "tabular-nums",
-              fontSize: 14,
-            }}
-          >
-            ETA {etaText}
-          </span>
-        ) : null}
       </div>
       {serviceNumber ? (
         <div style={{ marginTop: 8, fontSize: 12, color: DRIVER_UI.muted, fontWeight: 600 }}>{serviceNumber}</div>
@@ -451,7 +427,10 @@ function OperationalStopCard({
   onConfirmMuelle,
   EvidenciasStopComponent,
   showToast,
+  servicio,
   servicioId,
+  conductorNombre,
+  onEvidenciaSaved,
 }) {
   const { stop, label, group } = item;
   const entrada = !!stop.hora_llegada_real;
@@ -565,7 +544,19 @@ function OperationalStopCard({
 
           {inOperation ? (
             <div style={{ marginTop: 12 }}>
-              {Ev ? <Ev key={stop.id} stopId={stop.id} servicioId={servicioId} showToast={showToast} /> : null}
+              {Ev ? (
+                <Ev
+                  key={stop.id}
+                  stopId={stop.id}
+                  servicioId={servicioId}
+                  servicio={servicio}
+                  stop={stop}
+                  conductorName={conductorNombre}
+                  conductorId={servicio?.conductor_id}
+                  showToast={showToast}
+                  onEvidenciaSaved={onEvidenciaSaved}
+                />
+              ) : null}
               <button
                 type="button"
                 onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
@@ -605,7 +596,19 @@ function OperationalStopCard({
   );
 }
 
-function OperationalStops({ items, currentStopId, evidenciasByStop, canOperate, onConfirmMuelle, EvidenciasStopComponent, showToast, servicioId }) {
+function OperationalStops({
+  items,
+  currentStopId,
+  evidenciasByStop,
+  canOperate,
+  onConfirmMuelle,
+  EvidenciasStopComponent,
+  showToast,
+  servicio,
+  servicioId,
+  conductorNombre,
+  onEvidenciaSaved,
+}) {
   if (!items.length) {
     return (
       <div style={{ borderRadius: 14, padding: "14px", color: DRIVER_UI.su, fontSize: 13, border: `1px dashed ${DRIVER_UI.line}` }}>
@@ -639,7 +642,10 @@ function OperationalStops({ items, currentStopId, evidenciasByStop, canOperate, 
             onConfirmMuelle={onConfirmMuelle}
             EvidenciasStopComponent={EvidenciasStopComponent}
             showToast={showToast}
+            servicio={servicio}
             servicioId={servicioId}
+            conductorNombre={conductorNombre}
+            onEvidenciaSaved={onEvidenciaSaved}
           />
         </div>
       ))}
@@ -662,23 +668,30 @@ export function ActiveServicePanel({
   recargar,
   EvidenciasStopComponent,
   onOpenViajeModal,
+  onEvidenciaSaved,
   conductorNombre = "Conductor",
+  norma = null,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
-  const planSnapshot = useMemo(() => getOperationalPlanSnapshot(servicio), [servicio?.referencia]);
-  const planConfirmed = !!getOperationalPlanConfirmedAt(servicio);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
-  const routeTitle = getFixedServiceRoute(servicio);
+  const tacografoEstado = useMemo(() => {
+    if (!norma) return null;
+    return {
+      isDriving: !!norma.isDriving,
+      crType: norma.crType ?? "",
+      crDur: Number(norma.crDur),
+    };
+  }, [norma]);
+  const routeTitle = getFixedServiceRoute(servicio, "Origen", "Destino", sortedStops);
   const serviceNumber = getServiceNumberForDisplay(servicio);
   const cliente = getServiceClient(servicio) || "—";
   const referenciaCliente = getServiceClientReference(servicio) || "—";
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
-  const etaHeader = planConfirmed ? primaryEtaText(formatOperationalEtaLabel(planSnapshot?.planned_eta) || planSnapshot?.planned_eta_label) : null;
   const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso";
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
@@ -686,18 +699,14 @@ export function ActiveServicePanel({
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
-    const stop = sortedStops.find((s) => s.id === stopId);
-    const operationName = operationNameForStop(stop);
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
         await marcarLlegado(stopId);
         await recargar?.();
-        showToast?.("Entrada en muelle registrada");
       } else {
         await marcarCompletado(stopId);
         await recargar?.();
-        showToast?.(`${operationName} finalizada`);
       }
       setConfirmMuelle(null);
     } catch (error) {
@@ -711,7 +720,7 @@ export function ActiveServicePanel({
     mode === "asignado"
       ? {
           label: "Iniciar servicio",
-          onClick: () => onIniciarServicio(servicio.id).then(() => showToast?.("Servicio iniciado")),
+          onClick: () => onIniciarServicio(servicio.id),
         }
       : null;
 
@@ -801,12 +810,35 @@ export function ActiveServicePanel({
           routeTitle={routeTitle}
           operationalLabel={sig.operationalMeta.label}
           scheduleLabel={scheduleLabel}
-          etaText={etaHeader}
           serviceNumber={serviceNumber}
           attention={sig.attention}
           attentionReason={sig.attentionReason}
           serviceAction={serviceAction}
         />
+
+        <div
+          style={{
+            marginTop: 14,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            padding: "12px 14px",
+            borderRadius: 12,
+            border: `1px solid ${DRIVER_UI.line}`,
+            background: DRIVER_UI.surface,
+          }}
+        >
+          <OperationalEtaSnapshotBlock
+            servicio={servicio}
+            nowMs={Date.now()}
+            tx={DRIVER_UI.tx}
+            su={DRIVER_UI.su}
+            subtle={DRIVER_UI.muted}
+            latestLocation={null}
+            tacografoEstado={tacografoEstado}
+            activeStop={stopMostrar}
+          />
+        </div>
 
         <ServiceDetailsCollapsible
           cliente={cliente}
@@ -833,7 +865,10 @@ export function ActiveServicePanel({
             onConfirmMuelle={setConfirmMuelle}
             EvidenciasStopComponent={EvidenciasStopComponent}
             showToast={showToast}
+            servicio={servicio}
             servicioId={servicio?.id}
+            conductorNombre={conductorNombre}
+            onEvidenciaSaved={onEvidenciaSaved}
           />
         </div>
 

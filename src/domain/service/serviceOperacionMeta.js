@@ -16,6 +16,9 @@ function findMetaMark(s) {
 
 export function stripServicioOperacionDisplay(referencia) {
   if (referencia == null || referencia === "") return "";
+  if (typeof referencia === "object" && !Array.isArray(referencia)) {
+    return "";
+  }
   const s = String(referencia);
   const mark = findMetaMark(s);
   if (!mark) return s.trim();
@@ -24,9 +27,23 @@ export function stripServicioOperacionDisplay(referencia) {
 
 function parseMetaFromRef(ref) {
   if (ref == null || ref === "") return {};
+  if (typeof ref === "object" && !Array.isArray(ref)) {
+    return { ...ref };
+  }
   const s = String(ref);
   const mark = findMetaMark(s);
-  if (!mark) return {};
+  if (!mark) {
+    const t = s.trim();
+    if (t.startsWith("{") && t.endsWith("}")) {
+      try {
+        const o = JSON.parse(t);
+        return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  }
   try {
     const o = JSON.parse(s.slice(mark.index + mark.length).trim());
     return o && typeof o === "object" ? o : {};

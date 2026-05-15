@@ -1,4 +1,4 @@
-import { getServicioOperacionMeta, stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
+import { getOperationalPlanSnapshot, getServicioOperacionMeta, stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
 
 /** UUID v4 (no mostrar al conductor como “número de servicio”). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -38,7 +38,39 @@ function fixedPlace(value, fallback) {
   return text;
 }
 
-export function getFixedServiceRoute(servicio, fallbackOrigen = "Origen", fallbackDestino = "Destino") {
+/**
+ * Origen/destino visibles para flota (no usar etiqueta genérica «Origen» si hay plan o paradas).
+ * @param {object|null} servicio
+ * @param {object[]|null} [stops] — paradas ordenadas opcionales (primera parada como fallback de origen)
+ * @returns {{ origen: string, destino: string }}
+ */
+export function resolveServiceRouteEndpoints(servicio, stops = null) {
+  const plan = getOperationalPlanSnapshot(servicio);
+  const fromPlanO = fixedPlace(plan?.planned_origin, null);
+  const fromPlanD = fixedPlace(plan?.planned_destination, null);
+  const destino =
+    fixedPlace(servicio?.destino, null) ||
+    fromPlanD ||
+    "Destino";
+
+  let origen = fromPlanO || fixedPlace(servicio?.origen, null);
+  if (!origen && Array.isArray(stops) && stops.length) {
+    const sorted = [...stops].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+    const nm = String(sorted[0]?.nombre || "").trim();
+    if (nm && !/^-?\d{1,2}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?$/.test(nm)) {
+      origen = nm;
+    }
+  }
+  if (!origen) origen = "Inicio servicio";
+
+  return { origen, destino };
+}
+
+export function getFixedServiceRoute(servicio, fallbackOrigen = "Origen", fallbackDestino = "Destino", stops = null) {
+  if (stops != null) {
+    const { origen, destino } = resolveServiceRouteEndpoints(servicio, stops);
+    return `${origen} → ${destino}`;
+  }
   const origen = fixedPlace(servicio?.origen, fallbackOrigen);
   const destino = fixedPlace(servicio?.destino, fallbackDestino);
   return `${origen} → ${destino}`;

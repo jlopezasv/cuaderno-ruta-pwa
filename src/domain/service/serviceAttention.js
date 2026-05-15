@@ -33,6 +33,7 @@ export function needsAttention({ service, stops, evidencias, lastActivity }) {
   const st = stops || [];
 
   if (hasIncidencia(evidencias, st)) return true;
+  if (service?.estado === "pendiente_asignacion") return true;
   if (service?.estado === "asignado") return true;
 
   if (isStale(service, lastActivity)) return true;
@@ -44,6 +45,7 @@ export function getAttentionReason({ service, stops, evidencias, lastActivity })
   const st = stops || [];
 
   if (hasIncidencia(evidencias, st)) return "Incidencia registrada";
+  if (service?.estado === "pendiente_asignacion") return "Sin conductor asignado";
   if (service?.estado === "asignado") return "Servicio sin iniciar";
 
   if (isStale(service, lastActivity)) return "Sin actividad reciente";

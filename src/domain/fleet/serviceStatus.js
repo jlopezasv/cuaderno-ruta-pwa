@@ -5,6 +5,7 @@
 
 /** @type {Readonly<Record<string, string>>} */
 export const ESTADO_COLOR = Object.freeze({
+  pendiente_asignacion: "#6366F1",
   asignado: "#3B82F6",
   en_curso: "#F59E0B",
   completado: "#22C55E",
@@ -14,6 +15,7 @@ export const ESTADO_COLOR = Object.freeze({
 
 /** @type {Readonly<Record<string, string>>} */
 export const ESTADO_LABEL = Object.freeze({
+  pendiente_asignacion: "Pendiente asignación",
   asignado: "Asignado",
   en_curso: "En curso",
   completado: "Completado",
@@ -23,6 +25,7 @@ export const ESTADO_LABEL = Object.freeze({
 
 /** @type {Readonly<Record<string, string>>} */
 export const ESTADO_ICON = Object.freeze({
+  pendiente_asignacion: "◎",
   asignado: "📋",
   en_curso: "🚛",
   completado: "🏁",

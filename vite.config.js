@@ -10,8 +10,16 @@ export default defineConfig({
     target: ['es2019', 'safari14'],
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
+        manualChunks(id) {
+          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
+            return 'react';
+          }
+          if (id.includes('node_modules/firebase')) {
+            return 'firebase';
+          }
+          if (id.includes('node_modules/@supabase')) {
+            return 'supabase';
+          }
         },
       },
     },

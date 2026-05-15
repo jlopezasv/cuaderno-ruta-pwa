@@ -2,26 +2,28 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 
-// Registrar Service Worker
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
-      .then(reg => {
-        console.log('[SW] Registrado:', reg.scope);
-        // Detectar actualizaciones
-        reg.addEventListener('updatefound', () => {
-          const newWorker = reg.installing;
-          newWorker?.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nueva versión disponible — mostrar toast
-              window.__newVersionAvailable?.();
-            }
-          });
+// Registrar Service Worker tras el primer paint (no compite con carga JS)
+function registerAppServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker
+    .register('/sw.js', { scope: '/' })
+    .then((reg) => {
+      console.log('[SW] Registrado:', reg.scope);
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        newWorker?.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            window.__newVersionAvailable?.();
+          }
         });
-      })
-      .catch(err => console.warn('[SW] Error:', err));
-  });
+      });
+    })
+    .catch((err) => console.warn('[SW] Error:', err));
+}
+if (typeof requestIdleCallback === 'function') {
+  requestIdleCallback(registerAppServiceWorker, { timeout: 4000 });
+} else {
+  setTimeout(registerAppServiceWorker, 2000);
 }
 
 // Detectar si está instalada como PWA

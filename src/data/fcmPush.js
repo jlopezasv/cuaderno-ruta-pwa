@@ -1,6 +1,16 @@
-import { getApp, getApps, initializeApp } from "firebase/app";
-import { getMessaging, getToken, isSupported, onMessage } from "firebase/messaging";
 import { getUserId, sbFetch, getAccessToken } from "./supabaseClient";
+
+/** Firebase solo se descarga al inicializar push (no en el bundle inicial). */
+let firebaseSdkPromise = null;
+function loadFirebaseSdk() {
+  if (!firebaseSdkPromise) {
+    firebaseSdkPromise = Promise.all([
+      import("firebase/app"),
+      import("firebase/messaging"),
+    ]).then(([appMod, msgMod]) => ({ ...appMod, ...msgMod }));
+  }
+  return firebaseSdkPromise;
+}
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -109,7 +119,8 @@ function getPwaDiagnostics() {
   };
 }
 
-function ensureFirebaseApp(trace) {
+async function ensureFirebaseApp(trace) {
+  const { getApp, getApps, initializeApp } = await loadFirebaseSdk();
   try {
     if (getApps().length) {
       const app = getApp();
@@ -252,6 +263,8 @@ export async function initFcmPush({ showToast } = {}) {
     return { ok: false, reason: "missing_config", trace: { ...trace, missingConfig: missing } };
   }
 
+  const { isSupported, getMessaging, getToken, onMessage } = await loadFirebaseSdk();
+
   const supported = await isSupported().catch((e) => {
     pushLog("isSupported() threw", e?.message || String(e), e);
     return false;
@@ -299,7 +312,7 @@ export async function initFcmPush({ showToast } = {}) {
 
   let app;
   try {
-    app = ensureFirebaseApp(trace);
+    app = await ensureFirebaseApp(trace);
   } catch {
     return { ok: false, reason: "firebase_init_failed", trace };
   }

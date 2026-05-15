@@ -32,7 +32,7 @@ function resolveConfidence(routeReals, skippedStops) {
  * @param {{ lat: number, lon: number }|null} params.currentPosition
  * @param {boolean} [params.operationalTripStarted=true] — si es false en servicio en_curso, ETA planificada (sin GPS vivo).
  * @param {number} [params.truckSpeedKmh] — km/h para legs OSRM; por defecto TRUCK_KMH (80), o convive con `operational_plan.velocidad` si se pasa explícito.
- * @returns {Promise<{ eta: string, label: string, confidence: 'high'|'medium'|'low' }|null>}
+ * @returns {Promise<{ eta: string, label: string, confidence: 'high'|'medium'|'low', remaining_km: number, remaining_mins: number }|null>}
  */
 export async function getServiceEta({
   service,
@@ -129,11 +129,15 @@ export async function getServiceEta({
 
     const label = formatOperationalEtaLabel(arrival) || "Sin ETA";
     const confidence = resolveConfidence(routeReals, skippedStops);
+    const remaining_km = Math.round(totalKm * 10) / 10;
+    const remaining_mins = Math.max(0, Math.round(totalMins));
 
     return {
       eta: arrival.toISOString(),
       label,
       confidence,
+      remaining_km,
+      remaining_mins,
     };
   } catch {
     return null;

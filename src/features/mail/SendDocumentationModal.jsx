@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getFixedServiceRoute, getServiceClient } from "../../domain/service/serviceIdentity";
 import { getDocumentLabel } from "../../domain/service/serviceDocuments";
-import { fetchServicioDocumentosExtra } from "../../domain/service/serviceExtraDocuments";
+import { extraDocFileUrl, fetchServicioDocumentosExtra } from "../../domain/service/serviceExtraDocuments.js";
 import { logDocumentacionEnvio } from "../../domain/mail/documentacionEnviosLog";
 
 const LS_HINTS = "cuaderno_cliente_email_hints";
@@ -77,12 +77,13 @@ export function SendDocumentationModal({ open, onClose, servicio, stops, evidenc
       });
     });
     (extraDocs || []).forEach((ex) => {
-      if (!ex?.id || !ex.url) return;
+      const exUrl = extraDocFileUrl(ex);
+      if (!ex?.id || !exUrl) return;
       list.push({
         id: `ex:${ex.id}`,
         key: ex.id,
         label: `Extra · ${ex.tipo}${ex.archivo_nombre ? ` (${ex.archivo_nombre})` : ""}`,
-        url: ex.url,
+        url: exUrl,
         filename: (ex.archivo_nombre || `extra_${ex.tipo}.pdf`).slice(0, 120),
         selected: true,
       });

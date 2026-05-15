@@ -57,6 +57,7 @@ import {
   countServiceDocuments,
   getDocumentLabel,
   groupDocumentsByStop,
+  fetchEvidenciasGroupedByStop,
   isIncidentDocument,
 } from "./domain/service/serviceDocuments";
 import {
@@ -84,13 +85,57 @@ import {
 } from "./domain/service/tripOperationalDossier.js";
 import {
   buildServiceExpediente,
+  buildServiceExpedienteListPreview,
   downloadServiceExpedientePdf,
 } from "./domain/service/serviceExpediente.js";
+import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
+import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
+import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
+import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
+import {
+  EVIDENCIA_SAVED_EVENT,
+  mergeEvidenciaIntoByStop,
+} from "./domain/documents/operationalEvidenciaSync.js";
+import { ExpedienteDocumentsPanel } from "./features/documents/ExpedienteDocumentsPanel.jsx";
+import {
+  EMPRESA_ETA_VISUAL_TICK_MS,
+  EMPRESA_FLOTA_DATA_POLL_MS,
+  EMPRESA_UBICACION_POLL_MS,
+  mergeFlotaServicios,
+  mergeFlotaStopsMap,
+  mergeFlotaEvsMap,
+  patchUbicacionMap,
+  stopsRowsToMap,
+  servicioIdsForLightStopsRefresh,
+  servicioIdsForInitialStopsLoad,
+  formatFlotaManualRefreshLabel,
+} from "./features/empresa/empresaFlotaRefresh.js";
+import {
+  getOperationalEtaUiState,
+  OPERATIONAL_ETA_CALCULATING,
+  formatOperationalEtaSnapshotLine,
+} from "./domain/service/operationalEtaPresentation.js";
 import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
+import {
+  fetchEmpresaDocumentosExtra,
+  fetchServicioDocumentosExtra,
+} from "./domain/service/serviceExtraDocuments.js";
+import { groupExtraDocsByServicioId } from "./domain/service/extraDocumentExpediente.js";
+import {
+  assignConductorPrincipalToServicio,
+  fetchFlotaServiciosForEmpresa,
+  SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
+  servicioPendienteAsignacion,
+} from "./domain/fleet/servicioAssignment.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
-import { formatOperationalEtaLabel, formatOperationalEtaSlot, isRelativeEtaLabel } from "./domain/service/etaFormatter.js";
+import {
+  formatOperationalEtaLabel,
+  isRelativeEtaLabel,
+} from "./domain/service/etaFormatter.js";
+import { shouldPersistOperationalEtaRefresh } from "./domain/service/operationalEtaRefreshPolicy.js";
 import {
   mergeReferenciaOperacional,
   getServicioOperacionMeta,
@@ -105,6 +150,7 @@ import {
   getServiceClient,
   getServiceClientReference,
   getServiceNumber,
+  resolveServiceRouteEndpoints,
 } from "./domain/service/serviceIdentity.js";
 import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
@@ -4553,13 +4599,20 @@ function trackingLog(step,data){
   else console.info(`[tracking] ${step}`,data??"");
 }
 
-function getDriverActionGps(){
+/**
+ * GPS para acciones operativas.
+ * @param {{fresh?:boolean,timeoutMs?:number}} [opts] fresh=true evita caché del navegador (máxima frescura para ubicaciones).
+ */
+function getDriverActionGps(opts={}){
+  const fresh=!!opts.fresh;
+  const timeoutMs=Number.isFinite(opts.timeoutMs)?Math.min(60000,Math.max(5000,opts.timeoutMs)):12000;
+  const maximumAge=fresh?0:60000;
   if(typeof navigator==="undefined"||!navigator.geolocation){
     trackingLog("gps unavailable",{reason:"navigator.geolocation missing"});
     return Promise.resolve({ok:false,error:"GPS no disponible en este dispositivo"});
   }
   return new Promise(resolve=>{
-    trackingLog("gps requested",{timeoutMs:12000,enableHighAccuracy:false,maximumAge:60000});
+    trackingLog("gps requested",{timeoutMs,enableHighAccuracy:false,maximumAge,fresh});
     navigator.geolocation.getCurrentPosition(
       pos=>{
         const{latitude:lat,longitude:lon,accuracy,speed}=pos.coords;
@@ -4568,7 +4621,7 @@ function getDriverActionGps(){
           resolve({ok:false,error:"Coordenadas GPS inválidas"});
           return;
         }
-        trackingLog("gps success",{lat,lon,accuracy,speed});
+        trackingLog("gps success",{lat,lon,accuracy,speed,fresh});
         resolve({ok:true,point:{lat,lon,accuracy,speed,ts:new Date().toISOString()}});
       },
       error=>{
@@ -4578,7 +4631,7 @@ function getDriverActionGps(){
         else trackingLog("gps failed",detail);
         resolve({ok:false,error:gpsActionErrorMessage(error)});
       },
-      {enableHighAccuracy:false,timeout:12000,maximumAge:60000}
+      {enableHighAccuracy:false,timeout:timeoutMs,maximumAge}
     );
   });
 }
@@ -4706,35 +4759,80 @@ async function saveDriverActionLocation(uid,point,{servicio=null,stops=null,even
   return res;
 }
 
-function buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId}){
+function buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId,activeStopId}){
   const plan=getOperationalPlanSnapshot(servicio);
   const planEta=plan?.planned_eta||null;
   const etaMs=eta?.eta?new Date(eta.eta).getTime():NaN;
   const planMs=planEta?new Date(planEta).getTime():NaN;
   const deltaMin=Number.isFinite(etaMs)&&Number.isFinite(planMs)?Math.round((etaMs-planMs)/60000):null;
+  const ts=new Date().toISOString();
+  const rm=Number(eta.remaining_mins);
+  const rk=Number(eta.remaining_km);
   return{
     eta:eta.eta,
+    eta_ts:eta.eta,
+    eta_label:eta.label,
     label:eta.label,
     confidence:eta.confidence||"medium",
     status:"ok",
     source:"driver_event",
     event_type:eventType||null,
     stop_id:stopId||null,
-    calculated_at:new Date().toISOString(),
+    active_stop_id:activeStopId??null,
+    servicio_id:servicio?.id??null,
+    calculated_at:ts,
+    updated_at:ts,
+    last_eta_refresh_at:ts,
     location_ts:point?.ts||null,
     lat:Number(point.lat),
     lon:Number(point.lon),
     precision_m:Math.round(point?.accuracy||0),
     planned_eta:planEta,
     delta_min:deltaMin,
+    remaining_mins:Number.isFinite(rm)?Math.max(0,Math.round(rm)):null,
+    remaining_km:Number.isFinite(rk)?Math.round(rk*10)/10:null,
   };
 }
 
-async function persistServiceOperationalEta({servicio,stops,norma,point,eventType,stopId}){
+async function persistServiceOperationalEta({
+  servicio,
+  stops,
+  norma,
+  point,
+  eventType,
+  stopId,
+  activeStopId:activeStopIdArg,
+  force: forceOpt,
+}={}){
   if(!servicio?.id||!point||!Number.isFinite(point.lat)||!Number.isFinite(point.lon))return null;
   if(!servicio.destino?.trim()||!servicio.origen?.trim())return null;
   if(!isEtaActivationReady(servicio))return null;
-  trackingLog("operativa persist_eta_start",{servicio_id:servicio.id,empresa_id:servicio.empresa_id||null,event_type:eventType||null});
+  const activeStopId=activeStopIdArg??getCurrentStop(stops)?.id??null;
+  const prevSnap=getOperationalEtaSnapshot(servicio);
+  const forcePersist=!!forceOpt||eventType==="empresa_refresh";
+  const decision=shouldPersistOperationalEtaRefresh({
+    prev:prevSnap,
+    point,
+    servicioId:servicio.id,
+    activeStopId,
+    eventType:eventType||null,
+    force:forcePersist,
+  });
+  if(!decision.should){
+    trackingLog("operativa persist_eta_skipped",{
+      servicio_id:servicio.id,
+      empresa_id:servicio.empresa_id||null,
+      event_type:eventType||null,
+      reason:decision.reason,
+    });
+    return{skipped:true,referencia:null,operationalEta:prevSnap||null};
+  }
+  trackingLog("operativa persist_eta_start",{
+    servicio_id:servicio.id,
+    empresa_id:servicio.empresa_id||null,
+    event_type:eventType||null,
+    refresh_reason:decision.reason,
+  });
   const serviceForEta={...servicio,estado:servicio.estado==="asignado"?"en_curso":servicio.estado};
   const planSnap=getOperationalPlanSnapshot(servicio);
   const truckSpeedKmh=Number.isFinite(Number(planSnap?.velocidad))
@@ -4749,7 +4847,7 @@ async function persistServiceOperationalEta({servicio,stops,norma,point,eventTyp
     truckSpeedKmh,
   });
   if(!eta?.eta)return null;
-  const operationalEta=buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId});
+  const operationalEta=buildOperationalEtaSnapshot({eta,servicio,point,eventType,stopId,activeStopId});
   const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
     operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
     operational_eta:operationalEta,
@@ -4761,39 +4859,78 @@ async function persistServiceOperationalEta({servicio,stops,norma,point,eventTyp
     trackingLog("operativa persist_eta_failed",{servicio_id:servicio.id,status:res.status,detail:String(errTxt).slice(0,400)});
     throw new Error(`No se pudo guardar la ETA operacional`);
   }
-  trackingLog("operativa persist_eta_ok",{servicio_id:servicio.id});
+  trackingLog("operativa persist_eta_ok",{servicio_id:servicio.id,refresh_reason:decision.reason});
   try{window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));}catch(_){/* SSR */}
   return{referencia,operationalEta};
 }
 
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
   const depStopsIn=Array.isArray(stops)?stops:[];
-  const snap=await resolveOperationalUbicacionSnapshot(uid,servicio,depStopsIn);
-  trackingLog("event dispatch",{event_type:eventType||null,uid,servicio_id:snap.servicio_id,empresa_id:snap.empresa_id,stop_id:stopId||null});
-  const gps=await getDriverActionGps();
+  const successMsgs={
+    entrada_muelle:"Entrada en muelle registrada",
+    salida_muelle:"Muelle finalizado",
+    inicio_servicio:"Servicio en marcha",
+    inicio_operacion_stop:"Operación registrada",
+  };
+  const successBase=successMsgs[eventType]||"✓ Acción registrada";
+
+  showToast?.("Obteniendo ubicación…","#64748B",4000);
+  trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
+
+  const gps=await getDriverActionGps({fresh:true,timeoutMs:15000});
   if(!gps.ok){
-    showToast?.(`${gps.error}. ETA no recalculada`,"#F97316",3500);
-    return null;
+    showToast?.(`${gps.error}. Sin ubicación operativa.`,"#F97316",4200);
+    trackingLog("operativa flow_gps_fail",{uid,error:gps.error});
+    return{gpsOk:false,error:gps.error};
   }
   const point=gps.point;
+  trackingLog("operativa flow_gps_ok",{uid,lat:point.lat,lon:point.lon,accuracy:point.accuracy});
+
+  const snap=await resolveOperationalUbicacionSnapshot(uid,servicio,depStopsIn);
+  trackingLog("event dispatch",{event_type:eventType||null,uid,servicio_id:snap.servicio_id,empresa_id:snap.empresa_id,stop_id:stopId||null});
+
   try{
     await saveDriverActionLocation(uid,point,{preResolved:snap,eventType,stopId});
   }catch(e){
     console.warn("ubicacion evento save failed:",e);
     trackingLog("operativa ubicacion save_exception",{uid,error:String(e?.message||e)});
     const msg=e?.message?String(e.message).slice(0,120):"Error desconocido";
-    showToast?.(`GPS obtenido, pero no se pudo guardar la ubicación: ${msg}`,"#F97316",4200);
+    showToast?.(`Ubicación GPS lista, pero no se guardó: ${msg}`,"#F97316",4200);
+    return{gpsOk:true,point,saveFailed:true};
   }
+
   try{
-    const etaRes=await persistServiceOperationalEta({servicio:snap.servicio,stops:snap.stops,norma,point,eventType,stopId});
-    if(etaRes?.operationalEta?.label){
-      showToast?.(`ETA actualizada: ${etaRes.operationalEta.label}`,"#2563EB",3000);
+    const activeStopId=getCurrentStop(snap.stops)?.id??null;
+    const etaRes=await persistServiceOperationalEta({
+      servicio:snap.servicio,
+      stops:snap.stops,
+      norma,
+      point,
+      eventType,
+      stopId,
+      activeStopId,
+    });
+    if(etaRes?.referencia&&snap.servicio)snap.servicio.referencia=etaRes.referencia;
+    const etaLabel=etaRes?.operationalEta?.label||etaRes?.operationalEta?.eta_label;
+    if(etaLabel){
+      showToast?.(`${successBase} · ETA ${etaLabel}`,"#166534",3800);
+    }else{
+      showToast?.(successBase,"#166534",2800);
     }
-    return{point,...(etaRes||{})};
+    trackingLog("operativa flow_complete",{
+      uid,
+      event:eventType||null,
+      servicio_id:snap.servicio_id,
+      empresa_id:snap.empresa_id,
+      has_eta:!!etaLabel,
+    });
+    return{gpsOk:true,point,...(etaRes||{})};
   }catch(e){
     console.warn("eta operacional failed:",e);
-    showToast?.("Ubicación guardada, pero no se pudo recalcular la ETA","#F97316",3500);
-    return{point};
+    showToast?.("Ubicación guardada. ETA no recalculada","#F97316",3200);
+    showToast?.(successBase,"#166534",2400);
+    trackingLog("operativa flow_eta_fail",{uid,error:String(e?.message||e)});
+    return{gpsOk:true,point};
   }
 }
 
@@ -5811,15 +5948,7 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
   const sortedCp = [...(cpStops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   const cpCurrent = sortedCp.length ? getCurrentStop(sortedCp) : null;
   const cpPlan = cpSv ? getOperationalPlanSnapshot(cpSv) : null;
-  const cpOpEta = cpSv ? getOperationalEtaSnapshot(cpSv) : null;
-  const cpEtaReady = cpSv ? isEtaActivationReady(cpSv) : false;
-  const cpEta =
-    cpEtaReady
-      ? formatOperationalEtaLabel(cpOpEta?.eta) ||
-        (!isRelativeEtaLabel(cpOpEta?.label) ? cpOpEta?.label : null) ||
-        formatOperationalEtaLabel(cpPlan?.planned_eta) ||
-        (!isRelativeEtaLabel(cpPlan?.planned_eta_label) ? cpPlan?.planned_eta_label : null)
-      : null;
+  const cpEta = cpSv ? formatOperationalEtaSnapshotLine(cpSv, new Date()) : null;
   const cpKm = Number.isFinite(Number(cpPlan?.planned_km)) ? Math.round(Number(cpPlan.planned_km)) : null;
   const evsCur = cpCurrent?.id ? cpEvs?.[cpCurrent.id] : null;
   const cmrN = Array.isArray(evsCur) ? evsCur.filter((e) => e?.tipo === "cmr").length : 0;
@@ -11295,37 +11424,159 @@ function normalizeServicioEmpresaId(value){
   return s?s:null;
 }
 
-async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, ...basePayload }) {
+async function resolveEmpresaIdForServicioInsert(empresaIdProp){
+  const fromProp=normalizeServicioEmpresaId(empresaIdProp);
+  if(fromProp)return fromProp;
+  const uid=getUserId?.();
+  if(!uid)return null;
+  try{
+    const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
+    return normalizeServicioEmpresaId(emps?.[0]?.id);
+  }catch(_){
+    return null;
+  }
+}
+
+function buildServicioInsertCorePayload({empresaId,conductorId,estado,origen,destino,referencia,fecha_inicio}){
+  return{
+    empresa_id:empresaId||null,
+    conductor_id:conductorId??null,
+    estado:estado||"asignado",
+    origen:String(origen||"").trim(),
+    destino:String(destino||"").trim(),
+    referencia:referencia||null,
+    fecha_inicio:fecha_inicio||null,
+  };
+}
+
+async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,referenciaCliente,referencia}){
+  if(!servicioId)return;
+  const referenciaBase=serviceNumber?.trim()||null;
+  const patch={
+    service_number:referenciaBase,
+    cliente:cliente?.trim()||null,
+    referencia_cliente:referenciaCliente?.trim()||null,
+    referencia,
+  };
+  const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{
+    method:"PATCH",
+    headers:{"Prefer":"return=representation"},
+    body:JSON.stringify(patch),
+  });
+  if(res.ok)return;
+  const t=await res.text().catch(()=>"");
+  if(!/service_number|referencia_cliente|cliente|column|schema|PGRST/i.test(t))return;
+  await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{
+    method:"PATCH",
+    body:JSON.stringify({referencia}),
+  }).catch(()=>{});
+}
+
+/** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
+const SERVICE_CREATE_DEBUG=true;
+function logServiceCreate(tag,payload){
+  if(!SERVICE_CREATE_DEBUG)return;
+  const line=`[${tag}]`;
+  console.log(line,payload);
+  if(tag.includes("FAIL"))console.warn(line,payload);
+}
+
+async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, _debugSource, ...basePayload }) {
   const referenciaBase = serviceNumber?.trim() || null;
   const identityMeta = buildServiceIdentityMeta({ cliente, referenciaCliente });
   const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
-  const empresaId = normalizeServicioEmpresaId(basePayload.empresa_id);
-  const fullPayload = {
-    ...basePayload,
-    empresa_id: empresaId,
-    service_number: referenciaBase,
-    cliente: cliente?.trim() || null,
-    referencia_cliente: referenciaCliente?.trim() || null,
+  const empresaIdRaw=basePayload.empresa_id;
+  const empresaId=await resolveEmpresaIdForServicioInsert(empresaIdRaw);
+  const conductorId=basePayload.conductor_id??null;
+  const corePayload=buildServicioInsertCorePayload({
+    empresaId,
+    conductorId,
+    estado:basePayload.estado,
+    origen:basePayload.origen,
+    destino:basePayload.destino,
     referencia,
-  };
+    fecha_inicio:basePayload.fecha_inicio,
+  });
+
+  logServiceCreate("SERVICE_CREATE_START",{
+    source:_debugSource||"crearServicioConIdentidad",
+    authUid:getUserId?.()||null,
+    sinConductor:!conductorId,
+  });
+  logServiceCreate("SERVICE_CREATE_EMPRESA_ID",{
+    raw:empresaIdRaw,
+    resolved:empresaId,
+    isNull:empresaId==null,
+    typeRaw:empresaIdRaw==null?"null/undefined":typeof empresaIdRaw,
+  });
+  logServiceCreate("SERVICE_CREATE_CONDUCTOR_ID",{
+    value:conductorId,
+    isNull:conductorId==null,
+  });
+  logServiceCreate("SERVICE_CREATE_PAYLOAD",{
+    endpoint:"POST /rest/v1/servicios",
+    attempt:"core_only",
+    body:corePayload,
+    estado:corePayload.estado,
+    empresa_id:corePayload.empresa_id,
+    conductor_id:corePayload.conductor_id,
+    json:JSON.stringify(corePayload),
+  });
+
+  if(!empresaId&&!conductorId){
+    const msg="Falta empresa_id y conductor_id: no se puede crear el servicio (RLS).";
+    logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{status:0,errText:msg,empresa_id:null});
+    throw new Error(msg);
+  }
+
   const res = await sbFetch("/rest/v1/servicios", {
     method: "POST",
     headers: { "Prefer": "return=representation" },
-    body: JSON.stringify(fullPayload),
+    body: JSON.stringify(corePayload),
   });
-  if (res.ok) return res.json();
+  if (res.ok) {
+    const data=await res.json();
+    const row=Array.isArray(data)?data[0]:data;
+    logServiceCreate("SERVICE_CREATE_RESPONSE_OK",{
+      status:res.status,
+      row,
+      empresa_id_en_respuesta:row?.empresa_id??null,
+      conductor_id_en_respuesta:row?.conductor_id??null,
+      estado_en_respuesta:row?.estado??null,
+    });
+    if(row?.id&&(referenciaBase||cliente?.trim()||referenciaCliente?.trim())){
+      await patchServicioIdentidadOpcional(row.id,{serviceNumber,cliente,referenciaCliente,referencia});
+    }
+    return data;
+  }
 
   const errText = await res.text().catch(() => "");
-  const schemaFallback = /service_number|referencia_cliente|cliente|column|schema|PGRST/i.test(errText);
-  if (!schemaFallback) throw new Error(errText || `Supabase ${res.status}`);
-
-  const fallbackRes = await sbFetch("/rest/v1/servicios", {
-    method: "POST",
-    headers: { "Prefer": "return=representation" },
-    body: JSON.stringify({ ...basePayload, empresa_id: empresaId, referencia }),
+  let errJson=null;
+  try{errJson=JSON.parse(errText);}catch(_){}
+  logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{
+    status:res.status,
+    statusText:res.statusText,
+    errText,
+    errJson,
+    payloadEnviado:corePayload,
+    empresa_id:corePayload.empresa_id??null,
+    conductor_id:corePayload.conductor_id??null,
+    rlsHint:corePayload.empresa_id==null
+      ? "empresa_id NULL"
+      : res.status===403
+        ? "403 RLS — migración 20260521150000"
+        : res.status===400
+          ? "400 — CHECK estado pendiente_asignacion (migración 20260521160000)"
+          : "ver errText",
   });
-  if (!fallbackRes.ok) throw new Error(await fallbackRes.text().catch(() => `Supabase ${fallbackRes.status}`));
-  return fallbackRes.json();
+
+  if(res.status===403||/row-level security|42501/i.test(errText)){
+    throw new Error(
+      `Permisos (RLS). empresa_id=${corePayload.empresa_id||"NULL"}. `+
+      "Ejecuta migración RLS en Supabase y confirma que eres owner de la empresa.",
+    );
+  }
+  throw new Error(errText || `Supabase ${res.status}`);
 }
 
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
@@ -11349,7 +11600,8 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
-function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClose,onCreado}){
+function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
+  const sinConductor=!conductorId;
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
@@ -11397,12 +11649,22 @@ function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClos
   async function guardar(){
     if(!origen.trim()||!destino.trim()){setError("Origen y destino son obligatorios");return;}
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
+    if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     setSaving(true);setError("");
     try{
+      logServiceCreate("SERVICE_CREATE_START",{
+        source:"AsignarServicioModal.guardar",
+        sinConductor,
+        empresaIdProp:empresaId,
+        empresaIdPropType:empresaId==null?"null":typeof empresaId,
+        conductorIdProp:conductorId??null,
+        authUid:getUserId?.()||null,
+      });
       const srData=await crearServicioConIdentidad({
-        ...(empresaId?{empresa_id:empresaId}:{}),
-        conductor_id:conductorId,
-        estado:"asignado",
+        _debugSource:"AsignarServicioModal",
+        empresa_id:empresaId||null,
+        conductor_id:sinConductor?null:conductorId,
+        estado:sinConductor?SERVICIO_ESTADO_PENDIENTE_ASIGNACION:"asignado",
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
@@ -11416,13 +11678,33 @@ function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClos
         method:"POST",
         body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
       });
-      // Registrar asignación
-      sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
-      void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
+      if(!sinConductor){
+        sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
+        sbFetch("/rest/v1/servicio_asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo_asignacion:"principal"})}).catch(()=>{});
+        void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
+      }
       onCreado(sv);
-    }catch(e){setError("Error: "+e.message);}
+    }catch(e){
+      logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{
+        source:"AsignarServicioModal.guardar.catch",
+        message:e?.message||String(e),
+        empresaIdProp:empresaId,
+        sinConductor,
+      });
+      setError("Error: "+e.message);
+    }
     finally{setSaving(false);}
   }
+
+  useEffect(()=>{
+    logServiceCreate("SERVICE_CREATE_START",{
+      source:"AsignarServicioModal.mount",
+      empresaIdProp:empresaId,
+      empresaIdPropIsNull:empresaId==null,
+      conductorIdProp:conductorId??null,
+      sinConductor,
+    });
+  },[]);
 
   return(
     <div style={overlayStyle} onClick={onClose}>
@@ -11433,10 +11715,16 @@ function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClos
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
               <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
-              <div style={{fontSize:11,color:su,marginTop:1}}>Conductor seleccionado</div>
+              <div style={{fontSize:11,color:su,marginTop:1}}>{sinConductor?"Planificación sin conductor":"Conductor seleccionado"}</div>
             </div>
             <button onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
           </div>
+          {sinConductor?(
+            <div style={{marginTop:12,background:"#eef2ff",border:"1.5px solid #c7d2fe",borderRadius:12,padding:"11px 12px"}}>
+              <div style={{fontSize:14,fontWeight:650,color:"#3730a3"}}>Sin conductor asignado</div>
+              <div style={{fontSize:11,color:"#475569",marginTop:4}}>Quedará en «Pendiente asignación». Podrás asignar chófer después.</div>
+            </div>
+          ):(
           <div style={{marginTop:12,background:EMPRESA_UI.accentSoft,border:"1.5px solid #93c5fd",borderRadius:12,padding:"11px 12px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 6px 18px rgba(37,99,235,.10)"}}>
             <span style={{width:22,height:22,borderRadius:"50%",background:EMPRESA_UI.accent,color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,flexShrink:0}}>✓</span>
             <div style={{minWidth:0}}>
@@ -11444,6 +11732,7 @@ function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClos
               <div style={{fontSize:11,color:"#475569",marginTop:1}}>Asignado a este servicio</div>
             </div>
           </div>
+          )}
         </div>
 
         {/* BODY — scrollable */}
@@ -11537,10 +11826,71 @@ function AsignarServicioModal({conductorId,conductorNombre,empresaId=null,onClos
         <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
           <button onClick={guardar} disabled={saving}
             style={{width:"100%",background:saving?"#cbd5e1":EMPRESA_UI.tx,color:saving?"#64748B":"white",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:650,cursor:saving?"default":"pointer"}}>
-            {saving?"Asignando...":"Asignar servicio"}
+            {saving?(sinConductor?"Guardando...":"Asignando..."):(sinConductor?"Crear servicio planificado":"Asignar servicio")}
           </button>
         </div>
 
+      </div>
+    </div>
+  );
+}
+
+function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}){
+  const[saving,setSaving]=useState(false);
+  const[error,setError]=useState("");
+  const{overlayStyle,modalStyle}=useModalLayout();
+  const card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
+  const lista=(conductores||[]).filter(c=>c.user_id);
+
+  async function elegir(c){
+    if(!servicio?.id||!c?.user_id||saving)return;
+    setSaving(true);setError("");
+    try{
+      await assignConductorPrincipalToServicio({
+        servicioId:servicio.id,
+        conductorId:c.user_id,
+        origen:servicio.origen,
+        destino:servicio.destino,
+        fechaInicio:servicio.fecha_inicio,
+      });
+      void sendAssignmentPush({
+        conductorId:c.user_id,
+        origen:servicio.origen,
+        destino:servicio.destino,
+        fechaInicio:servicio.fecha_inicio,
+        servicioId:servicio.id,
+      });
+      onAsignado?.({servicioId:servicio.id,conductorId:c.user_id,conductorNombre:c.nombre||"Conductor"});
+    }catch(e){setError(e?.message||"No se pudo asignar");}
+    finally{setSaving(false);}
+  }
+
+  return(
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={{...modalStyle,background:card,maxHeight:"75vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 16px",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
+          <div style={{fontSize:15,fontWeight:650,color:tx}}>Asignar conductor</div>
+          <div style={{fontSize:12,color:su,marginTop:4}}>
+            {getServiceNumber(servicio)} · {getFixedServiceRoute(servicio)}
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
+          {!lista.length?(
+            <div style={{fontSize:13,color:su,lineHeight:1.45}}>Añade un conductor en la pestaña Conductores para poder asignarlo.</div>
+          ):lista.map(c=>(
+            <button key={c.user_id} type="button" disabled={saving} onClick={()=>elegir(c)}
+              style={{width:"100%",textAlign:"left",background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"12px 14px",fontSize:14,fontWeight:700,color:tx,cursor:saving?"default":"pointer",marginBottom:8}}>
+              {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:500,marginLeft:8}}>· {c.matricula}</span>}
+            </button>
+          ))}
+          {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red}}>{error}</div>}
+        </div>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`}}>
+          <button type="button" onClick={onClose} disabled={saving}
+            style={{width:"100%",background:"transparent",border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,color:su,cursor:"pointer"}}>
+            Cancelar
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -11568,20 +11918,6 @@ function evidenciasForServicioStops(servicioId,flotaStops,flotaEvs){
 function fmtClockMs(ms){
   if(ms==null||!Number.isFinite(ms))return "—";
   return new Date(ms).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-}
-
-/** Fila compacta empresa: ETA operacional sin placeholder de carga interminable. */
-function fmtEtaEmpresaCompacto(raw){
-  if(raw==null||raw===""||raw==="…"||raw==="..."||raw==="Sin ETA")return"—";
-  if(raw instanceof Date)return formatOperationalEtaLabel(raw)||"—";
-  if(typeof raw==="object"){
-    const slot=raw.operational||raw.planned||raw;
-    return formatOperationalEtaSlot(slot);
-  }
-  const exact=formatOperationalEtaLabel(raw);
-  if(exact)return exact;
-  if(isRelativeEtaLabel(raw))return"—";
-  return String(raw);
 }
 
 /** Ciudad aproximada (sin coordenadas); vacío → — */
@@ -11648,20 +11984,6 @@ function conductorJourneyInfo(conductor,now=new Date()){
   return{open:true,label:"🟢 Jornada activa",color:"#22C55E",active};
 }
 
-const ETA_RIESGO_WARN_MIN=20;
-const ETA_RIESGO_LATE_MIN=45;
-
-function getEtaLabelEmpresa(entry){
-  if(entry?.phase==="pre_route"||entry?.label==="Pendiente de iniciar ruta")return"Pendiente de iniciar ruta";
-  const raw=entry?.operational?.eta ?? entry?.planned?.eta ?? entry?.eta ?? entry?.operational?.label ?? entry?.planned?.label ?? entry?.label ?? entry;
-  return fmtEtaEmpresaCompacto(raw);
-}
-
-function etaMs(slot){
-  const t=slot?.eta?new Date(slot.eta).getTime():NaN;
-  return Number.isFinite(t)?t:null;
-}
-
 function hasOperationalDestinationConfirmed(service){
   const plan=getOperationalPlanSnapshot(service);
   const confirmedAt=getOperationalPlanConfirmedAt(service);
@@ -11670,23 +11992,19 @@ function hasOperationalDestinationConfirmed(service){
   return destinationOk&&!!confirmedAt&&planReady;
 }
 
-function isEtaActivationReady(service){
-  return hasOperationalDestinationConfirmed(service)&&!!getOperationalTripStartedAt(service);
+/** Viaje con ETA operacional ya persistida (pantalla flota alineada con conductor). */
+function hasPersistedOperationalEta(service){
+  return !!getOperationalEtaSnapshot(service)?.eta;
 }
 
-function getEtaEstadoEmpresa(entry){
-  if(entry?.phase==="pre_route")return{icon:"⚪",label:"Pendiente de iniciar ruta",color:"#94A3B8",bg:"rgba(148,163,184,0.12)",deltaMin:null};
-  const planStatus=entry?.planned?.status;
-  if(planStatus==="calculating")return{icon:"🟡",label:"Calculando",color:"#FACC15",bg:"rgba(250,204,21,0.13)",deltaMin:null};
-  if(planStatus==="failed")return{icon:"⚠",label:"Sin ruta completa",color:"#FB923C",bg:"rgba(251,146,60,0.14)",deltaMin:null};
-  const opMs=etaMs(entry?.operational);
-  const planMs=etaMs(entry?.planned);
-  if(planMs!=null&&opMs==null)return{icon:"🟢",label:"Plan estable",color:"#22C55E",bg:"rgba(34,197,94,0.12)",deltaMin:null};
-  if(opMs==null||planMs==null)return{icon:"⚪",label:"Sin previsión",color:"#94A3B8",bg:"rgba(148,163,184,0.12)",deltaMin:null};
-  const deltaMin=Math.round((opMs-planMs)/60000);
-  if(deltaMin>ETA_RIESGO_LATE_MIN)return{icon:"🔴",label:"Retrasado",color:"#F87171",bg:"rgba(248,113,113,0.13)",deltaMin};
-  if(deltaMin>ETA_RIESGO_WARN_MIN)return{icon:"🟠",label:"Riesgo retraso",color:"#FB923C",bg:"rgba(251,146,60,0.14)",deltaMin};
-  return{icon:"🟢",label:"Dentro de previsión",color:"#22C55E",bg:"rgba(34,197,94,0.12)",deltaMin};
+/**
+ * Listo para mostrar / usar ETA operacional en flotas que aún dependen del plan confirmado (no usado en UI empresa snapshot-only).
+ */
+function isEtaActivationReady(service){
+  if(!getOperationalTripStartedAt(service))return false;
+  if(!String(service?.destino||"").trim())return false;
+  if(hasOperationalDestinationConfirmed(service))return true;
+  return hasPersistedOperationalEta(service);
 }
 
 function nextPendingStop(stops){
@@ -11697,35 +12015,11 @@ function stopTipoCompacto(stop){
   return String(stop?.tipo||"parada").replace(/_/g," ").toUpperCase();
 }
 
-function etaSlotFromOperationalPlan(plan,service=null){
-  if(service&&!isEtaActivationReady(service))return null;
-  const routePlanStatus=plan?.route_plan_status||null;
-  if(routePlanStatus==="pending"||plan?.status==="calculating")return{
-    eta:null,
-    label:"Calculando planificación operacional...",
-    confidence:"pending",
-    stable:true,
-    status:"calculating",
-  };
-  if(routePlanStatus==="failed"||plan?.status==="failed")return{
-    eta:null,
-    label:null,
-    confidence:"low",
-    stable:true,
-    status:"failed",
-  };
-  if(!plan?.planned_eta)return null;
-  return{
-    eta:plan.planned_eta,
-    label:fmtOperationalEtaLabel(plan.planned_eta)||(!isRelativeEtaLabel(plan.planned_eta_label)?plan.planned_eta_label:null)||"Sin ETA",
-    confidence:plan.confidence||"medium",
-    stable:true,
-    status:plan.status||"ok",
-  };
-}
-
 function etaSlotFromOperationalEta(eta){
   if(!eta?.eta)return null;
+  const rm=Number(eta.remaining_mins);
+  const rk=Number(eta.remaining_km);
+  const ua=eta.updated_at||eta.calculated_at||null;
   return{
     eta:eta.eta,
     label:fmtOperationalEtaLabel(eta.eta)||(!isRelativeEtaLabel(eta.label)?eta.label:null)||"Sin ETA",
@@ -11734,46 +12028,11 @@ function etaSlotFromOperationalEta(eta){
     source:eta.source||"driver_event",
     delta_min:Number.isFinite(Number(eta.delta_min))?Number(eta.delta_min):null,
     calculated_at:eta.calculated_at||null,
+    updated_at:ua,
     location_ts:eta.location_ts||null,
+    remaining_mins:Number.isFinite(rm)?Math.max(0,Math.round(rm)):null,
+    remaining_km:Number.isFinite(rk)?Math.round(rk*10)/10:null,
   };
-}
-
-function shiftEtaSlotVisual(slot,{nowMs,conductor,ubicInfo}={}){
-  const baseMs=etaMs(slot);
-  if(baseMs==null)return slot;
-  const refRaw=slot?.calculated_at||slot?.location_ts||slot?.updated_at||slot?.ts||slot?.eta;
-  const refMs=refRaw?new Date(refRaw).getTime():NaN;
-  if(!Number.isFinite(refMs))return slot;
-  const elapsedMin=Math.floor((nowMs-refMs)/60000);
-  if(elapsedMin<=0)return slot;
-  const journey=conductorJourneyInfo(conductor,new Date(nowMs));
-  const locTsRaw=ubicInfo?.updatedAt||ubicInfo?.ts||null;
-  const locTsMs=locTsRaw?new Date(locTsRaw).getTime():NaN;
-  const locAgeMin=Number.isFinite(locTsMs)?Math.max(0,Math.floor((nowMs-locTsMs)/60000)):Infinity;
-  const locRecent=ubicInfo?.recent!==false&&locAgeMin<=Math.floor(TRACKING_RECENT_MAX_AGE_MS/60000);
-  const isDriving=journey?.active?.type==="inicio_conduccion";
-  const driftPerMin=isDriving&&locRecent?0.35:1;
-  const shiftMin=Math.max(0,Math.round(elapsedMin*driftPerMin));
-  const liveMs=baseMs+shiftMin*60000;
-  return{
-    ...slot,
-    eta:new Date(liveMs).toISOString(),
-    label:fmtOperationalEtaLabel(new Date(liveMs))||slot.label||"Sin ETA",
-    source:`${slot.source||"operational"}:heartbeat_visual`,
-    live_visual:true,
-    live_shift_min:shiftMin,
-    live_ref_at:new Date(refMs).toISOString(),
-    live_factor:driftPerMin,
-  };
-}
-
-function buildEtaEntryVisual({service,planSlot,operationalSlot,localEta,conductor,ubicInfo,nowMs}){
-  if(service?.estado==="anulado")return{planned:null,operational:null};
-  if(!isEtaActivationReady(service))return{planned:null,operational:null,phase:"pre_route",label:"Pendiente de iniciar ruta"};
-  const planned=planSlot;
-  const operationalBase=localEta?.operational||operationalSlot;
-  const operational=operationalBase?shiftEtaSlotVisual(operationalBase,{nowMs,conductor,ubicInfo}):null;
-  return{planned,operational};
 }
 
 const EMPRESA_UI=Object.freeze({
@@ -11814,6 +12073,15 @@ function statusPill(label,color){
   };
 }
 
+/** Chip lateral lista empresa: estados alineados con `resolveEtaVisual`. */
+function empresaListaEtaChip(servicio, nowMs){
+  const st=getOperationalEtaUiState(servicio,new Date(nowMs??Date.now()));
+  if(st.kind==="cancelled")return{label:"—",color:"#64748B"};
+  if(st.kind==="calculating")return{label:OPERATIONAL_ETA_CALCULATING,color:"#64748B"};
+  if(st.kind==="plan_fallback")return{label:"Previa · plan",color:EMPRESA_UI.accent};
+  return{label:"ETA operacional",color:EMPRESA_UI.green};
+}
+
 function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[modo,setModo]=useState(null);
   const[empresa,setEmpresa]=useState(null);
@@ -11822,6 +12090,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[toast,setToast]=useState("");
   const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
   const[asignarModal,setAsignarModal]=useState(null);
+  const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
   const[addForm,setAddForm]=useState({nombre:"",matricula:"",email:""});
@@ -11841,7 +12110,35 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[flotaServicios,setFlotaServicios]=useState([]);
   const[flotaStops,setFlotaStops]=useState({});
   const[flotaEvs,setFlotaEvs]=useState({});
+  const[flotaExtraDocs,setFlotaExtraDocs]=useState({});
   const[flotaLoading,setFlotaLoading]=useState(false);
+  const[flotaBootstrapped,setFlotaBootstrapped]=useState(false);
+  const[flotaManualRefreshAt,setFlotaManualRefreshAt]=useState(null);
+  const flotaServiciosRef=useRef([]);
+  flotaServiciosRef.current=flotaServicios;
+  const flotaStopsRef=useRef({});
+  flotaStopsRef.current=flotaStops;
+  const flotaEvsRef=useRef({});
+  flotaEvsRef.current=flotaEvs;
+  const flotaExtraDocsRef=useRef({});
+  flotaExtraDocsRef.current=flotaExtraDocs;
+  const flotaExtraDocsLoadedRef=useRef(false);
+  const flotaExtraDocsServicioLoadedRef=useRef(new Set());
+  const flotaConductorUidsRef=useRef(null);
+  const flotaLightBusyRef=useRef(false);
+  const flotaEvsLoadedServiciosRef=useRef(new Set());
+  const flotaStopsFetchedIdsRef=useRef(new Set());
+
+  useEffect(() => {
+    function onEvidenciaSaved(e) {
+      const { ev, stopId } = e.detail || {};
+      if (!ev?.id || !stopId) return;
+      setFlotaEvs((prev) => mergeEvidenciaIntoByStop(prev, stopId, ev));
+    }
+    window.addEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
+    return () => window.removeEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
+  }, []);
+
   // Documentos de la flota
   const[docsLoading,setDocsLoading]=useState(false);
   const[visorEv,setVisorEv]=useState(null);
@@ -11855,7 +12152,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[etaOperativaById,setEtaOperativaById]=useState({});
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
   const[ubicacionRefreshByUid,setUbicacionRefreshByUid]=useState({});
-  const[etaHeartbeatNowMs,setEtaHeartbeatNowMs]=useState(()=>Date.now());
+  const ubicacionConductorByUidRef=useRef({});
+  ubicacionConductorByUidRef.current=ubicacionConductorByUid;
+  const[empresaEtaVisualNowMs,setEmpresaEtaVisualNowMs]=useState(()=>Date.now());
   const[inviteEquipoOpen,setInviteEquipoOpen]=useState(false);
   const flotaLoadingRef=useRef(false);
   const ubicacionLabelCacheRef=useRef(new Map());
@@ -12091,43 +12390,230 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const loadConductoresRef=useRef(loadConductores);
   loadConductoresRef.current=loadConductores;
+  const conductoresFlotaRef=useRef(conductores);
+  conductoresFlotaRef.current=conductores;
 
-  async function loadFlotaServicios(force=false){
-    if(!empresa)return;
-    if(flotaLoadingRef.current)return;
-    if(!force&&flotaLoading)return;
-    flotaLoadingRef.current=true;
-    setFlotaLoading(true);
+  async function resolveFlotaConductorUids(){
+    const fromConductores=conductoresFlotaRef.current.map(c=>c.user_id).filter(Boolean);
+    if(fromConductores.length)return fromConductores;
+    if(flotaConductorUidsRef.current?.length)return flotaConductorUidsRef.current;
+    const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${empresa.id}&activo=eq.true`);
+    const uids=rels.filter(r=>r.user_id).map(r=>r.user_id);
+    flotaConductorUidsRef.current=uids;
+    return uids;
+  }
+
+  async function fetchFlotaStopsMapForServicioIds(ids){
+    if(!ids?.length)return{};
+    const stps=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids.join(",")})&order=servicio_id.asc,orden.asc`).then(r=>r.json());
+    return stopsRowsToMap(stps);
+  }
+
+  async function ensureFlotaStopsForServicioIds(ids){
+    if(!ids?.length)return;
+    const missing=ids.filter((id)=>!flotaStopsFetchedIdsRef.current.has(id));
+    if(!missing.length)return;
     try{
-      // Cargamos servicios de todos los conductores de la empresa
-      const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${empresa.id}&activo=eq.true`);
-      const uids=rels.filter(r=>r.user_id).map(r=>r.user_id);
-      if(!uids.length){setFlotaLoading(false);return;}
-      const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&order=created_at.desc&limit=100`).then(r=>r.json());
-      const svsArr=(Array.isArray(svs)?svs:[]).map(normalizarServicioEmpresa);
-      setFlotaServicios(svsArr);
+      const map=await fetchFlotaStopsMapForServicioIds(missing);
+      missing.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
+      setFlotaStops((prev)=>{
+        const next=mergeFlotaStopsMap(prev,map);
+        flotaStopsRef.current=next;
+        return next;
+      });
+    }catch(e){console.warn("ensureFlotaStopsForServicioIds:",e);}
+  }
+
+  async function ensureFlotaEvidenciasForServicio(servicioId,{force=false}={}){
+    if(!servicioId)return;
+    if(!force&&flotaEvsLoadedServiciosRef.current.has(servicioId))return;
+    const stops=flotaStopsRef.current[servicioId]||[];
+    const stopIds=stops.map(s=>s.id).filter(Boolean);
+    if(!stopIds.length)return;
+    try{
+      const grouped=await fetchEvidenciasGroupedByStop(stopIds,sbFetch);
+      const merged=mergeFlotaEvsMap(flotaEvsRef.current,grouped);
+      flotaEvsRef.current=merged;
+      setFlotaEvs(merged);
+      flotaEvsLoadedServiciosRef.current.add(servicioId);
+      return grouped;
+    }catch(e){console.warn("ensureFlotaEvidenciasForServicio",servicioId,e);}
+    return null;
+  }
+
+  async function ensureFlotaEvidenciasForDocumentos(){
+    const stopIds=Object.values(flotaStopsRef.current).flat().map(s=>s?.id).filter(Boolean);
+    if(!stopIds.length)return;
+    try{
+      const grouped=await fetchEvidenciasGroupedByStop(stopIds,sbFetch);
+      const merged=mergeFlotaEvsMap(flotaEvsRef.current,grouped);
+      flotaEvsRef.current=merged;
+      setFlotaEvs(merged);
+      flotaServiciosRef.current.forEach(s=>{if(s?.id)flotaEvsLoadedServiciosRef.current.add(s.id);});
+    }catch(e){console.warn("ensureFlotaEvidenciasForDocumentos:",e);}
+  }
+
+  async function ensureFlotaExtraDocsForDocumentos({force=false}={}){
+    if(!empresa?.id)return;
+    if(!force&&flotaExtraDocsLoadedRef.current)return;
+    try{
+      const servicioIds=flotaServiciosRef.current.map(s=>s.id).filter(Boolean);
+      const rows=await fetchEmpresaDocumentosExtra(empresa.id,{servicioIds});
+      const grouped=groupExtraDocsByServicioId(rows);
+      flotaExtraDocsRef.current=grouped;
+      setFlotaExtraDocs(grouped);
+      flotaExtraDocsLoadedRef.current=true;
+      console.log("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_LOAD",{
+        empresaId:empresa.id,
+        servicios:servicioIds.length,
+        filas:rows.length,
+        serviciosConExtra:Object.keys(grouped).length,
+      });
+    }catch(e){
+      console.warn("ensureFlotaExtraDocsForDocumentos:",e);
+      flotaExtraDocsLoadedRef.current=false;
+    }
+  }
+
+  async function ensureFlotaExtraDocsForServicio(servicioId,{force=false}={}){
+    if(!servicioId)return [];
+    if(!force&&flotaExtraDocsServicioLoadedRef.current.has(servicioId)){
+      return flotaExtraDocsRef.current[servicioId]||[];
+    }
+    try{
+      const rows=await fetchServicioDocumentosExtra(servicioId);
+      const next={...flotaExtraDocsRef.current,[servicioId]:rows};
+      flotaExtraDocsRef.current=next;
+      setFlotaExtraDocs(next);
+      flotaExtraDocsServicioLoadedRef.current.add(servicioId);
+      console.log("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_SERVICIO",{
+        servicioId,
+        count:rows.length,
+        ids:rows.map(r=>r.id),
+      });
+      return rows;
+    }catch(e){
+      console.warn("ensureFlotaExtraDocsForServicio",servicioId,e);
+      flotaExtraDocsServicioLoadedRef.current.delete(servicioId);
+      return [];
+    }
+  }
+
+  async function abrirExpedientePreview(sv){
+    if(!sv?.id)return;
+    setDocsLoading(true);
+    console.log("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_START",{servicioId:sv.id});
+    try{
+      await ensureFlotaStopsForServicioIds([sv.id]);
+      await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+      await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+      const preview=buildExpedienteCompleto(sv);
+      if(!preview)throw new Error("sin_datos");
+      const extraMerged=(preview.evidencias||[]).filter(e=>e.source==="servicio_documentos_extra");
+      console.log("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_OK",{
+        servicioId:sv.id,
+        docs:preview.evidencias?.length??0,
+        extraDb:flotaExtraDocsRef.current[sv.id]?.length??0,
+        extraEnExpediente:extraMerged.length,
+        timeline:preview.timeline?.length??0,
+      });
+      setExpedientePreview(preview);
+    }catch(e){
+      console.error("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_FAIL",e?.message||e);
+      showToast(e?.message||"No se pudo cargar el expediente");
+    }finally{
+      setDocsLoading(false);
+    }
+  }
+
+  const ensureFlotaEvidenciasRef=useRef(ensureFlotaEvidenciasForServicio);
+  ensureFlotaEvidenciasRef.current=ensureFlotaEvidenciasForServicio;
+
+  /** Carga inicial: servicios + paradas (sin evidencias; lazy al expandir). */
+  async function loadFlotaServicios(opts=false){
+    const options=typeof opts==="object"&&opts!==null?opts:{force:opts===true,silent:false};
+    const{force=false,silent=false,includeEvidencias=false}=options;
+    if(!empresa)return;
+    if(flotaLoadingRef.current&&!force)return;
+    if(!force&&!silent&&flotaLoading)return;
+    flotaLoadingRef.current=true;
+    if(!silent)setFlotaLoading(true);
+    try{
+      const uids=await resolveFlotaConductorUids();
+      const svsRaw=await fetchFlotaServiciosForEmpresa(sbFetch,empresa.id,uids);
+      const svsArr=(Array.isArray(svsRaw)?svsRaw:[]).map(normalizarServicioEmpresa);
+      setFlotaServicios(prev=>mergeFlotaServicios(prev,svsArr));
+      const enCurso=svsArr.filter(s=>s.estado==="en_curso");
+      const sample=enCurso[0]||svsArr[0]||null;
+      const opEta=sample?getOperationalEtaSnapshot(sample):null;
+      trackingLog("empresa_panel flota_loaded",{
+        empresa_id:empresa.id,
+        conductores_uids:uids.length,
+        servicios:svsArr.length,
+        en_curso:enCurso.length,
+        ref_type_sample:sample?typeof sample.referencia:"none",
+        has_operational_eta:!!opEta?.eta,
+        include_evidencias:includeEvidencias,
+      });
       if(svsArr.length){
-        const ids=svsArr.map(s=>s.id).join(",");
-        const stps=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`).then(r=>r.json());
-        const stopsMap={};
-        (Array.isArray(stps)?stps:[]).forEach(st=>{
-          if(!stopsMap[st.servicio_id])stopsMap[st.servicio_id]=[];
-          stopsMap[st.servicio_id].push(st);
-        });
-        setFlotaStops(stopsMap);
-        const stopIds=(Array.isArray(stps)?stps:[]).map(s=>s.id).join(",");
-        if(stopIds){
-          const evs=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=created_at.desc`).then(r=>r.json());
-          setFlotaEvs(groupDocumentsByStop(evs));
+        const initialIds=servicioIdsForInitialStopsLoad(svsArr);
+        const stopsMap=await fetchFlotaStopsMapForServicioIds(initialIds);
+        initialIds.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
+        setFlotaStops(prev=>mergeFlotaStopsMap(prev,stopsMap));
+        if(includeEvidencias){
+          const stopIds=Object.values(stopsMap).flat().map(s=>s.id).filter(Boolean);
+          if(stopIds.length){
+            const evs=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds.join(",")})&order=created_at.desc`).then(r=>r.json());
+            setFlotaEvs(prev=>mergeFlotaEvsMap(prev,groupDocumentsByStop(evs)));
+            svsArr.forEach(s=>flotaEvsLoadedServiciosRef.current.add(s.id));
+          }
         }
+      }else{
+        setFlotaStops({});
+        setFlotaEvs({});
+        setFlotaExtraDocs({});
+        flotaExtraDocsLoadedRef.current=false;
+        flotaExtraDocsServicioLoadedRef.current=new Set();
+        flotaStopsFetchedIdsRef.current=new Set();
       }
     }catch(e){console.warn("loadFlotaServicios:",e);}
-    finally{flotaLoadingRef.current=false;setFlotaLoading(false);}
+    finally{
+      flotaLoadingRef.current=false;
+      setFlotaBootstrapped(true);
+      if(!silent)setFlotaLoading(false);
+    }
   }
+
+  /** Refresco manual / poll: servicios activos, paradas operativas, ubicación; sin ETA ni evidencias. */
+  async function refreshFlotaOperativaLigera({instantFeedback=false}={}){
+    if(!empresa?.id||flotaLightBusyRef.current)return;
+    flotaLightBusyRef.current=true;
+    if(instantFeedback)setFlotaManualRefreshAt(Date.now());
+    try{
+      const uids=await resolveFlotaConductorUids();
+      const svsMerged=await fetchFlotaServiciosForEmpresa(sbFetch,empresa.id,uids);
+      const svsArr=(Array.isArray(svsMerged)?svsMerged:[]).map(normalizarServicioEmpresa);
+      setFlotaServicios(prev=>mergeFlotaServicios(prev,svsArr));
+      const stopIds=servicioIdsForLightStopsRefresh(svsArr,serviciosListaRef.current);
+      const ubicUids=[...new Set(svsArr.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)).map(s=>s.conductor_id).filter(Boolean))];
+      await Promise.all([
+        stopIds.length?fetchFlotaStopsMapForServicioIds(stopIds).then((map)=>{
+          stopIds.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
+          setFlotaStops(prev=>mergeFlotaStopsMap(prev,map));
+        }):Promise.resolve(),
+        ubicUids.length?refreshUbicacionConductores(ubicUids,{allowStale:true,requireOpen:false,skipRevGeo:true,silent:true}):Promise.resolve(),
+      ]);
+      trackingLog("empresa_panel flota_light_refresh",{empresa_id:empresa.id,servicios:svsArr.length,stops_ids:stopIds.length,ubic_uids:ubicUids.length});
+    }catch(e){console.warn("refreshFlotaOperativaLigera:",e);}
+    finally{flotaLightBusyRef.current=false;}
+  }
+
+  const refreshFlotaLigeraRef=useRef(refreshFlotaOperativaLigera);
+  refreshFlotaLigeraRef.current=refreshFlotaOperativaLigera;
 
   useEffect(()=>{
     if(!empresa?.id)return;
-    loadFlotaServicios();
+    loadFlotaServicios({force:true});
   },[empresa?.id]);
 
   useEffect(()=>{
@@ -12144,12 +12630,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const loadFlotaRef=useRef(loadFlotaServicios);
   loadFlotaRef.current=loadFlotaServicios;
-  useEffect(()=>{
-    if(!empresa?.id)return;
-    function onRecargaServicio(){void loadFlotaRef.current(true);}
-    window.addEventListener("cuaderno-recargar-servicio",onRecargaServicio);
-    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecargaServicio);
-  },[empresa?.id]);
 
   useEffect(()=>{
     if(!empresa?.id||modo!=="jefe")return undefined;
@@ -12167,21 +12647,71 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   useEffect(()=>{
     if(!empresa?.id)return;
-    const refresh=()=>{void loadFlotaRef.current(true);};
+    let ubicTimer;
+    const refresh=()=>{
+      if(document.visibilityState==="hidden")return;
+      void refreshFlotaLigeraRef.current?.({instantFeedback:false});
+      clearTimeout(ubicTimer);
+      ubicTimer=setTimeout(()=>{
+        const uids=[...new Set(
+          flotaServiciosRef.current
+            .filter((s)=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado))
+            .map((s)=>s.conductor_id)
+            .filter(Boolean),
+        )];
+        if(uids.length)void refreshUbicacionRef.current?.(uids,{allowStale:true,requireOpen:false,skipRevGeo:true,silent:true});
+      },600);
+    };
     const onVisible=()=>{if(document.visibilityState==="visible")refresh();};
     window.addEventListener("focus",refresh);
     document.addEventListener("visibilitychange",onVisible);
     return()=>{
+      clearTimeout(ubicTimer);
       window.removeEventListener("focus",refresh);
       document.removeEventListener("visibilitychange",onVisible);
     };
   },[empresa?.id]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe"||!flotaServicios.length)return;
+    const needsAllStops=
+      flotaTab==="documentos"||
+      (flotaTab==="servicios"&&["todos","completados","asignados","sin_asignar","anulados","archivados","incidencias"].includes(serviciosVistaTab));
+    if(!needsAllStops)return;
+    const missing=flotaServicios.map((s)=>s.id).filter((id)=>id&&!flotaStopsFetchedIdsRef.current.has(id));
+    if(missing.length)void ensureFlotaStopsForServicioIds(missing);
+  },[empresa?.id,modo,flotaTab,serviciosVistaTab,flotaServicios.length]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe"||flotaTab!=="documentos"||!flotaServicios.length)return;
+    let cancelled=false;
+    (async()=>{
+      const missing=flotaServicios.map(s=>s.id).filter(id=>id&&!flotaStopsFetchedIdsRef.current.has(id));
+      if(missing.length)await ensureFlotaStopsForServicioIds(missing);
+      if(cancelled)return;
+      const pending=flotaServicios.some(s=>s?.id&&!flotaEvsLoadedServiciosRef.current.has(s.id));
+      if(pending)await ensureFlotaEvidenciasForDocumentos();
+      await ensureFlotaExtraDocsForDocumentos();
+    })();
+    return()=>{cancelled=true;};
+  },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops]);
+
+  const flotaActivityTsById=useMemo(()=>{
+    const m={};
+    for(const sv of flotaServicios){
+      const sa=flotaStops[sv.id]||[];
+      const ea=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
+      m[sv.id]=getLastServiceActivity({service:sv,stops:sa,evidencias:ea}).ts||0;
+    }
+    return m;
+  },[flotaServicios,flotaStops,flotaEvs]);
 
   const serviciosListaOperativa=useMemo(()=>{
     let list=[...flotaServicios];
     if(serviciosVistaTab==="activos") list=list.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)&&!archivedExpedienteIds.has(s.id));
     else if(serviciosVistaTab==="en_curso") list=list.filter(s=>s.estado==="en_curso");
     else if(serviciosVistaTab==="asignados") list=list.filter(s=>s.estado==="asignado");
+    else if(serviciosVistaTab==="sin_asignar") list=list.filter(s=>servicioPendienteAsignacion(s));
     else if(serviciosVistaTab==="completados") list=list.filter(s=>s.estado==="completado");
     else if(serviciosVistaTab==="archivados") list=list.filter(s=>archivedExpedienteIds.has(s.id));
     else if(serviciosVistaTab==="anulados") list=list.filter(s=>s.estado==="anulado");
@@ -12195,17 +12725,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return attention||incN>0;
       });
     }
-    list.sort((a,b)=>{
-      const sa=flotaStops[a.id]||[];
-      const sb=flotaStops[b.id]||[];
-      const ea=evidenciasForServicioStops(a.id,flotaStops,flotaEvs);
-      const eb=evidenciasForServicioStops(b.id,flotaStops,flotaEvs);
-      const ta=getLastServiceActivity({service:a,stops:sa,evidencias:ea}).ts;
-      const tb=getLastServiceActivity({service:b,stops:sb,evidencias:eb}).ts;
-      return tb-ta;
-    });
+    list.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
     return list;
-  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab,archivedExpedienteIds]);
+  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab,archivedExpedienteIds,flotaActivityTsById]);
 
   useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length]);
 
@@ -12221,8 +12743,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const serviciosListaRef=useRef(serviciosListaOperativa);
   serviciosListaRef.current=serviciosListaOperativa;
 
-  async function readLatestConductorLocation(uid,{allowStale=true}={}){
+  async function readLatestConductorLocation(uid,{allowStale=true,skipRevGeo=false}={}){
     if(!uid)return null;
+    const empCtx={empresa_id:empresa?.id||null};
     const r=await sbFetch(`/rest/v1/ubicaciones?user_id=eq.${uid}&order=ts.desc&limit=1`);
     if(!r.ok){
       let detail="";
@@ -12232,26 +12755,32 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const j=await r.json();
     const pos=validUbicacionRow(Array.isArray(j)?j[0]:null);
     if(!pos){
-      trackingLog("latest location missing",{uid});
+      trackingLog("latest location missing",{uid,...empCtx});
       return null;
     }
     if(!allowStale&&!isRecentTrackingPoint(pos)){
-      trackingLog("latest location stale filtered",{uid,ts:pos.ts});
+      trackingLog("latest location stale filtered",{uid,ts:pos.ts,...empCtx});
       return null;
     }
     const tsMs=pos?.ts?new Date(pos.ts).getTime():NaN;
     const ageMin=Number.isFinite(tsMs)?Math.round((Date.now()-tsMs)/60000):null;
-    trackingLog("latest location read",{uid,ts:pos.ts||null,age_min:ageMin,allowStale});
+    trackingLog("latest location read",{uid,ts:pos.ts||null,age_min:ageMin,allowStale,...empCtx});
     const prev=ubicacionLastSeenRef.current.get(uid)||null;
     const nowKey=`${pos.ts||"null"}|${Number(pos.lat).toFixed(6)}|${Number(pos.lon).toFixed(6)}`;
-    if(!prev||prev!==nowKey)trackingLog("latest location changed",{uid,prev:prev||null,current:nowKey});
-    else trackingLog("latest location reused",{uid,current:nowKey});
+    if(!prev||prev!==nowKey)trackingLog("latest location changed",{uid,prev:prev||null,current:nowKey,...empCtx});
+    else trackingLog("latest location reused",{uid,current:nowKey,...empCtx});
     ubicacionLastSeenRef.current.set(uid,nowKey);
     const key=`${pos.lat.toFixed(3)},${pos.lon.toFixed(3)}`;
     let label=ubicacionLabelCacheRef.current.get(key);
-    if(!label){
+    if(!label&&skipRevGeo){
+      label=ubicacionConductorByUidRef.current[uid]?.label||null;
+    }
+    if(!label&&!skipRevGeo){
       label=await revGeoUbicacionLabel(pos.lat,pos.lon);
       ubicacionLabelCacheRef.current.set(key,label);
+    }
+    if(!label){
+      label=`${Number(pos.lat).toFixed(4)}, ${Number(pos.lon).toFixed(4)}`;
     }
     return{
       ...pos,
@@ -12261,116 +12790,289 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     };
   }
 
-  async function refreshUbicacionConductores(uids=null,{allowStale=true,requireOpen=true}={}){
+  async function refreshUbicacionConductores(uids=null,{allowStale=true,requireOpen=true,skipRevGeo=false,silent=false}={}){
     const target=[...new Set((uids||conductores.map(c=>c.user_id)).filter(Boolean))];
-    if(!target.length)return;
+    if(!target.length){
+      trackingLog("empresa_panel ubicacion_refresh_skip",{empresa_id:empresa?.id||null,reason:"no_target",requireOpen});
+      return;
+    }
+    trackingLog("empresa_panel ubicacion_refresh_start",{
+      empresa_id:empresa?.id||null,
+      target_count:target.length,
+      requireOpen,
+      allowStale,
+      uids_filter:!!uids,
+    });
     const locs={};
     await Promise.all(target.map(async uid=>{
       const cond=conductores.find(c=>c.user_id===uid);
       if(requireOpen&&!conductorJourneyInfo(cond).open)return;
       try{
-        const loc=await readLatestConductorLocation(uid,{allowStale});
+        const loc=await readLatestConductorLocation(uid,{allowStale,skipRevGeo});
         locs[uid]=loc||{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
-      }catch(_){/* noop */}
+      }catch(e){
+        console.warn("readLatestConductorLocation",uid,e);
+        trackingLog("empresa_panel ubicacion_read_failed",{empresa_id:empresa?.id||null,uid,error:String(e?.message||e)});
+        locs[uid]={label:"Sin lectura de ubicación",updatedAt:null,missing:true,recent:false,fetchError:true};
+      }
     }));
+    const vals=Object.values(locs);
+    trackingLog("empresa_panel ubicacion_batch_done",{
+      empresa_id:empresa?.id||null,
+      uids:Object.keys(locs).length,
+      have_coords:vals.filter(v=>v&&!v.missing&&!v.fetchError).length,
+      missing:vals.filter(v=>v?.missing&&!v.fetchError).length,
+      fetch_errors:vals.filter(v=>v?.fetchError).length,
+    });
     setUbicacionConductorByUid(prev=>{
-      const next={...prev};
+      const patch={};
+      let next=prev;
+      let deleted=false;
       target.forEach(uid=>{
         const cond=conductores.find(c=>c.user_id===uid);
-        if(requireOpen&&!conductorJourneyInfo(cond).open)delete next[uid];
-        else if(locs[uid])next[uid]=locs[uid];
+        if(requireOpen&&!conductorJourneyInfo(cond).open){
+          if(next[uid]){next={...next};delete next[uid];deleted=true;}
+        }else if(locs[uid])patch[uid]=locs[uid];
       });
+      if(Object.keys(patch).length)next=patchUbicacionMap(next,patch);
+      if(!deleted&&!Object.keys(patch).length)return prev;
       return next;
     });
   }
 
-  async function actualizarConductorUbicacion(uid,{allowStale=true,requireOpen=false,showResult=true}={}){
+  const refreshUbicacionRef=useRef(refreshUbicacionConductores);
+  refreshUbicacionRef.current=refreshUbicacionConductores;
+
+  useEffect(()=>{
+    if(!empresa?.id)return;
+    async function onRecargaServicio(){
+      for(let w=0;w<12;w++){
+        if(!flotaLoadingRef.current)break;
+        await new Promise(r=>setTimeout(r,80));
+      }
+      try{
+        await refreshFlotaLigeraRef.current?.({instantFeedback:false});
+      }catch(e){
+        console.warn("empresa_panel recarga_servicio loadFlota",e);
+        trackingLog("empresa_panel recarga_servicio_flota_err",{empresa_id:empresa.id,error:String(e?.message||e)});
+      }
+      const conds=conductoresFlotaRef.current||[];
+      const uids=[...new Set([
+        ...conds.map(c=>c.user_id),
+        ...serviciosListaRef.current.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id),
+      ].filter(Boolean))];
+      trackingLog("empresa_panel recarga_servicio",{empresa_id:empresa.id,uid_count:uids.length});
+      try{
+        await refreshUbicacionRef.current?.(uids.length?uids:null,{allowStale:true,requireOpen:false});
+      }catch(e){
+        console.warn("empresa_panel recarga_servicio ubicaciones",e);
+        trackingLog("empresa_panel recarga_servicio_ubi_err",{empresa_id:empresa.id,error:String(e?.message||e)});
+      }
+    }
+    window.addEventListener("cuaderno-recargar-servicio",onRecargaServicio);
+    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecargaServicio);
+  },[empresa?.id]);
+
+  async function actualizarConductorUbicacion(uid,{allowStale=true,requireOpen=false,showResult=true,skipRevGeo=false}={}){
     const cond=conductores.find(c=>c.user_id===uid);
     if(requireOpen&&!conductorJourneyInfo(cond).open){
       setUbicacionConductorByUid(prev=>{const next={...prev};delete next[uid];return next;});
-      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:"Conductor fuera de jornada"}}));
+      if(showResult)setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:"Conductor fuera de jornada"}}));
       if(showResult)showToast("Conductor fuera de jornada");
       return null;
     }
     try{
-      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:true,error:""}}));
-      const loc=await readLatestConductorLocation(uid,{allowStale});
+      if(showResult)setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:true,error:""}}));
+      const loc=await readLatestConductorLocation(uid,{allowStale,skipRevGeo});
       const nextLoc=loc||{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
       setUbicacionConductorByUid(prev=>({...prev,[uid]:nextLoc}));
       const status=!loc?"Sin ubicación registrada":loc.recent===false?"Sin actualización reciente":"";
-      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:status}}));
+      if(showResult)setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error:status}}));
       if(showResult)showToast(status||"Ubicación actualizada");
       return loc;
     }catch(e){
       console.warn("actualizar ubicacion conductor:",e);
       const error="No se pudo actualizar ubicación";
-      setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error}}));
+      if(showResult)setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error}}));
       if(showResult)showToast(error);
       return null;
     }
   }
 
-  async function actualizarServicioUbicacionYEta(sv,{showResult=true}={}){
+  /** Ubicación del conductor sin persistir ETA ni forzar tick visual. */
+  async function actualizarServicioUbicacionLigera(sv,{showResult=true}={}){
     if(!sv?.conductor_id)return;
-    const cond=conductores.find(c=>c.user_id===sv.conductor_id);
-    const loc=await actualizarConductorUbicacion(sv.conductor_id,{allowStale:true,requireOpen:false,showResult});
-    let operational=null;
-    if(loc?.recent!==false&&loc&&sv.estado==="en_curso"&&getOperationalTripStartedAt(sv)){
-      try{
-        const saved=await persistServiceOperationalEta({
-          servicio:sv,
-          stops:flotaStops[sv.id]||[],
-          norma:cond?.norma??null,
-          point:{lat:loc.lat,lon:loc.lon,accuracy:loc.precision_m,ts:loc.ts||loc.updatedAt||new Date().toISOString()},
-          eventType:"empresa_refresh",
-        });
-        operational=saved?.operationalEta?etaSlotFromOperationalEta(saved.operationalEta):null;
-      }catch(_){/* noop */}
-    }
-    setEtaOperativaById(prev=>({...prev,[sv.id]:{...prev[sv.id],operational}}));
+    await actualizarConductorUbicacion(sv.conductor_id,{
+      allowStale:true,
+      requireOpen:false,
+      showResult,
+      skipRevGeo:true,
+    });
   }
+
+  const serviciosOperativaIdsKey=useMemo(
+    ()=>serviciosListaOperativa.map(s=>s.id).join(","),
+    [serviciosListaOperativa],
+  );
+  const serviciosOperativaKeyRef=useRef("");
 
   useEffect(()=>{
     if(!serviciosListaOperativa.length){
-      setEtaOperativaById({});
+      if(serviciosOperativaKeyRef.current){
+        setEtaOperativaById({});
+        serviciosOperativaKeyRef.current="";
+      }
       return;
     }
-    const etas={};
-    serviciosListaOperativa.forEach(sv=>{
-      if(sv.estado!=="anulado")etas[sv.id]={operational:null,phase:isEtaActivationReady(sv)?null:"pre_route"};
+    if(serviciosOperativaIdsKey===serviciosOperativaKeyRef.current)return;
+    serviciosOperativaKeyRef.current=serviciosOperativaIdsKey;
+    setEtaOperativaById(prev=>{
+      const next={...prev};
+      let changed=false;
+      for(const sv of serviciosListaOperativa){
+        if(sv.estado==="anulado")continue;
+        if(!(sv.id in next)){next[sv.id]={};changed=true;}
+      }
+      for(const id of Object.keys(next)){
+        if(!serviciosListaOperativa.some(s=>s.id===id)){delete next[id];changed=true;}
+      }
+      return changed?next:prev;
     });
-    setEtaOperativaById(etas);
-    void refreshUbicacionConductores([...new Set(serviciosListaOperativa.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id).filter(Boolean))],{allowStale:true,requireOpen:false});
-  },[serviciosListaOperativa,conductores]);
-
-  useEffect(()=>{
-    if(!empresa?.id||!conductores.length)return;
-    void refreshUbicacionConductores(null,{allowStale:true,requireOpen:false});
-  },[empresa?.id,conductores]);
+    void refreshUbicacionRef.current?.(
+      [...new Set(serviciosListaOperativa.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id).filter(Boolean))],
+      {allowStale:true,requireOpen:false,skipRevGeo:true,silent:true},
+    );
+  },[serviciosOperativaIdsKey,serviciosListaOperativa]);
 
   useEffect(()=>{
     if(!empresa?.id||modo!=="jefe")return;
-    const refreshLigero=()=>{
+    const refreshFlota=()=>{
       if(document.visibilityState==="hidden")return;
-      setEtaHeartbeatNowMs(Date.now());
-      void loadFlotaRef.current(true);
-      const uids=[
-        ...conductores.map(c=>c.user_id),
-        ...serviciosListaRef.current.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id),
-      ].filter(Boolean);
-      void refreshUbicacionConductores(uids,{allowStale:true,requireOpen:false});
+      void refreshFlotaLigeraRef.current?.({instantFeedback:false});
     };
-    refreshLigero();
-    const id=setInterval(refreshLigero,45*1000);
+    const refreshUbi=()=>{
+      if(document.visibilityState==="hidden")return;
+      const uids=[...new Set([
+        ...conductoresFlotaRef.current.map(c=>c.user_id),
+        ...serviciosListaRef.current.filter(s=>s.estado!=="anulado").map(s=>s.conductor_id),
+      ].filter(Boolean))];
+      void refreshUbicacionRef.current?.(uids,{allowStale:true,requireOpen:false,skipRevGeo:true,silent:true});
+    };
+    const idFlota=setInterval(refreshFlota,EMPRESA_FLOTA_DATA_POLL_MS);
+    const idUbi=setInterval(refreshUbi,EMPRESA_UBICACION_POLL_MS);
+    return()=>{clearInterval(idFlota);clearInterval(idUbi);};
+  },[empresa?.id,modo]);
+
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe")return;
+    const tick=()=>{
+      if(document.visibilityState!=="hidden")setEmpresaEtaVisualNowMs(Date.now());
+    };
+    const id=setInterval(tick,EMPRESA_ETA_VISUAL_TICK_MS);
     return()=>clearInterval(id);
-  },[empresa?.id,modo,conductores]);
+  },[empresa?.id,modo]);
+
+  const nombreConductor=useCallback((uid)=>{
+    if(!uid)return "Sin asignar";
+    const c=conductores.find(c=>c.user_id===uid);
+    return c?.nombre||"Conductor";
+  },[conductores]);
+
+  const buildExpedienteCompleto=useCallback((sv)=>{
+    const conductor=conductores.find((c)=>c.user_id===sv.conductor_id);
+    return buildExpedienteForServicio({
+      servicio:sv,
+      flotaStopsMap:flotaStopsRef.current,
+      flotaEvsMap:flotaEvsRef.current,
+      flotaExtraDocsMap:flotaExtraDocsRef.current,
+      nombreConductor,
+      fmtDur,
+      entries:conductor?.entries||[],
+    });
+  },[conductores,nombreConductor,fmtDur]);
+
+  const conductoresByUid=useMemo(()=>{
+    const m={};
+    for(const c of conductores){
+      if(c.user_id)m[c.user_id]=c;
+    }
+    return m;
+  },[conductores]);
+
+  const actualizarServicioUbicacionLigeraRef=useRef(actualizarServicioUbicacionLigera);
+  actualizarServicioUbicacionLigeraRef.current=actualizarServicioUbicacionLigera;
+  const abrirAnularServicioRef=useRef(abrirAnularServicio);
+  abrirAnularServicioRef.current=abrirAnularServicio;
+
+  const handleToggleExpandId=useCallback((id)=>{
+    setSvCardExpand(prev=>{
+      const opening=prev!==id;
+      if(opening)void ensureFlotaEvidenciasRef.current?.(id);
+      return opening?id:null;
+    });
+  },[]);
+
+  const handleRefreshServicioId=useCallback((id)=>{
+    const sv=flotaServiciosRef.current.find(s=>s.id===id);
+    if(sv)void actualizarServicioUbicacionLigeraRef.current?.(sv,{showResult:true});
+  },[]);
+
+  const handleManualRefreshFlota=useCallback(()=>{
+    void refreshFlotaLigeraRef.current?.({instantFeedback:true});
+  },[]);
+
+  const[flotaRefreshLabelTick,setFlotaRefreshLabelTick]=useState(0);
+  useEffect(()=>{
+    if(!flotaManualRefreshAt)return undefined;
+    const id=setInterval(()=>setFlotaRefreshLabelTick(t=>t+1),8000);
+    return()=>clearInterval(id);
+  },[flotaManualRefreshAt]);
+
+  const flotaManualRefreshLabel=useMemo(
+    ()=>formatFlotaManualRefreshLabel(flotaManualRefreshAt),
+    [flotaManualRefreshAt,flotaRefreshLabelTick],
+  );
+
+  useEffect(()=>{
+    if(flotaTab!=="servicios"||serviciosVistaTab!=="incidencias")return;
+    for(const sv of serviciosListaVisible){
+      void ensureFlotaEvidenciasRef.current?.(sv.id);
+    }
+  },[flotaTab,serviciosVistaTab,serviciosListaVisible]);
+
+  const handleAnularServicioId=useCallback((id)=>{
+    const sv=flotaServiciosRef.current.find(s=>s.id===id);
+    if(sv)abrirAnularServicioRef.current?.(sv);
+  },[]);
 
   function openNuevoViaje(){
     const list=conductores.filter(c=>c.user_id);
-    if(!list.length){showToast("Añade un conductor primero (pestaña Conductores)");return;}
-    if(list.length===1){setAsignarModal({id:list[0].user_id,nombre:list[0].nombre||"Conductor"});return;}
+    logServiceCreate("SERVICE_CREATE_START",{
+      source:"PanelEmpresa.openNuevoViaje",
+      empresaState:empresa?{id:empresa.id,nombre:empresa.nombre}:null,
+      empresaId:empresa?.id??null,
+      conductoresActivos:list.length,
+      authUid:getUserId?.()||null,
+    });
+    if(!list.length){setAsignarModal({id:null,nombre:null});return;}
     setPickConductorViaje(true);
   }
+
+  useEffect(()=>{
+    if(!asignarModal)return;
+    logServiceCreate("SERVICE_CREATE_START",{
+      source:"PanelEmpresa.asignarModal.open",
+      asignarModal,
+      empresaState:empresa?{id:empresa.id,nombre:empresa.nombre,owner_id:empresa.owner_id}:null,
+      empresaIdPassToModal:empresa?.id||null,
+      authUid:getUserId?.()||null,
+    });
+  },[asignarModal,empresa?.id]);
+
+  const handleAsignarConductorServicioId=useCallback((servicioId)=>{
+    const sv=flotaServiciosRef.current.find(s=>s.id===servicioId);
+    if(sv&&servicioPendienteAsignacion(sv))setAsignarConductorServicio(sv);
+  },[]);
 
   async function crearEmpresa(nombre,cif){
     const uid=getUserId();if(!uid)return;
@@ -12471,14 +13173,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return{col:EMPRESA_UI.green,icon:"",label:"Operativo"};
   };
 
-  const TIPO_EV={cmr:"▤",foto:"□",incidencia:"○"};
-  const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red};
+  const TIPO_EV={cmr:"▤",foto:"□",incidencia:"○",ticket:"🎫",factura:"📄",otro:"📎"};
+  const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red,ticket:"#0EA5E9",factura:"#6366F1",otro:"#64748B"};
 
-  // Nombre del conductor por uid
-  const nombreConductor=(uid)=>{
-    const c=conductores.find(c=>c.user_id===uid);
-    return c?.nombre||"Conductor";
-  };
+  function openExpedienteDocument(ev){
+    const url=ev?.url||ev?.previewUrl;
+    if(!url)return;
+    const mime=ev?.mime_type||"";
+    const isPdf=mime.includes("pdf")||String(url).toLowerCase().includes(".pdf");
+    if(isPdf){
+      window.open(url,"_blank","noopener,noreferrer");
+      return;
+    }
+    setVisorEv({...ev,url});
+  }
 
   const serviciosEnRuta=flotaServicios.filter(s=>s.estado==="en_curso").length;
   const codigoEquipoStrict=empresa?getEmpresaEquipoCodeStrict(empresa):"";
@@ -12543,8 +13251,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.36)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setPickConductorViaje(false)}>
           <div style={{background:card,borderRadius:"18px 18px 0 0",width:"100%",maxWidth:480,maxHeight:"70vh",overflowY:"auto",padding:"16px 16px 28px",borderTop:`1px solid ${EMPRESA_UI.border}`,boxShadow:"0 -12px 32px rgba(15,23,42,.16)"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:14,fontWeight:650,color:tx,marginBottom:4}}>Nuevo servicio</div>
-            <div style={{fontSize:12,color:su,marginBottom:14}}>Elige conductor para asignar el viaje</div>
+            <div style={{fontSize:12,color:su,marginBottom:14}}>Elige conductor o planifica sin asignar</div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button type="button" onClick={()=>{setAsignarModal({id:null,nombre:null});setPickConductorViaje(false);}}
+                style={{width:"100%",textAlign:"left",background:"#eef2ff",border:"1.5px solid #c7d2fe",borderRadius:10,padding:"12px 14px",fontSize:14,fontWeight:700,color:"#3730a3",cursor:"pointer"}}>
+                Planificar sin conductor
+                <div style={{fontSize:11,color:"#475569",fontWeight:500,marginTop:4}}>Pendiente de asignación · visible solo en empresa</div>
+              </button>
               {conductores.filter(c=>c.user_id).map(c=>(
                 <button
                   key={c.user_id}
@@ -12767,7 +13480,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── SERVICIOS — centro operacional (PR-26/27) ── */}
       {flotaTab==="servicios"&&(
         <div style={{padding:"6px 12px 72px"}}>
-          {flotaLoading?(
+          {!flotaBootstrapped&&flotaLoading?(
             <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando servicios...</div>
           ):flotaServicios.length===0?(
             <div style={{background:card,borderRadius:12,padding:"24px 16px",textAlign:"center",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
@@ -12814,7 +13527,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 </div>
                 <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
-                  {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
+                  {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
@@ -12843,256 +13556,25 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   Nada en esta vista · prueba otro filtro o crea un servicio nuevo
                 </div>
               ):(
-                <div style={{display:"flex",flexDirection:"column"}}>
-                  {serviciosListaVisible.map(sv=>{
-                    const svStops=flotaStops[sv.id]||[];
-                    const completados=countCompletedStops(svStops);
-                    const stopActual=getCurrentStop(svStops);
-                    const color=ESTADO_COLOR[sv.estado]||su;
-                    const operationalStatus=getOperationalStatus({service:sv,stops:svStops,evidencias:flotaEvs});
-                    const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
-                    const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:flotaEvs});
-                    const attention=needsAttention({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity});
-                    const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias:flotaEvs,lastActivity}):"";
-                    const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
-                    const normaC=conductor?.norma;
-                    const ubicInfo=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
-                    const ubicRefresh=sv.conductor_id?ubicacionRefreshByUid[sv.conductor_id]:null;
-                    const ubicLine=fmtUbicacionConductorEmpresa(ubicInfo);
-                    const ubicUpdated=fmtUbicacionActualizada(ubicInfo);
-                    const incNCompact=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
-                    const nextStop=nextPendingStop(svStops);
-                    const progressLabel=svStops.length?`${completados}/${svStops.length}`:"0/0";
-                    const planSnapshot=getOperationalPlanSnapshot(sv);
-                    const planSlot=etaSlotFromOperationalPlan(planSnapshot,sv);
-                    const operationalSlot=etaSlotFromOperationalEta(getOperationalEtaSnapshot(sv));
-                    const localEta=etaOperativaById[sv.id];
-                    const etaEntry=buildEtaEntryVisual({
-                      service:sv,
-                      planSlot,
-                      operationalSlot,
-                      localEta,
-                      conductor,
-                      ubicInfo,
-                      nowMs:etaHeartbeatNowMs,
-                    });
-                    const etaActiva=etaEntry?.phase!=="pre_route";
-                    const etaCompact=sv.estado==="anulado"?"—":getEtaLabelEmpresa(etaEntry);
-                    const etaEstado=sv.estado==="anulado"?{label:"Sin ETA activa",color:"#64748B"}:getEtaEstadoEmpresa(etaEntry);
-                    const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
-                    const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
-                    const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
-                    const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
-                    const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
-                    const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
-                    const dossierMetrics=computeTripOperationalMetrics(sv,svStops);
-                    const expanded=svCardExpand===sv.id;
-                    const serviceNumber=getServiceNumber(sv);
-                    const clienteCompact=getServiceClient(sv)||"—";
-                    const refClienteCompact=getServiceClientReference(sv);
-                    const etaTone=empresaTone(etaEstado.color);
-                    const opTone=empresaTone(operationalMeta.color);
-                    const stateTone=empresaTone(color);
-                    const expedienteCard=EMPRESA_UI.surface;
-                    return(
-                      <div
-                        key={sv.id}
-                        style={{
-                          borderBottom:`1px solid ${EMPRESA_UI.border}`,
-                          overflow:"hidden",
-                          background:expanded?EMPRESA_UI.surface:"transparent",
-                          borderLeft:attention&&!expanded?`3px solid ${EMPRESA_UI.amber}`:"3px solid transparent",
-                        }}
-                      >
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={()=>setSvCardExpand(expanded?null:sv.id)}
-                          onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setSvCardExpand(expanded?null:sv.id);}}}
-                          style={{
-                            padding:"10px 8px 11px",
-                            cursor:"pointer",
-                            display:"grid",
-                            gridTemplateColumns:"1fr auto",
-                            gap:8,
-                            background:expanded?EMPRESA_UI.surface:"transparent",
-                          }}
-                        >
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:11,color:su,fontWeight:700,letterSpacing:.3,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              {serviceNumber}{clienteCompact!=="—"?` · Cliente: ${clienteCompact}`:""}{refClienteCompact?` · Ref cliente: ${refClienteCompact}`:""}
-                            </div>
-                            <div style={{fontSize:13,fontWeight:600,color:tx,lineHeight:1.35,letterSpacing:0.05,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              {routeFrom} → {routeTo}
-                            </div>
-                            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3,flexWrap:"wrap"}}>
-                              <div style={{display:"flex",flexDirection:"column",gap:1}}>
-                                <span style={{fontSize:16,fontWeight:750,color:etaCompact==="—"?"#94A3B8":tx,lineHeight:1.15,fontVariantNumeric:"tabular-nums",letterSpacing:-0.2}}>{etaCompact}</span>
-                                <span style={{fontSize:10,color:su,fontWeight:500}}>Llegada estimada</span>
-                              </div>
-                              <span style={{fontSize:10,fontWeight:600,color:etaTone.fg,background:etaTone.bg,border:`1px solid ${etaTone.border}`,borderRadius:999,padding:"2px 7px",lineHeight:1.2,whiteSpace:"nowrap"}}>
-                                ● {etaEstado.label}
-                              </span>
-                            </div>
-                            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:6,fontSize:13,color:EMPRESA_UI.subtle,lineHeight:1.35,overflow:"hidden",whiteSpace:"nowrap"}}>
-                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>
-                                {sv.estado==="anulado"?"Servicio histórico anulado":<>Última ubicación · {ubicLine}{ubicUpdated&&<span style={{color:su,fontSize:11,fontWeight:600}}> · {ubicUpdated}</span>}</>}
-                              </span>
-                              {sv.conductor_id&&sv.estado!=="anulado"&&(
-                                <button type="button" onClick={e=>{e.stopPropagation();void actualizarServicioUbicacionYEta(sv);}}
-                                  disabled={!!ubicRefresh?.loading}
-                                  style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 7px",fontSize:10,color:"#1d4ed8",cursor:ubicRefresh?.loading?"default":"pointer",fontWeight:600,flexShrink:0}}>
-                                  {ubicRefresh?.loading?"...":"↻"}
-                                </button>
-                              )}
-                            </div>
-                            {ubicRefresh?.error&&(
-                              <div style={{fontSize:10.5,color:"#b45309",marginTop:3,fontWeight:700}}>{ubicRefresh.error}</div>
-                            )}
-                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:"6px 10px",marginTop:6,fontSize:12.5,color:EMPRESA_UI.subtle,lineHeight:1.35}}>
-                              <span>Conductor · {nombreConductor(sv.conductor_id)}</span>
-                              <span>Paradas · {progressLabel}</span>
-                              {sv.estado!=="anulado"&&etaActiva&&(planKm!=null||planDrive||planBreaks!=null||planRestLabel)&&(
-                                <span>
-                                  Plan · {[
-                                    planKm!=null?`${planKm} km`:null,
-                                    planDrive,
-                                    planBreaks!=null?`${planBreaks} pausa${planBreaks===1?"":"s"}`:null,
-                                    planRestLabel,
-                                  ].filter(Boolean).join(" · ")}
-                                </span>
-                              )}
-                              <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>
-                                Próxima: <strong style={{color:tx,fontWeight:600}}>{nextStop?.nombre||"—"}</strong>{nextStop&&<span style={{color:su}}> · {stopTipoCompacto(nextStop)}</span>}
-                              </span>
-                            </div>
-                            <div style={{display:"flex",alignItems:"center",gap:7,marginTop:5,fontSize:11.5,color:su,lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap"}}>
-                              <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>Cliente: <span style={{color:EMPRESA_UI.subtle,fontWeight:500}}>{clienteCompact}</span></span>
-                              <span style={{background:stateTone.bg,color:stateTone.fg,border:`1px solid ${stateTone.border}`,borderRadius:999,padding:"2px 7px",fontWeight:600,flexShrink:0}}>● {ESTADO_LABEL[sv.estado]||sv.estado}</span>
-                              <span style={{background:opTone.bg,color:opTone.fg,border:`1px solid ${opTone.border}`,borderRadius:999,padding:"2px 7px",fontWeight:600,flexShrink:0}}>● {operationalMeta.label}</span>
-                              {incNCompact>0?(
-                                <span title={attentionReason||undefined} style={{color:EMPRESA_UI.amber,fontWeight:600,flexShrink:0}}>Atención · {incNCompact}</span>
-                              ):(
-                                <span style={{color:su,fontWeight:500,flexShrink:0}}>Incidencias · 0</span>
-                              )}
-                            </div>
-                          </div>
-                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-                            {sv.estado!=="anulado"&&(
-                              <button type="button" onClick={e=>{e.stopPropagation();abrirAnularServicio(sv);}}
-                                style={{background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:8,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>
-                                Anular servicio
-                              </button>
-                            )}
-                            <div style={{fontSize:13,color:su,lineHeight:1.2,paddingTop:2}}>{expanded?"⌄":"›"}</div>
-                          </div>
-                        </div>
-                        {expanded&&(
-                          <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 8px 10px",marginBottom:2,background:EMPRESA_UI.surfaceSoft}}>
-                            <div style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:10,border:`1px solid ${EMPRESA_UI.border}`}}>
-                              <div style={{fontSize:12,fontWeight:650,color:tx,marginBottom:8,letterSpacing:0.2}}>Resumen operacional</div>
-                              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:8}}>
-                                {[
-                                  {l:"Tiempo total viaje",v:dossierMetrics.tiempoTotalViajeMin!=null?fmtDur(dossierMetrics.tiempoTotalViajeMin):"—"},
-                                  {l:"Conducción operacional",v:fmtDur(dossierMetrics.tiempoConduccionMin)},
-                                  {l:"Tiempo en planta · cargas",v:fmtDur(dossierMetrics.tiempoEnPlantaCargaMin)},
-                                  {l:"Tiempo en planta · descargas",v:fmtDur(dossierMetrics.tiempoEnPlantaDescargaMin)},
-                                  {l:"Espera muelle · cargas",v:fmtDur(dossierMetrics.esperaMuelleCargaMin)},
-                                  {l:"Espera muelle · descargas",v:fmtDur(dossierMetrics.esperaMuelleDescargaMin)},
-                                  {l:"Incidencias",v:String(incNCompact),raw:true},
-                                ].map(({l,v,raw})=>(
-                                  <div key={l} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,padding:"8px 10px"}}>
-                                    <div style={{fontSize:10,color:su,fontWeight:500,marginBottom:3}}>{l}</div>
-                                    <div style={{fontSize:13,fontWeight:650,color:raw&&Number(v)>0?EMPRESA_UI.amber:tx,fontFamily:raw?undefined:"monospace"}}>{v}</div>
-                                  </div>
-                                ))}
-                              </div>
-                              <div style={{fontSize:10,color:su,marginTop:8,lineHeight:1.4}}>
-                                Totales desde inicio del viaje operacional (tras «Añadir destino al servicio»). En planta = entre entrada y salida de muelle.
-                              </div>
-                            </div>
-
-                            <div style={{fontSize:12,fontWeight:650,color:tx,marginBottom:8,letterSpacing:0.3}}>Operación del servicio</div>
-                            {dossierMetrics.perStop.length===0?(
-                              <div style={{fontSize:12,color:su,marginBottom:10}}>Sin paradas registradas en el plan.</div>
-                            ):dossierMetrics.perStop.map((row,idx)=>{
-                              const incLines=incidenciaLinesForStop(row.stop.id,flotaEvs);
-                              const labelGroup=OPERATIONAL_GROUP_LABEL[row.group]||row.stop.tipo||"PARADA";
-                              const titulo=`${labelGroup} — ${row.stop.nombre||"Sin nombre"}`;
-                              return(
-                                <div key={row.stop.id||idx} style={{background:expedienteCard,borderRadius:10,padding:"10px 12px",marginBottom:8,border:`1px solid ${EMPRESA_UI.border}`}}>
-                                  <div style={{fontSize:13,fontWeight:650,color:tx,marginBottom:8}}>{titulo}</div>
-                                  <div style={{display:"flex",flexDirection:"column",gap:5,fontSize:12,color:su}}>
-                                    <div><span style={{color:"#94A3B8"}}>Entrada muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.entradaMuelleMs)}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Inicio operación (entrada) · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.inicioOperacionMs)}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Salida muelle · </span><span style={{color:tx,fontWeight:600}}>{fmtClockMs(row.salidaMuelleMs)}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Tiempo en planta · </span><span style={{color:"#F59E0B",fontWeight:700}}>{row.tiempoEnPlantaMin!=null?fmtDur(row.tiempoEnPlantaMin):"—"}</span></div>
-                                    <div><span style={{color:"#94A3B8"}}>Traslado previo · </span><span style={{color:tx}}>{row.trasladoPrevioMin!=null?fmtDur(row.trasladoPrevioMin):"—"}</span><span style={{fontSize:10,marginLeft:6,color:"#64748B"}}> (hasta esta parada)</span></div>
-                                  </div>
-                                  {incLines.length>0&&(
-                                    <div style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${EMPRESA_UI.border}`}}>
-                                      <div style={{fontSize:10,color:su,fontWeight:650,marginBottom:4}}>Incidencias en esta operación</div>
-                                      {incLines.map((t,j)=>(<div key={j} style={{fontSize:12,color:EMPRESA_UI.amber,lineHeight:1.35}}>Atención · {t}</div>))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-
-                            <div style={{borderTop:`1px solid ${EMPRESA_UI.border}`,paddingTop:10}}>
-                              <div style={{fontSize:12,color:su,marginBottom:8}}>
-                                <span style={{background:opTone.bg,color:opTone.fg,border:`1px solid ${opTone.border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600,marginRight:8}}>● {operationalMeta.label}</span>
-                                <span>Última actividad: {lastActivity.label}</span>
-                                {getServiceNumber(sv)&&<span style={{marginLeft:8,color:"#F59E0B"}}>{getServiceNumber(sv)}</span>}
-                              </div>
-                              {attention&&(
-                                <div style={{fontSize:12,color:EMPRESA_UI.amber,lineHeight:1.35,marginBottom:8}}>
-                                  {attentionReason||"Atención requerida"}
-                                </div>
-                              )}
-                              {svStops.length>0&&(
-                                <div style={{background:"#e2e8f0",borderRadius:4,height:5,overflow:"hidden",marginBottom:10}}>
-                                  <div style={{background:sv.estado==="completado"?EMPRESA_UI.green:EMPRESA_UI.accent,height:"100%",width:`${(completados/svStops.length)*100}%`,borderRadius:4}}/>
-                                </div>
-                              )}
-                              {stopActual&&sv.estado==="en_curso"&&(
-                                <div style={{marginBottom:10}}>
-                                  <div style={{fontSize:11,color:su,marginBottom:3}}>Stop actual</div>
-                                  <div style={{fontSize:14,fontWeight:650,color:tx}}>{stopActual.nombre}</div>
-                                  <div style={{fontSize:12,color:su}}>{String(stopActual.tipo||"").replace("_"," ").toUpperCase()} · {stopActual.orden}/{svStops.length}</div>
-                                  {stopActual.hora_llegada_real&&<div style={{fontSize:12,color:EMPRESA_UI.green,marginTop:2}}>Llegó {new Date(stopActual.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
-                                </div>
-                              )}
-                              {normaC&&sv.estado==="en_curso"&&(
-                                <div style={{marginBottom:8}}>
-                                  <div style={{fontSize:11,color:su,marginBottom:6}}>Conducción · {nombreConductor(sv.conductor_id)}</div>
-                                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-                                    {[
-                                      {l:"Disponible",v:normaC.canDrive<=0?"Parar":fmtDur(normaC.canDrive),c:normaC.canDrive<=0?EMPRESA_UI.red:normaC.canDrive<=30?EMPRESA_UI.amber:EMPRESA_UI.green},
-                                      {l:"Hoy",v:fmtDur(normaC.todayDrive),c:EMPRESA_UI.amber},
-                                      {l:"Semana",v:fmtDur(normaC.weekDrive),c:"#64748B"},
-                                    ].map(({l,v,c})=>(
-                                      <div key={l} style={{textAlign:"center"}}>
-                                        <div style={{fontSize:13,fontWeight:650,color:c,fontFamily:"monospace"}}>{v}</div>
-                                        <div style={{fontSize:10,color:su,marginTop:2}}>{l}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              {sv.fecha_inicio&&<div style={{fontSize:12,color:su}}>Salida programada / inicio: {new Date(sv.fecha_inicio).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
-                              {sv.estado!=="anulado"&&(
-                                <button type="button" onClick={()=>abrirAnularServicio(sv)}
-                                  style={{width:"100%",marginTop:10,background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:9,padding:"9px 10px",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>
-                                  Anular servicio
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                <>
+                <EmpresaFlotaServiciosList
+                  servicios={serviciosListaVisible}
+                  flotaStops={flotaStops}
+                  flotaEvs={flotaEvs}
+                  expandedId={svCardExpand}
+                  onToggleExpandId={handleToggleExpandId}
+                  nowMs={empresaEtaVisualNowMs}
+                  ubicacionConductorByUid={ubicacionConductorByUid}
+                  ubicacionRefreshByUid={ubicacionRefreshByUid}
+                  conductoresByUid={conductoresByUid}
+                  nombreConductor={nombreConductor}
+                  onRefreshServicioId={handleRefreshServicioId}
+                  onAnularServicioId={handleAnularServicioId}
+                  onAsignarConductorServicioId={handleAsignarConductorServicioId}
+                  fmtDur={fmtDur}
+                  tx={tx}
+                  su={su}
+                />
                   <div style={{background:"#f8fafc",borderTop:`1px solid ${EMPRESA_UI.border}`,padding:"10px 11px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
                     <div style={{fontSize:12,color:"#334155",fontWeight:700}}>
                       Mostrando {serviciosFrom+1}-{serviciosTo} de {serviciosTotal} servicios
@@ -13114,10 +13596,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       </button>
                     </div>
                   </div>
-                </div>
+                </>
               )}
               </div>
-              <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:12,background:EMPRESA_UI.surface,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:EMPRESA_UI.shadow}}>Actualizar</button>
+              <div style={{marginTop:12}}>
+                <button type="button" onClick={handleManualRefreshFlota} style={{width:"100%",background:EMPRESA_UI.surface,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:EMPRESA_UI.shadow}}>
+                  Actualizar
+                </button>
+                {flotaManualRefreshLabel?(
+                  <div style={{marginTop:6,textAlign:"center",fontSize:11,color:EMPRESA_UI.green,fontWeight:600}}>
+                    {flotaManualRefreshLabel}
+                  </div>
+                ):null}
+              </div>
             </>
           )}
         </div>
@@ -13174,6 +13665,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ["ETA",expedientePreview.header.eta],
                       ["Km",expedientePreview.header.km!=null?`${expedientePreview.header.km}`:"—"],
                       ["Documentos",String(expedientePreview.evidencias.length)],
+                      ["Peso expediente",expedientePreview.storage?.totalLabel||"—"],
                     ].map(([l,v])=>(
                       <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px"}}>
                         <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>{l}</div>
@@ -13213,27 +13705,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:12}}>
                     <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px"}}>
-                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Documentos y evidencias</div>
-                      {expedientePreview.evidencias.length===0?(
-                        <div style={{fontSize:12,color:"#64748b"}}>Sin evidencias adjuntas.</div>
-                      ):(
-                        <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                          {expedientePreview.evidencias.map(ev=>(
-                            <button key={ev.id||`${ev.tipo}-${ev.created_at}`} type="button" onClick={()=>setVisorEv(ev)}
-                              style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 9px",textAlign:"left",cursor:"pointer"}}>
-                              <div style={{fontSize:12,fontWeight:800,color:ev.tipo==="incidencia"?"#c2410c":ev.tipo==="cmr"?"#1d4ed8":"#334155"}}>{ev.titulo}</div>
-                              <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{ev.stopLabel} · {ev.hora}{ev.url?" · adjunto":""}</div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Expediente documental</div>
+                      <ExpedienteDocumentsPanel
+                        expediente={expedientePreview}
+                        onOpenDocument={openExpedienteDocument}
+                      />
                     </div>
                     <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px"}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Resumen operacional</div>
                       {[
                         ["Km reales / plan",expedientePreview.header.km!=null?`${expedientePreview.header.km} km`:"—"],
                         ["Conducción",expedientePreview.metrics.conduccion],
-                        ["Pausas / descansos","Incluidas en timeline"],
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
                         ["ETA prevista vs real",expedientePreview.header.eta],
@@ -13274,7 +13756,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               </div>
             </div>
           )}
-          {flotaLoading?<div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando expedientes...</div>
+          {flotaLoading?<div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando expedientes…</div>
           :flotaServicios.length===0?(<div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>▤</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin expedientes todavía</div></div>)
           :(
             <>
@@ -13452,25 +13934,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         <div style={{background:"#f8fafc",borderBottom:"1px solid #dbe2ea",padding:"8px 11px",fontSize:11,color:"#475569",fontWeight:850,textTransform:"uppercase",letterSpacing:.4}}>{group}</div>
                         {rows.map(sv=>{
                           const svStops=flotaStops[sv.id]||[];
-                          const totalEvs=countServiceDocuments(svStops,flotaEvs);
-                          const metrics=computeTripOperationalMetrics(sv,svStops);
-                          const planSnapshot=getOperationalPlanSnapshot(sv);
-                          const planSlot=etaSlotFromOperationalPlan(planSnapshot,sv);
-                          const operationalSlot=etaSlotFromOperationalEta(getOperationalEtaSnapshot(sv));
-                          const localEta=etaOperativaById[sv.id];
+                          const totalEvs=countServiceDocuments(svStops,flotaEvs,flotaExtraDocs[sv.id]);
                           const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
-                          const ubicInfo=sv.conductor_id?ubicacionConductorByUid[sv.conductor_id]:null;
-                          const etaEntry=buildEtaEntryVisual({
-                            service:sv,
-                            planSlot,
-                            operationalSlot,
-                            localEta,
-                            conductor,
-                            ubicInfo,
-                            nowMs:etaHeartbeatNowMs,
-                          });
-                          const etaCompact=getEtaLabelEmpresa(etaEntry);
-                          const expediente=buildServiceExpediente({servicio:sv,stops:svStops,evidenciasByStop:flotaEvs,metrics,nombreConductor,etaLabel:etaCompact,fmtDur,entries:conductor?.entries||[]});
+                          const preview=buildServiceExpedienteListPreview({servicio:sv,stops:svStops,nombreConductor});
                           const refVisible=getServiceNumber(sv);
                           const clienteDoc=getServiceClient(sv)||"—";
                           const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
@@ -13482,36 +13948,52 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{clienteDoc}</div>
                               </div>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:12.5,fontWeight:700,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.ruta}</div>
+                                <div style={{fontSize:12.5,fontWeight:700,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.ruta}</div>
                                 <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>Docs {totalEvs} · Incidencias {incN}</div>
                               </div>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:12,color:"#334155",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.conductor}</div>
+                                <div style={{fontSize:12,color:"#334155",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.conductor}</div>
                                 <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{sv.matricula||conductor?.matricula||"Sin matrícula"}</div>
                               </div>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:12,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{expediente.header.eta}</div>
+                                <div style={{fontSize:12,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.eta}</div>
                                 <div style={{fontSize:10.5,color:"#166534",marginTop:2,fontWeight:750}}>✓ Integridad validada</div>
                               </div>
                               <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
                                 {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
-                                <button type="button" onClick={()=>setExpedientePreview(expediente)}
+                                {servicioPendienteAsignacion(sv)&&(
+                                  <button type="button" onClick={()=>setAsignarConductorServicio(sv)}
+                                    style={{background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                                    Asignar conductor
+                                  </button>
+                                )}
+                                <button type="button" onClick={()=>void abrirExpedientePreview(sv)}
                                   style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Ver
                                 </button>
                                 <button type="button" onClick={()=>{
                                   const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
-                                  setMailExpediente({servicio:sv,stops:svStops,evidenciasByStop:evs});
+                                  setMailExpediente({
+                                    servicio:sv,
+                                    stops:svStops,
+                                    evidenciasByStop:evs,
+                                    extraDocs:flotaExtraDocs[sv.id]||[],
+                                  });
                                 }}
                                   style={{background:"#2563eb",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Correo
                                 </button>
-                                <button type="button" onClick={()=>descargarExpediente(expediente)}
+                                <button type="button" onClick={async()=>{
+                                  await ensureFlotaStopsForServicioIds([sv.id]);
+                                  await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                  await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                  void descargarExpediente(buildExpedienteCompleto(sv));
+                                }}
                                   style={{background:"#0f172a",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   PDF
                                 </button>
                                 {!isArchived&&(
-                                  <button type="button" onClick={()=>archivarMetadataExpediente(expediente)}
+                                  <button type="button" onClick={()=>void archivarMetadataExpediente(buildExpedienteCompleto(sv))}
                                     style={{background:"white",color:"#475569",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                     Archivar
                                   </button>
@@ -13527,7 +14009,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               })()}
             </>
           )}
-          <button onClick={loadFlotaServicios} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>Actualizar</button>
+          <button type="button" onClick={()=>{handleManualRefreshFlota();void ensureFlotaExtraDocsForDocumentos({force:true});}} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>Actualizar</button>
         </div>
       )}
 
@@ -13538,7 +14020,26 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           conductorNombre={asignarModal.nombre}
           empresaId={empresa?.id||null}
           onClose={()=>setAsignarModal(null)}
-          onCreado={()=>{setAsignarModal(null);showToast("✅ Servicio asignado a "+asignarModal.nombre);loadFlotaServicios();}}
+          onCreado={()=>{
+            const sinCond=asignarModal?.id==null;
+            setAsignarModal(null);
+            showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal.nombre||"conductor"));
+            void refreshFlotaLigeraRef.current?.({instantFeedback:true});
+          }}
+        />
+      )}
+
+      {asignarConductorServicio&&(
+        <AsignarConductorServicioModal
+          servicio={asignarConductorServicio}
+          conductores={conductores}
+          onClose={()=>setAsignarConductorServicio(null)}
+          onAsignado={({conductorNombre,conductorId,servicioId})=>{
+            setAsignarConductorServicio(null);
+            setFlotaServicios(prev=>prev.map(s=>s.id===servicioId?{...s,conductor_id:conductorId,estado:"asignado"}:s));
+            showToast("✅ Conductor asignado: "+conductorNombre);
+            void refreshFlotaLigeraRef.current?.({instantFeedback:true});
+          }}
         />
       )}
 
@@ -13549,6 +14050,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           servicio={mailExpediente.servicio}
           stops={mailExpediente.stops}
           evidenciasByStop={mailExpediente.evidenciasByStop}
+          extraDocs={mailExpediente.extraDocs}
           showToast={showToast}
         />
       )}
@@ -14886,8 +15388,9 @@ function ServiciosTimelineView({uid}){
               const attentionReason=attention?getAttentionReason({service:sv,stops:svStops,evidencias,lastActivity}):"";
               const refVisible=getServiceNumber(sv);
               const clienteVisible=getServiceClient(sv);
-              const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
-              const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
+              const epR=resolveServiceRouteEndpoints(sv,svStops);
+              const routeFrom=epR.origen;
+              const routeTo=epR.destino;
               let duracion=null;
               if(sv.estado==="completado"&&sv.fecha_inicio){
                 const lastStop=svStops.filter(s=>s.hora_salida_real).sort((a,b)=>new Date(b.hora_salida_real)-new Date(a.hora_salida_real))[0];
@@ -15025,17 +15528,25 @@ function useServicioActivo(uid,norma=null,showToast=null){
     const now=new Date().toISOString();
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
     if(!res.ok)throw new Error("No se pudo guardar la entrada en muelle");
-    const updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
+    let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
     setStops(updated);
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
     if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    const geo=geoFromGpsPoint(op?.point);
+    if(geo){
+      const stop=updated.find(s=>s.id===stopId);
+      const notas=mergeStopOperacionMeta(stop?.notas,{entrada_geo:geo});
+      await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
+      updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
+      setStops(updated);
+    }
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId){
     const now=new Date().toISOString();
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
     if(!res.ok)throw new Error("No se pudo guardar la salida de muelle");
-    const updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
+    let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
     setStops(updated);
 
     // ── Registrar automáticamente en tacógrafo ──
@@ -15054,6 +15565,14 @@ function useServicioActivo(uid,norma=null,showToast=null){
 
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast});
     if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    const geoSalida=geoFromGpsPoint(op?.point);
+    if(geoSalida){
+      const stop=updated.find(s=>s.id===stopId);
+      const notas=mergeStopOperacionMeta(stop?.notas,{salida_geo:geoSalida});
+      await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
+      updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
+      setStops(updated);
+    }
 
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
@@ -15571,35 +16090,49 @@ function ServicioDocsView({ uid, showToast, onBack }) {
     async function cargar() {
       try {
         const sr = await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=20`);
+        if (!sr.ok) throw new Error(`servicios HTTP ${sr.status}`);
         const svs = await sr.json();
-        setServicios(Array.isArray(svs) ? svs : []);
-        if (Array.isArray(svs) && svs.length) {
-          syncArchivedServicesFromList(svs);
-          void runRetentionSweep();
-          const ids = svs.map((s) => s.id).join(",");
-          const str = await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`);
-          const stps = await str.json();
-          const stopsMap = {};
-          (Array.isArray(stps) ? stps : []).forEach((st) => {
-            if (!stopsMap[st.servicio_id]) stopsMap[st.servicio_id] = [];
-            stopsMap[st.servicio_id].push(st);
-          });
-          setStops(stopsMap);
-          const stopIds = stps.map((s) => s.id).join(",");
-          if (stopIds) {
-            const evr = await sbFetch(`/rest/v1/evidencias?stop_id=in.(${stopIds})&order=stop_id.asc,created_at.asc`);
-            const evs = await evr.json();
-            setEvidencias(groupDocumentsByStop(evs));
-          }
+        const list = Array.isArray(svs) ? svs : [];
+        setServicios(list);
+        if (!list.length) return;
+        syncArchivedServicesFromList(list);
+        void runRetentionSweep();
+        const ids = list.map((s) => s.id).filter(Boolean).join(",");
+        if (!ids) return;
+        const str = await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids})&order=servicio_id.asc,orden.asc`);
+        if (!str.ok) throw new Error(`stops HTTP ${str.status}`);
+        const stps = await str.json();
+        const stpsArr = Array.isArray(stps) ? stps : [];
+        const stopsMap = {};
+        stpsArr.forEach((st) => {
+          if (!stopsMap[st.servicio_id]) stopsMap[st.servicio_id] = [];
+          stopsMap[st.servicio_id].push(st);
+        });
+        setStops(stopsMap);
+        const stopIds = stpsArr.map((s) => s.id).filter(Boolean);
+        if (stopIds.length) {
+          const grouped = await fetchEvidenciasGroupedByStop(stopIds, sbFetch);
+          setEvidencias(grouped);
         }
       } catch (e) {
         console.warn("ServicioDocsView:", e);
+        showToast?.("No se pudieron cargar los documentos");
       } finally {
         setLoading(false);
       }
     }
     cargar();
   }, [uid]);
+
+  useEffect(() => {
+    function onEvidenciaSaved(e) {
+      const { ev, stopId } = e.detail || {};
+      if (!ev?.id || !stopId) return;
+      setEvidencias((prev) => mergeEvidenciaIntoByStop(prev, stopId, ev));
+    }
+    window.addEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
+    return () => window.removeEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
+  }, []);
 
   const buckets = useMemo(() => {
     const ref = new Date();
@@ -15628,7 +16161,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
     if (sv.estado === "completado")
       return { label: "COMPLETADO", bg: "rgba(34, 197, 94, 0.14)", fg: "#86EFAC", bd: "rgba(34, 197, 94, 0.35)" };
     if (sv.estado === "asignado")
-      return { label: "PENDIENTE", bg: "rgba(245, 158, 11, 0.12)", fg: "#FCD34D", bd: "rgba(245, 158, 11, 0.35)" };
+      return { label: "ASIGNADO", bg: "rgba(245, 158, 11, 0.12)", fg: "#FCD34D", bd: "rgba(245, 158, 11, 0.35)" };
     return { label: "OPERATIVO", bg: "rgba(59, 130, 246, 0.14)", fg: "#93C5FD", bd: "rgba(59, 130, 246, 0.35)" };
   }
 
@@ -15812,7 +16345,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                         <span style={{ color: su, fontWeight: 600 }}> · </span>
                         {stop.nombre || "Parada"}
                       </div>
-                      <div style={{ fontSize: 10, color: su, marginTop: 1 }}>{hasDoc ? "✓ Documento subido" : "⏳ Pendiente"}</div>
+                      <div style={{ fontSize: 10, color: su, marginTop: 1 }}>{hasDoc ? "✓ Documento subido" : "Sin documento"}</div>
                     </div>
                     <span style={{ color: su, fontSize: 12, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
                   </button>
@@ -15984,241 +16517,12 @@ function ServicioDocsView({ uid, showToast, onBack }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  EVIDENCIAS DEL STOP
+//  EVIDENCIAS DEL STOP (expediente documental operacional)
 // ─────────────────────────────────────────────────────────────
-function EvidenciasStop({ stopId, servicioId = null, showToast, variant = "default", onEvidenciaSaved, tiposPermitidos = null }) {
-  const[evidencias,setEvidencias]=useState([]);
-  const[modal,setModal]=useState(null);
-  const[nota,setNota]=useState("");
-  const[fotoUrl,setFotoUrl]=useState(null);
-  const[cmrFase,setCmrFase]=useState("scan");
-  const[cmrCampos,setCmrCampos]=useState({});
-  const[cmrFotoB64,setCmrFotoB64]=useState(null);
-  const[saving,setSaving]=useState(false);
-  const[error,setError]=useState("");
-  const fileRef=useRef(null);
-  const fotoRef=useRef(null);
-  const allowedTipos=useMemo(()=>{
-    if(!Array.isArray(tiposPermitidos)||!tiposPermitidos.length)return null;
-    return new Set(tiposPermitidos.map((t)=>String(t||"").toLowerCase()));
-  },[tiposPermitidos]);
-  const isDocsShell=variant==="docsShell";
-  const LIGHT={card:"#FFFFFF",bg:"#F8FAFC",tx:"#0F172A",su:"#64748B"};
-  const panel=isDocsShell
-    ?{rowBg:"rgba(30,41,59,.78)",tx:"#F8FAFC",su:"#94A3B8",border:"rgba(148,163,184,0.14)",time:"#64748B",head:"rgba(248,250,252,.92)"}
-    :{rowBg:LIGHT.bg,tx:LIGHT.tx,su:LIGHT.su,border:"#E2E8F0",time:"#334155",head:LIGHT.su};
-  const iStyle={width:"100%",background:LIGHT.bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:LIGHT.tx,outline:"none",boxSizing:"border-box",marginBottom:8};
-  const CMR_FIELDS=[{k:"num_cmr",l:"Nº CMR"},{k:"fecha",l:"Fecha"},{k:"remitente",l:"Remitente"},{k:"destinatario",l:"Destinatario"},{k:"transportista",l:"Transportista"},{k:"lugar_carga",l:"Lugar de carga"},{k:"lugar_entrega",l:"Lugar de entrega"},{k:"mercancia",l:"Mercancía"},{k:"peso_kg",l:"Peso (kg)"},{k:"matricula",l:"Matrícula"},{k:"observaciones",l:"Observaciones"}];
-  const TIPO_ICON={cmr:"📄",foto:"📸",incidencia:"⚠️",nota:"📝"};
-  const TIPO_COLOR={cmr:"#0EA5E9",foto:"#22C55E",incidencia:"#EF4444",nota:"#64748B"};
-  const TIPO_LABEL=Object.freeze(
-    DOCUMENT_TYPES.reduce((acc,tipo)=>{acc[tipo]=tipo==="nota"?"OBSERVACIÓN":tipo.toUpperCase();return acc;},{})
-  );
-
-  useEffect(()=>{
-    if(!stopId)return;
-    sbFetch(`/rest/v1/evidencias?stop_id=eq.${stopId}&order=created_at.asc`)
-      .then(r=>r.json()).then(d=>setEvidencias(Array.isArray(d)?d:[])).catch(()=>{});
-  },[stopId]);
-
-  const visibleEvs=useMemo(()=>{
-    if(!allowedTipos)return evidencias;
-    return evidencias.filter((ev)=>allowedTipos.has(String(ev?.tipo||"").toLowerCase()));
-  },[evidencias,allowedTipos]);
-  const canTipo=(t)=>!allowedTipos||allowedTipos.has(String(t||"").toLowerCase());
-
-  async function guardarEvidencia(tipo,datos){
-    setSaving(true);setError("");
-    try{
-      const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo,datos:datos||null,nota:nota||null})});
-      const[saved]=await r.json();
-      setEvidencias(prev=>[...prev,saved]);
-      onEvidenciaSaved?.(saved);
-      setModal(null);setNota("");showToast("✅ Evidencia guardada");
-    }catch(e){setError("Error: "+e.message);}
-    finally{setSaving(false);}
-  }
-
-  async function subirFoto(file){
-    setSaving(true);setError("");
-    try{
-      const url=await uploadPhoto(file,"stops");
-      const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo:"foto",url,nota:nota||null})});
-      const[saved]=await r.json();
-      setEvidencias(prev=>[...prev,saved]);
-      onEvidenciaSaved?.(saved);
-      setModal(null);setNota("");setFotoUrl(null);showToast("✅ Foto guardada");
-    }catch(e){setError("Error: "+e.message);}
-    finally{setSaving(false);}
-  }
-
-  async function escanearCmr(e){
-    const file=e.target.files?.[0];if(!file)return;
-    setError("");setCmrFase("procesando");
-    const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.readAsDataURL(file);});
-    setCmrFotoB64(b64);
-    try{
-      const resp=await fetch("/api/cmr",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image:b64,mediaType:file.type||"image/jpeg"})});
-      const data=await resp.json();
-      if(data.ok&&data.campos){setCmrCampos(data.campos);setCmrFase("revisar");}
-      else{setError(data.error||"No se pudo leer el CMR");setCmrFase("scan");}
-    }catch(e){setError("Error: "+e.message);setCmrFase("scan");}
-  }
-
-  async function guardarCmr(){
-    setSaving(true);setError("");
-    try{
-      let url=null;
-      if(cmrFotoB64){const bytes=Uint8Array.from(atob(cmrFotoB64),c=>c.charCodeAt(0));url=await uploadPhoto(new File([new Blob([bytes],{type:"image/jpeg"})],"cmr.jpg",{type:"image/jpeg"}),"cmr").catch(()=>null);}
-      const r=await sbFetch("/rest/v1/evidencias",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({stop_id:stopId,tipo:"cmr",url,datos:cmrCampos,nota:nota||null})});
-      const[saved]=await r.json();
-      setEvidencias(prev=>[...prev,saved]);
-      onEvidenciaSaved?.(saved);
-      setModal(null);setNota("");setCmrFase("scan");setCmrCampos({});setCmrFotoB64(null);showToast("✅ CMR guardado");
-    }catch(e){setError("Error: "+e.message);}
-    finally{setSaving(false);}
-  }
-
-  const gBtn=(bg,bd,pd)=>({background:bg,border:bd,borderRadius:12,padding:pd,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:isDocsShell?3:4});
-  return(
-    <div style={{marginTop:isDocsShell?6:16}}>
-      {evidencias.length>0&&(
-        <div style={{marginBottom:isDocsShell?8:12}}>
-          <div style={{fontSize:10,color:panel.head,fontWeight:800,marginBottom:6,letterSpacing:isDocsShell?0.6:0,textTransform:isDocsShell?"uppercase":"none"}}>
-            {isDocsShell?"En esta parada":"EVIDENCIAS"} ({visibleEvs.length}{allowedTipos&&evidencias.length>visibleEvs.length?` / ${evidencias.length}`:""})
-          </div>
-          {visibleEvs.map(ev=>(
-            <div key={ev.id} style={{background:panel.rowBg,border:`1px solid ${panel.border}`,borderRadius:isDocsShell?8:10,padding:isDocsShell?"8px 10px":"10px 12px",marginBottom:isDocsShell?5:6,display:"flex",gap:isDocsShell?8:10,alignItems:"center"}}>
-              <span style={{fontSize:isDocsShell?18:20}}>{TIPO_ICON[ev.tipo]||"📎"}</span>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:isDocsShell?12:13,fontWeight:700,color:TIPO_COLOR[ev.tipo]||panel.tx}}>{getDocumentLabel(ev)||TIPO_LABEL[ev.tipo]||ev.tipo}</div>
-                {(ev.nota||ev.datos?.texto)&&<div style={{fontSize:11,color:panel.su,marginTop:2,lineHeight:1.35}}>{ev.nota||ev.datos?.texto}</div>}
-                {ev.tipo==="cmr"&&ev.datos?.remitente&&<div style={{fontSize:10,color:panel.su,marginTop:1}}>{ev.datos.remitente} → {ev.datos.destinatario||"—"}</div>}
-                <div style={{fontSize:10,color:panel.time,marginTop:2}}>{new Date(ev.created_at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
-              </div>
-              {ev.url ? (
-              <DriverCachedMediaImg
-                servicioId={servicioId}
-                evidenciaId={ev.id}
-                src={ev.url}
-                alt="ev"
-                style={{
-                  width: isDocsShell ? 40 : 44,
-                  height: isDocsShell ? 40 : 44,
-                  objectFit: "cover",
-                  borderRadius: 7,
-                  flexShrink: 0,
-                  border: `1px solid ${panel.border}`,
-                }}
-              />
-            ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:isDocsShell?6:8}}>
-        {canTipo("foto")&&(
-        <button type="button" onClick={()=>{setModal("foto");setError("");}} style={gBtn(isDocsShell?"rgba(34,197,94,.14)":"#22C55E20",isDocsShell?"1px solid rgba(34,197,94,.38)":"1.5px solid #22C55E50",isDocsShell?"10px 4px":"12px 6px")}>
-          <span style={{fontSize:isDocsShell?22:24}}>📸</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#86EFAC":"#22C55E"}}>Foto</span>
-        </button>
-        )}
-        {canTipo("cmr")&&(
-        <button type="button" onClick={()=>{setModal("cmr");setCmrFase("scan");setError("");}} style={gBtn(isDocsShell?"rgba(56,189,248,.12)":"#0EA5E920",isDocsShell?"1px solid rgba(56,189,248,.35)":"1.5px solid #0EA5E950",isDocsShell?"10px 4px":"12px 6px")}>
-          <span style={{fontSize:isDocsShell?22:24}}>📄</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#7DD3FC":"#0EA5E9"}}>Scanner CMR</span>
-        </button>
-        )}
-        {canTipo("incidencia")&&(
-        <button type="button" onClick={()=>{setModal("incidencia");setNota("");setError("");}} style={gBtn(isDocsShell?"rgba(248,113,113,.12)":"#EF444420",isDocsShell?"1px solid rgba(248,113,113,.35)":"1.5px solid #EF444450",isDocsShell?"10px 4px":"12px 6px")}>
-          <span style={{fontSize:isDocsShell?22:24}}>⚠️</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#FCA5A5":"#EF4444"}}>Incidencia</span>
-        </button>
-        )}
-        {canTipo("nota")&&(
-        <button type="button" onClick={()=>{setModal("nota");setNota("");setError("");}} style={gBtn(isDocsShell?"rgba(148,163,184,.14)":"#64748B20",isDocsShell?"1px solid rgba(148,163,184,.28)":"1.5px solid #64748B50",isDocsShell?"10px 4px":"12px 6px")}>
-          <span style={{fontSize:isDocsShell?22:24}}>📝</span><span style={{fontSize:11,fontWeight:700,color:isDocsShell?"#CBD5E1":"#64748B"}}>Observación</span>
-        </button>
-        )}
-      </div>
-      {modal==="cmr"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:16,fontWeight:800,color:"#0EA5E9"}}>📄 ESCANEAR CMR</div>
-              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
-            </div>
-            <div style={{padding:"16px 18px 40px"}}>
-              <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={escanearCmr} style={{display:"none"}}/>
-              {cmrFase==="scan"&&(<><button type="button" onClick={()=>fileRef.current?.click()} style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:16}}>📷 FOTOGRAFIAR CMR</button>
-                <div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:8}}>O INTRODUCE MANUALMENTE</div>
-                {CMR_FIELDS.slice(0,4).map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
-                {Object.values(cmrCampos).some(v=>v)&&<button type="button" onClick={guardarCmr} disabled={saving} style={{width:"100%",background:saving?"#334155":"#0EA5E9",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",marginTop:4}}>{saving?"⏳...":"✅ Guardar CMR"}</button>}
-              </>)}
-              {cmrFase==="procesando"&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{fontSize:40,marginBottom:12}}>🤖</div><div style={{fontSize:15,fontWeight:700,color:"#F59E0B"}}>Analizando CMR...</div></div>)}
-              {cmrFase==="revisar"&&(<div>
-                <div style={{background:"#DCFCE7",border:"1px solid #86EFAC",borderRadius:9,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#16A34A"}}>✓ Datos extraídos — revisa y corrige</div>
-                {CMR_FIELDS.map(({k,l})=>(<div key={k}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:3}}>{l.toUpperCase()}</div><input value={cmrCampos[k]||""} onChange={e=>setCmrCampos(p=>({...p,[k]:e.target.value}))} placeholder={l} style={iStyle}/></div>))}
-                <input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Nota opcional..." style={iStyle}/>
-                {error&&<div style={{background:"#FEE2E2",borderRadius:8,padding:"9px 12px",fontSize:13,color:"#DC2626",marginBottom:10}}>⚠️ {error}</div>}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:4}}>
-                  <button type="button" onClick={()=>{setCmrFase("scan");setError("");}} style={{background:"#F1F5F9",color:LIGHT.su,border:"1px solid #CBD5E1",borderRadius:10,padding:"13px",fontSize:14,cursor:"pointer"}}>✕ Cancelar</button>
-                  <button type="button" onClick={guardarCmr} disabled={saving} style={{background:saving?"#CBD5E1":"#22C55E",color:"white",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>{saving?"⏳...":"✅ Guardar"}</button>
-                </div>
-              </div>)}
-            </div>
-          </div>
-        </div>
-      )}
-      {modal==="foto"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:16,fontWeight:800,color:"#22C55E"}}>📸 FOTO</div>
-              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
-            </div>
-            <div style={{padding:"16px 18px 40px"}}>
-              <input ref={fotoRef} type="file" accept="image/*" capture="environment" onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setFotoUrl(URL.createObjectURL(file));await subirFoto(file);}} style={{display:"none"}}/>
-              {!fotoUrl?(<><div style={{marginBottom:10}}><div style={{fontSize:11,color:LIGHT.su,fontWeight:700,marginBottom:5}}>NOTA (opcional)</div><input value={nota} onChange={e=>setNota(e.target.value)} placeholder="Describe la foto..." style={iStyle}/></div><button type="button" onClick={()=>fotoRef.current?.click()} style={{width:"100%",background:"#22C55E",color:"white",border:"none",borderRadius:13,padding:"18px",fontSize:16,fontWeight:800,cursor:"pointer"}}>📷 TOMAR FOTO</button></>)
-              :(<div style={{textAlign:"center",padding:"20px 0"}}><img src={fotoUrl} style={{width:"100%",maxHeight:200,objectFit:"cover",borderRadius:10,marginBottom:12}} alt="preview"/>{saving&&<div style={{fontSize:14,color:"#F59E0B",fontWeight:700}}>⏳ Subiendo...</div>}</div>)}
-            </div>
-          </div>
-        </div>
-      )}
-      {modal==="incidencia"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:16,fontWeight:800,color:"#EF4444"}}>⚠️ INCIDENCIA</div>
-              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
-            </div>
-            <div style={{padding:"16px 18px 40px"}}>
-              <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Mercancía dañada..." rows={4} style={{...iStyle,resize:"vertical"}}/>
-              <button type="button" onClick={()=>nota.trim()&&guardarEvidencia("incidencia",{texto:nota})} disabled={saving||!nota.trim()}
-                style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#EF4444",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
-                {saving?"⏳ Guardando...":"⚠️ REGISTRAR INCIDENCIA"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {modal==="nota"&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.35)",zIndex:400,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setModal(null)}>
-          <div style={{background:LIGHT.card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520}} onClick={e=>e.stopPropagation()}>
-            <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:16,fontWeight:800,color:"#64748B"}}>📝 OBSERVACIÓN</div>
-              <button type="button" onClick={()=>setModal(null)} style={{background:"#E2E8F0",border:"none",borderRadius:8,width:30,height:30,color:LIGHT.tx,cursor:"pointer"}}>✕</button>
-            </div>
-            <div style={{padding:"16px 18px 40px"}}>
-              <textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Precinto revisado, muelle saturado..." rows={4} style={{...iStyle,resize:"vertical"}}/>
-              <button type="button" onClick={()=>nota.trim()&&guardarEvidencia("nota",{texto:nota})} disabled={saving||!nota.trim()}
-                style={{width:"100%",background:saving||!nota.trim()?"#CBD5E1":"#64748B",color:"white",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:800,cursor:saving||!nota.trim()?"default":"pointer"}}>
-                {saving?"⏳ Guardando...":"📝 GUARDAR OBSERVACIÓN"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function EvidenciasStop(props) {
+  return <OperationalEvidenciasStop {...props} />;
 }
+
 
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
@@ -16324,14 +16628,12 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     let cancelled=false;
     (async()=>{
       try{
-        const ids=stops.map(s=>s.id).filter(Boolean).join(",");
-        if(!ids){
+        const stopIds=stops.map(s=>s.id).filter(Boolean);
+        if(!stopIds.length){
           if(!cancelled)setEvidenciasByStop({});
           return;
         }
-        const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${ids})&order=created_at.desc`);
-        const evs=await evr.json();
-        const grouped=groupDocumentsByStop(Array.isArray(evs)?evs:[]);
+        const grouped=await fetchEvidenciasGroupedByStop(stopIds,sbFetch);
         if(!cancelled)setEvidenciasByStop(grouped);
       }catch(_){
         if(!cancelled)setEvidenciasByStop({});
@@ -16339,6 +16641,12 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     })();
     return()=>{cancelled=true;};
   },[servicio?.id,stops]);
+
+  const handleEvidenciaSaved=useCallback((ev)=>{
+    const stopId=ev?.stop_id;
+    if(!ev?.id||!stopId)return;
+    setEvidenciasByStop((prev)=>mergeEvidenciaIntoByStop(prev,stopId,ev));
+  },[]);
 
   useEffect(()=>{
     if(servicio?.id&&["completado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
@@ -16447,7 +16755,9 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       tx={tx}
       su={su}
       onOpenViajeModal={onOpenViajeModal}
+      onEvidenciaSaved={handleEvidenciaSaved}
       conductorNombre={conductorNombre}
+      norma={norma}
     />
     </>
   );
@@ -16472,7 +16782,9 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       tx={tx}
       su={su}
       onOpenViajeModal={onOpenViajeModal}
+      onEvidenciaSaved={handleEvidenciaSaved}
       conductorNombre={conductorNombre}
+      norma={norma}
     />
     </>
   );
@@ -16580,24 +16892,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   },[empresa?.id,conductores,servicios]);
 
   const primerCurso=servicios.find(s=>s.estado==="en_curso");
-  const primerCursoPlan=getOperationalPlanSnapshot(primerCurso);
-  const primerCursoOpEta=getOperationalEtaSnapshot(primerCurso);
-  const primerCursoEtaActiva=primerCurso?isEtaActivationReady(primerCurso):false;
-  const primerCursoRuta=primerCurso
-    ? getFixedServiceRoute(primerCurso)
-    : null;
-  const primerCursoEta=primerCursoEtaActiva?(fmtOperationalEtaLabel(primerCursoOpEta?.eta)||(!isRelativeEtaLabel(primerCursoOpEta?.label)?primerCursoOpEta?.label:null)||fmtOperationalEtaLabel(primerCursoPlan?.planned_eta)||(!isRelativeEtaLabel(primerCursoPlan?.planned_eta_label)?primerCursoPlan?.planned_eta_label:null)):null;
-  const primerCursoKm=Number.isFinite(Number(primerCursoPlan?.planned_km))?Math.round(Number(primerCursoPlan.planned_km)):null;
-  const tripPres=useMemo(
-    ()=>getUnifiedTripPresentation({
-      viajeActivo:viajeLocal,
-      servicio:primerCurso||null,
-      norma:null,
-      etaSlot:null,
-      etaLoading:false,
-    }),
-    [viajeLocal,primerCurso],
-  );
+  const primerCursoRuta=primerCurso?(()=>{const e=resolveServiceRouteEndpoints(primerCurso,null);return`${e.origen} → ${e.destino}`;})():null;
+  const primerUbic=primerCurso?.conductor_id?ubicacionDashByUid[primerCurso.conductor_id]:null;
+  const primerNorma=primerCurso?.conductor_id?conductores.find(c=>c.user_id===primerCurso.conductor_id)?.norma:null;
+  const localPreviewHeadline=!primerCurso&&viajeLocal?getUnifiedTripPresentation({viajeActivo:viajeLocal,servicio:null,norma:null,etaSlot:null,etaLoading:false}).rutaHeadline:null;
 
   if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>;
 
@@ -16620,12 +16918,34 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
           {(viajeLocal||primerCurso)&&(
             <span style={{width:"100%",fontSize:12,color:su,marginTop:4,lineHeight:1.45}}>
-              ETA: <strong style={{color:tx}}>{primerCursoRuta||tripPres.rutaHeadline}</strong>
-              {primerCursoKm!=null?<> · {primerCursoKm} km</>:tripPres.kmRestantes!=null&&<> · {tripPres.kmRestantes} km</>}
-              {tripPres.etaPlanNormativoLabel&&<> · {tripPres.etaPlanNormativoLabel}</>}
-              {primerCursoEta&&<> · ETA {primerCursoEta}</>}
-              {!primerCursoEtaActiva&&primerCurso&&<> · Pendiente de iniciar ruta</>}
-              {tripPres.etaOperacionalLabel&&tripPres.etaOperacionalLabel!=="Sin ETA"&&<> · {tripPres.etaOperacionalLabel}</>}
+              {(primerCursoRuta||localPreviewHeadline)&&(
+                <div>
+                  <strong style={{color:tx}}>{primerCursoRuta||localPreviewHeadline}</strong>
+                </div>
+              )}
+              {primerCurso&&(
+                <div style={{marginTop:6}}>
+                  <OperationalEtaSnapshotBlock
+                    servicio={primerCurso}
+                    nowMs={Date.now()}
+                    tx={tx}
+                    su={su}
+                    subtle={EMPRESA_UI.subtle}
+                    layout="empresa"
+                    latestLocation={primerUbic && !primerUbic.missing && !primerUbic.fetchError ? primerUbic : null}
+                    tacografoEstado={
+                      primerNorma
+                        ? {
+                            isDriving: !!primerNorma.isDriving,
+                            crType: primerNorma.crType || "",
+                            crDur: Number(primerNorma.crDur),
+                          }
+                        : null
+                    }
+                    activeStop={null}
+                  />
+                </div>
+              )}
               {viajeLocal&&<span style={{display:"block",marginTop:4,fontSize:11,color:"#475569"}}>Ruta guardada en este navegador (vista previa)</span>}
             </span>
           )}
@@ -16693,38 +17013,26 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
             const attentionReason=attention?getAttentionReason({service:sv,stops:[],evidencias:[],lastActivity}):"";
             const refVisible=getServiceNumber(sv);
             const clienteVisible=getServiceClient(sv);
-            const planSnapshot=getOperationalPlanSnapshot(sv);
-            const opEtaSnapshot=getOperationalEtaSnapshot(sv);
-            const etaActiva=isEtaActivationReady(sv);
-            const routeFrom=safeOperationalPlaceName(sv.origen,"Origen");
-            const routeTo=safeOperationalPlaceName(sv.destino,"Destino");
-            const planEta=etaActiva?(fmtOperationalEtaLabel(opEtaSnapshot?.eta)||(!isRelativeEtaLabel(opEtaSnapshot?.label)?opEtaSnapshot?.label:null)||fmtOperationalEtaLabel(planSnapshot?.planned_eta)||(!isRelativeEtaLabel(planSnapshot?.planned_eta_label)?planSnapshot?.planned_eta_label:null)):null;
-            const planKm=Number.isFinite(Number(planSnapshot?.planned_km))?Math.round(Number(planSnapshot.planned_km)):null;
-            const planDrive=planSnapshot?.planned_drive_time||(Number.isFinite(Number(planSnapshot?.planned_drive_min))?fmtDur(Math.round(Number(planSnapshot.planned_drive_min))):null);
-            const planBreaks=Number.isFinite(Number(planSnapshot?.planned_breaks))?Number(planSnapshot.planned_breaks):null;
-            const planRestLabel=planSnapshot?.planned_daily_rest_label||null;
+            const {origen:routeFrom,destino:routeTo}=resolveServiceRouteEndpoints(sv,null);
             const ubic=sv.conductor_id?ubicacionDashByUid[sv.conductor_id]:null;
             const ubicUpdated=fmtUbicacionActualizada(ubic);
             return(
             <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"11px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`,boxShadow:attention?`inset 3px 0 0 ${EMPRESA_UI.amber}`:"none",paddingLeft:attention?8:0}}>
               <div style={{minWidth:0,flex:1}}>
                 <div style={{fontSize:13,fontWeight:600,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{routeFrom} → {routeTo}</div>
-                {(planEta||planKm!=null)&&(
-                  <div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:3}}>
-                    {planEta&&<span>ETA {planEta}</span>}
-                    {planKm!=null&&<span>{planEta?" · ":""}{planKm} km</span>}
-                  </div>
-                )}
-                {!etaActiva&&(
-                  <div style={{fontSize:11,color:su,marginTop:3}}>
-                    Pendiente de iniciar ruta
-                  </div>
-                )}
-                {etaActiva&&(planDrive||planBreaks!=null||planRestLabel)&&(
-                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.35}}>
-                    Plan · {[planDrive,planBreaks!=null?`${planBreaks} pausa${planBreaks===1?"":"s"}`:null,planRestLabel].filter(Boolean).join(" · ")}
-                  </div>
-                )}
+                <div style={{marginTop:4}}>
+                  <OperationalEtaSnapshotBlock
+                    servicio={sv}
+                    nowMs={Date.now()}
+                    tx={tx}
+                    su={su}
+                    subtle={EMPRESA_UI.subtle}
+                    layout="empresa"
+                    latestLocation={ubic && !ubic.missing && !ubic.fetchError ? ubic : null}
+                    tacografoEstado={null}
+                    activeStop={null}
+                  />
+                </div>
                 <div style={{fontSize:10.5,color:su,marginTop:3,lineHeight:1.35}}>
                   Última ubicación · <span style={{color:EMPRESA_UI.subtle,fontWeight:600}}>{fmtUbicacionConductorEmpresa(ubic)}</span>
                 </div>

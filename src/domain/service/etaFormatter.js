@@ -33,3 +33,33 @@ export function formatOperationalEtaSlot(slot, now = new Date()) {
   if (formatted) return formatted;
   return slot.label && slot.label !== "Sin ETA" && slot.label !== "…" && !isRelativeEtaLabel(slot.label) ? String(slot.label) : "—";
 }
+
+/** "2h 14m · 187 km" para panel flota (duración y distancia restantes al cálculo). */
+export function formatEmpresaOperationalRestLine(remainingMins, remainingKm) {
+  const parts = [];
+  if (Number.isFinite(remainingMins) && remainingMins > 0) {
+    const h = Math.floor(remainingMins / 60);
+    const m = Math.round(remainingMins % 60);
+    if (h > 0) parts.push(`${h}h${m > 0 ? ` ${m}m` : ""}`.trim());
+    else parts.push(`${m}m`);
+  }
+  if (Number.isFinite(remainingKm) && remainingKm > 0) {
+    parts.push(`${remainingKm >= 100 ? Math.round(remainingKm) : Math.round(remainingKm * 10) / 10} km`);
+  }
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+/** "hace 8 min" / "hace 1 h" respecto a un ISO (último cálculo persistido). */
+export function formatSpanishAgo(iso, now = new Date()) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "—";
+  const diff = Math.max(0, now.getTime() - t);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "ahora";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `hace ${h} h`;
+  const d = Math.floor(h / 24);
+  return `hace ${d} d`;
+}

@@ -1,7 +1,11 @@
 import { getOperationalPlanSnapshot, getServicioOperacionMeta } from "./serviceOperacionMeta.js";
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
-import { formatOperationalEtaLabel, isRelativeEtaLabel } from "./etaFormatter.js";
+import { formatOperationalEtaSnapshotLine } from "./operationalEtaPresentation.js";
+import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteBytes } from "../documents/operationalDocumentRecord.js";
+import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
+import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
+import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 
 const enc = new TextEncoder();
 
@@ -39,20 +43,25 @@ function plain(value) {
 }
 
 function evidenceTitle(ev) {
+  const meta = getDocMeta(ev);
+  if (meta?.display_name) {
+    return meta.display_name.replace(/_/g, " · ").replace(/\s+/g, " ").trim();
+  }
   if (ev?.tipo === "cmr") return ev?.datos?.num_cmr ? `CMR ${ev.datos.num_cmr}` : "CMR escaneado";
   if (ev?.tipo === "incidencia") return "Incidencia";
-  if (ev?.tipo === "foto") return "Foto adjunta";
+  if (ev?.tipo === "foto") return "Documento fotográfico";
   if (ev?.tipo === "nota") return "Observación";
   return String(ev?.tipo || "Documento").toUpperCase();
 }
 
 function evidenceDetail(ev) {
-  if (ev?.tipo === "incidencia") return ev?.datos?.texto || ev?.nota || "";
-  if (ev?.tipo === "cmr") {
+  let base = "";
+  if (ev?.tipo === "incidencia") base = ev?.datos?.texto || ev?.nota || "";
+  else if (ev?.tipo === "cmr") {
     const d = ev.datos || {};
-    return [d.remitente && `Remitente: ${d.remitente}`, d.destinatario && `Destinatario: ${d.destinatario}`, d.mercancia && `Mercancía: ${d.mercancia}`].filter(Boolean).join(" · ");
-  }
-  return ev?.nota || "";
+    base = [d.remitente && `Remitente: ${d.remitente}`, d.destinatario && `Destinatario: ${d.destinatario}`, d.mercancia && `Mercancía: ${d.mercancia}`].filter(Boolean).join(" · ");
+  } else base = ev?.nota || "";
+  return appendGeoToDetail(base, getGeoFromDocMeta(ev));
 }
 
 function stopLabel(stop, counters) {
@@ -97,6 +106,46 @@ function entryTitle(type) {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Evento conductor";
 }
 
+/**
+ * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
+ * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
+ */
+function filterExpedienteTimelineOperacional(items, servicio) {
+  const out = [];
+  for (const ev of items || []) {
+    const ty = String(ev.type || "");
+    if (ty.startsWith("tacografo_")) continue;
+    let title = ev.title;
+    if (ty === "entrada_muelle" && typeof title === "string" && title.startsWith("Entrada muelle")) {
+      title = title.replace(/^Entrada muelle/, "Llegada muelle");
+    }
+    if (ty === "servicio_iniciado" || ty === "servicio") title = "Servicio iniciado";
+    if (ty === "carga_finalizada" || ty === "descarga_finalizada") {
+      title = "Salida muelle";
+    }
+    if (ty === "salida_muelle") title = "Salida muelle";
+    out.push({ ...ev, title });
+  }
+  out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+  if (servicio?.estado === "completado") {
+    const ts = servicio.updated_at || servicio.fecha_inicio || new Date().toISOString();
+    const ms = parseTs(ts);
+    out.push({
+      ts,
+      time: fmtClock(ms),
+      type: "entrega_completada",
+      title: "Entrega completada",
+      detail: String(servicio.destino || "").trim() || null,
+      stopId: null,
+      evidenceId: null,
+      integrityHash: null,
+      origin: "servicio",
+    });
+    out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+  }
+  return out;
+}
+
 function eventRecord({ ts, type, title, detail = "", servicio, stopId = null, userId = null, location = "", origin, metadata = {} }) {
   const base = {
     timestamp_utc: ts ? new Date(ts).toISOString() : new Date().toISOString(),
@@ -131,7 +180,29 @@ function serviceWindow(servicio, stopRows, evidencias) {
   };
 }
 
-export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metrics, nombreConductor, etaLabel, fmtDur, entries = [] }) {
+/** Vista ligera para listado documentos (sin timeline ni integridad). */
+export function buildServiceExpedienteListPreview({ servicio, stops = [], nombreConductor }) {
+  const sortedStops = sortStopsByOrden(stops);
+  return {
+    ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
+    conductor:
+      typeof nombreConductor === "function"
+        ? nombreConductor(servicio?.conductor_id) || "—"
+        : "—",
+    eta: formatOperationalEtaSnapshotLine(servicio),
+  };
+}
+
+export function buildServiceExpediente({
+  servicio,
+  stops,
+  evidenciasByStop,
+  extraDocumentos = [],
+  metrics,
+  nombreConductor,
+  fmtDur,
+  entries = [],
+}) {
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
   const plan = getOperationalPlanSnapshot(servicio);
@@ -159,18 +230,30 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
       salidaHora: fmtClock(salidaMs),
       esperaMin,
       esperaLabel: esperaMin != null ? fmtDur(esperaMin) : "—",
-      evidencias: evs.map((ev) => ({
-        id: ev.id,
-        tipo: ev.tipo,
-        titulo: evidenceTitle(ev),
-        detalle: evidenceDetail(ev),
-        created_at: ev.created_at,
-        hora: fmtClock(parseTs(ev.created_at)),
-        url: ev.url || null,
-        nota: ev.nota || null,
-        datos: ev.datos || null,
-        bucket: bucketForEvidence(ev),
-      })),
+      evidencias: evs.map((ev) => {
+        const enriched = enrichEvidenciaDisplay(ev, {
+          stop,
+          conductorName: typeof nombreConductor === "function" ? nombreConductor(servicio?.conductor_id) : null,
+        });
+        return {
+          id: ev.id,
+          tipo: ev.tipo,
+          titulo: enriched.displayTitle || evidenceTitle(ev),
+          detalle: evidenceDetail(ev) || enriched.displaySubtitle,
+          created_at: ev.created_at,
+          hora: fmtClock(parseTs(ev.created_at)),
+          url: enriched.previewUrl || ev.url || null,
+          nota: ev.nota || null,
+          datos: ev.datos || null,
+          bucket: bucketForEvidence(ev),
+          displayTitle: enriched.displayTitle,
+          displaySubtitle: enriched.displaySubtitle,
+          displayLine2: enriched.displayLine2,
+          displaySizeLabel: enriched.displaySizeLabel,
+          displayKindLabel: enriched.displayKindLabel,
+          originalUrl: enriched.originalUrl,
+        };
+      }),
     };
   });
 
@@ -194,18 +277,44 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
     });
   }
   for (const stop of stopRows) {
-    if (stop.entrada) timeline.push({ ts: stop.entrada, time: stop.entradaHora, type: "entrada_muelle", title: `Entrada muelle — ${stop.nombre}`, detail: stop.label, stopId: stop.id });
+    const stopMeta = getStopOperacionMeta(stop.notas);
+    if (stop.entrada) {
+      timeline.push({
+        ts: stop.entrada,
+        time: stop.entradaHora,
+        type: "entrada_muelle",
+        title: `Entrada muelle — ${stop.nombre}`,
+        detail: appendGeoToDetail(stop.label, stopMeta.entrada_geo),
+        stopId: stop.id,
+      });
+    }
     for (const ev of stop.evidencias) {
       timeline.push({ ts: ev.created_at, time: ev.hora, type: ev.tipo, title: ev.titulo, detail: ev.detalle, stopId: stop.id, evidenceId: ev.id });
     }
-    if (stop.salida) timeline.push({ ts: stop.salida, time: stop.salidaHora, type: "salida_muelle", title: `${stop.label} finalizada`, detail: `${stop.nombre} · Espera ${stop.esperaLabel}`, stopId: stop.id });
+    if (stop.salida) {
+      timeline.push({
+        ts: stop.salida,
+        time: stop.salidaHora,
+        type: "salida_muelle",
+        title: `${stop.label} finalizada`,
+        detail: appendGeoToDetail(`${stop.nombre} · Espera ${stop.esperaLabel}`, stopMeta.salida_geo),
+        stopId: stop.id,
+      });
+    }
   }
   timeline.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
 
-  const evidencias = stopRows.flatMap((stop) => stop.evidencias.map((ev) => ({ ...ev, stopId: stop.id, stopLabel: stop.label, stopName: stop.nombre })));
+  let evidencias = stopRows.flatMap((stop) =>
+    stop.evidencias.map((ev) => ({ ...ev, stopId: stop.id, stopLabel: stop.label, stopName: stop.nombre })),
+  );
+  evidencias = mergeExtraDocsIntoExpedienteEvidencias(evidencias, extraDocumentos, {
+    nombreConductor,
+    servicio,
+  });
   const incidencias = evidencias.filter((ev) => ev.tipo === "incidencia");
   const cmr = evidencias.filter((ev) => ev.tipo === "cmr");
   const fotos = evidencias.filter((ev) => ev.tipo === "foto");
+  const documentosExtra = evidencias.filter((ev) => ev.source === "servicio_documentos_extra");
   const window = serviceWindow(servicio, stopRows, evidencias);
   const integrityRecords = [];
 
@@ -239,16 +348,18 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
 
   for (const stop of stopRows) {
     if (stop.entrada) {
+      const stopMeta = getStopOperacionMeta(stop.notas);
+      const geoLine = formatOperationalGeoLine(stopMeta.entrada_geo);
       integrityRecords.push(eventRecord({
         ts: stop.entrada,
         type: "entrada_muelle",
         title: `Entrada muelle — ${stop.nombre}`,
-        detail: stop.label,
+        detail: appendGeoToDetail(stop.label, stopMeta.entrada_geo),
         servicio,
         stopId: stop.id,
         origin: "stop",
-        location: stop.nombre || stop.direccion || "",
-        metadata: { tipo: stop.tipo, orden: stop.orden },
+        location: geoLine || stop.nombre || stop.direccion || "",
+        metadata: { tipo: stop.tipo, orden: stop.orden, geo: stopMeta.entrada_geo || null },
       }));
     }
     for (const ev of stop.evidencias) {
@@ -265,16 +376,18 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
       }));
     }
     if (stop.salida) {
+      const stopMeta = getStopOperacionMeta(stop.notas);
+      const geoLine = formatOperationalGeoLine(stopMeta.salida_geo);
       integrityRecords.push(eventRecord({
         ts: stop.salida,
         type: stop.tipo === "descarga" ? "descarga_finalizada" : "carga_finalizada",
         title: `${stop.label} finalizada`,
-        detail: `${stop.nombre} · Espera ${stop.esperaLabel}`,
+        detail: appendGeoToDetail(`${stop.nombre} · Espera ${stop.esperaLabel}`, stopMeta.salida_geo),
         servicio,
         stopId: stop.id,
         origin: "stop",
-        location: stop.nombre || stop.direccion || "",
-        metadata: { espera_min: stop.esperaMin },
+        location: geoLine || stop.nombre || stop.direccion || "",
+        metadata: { espera_min: stop.esperaMin, geo: stopMeta.salida_geo || null },
       }));
     }
   }
@@ -326,19 +439,32 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
   const cliente = getServiceClient(servicio);
   const referenciaCliente = getServiceClientReference(servicio);
 
+  const rawTimeline = timelineFromIntegrity.length ? timelineFromIntegrity : timeline;
+  const timelineOperacional = filterExpedienteTimelineOperacional(rawTimeline, servicio);
+  const rawEvidenciasFlat = [
+    ...sortedStops.flatMap((st) => evidenciasByStop?.[st.id] || []),
+    ...(extraDocumentos || []),
+  ];
+
   return {
     id: servicio?.id,
     ref,
     filenameBase: fileSafe(`SRV_${servicio?.destino || ref}_${fechaArchivo}`, servicio?.id || "SERV"),
     generatedAt: new Date().toISOString(),
+    storage: {
+      totalBytes: sumExpedienteBytes(rawEvidenciasFlat),
+      totalLabel: expedienteSizeLabel(rawEvidenciasFlat),
+    },
     header: {
       referencia: ref,
-      ruta: getFixedServiceRoute(servicio, "—", "—"),
+      ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
       estado: servicio?.estado === "anulado" ? "ANULADO" : (servicio?.estado || "—"),
-      conductor: nombreConductor?.(servicio?.conductor_id) || "—",
+      conductor: servicio?.conductor_id
+        ? (nombreConductor?.(servicio.conductor_id) || "—")
+        : "Sin asignar",
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
-      eta: servicio?.estado === "anulado" ? "—" : (formatOperationalEtaLabel(plan?.planned_eta) || (isRelativeEtaLabel(etaLabel) ? null : etaLabel) || (isRelativeEtaLabel(plan?.planned_eta_label) ? null : plan?.planned_eta_label) || "—"),
+      eta: formatOperationalEtaSnapshotLine(servicio),
       km: Number.isFinite(Number(plan?.planned_km)) ? Math.round(Number(plan.planned_km)) : null,
       fechaInicio: servicio?.fecha_inicio || null,
       fecha: fechaDocumento,
@@ -359,15 +485,22 @@ export function buildServiceExpediente({ servicio, stops, evidenciasByStop, metr
       incidencias: incidencias.length,
       cmr: cmr.length,
       fotos: fotos.length,
+      documentosExtra: documentosExtra.length,
     },
     stops: stopRows,
-    timeline: timelineFromIntegrity.length ? timelineFromIntegrity : timeline,
+    timeline: timelineOperacional,
     integrity,
     evidencias,
     incidencias,
     cmr,
     fotos,
+    documentosExtra,
   };
+}
+
+/** Timeline operacional filtrado (misma lógica que expediente) para tarjetas empresa. */
+export function getServicioOperativaTimelineForCard(args) {
+  return buildServiceExpediente(args).timeline;
 }
 
 function pdfEscape(text) {
@@ -424,8 +557,15 @@ async function blobToJpeg(blob, { maxSide = 900, quality = 0.7 } = {}) {
   return { bytes: new Uint8Array(await jpg.arrayBuffer()), width, height, outputBytes: jpg.size, inputBytes: blob.size };
 }
 
+function expedienteEvidenceIsImageLike(ev) {
+  if (!ev?.url) return false;
+  if (ev.tipo === "foto" || ev.tipo === "cmr" || ev.tipo === "incidencia") return true;
+  const mime = ev.mime_type || getDocMeta(ev)?.mime_type || "";
+  return mime.startsWith("image/");
+}
+
 async function fetchEvidenceImages(expediente) {
-  const imageEvs = expediente.evidencias.filter((ev) => ev.url).slice(0, 24);
+  const imageEvs = expediente.evidencias.filter((ev) => expedienteEvidenceIsImageLike(ev));
   const many = imageEvs.length > 10;
   const images = new Map();
   for (const ev of imageEvs) {
@@ -433,8 +573,19 @@ async function fetchEvidenceImages(expediente) {
       const res = await fetch(ev.url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      const maxSide = ev.tipo === "cmr" ? (many ? 900 : 1200) : (many ? 620 : 900);
-      const quality = many ? 0.58 : ev.tipo === "cmr" ? 0.72 : 0.68;
+      const isAnnexDoc = ev.tipo === "foto" || ev.tipo === "cmr";
+      const maxSide = isAnnexDoc
+        ? ev.tipo === "cmr"
+          ? 1400
+          : 1200
+        : ev.tipo === "cmr"
+          ? many
+            ? 900
+            : 1200
+          : many
+            ? 620
+            : 900;
+      const quality = isAnnexDoc ? 0.82 : many ? 0.58 : ev.tipo === "cmr" ? 0.72 : 0.68;
       images.set(ev.id, await blobToJpeg(blob, { maxSide, quality }));
     } catch (error) {
       images.set(ev.id, { error: error?.message || "Imagen no disponible" });
@@ -542,7 +693,7 @@ async function makePdfBlob(expediente) {
 
   rect(0, pageHeight, pageWidth, 76, "#0f172a");
   text("EXPEDIENTE OPERACIONAL", margin, 792, 18, "#ffffff");
-  text("Documento corporativo unico con evidencias visuales incrustadas", margin, 770, 10, "#cbd5e1");
+  text("Informe operacional · documentos fotograficos en anexo A4 final", margin, 770, 10, "#cbd5e1");
   y = 728;
 
   metric("Servicio", expediente.header.referencia, margin, 120);
@@ -566,8 +717,9 @@ async function makePdfBlob(expediente) {
   section("Timeline operacional");
   for (const ev of expediente.timeline) {
     const evidence = ev.evidenceId ? evById.get(ev.evidenceId) : null;
-    const img = evidence?.id ? imageRefs.get(evidence.id) : null;
-    const failedImage = evidence?.id ? imageMap.get(evidence.id)?.error : null;
+    const isAnnexDoc = evidence && (evidence.tipo === "foto" || evidence.tipo === "cmr");
+    const img = !isAnnexDoc && evidence?.id ? imageRefs.get(evidence.id) : null;
+    const failedImage = !isAnnexDoc && evidence?.id ? imageMap.get(evidence.id)?.error : null;
     ensure(img ? 205 : 52);
     rect(margin, y + 5, contentWidth, img ? 38 : 34, evidence?.tipo === "incidencia" ? "#fff7ed" : evidence?.tipo === "cmr" ? "#eff6ff" : "#f8fafc");
     text(ev.time || "—", margin + 9, y - 13, 9, "#64748b");
@@ -586,7 +738,9 @@ async function makePdfBlob(expediente) {
       ].filter(Boolean).join(" · ");
       if (ocr) lines(`OCR contextual: ${ocr}`, margin + 60, 8.5, "#1d4ed8", 88, 12);
     }
-    if (img) {
+    if (isAnnexDoc) {
+      lines("Registrado en expediente · reproduccion A4 en anexo final", margin + 60, 8.5, "#64748b", 78, 11);
+    } else if (img) {
       drawImage(img, margin + 60, 250, evidence?.tipo === "cmr" ? 230 : 170);
     } else if (failedImage) {
       lines(`Imagen no incrustada: ${failedImage}`, margin + 60, 8.5, "#b45309", 78, 11);
@@ -598,12 +752,12 @@ async function makePdfBlob(expediente) {
   const resumen = [
     ["Km reales / plan", expediente.header.km != null ? `${expediente.header.km} km` : "—"],
     ["Conduccion", expediente.metrics.conduccion],
-    ["Pausas y descansos", "Incluidos en timeline"],
     ["Espera carga", expediente.metrics.esperaCarga],
     ["Espera descarga", expediente.metrics.esperaDescarga],
     ["ETA prevista vs real", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
     ["Incidencias", String(expediente.metrics.incidencias)],
+    ["Docs. extra", String(expediente.metrics.documentosExtra ?? 0)],
   ];
   for (let i = 0; i < resumen.length; i += 2) {
     ensure(48);
@@ -620,7 +774,55 @@ async function makePdfBlob(expediente) {
     expediente.integrity?.geoAvailable ? "Geolocalizacion operacional disponible" : "Geolocalizacion operacional no disponible",
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
 
-  finishPage();
+  const annexDocs = expediente.evidencias.filter((ev) => ev.url && (ev.tipo === "foto" || ev.tipo === "cmr"));
+  const extraPdfDocs = expediente.evidencias.filter((ev) => {
+    if (!ev.url || ev.source !== "servicio_documentos_extra") return false;
+    const mime = ev.mime_type || "";
+    return mime.includes("pdf") || String(ev.archivo_nombre || ev.url).toLowerCase().includes(".pdf");
+  });
+  if (extraPdfDocs.length) {
+    section("Documentacion adicional");
+    for (const doc of extraPdfDocs) {
+      lines(`${doc.displayTitle || doc.titulo}: ${doc.archivo_nombre || "PDF"}`, margin, 10, "#334155", 90, 14);
+      if (doc.displayLine2) lines(doc.displayLine2, margin, 9, "#64748b", 88, 12);
+    }
+    y -= 4;
+  }
+  if (annexDocs.length) {
+    finishPage();
+    for (const doc of annexDocs) {
+      const img = imageRefs.get(doc.id);
+      const failed = imageMap.get(doc.id)?.error;
+      y = 812;
+      rect(0, pageHeight, pageWidth, 36, "#f1f5f9");
+      text("ANEXO DOCUMENTAL · A4", margin, 818, 10, "#64748b");
+      text(doc.titulo || doc.displayTitle || "Documento", margin, 798, 13, "#0f172a");
+      y = 778;
+      const metaLine = [doc.stopLabel, doc.stopName, doc.hora].filter(Boolean).join(" · ");
+      if (metaLine) lines(metaLine, margin, 9, "#475569", 92, 12);
+      y -= 8;
+      const maxW = contentWidth;
+      const maxH = Math.max(120, y - 72);
+      if (img) {
+        const drawW = Math.min(maxW, img.width);
+        let drawH = drawW * (img.height / img.width);
+        let finalW = drawW;
+        if (drawH > maxH) {
+          drawH = maxH;
+          finalW = drawH * (img.width / img.height);
+        }
+        const x = margin + (contentWidth - finalW) / 2;
+        ensure(drawH + 24);
+        commands.push(`q ${finalW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${(y - drawH).toFixed(2)} cm /${img.name} Do Q`);
+        y -= drawH + 16;
+      } else if (failed) {
+        lines(`Documento no disponible: ${failed}`, margin, 10, "#b45309", 88, 13);
+      }
+      finishPage();
+    }
+  } else {
+    finishPage();
+  }
   objects[1] = bytes(`<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${pageRefs.length} >>`);
 
   let header = bytes("%PDF-1.4\n");
@@ -736,7 +938,9 @@ async function fetchBytes(url) {
 export async function downloadServiceExpedienteZip(expediente) {
   const entries = [];
   const pdf = await makePdfBlob(expediente);
-  entries.push({ path: "expediente.pdf", data: new Uint8Array(await pdf.arrayBuffer()) });
+  const pdfBytes = new Uint8Array(await pdf.arrayBuffer());
+  entries.push({ path: "expediente-operacional.pdf", data: pdfBytes });
+  entries.push({ path: "expediente.pdf", data: pdfBytes });
   entries.push({ path: "timeline.json", data: JSON.stringify(expediente.timeline, null, 2) });
   entries.push({ path: "integridad.json", data: JSON.stringify(expediente.integrity, null, 2) });
   entries.push({ path: "expediente.json", data: JSON.stringify(expediente, null, 2) });
