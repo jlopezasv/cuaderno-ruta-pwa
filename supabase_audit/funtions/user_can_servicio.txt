@@ -1,0 +1,38 @@
+| pg_get_functiondef                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CREATE OR REPLACE FUNCTION public.user_can_access_servicio(servicio_uuid uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  SELECT COALESCE(
+    (
+      SELECT
+        (s.conductor_id IS NOT NULL AND s.conductor_id = auth.uid())
+        OR (
+          s.empresa_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM public.empresas e
+            WHERE e.id = s.empresa_id
+              AND e.owner_id IS NOT NULL
+              AND e.owner_id = auth.uid()
+          )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM public.conductor_empresa ce
+          INNER JOIN public.empresas e ON e.id = ce.empresa_id
+          WHERE s.conductor_id IS NOT NULL
+            AND ce.user_id = s.conductor_id
+            AND (ce.activo IS DISTINCT FROM false)
+            AND e.owner_id = auth.uid()
+        )
+      FROM public.servicios s
+      WHERE s.id = servicio_uuid
+    ),
+    false
+  );
+$function$
+ |

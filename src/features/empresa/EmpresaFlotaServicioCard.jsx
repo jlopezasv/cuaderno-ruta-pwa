@@ -12,6 +12,8 @@ import {
   getServiceNumber,
 } from "../../domain/service/serviceIdentity.js";
 import { buildEmpresaFlotaCardSummary } from "./empresaFlotaServicioCardPresenter.js";
+import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
+import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -86,12 +88,16 @@ function EmpresaFlotaServicioCardImpl({
   onRefreshUbicacion,
   onAnular,
   onAsignarConductor,
+  onEditarServicio,
   fmtDur,
   tx,
   su,
 }) {
   const expandedOnceRef = useRef(false);
   if (expanded) expandedOnceRef.current = true;
+
+  const sinOp = servicioSinConductorOperacional(servicio);
+  const puedeEditarAdmin = servicioAdminEditMode(servicio?.estado) != null;
 
   const stopActual = getCurrentStop(stops);
   const nextStop = nextPendingStop(stops);
@@ -117,9 +123,9 @@ function EmpresaFlotaServicioCardImpl({
         tacografoEstado,
         activeStop: stopActual,
         nextStop,
-        useLiveEta: expanded,
+        useLiveEta: expanded && !sinOp,
       }),
-    [servicio, stops, nowMs, latestLocation, tacografoEstado, stopActual, nextStop, expanded],
+    [servicio, stops, nowMs, latestLocation, tacografoEstado, stopActual, nextStop, expanded, sinOp],
   );
 
   const dossierMetrics = useMemo(
@@ -146,11 +152,13 @@ function EmpresaFlotaServicioCardImpl({
   const serviceNumber = getServiceNumber(servicio);
   const refClienteCompact = getServiceClientReference(servicio);
   const stateColor = ESTADO_COLOR[servicio.estado] || su;
-  const conductorLine = servicio.conductor_id
-    ? `Conductor · ${nombreConductor(servicio.conductor_id)}`
-    : onAsignarConductor
-      ? "Sin conductor asignado"
-      : null;
+  const conductorLine = sinOp
+    ? "Sin asignar"
+    : servicio.conductor_id
+      ? `Conductor · ${nombreConductor(servicio.conductor_id)}`
+      : onAsignarConductor
+        ? "Sin asignar"
+        : null;
   const timelineSoloTexto = operativaTimeline;
   const ubicLine = ubicInfo?.label || (ubicInfo?.missing ? "Sin ubicación registrada" : "—");
   const ubicUpdated =
@@ -659,7 +667,7 @@ function EmpresaFlotaServicioCardImpl({
                 marginBottom: 10,
               }}
             >
-              <span>Conductor · {nombreConductor(servicio.conductor_id)}</span>
+              <span>Conductor · {sinOp ? "Sin asignar" : nombreConductor(servicio.conductor_id)}</span>
               <span>Paradas · {progressLabel}</span>
               <span>
                 Próxima: <strong style={{ color: tx }}>{nextStop?.nombre || "—"}</strong>
@@ -667,7 +675,7 @@ function EmpresaFlotaServicioCardImpl({
               </span>
             </div>
 
-            {servicio.estado !== "anulado" ? (
+            {servicio.estado !== "anulado" && !sinOp ? (
               <div
                 style={{
                   display: "flex",
@@ -684,7 +692,7 @@ function EmpresaFlotaServicioCardImpl({
                     <span style={{ color: su, fontSize: 11, fontWeight: 600 }}> · {ubicUpdated}</span>
                   ) : null}
                 </span>
-                {servicio.conductor_id ? (
+                {!sinOp && servicio.conductor_id ? (
                   <button
                     type="button"
                     onClick={(e) => {
@@ -747,7 +755,7 @@ function EmpresaFlotaServicioCardImpl({
               </div>
             ) : null}
 
-            {normaC && servicio.estado === "en_curso" ? (
+            {normaC && servicio.estado === "en_curso" && !sinOp ? (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 11, color: su, marginBottom: 6 }}>
                   Tacógrafo · {nombreConductor(servicio.conductor_id)}
@@ -788,6 +796,30 @@ function EmpresaFlotaServicioCardImpl({
                   minute: "2-digit",
                 })}
               </div>
+            ) : null}
+
+            {puedeEditarAdmin && onEditarServicio ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditarServicio();
+                }}
+                style={{
+                  width: "100%",
+                  marginTop: 12,
+                  background: UI.surface,
+                  color: UI.accent,
+                  border: `1px solid ${UI.border}`,
+                  borderRadius: 9,
+                  padding: "10px 10px",
+                  fontSize: 12.5,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Editar servicio
+              </button>
             ) : null}
 
             {onAsignarConductor ? (

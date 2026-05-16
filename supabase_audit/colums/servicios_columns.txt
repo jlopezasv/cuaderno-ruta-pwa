@@ -1,0 +1,14 @@
+| column_name   | data_type                | is_nullable | column_default    |
+| ------------- | ------------------------ | ----------- | ----------------- |
+| id            | uuid                     | NO          | gen_random_uuid() |
+| empresa_id    | uuid                     | YES         | null              |
+| conductor_id  | uuid                     | YES         | null              |
+| estado        | text                     | NO          | 'asignado'::text  |
+| origen        | text                     | YES         | null              |
+| destino       | text                     | YES         | null              |
+| referencia    | text                     | YES         | null              |
+| notas         | text                     | YES         | null              |
+| fecha_inicio  | timestamp with time zone | YES         | null              |
+| fecha_fin_est | timestamp with time zone | YES         | null              |
+| created_at    | timestamp with time zone | NO          | now()             |
+| updated_at    | timestamp with time zone | NO          | now()             |

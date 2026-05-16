@@ -1,0 +1,5 @@
+Problema arquitectónico detectado:
+helpers RLS basados en SECURITY DEFINER + auth.uid().
+Muy difíciles de depurar.
+Objetivo futuro:
+migrar hacia policies INLINE simples y explícitas.

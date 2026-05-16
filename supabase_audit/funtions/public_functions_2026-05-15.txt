@@ -1,0 +1,8 @@
+| schema | function_name            |
+| ------ | ------------------------ |
+| public | es_jefe_de               |
+| public | generar_codigo_equipo    |
+| public | handle_new_user          |
+| public | user_can_access_empresa  |
+| public | user_can_access_servicio |
+| public | user_can_insert_servicio |

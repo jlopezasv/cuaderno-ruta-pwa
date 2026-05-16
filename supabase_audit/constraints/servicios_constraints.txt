@@ -1,0 +1,5 @@
+| conname                     | pg_get_constraintdef                                                                                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| servicios_conductor_id_fkey | FOREIGN KEY (conductor_id) REFERENCES auth.users(id) ON DELETE CASCADE                                                                  |
+| servicios_estado_check      | CHECK ((estado = ANY (ARRAY['asignado'::text, 'pendiente_asignacion'::text, 'en_curso'::text, 'completado'::text, 'cancelado'::text]))) |
+| servicios_pkey              | PRIMARY KEY (id)                                                                                                                        |

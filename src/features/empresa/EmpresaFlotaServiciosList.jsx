@@ -4,6 +4,7 @@ import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../domain/serv
 import { getLastServiceActivity } from "../../domain/service/serviceActivity.js";
 import { getAttentionReason, needsAttention } from "../../domain/service/serviceAttention.js";
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
+import { conductorUidOperativoServicio } from "../../domain/fleet/operationalPlaceholderConductor.js";
 
 function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
   const stops = flotaStops[servicioId] || [];
@@ -32,6 +33,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   onRefreshServicioId,
   onAnularServicioId,
   onAsignarConductorServicioId,
+  onEditarServicioId,
   fmtDur,
   tx,
   su,
@@ -72,6 +74,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
       onRefreshUbicacion={onRefreshUbicacion}
       onAnular={onAnular}
       onAsignarConductor={pendienteAsignacion ? onAsignarConductor : undefined}
+      onEditarServicio={onEditarServicioId ? () => onEditarServicioId(servicioId) : undefined}
       fmtDur={fmtDur}
       tx={tx}
       su={su}
@@ -121,6 +124,7 @@ function EmpresaFlotaServiciosListImpl({
   onRefreshServicioId,
   onAnularServicioId,
   onAsignarConductorServicioId,
+  onEditarServicioId,
   fmtDur,
   tx,
   su,
@@ -152,7 +156,7 @@ function EmpresaFlotaServiciosListImpl({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "6px 0 10px" }}>
       {servicios.map((sv) => {
-        const uid = sv.conductor_id;
+        const uid = conductorUidOperativoServicio(sv);
         const normaC = uid ? conductoresByUid[uid]?.norma : null;
         return (
           <EmpresaFlotaServicioRowMemo
@@ -174,6 +178,7 @@ function EmpresaFlotaServiciosListImpl({
             onRefreshServicioId={onRefreshServicioId}
             onAnularServicioId={onAnularServicioId}
             onAsignarConductorServicioId={onAsignarConductorServicioId}
+            onEditarServicioId={onEditarServicioId}
             fmtDur={fmtDur}
             tx={tx}
             su={su}

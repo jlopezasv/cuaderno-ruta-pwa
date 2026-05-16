@@ -1,0 +1,19 @@
+| pg_get_functiondef                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CREATE OR REPLACE FUNCTION public.user_can_access_empresa(p_empresa_id uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  SELECT
+    p_empresa_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.empresas e
+      WHERE e.id = p_empresa_id
+        AND e.owner_id IS NOT NULL
+        AND e.owner_id = auth.uid()
+    );
+$function$
+ |

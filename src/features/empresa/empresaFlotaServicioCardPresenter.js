@@ -15,6 +15,7 @@ import {
   resolveServiceRouteEndpoints,
 } from "../../domain/service/serviceIdentity.js";
 import { ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
+import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 
 function isDescansoCr(crType) {
   const t = String(crType || "");
@@ -164,6 +165,24 @@ export function buildEmpresaFlotaCardSummary({
 
   if (servicio.estado === "completado") {
     return { ...base, contextLine: "Completado" };
+  }
+
+  if (servicioSinConductorOperacional(servicio)) {
+    return {
+      ...base,
+      contextLine: resolveEmpresaFlotaContextLine({
+        servicio,
+        activeStop: null,
+        nextStop: null,
+        tacografoEstado: null,
+        situation: null,
+        nowMs: clockMs,
+      }),
+      arrivalLabel: null,
+      remainingLine: null,
+      deviation: null,
+      calculating: false,
+    };
   }
 
   const v = resolveEtaVisual(servicio, now);

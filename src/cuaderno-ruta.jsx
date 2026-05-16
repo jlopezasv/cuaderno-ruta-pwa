@@ -93,6 +93,7 @@ import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
+import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
   EVIDENCIA_SAVED_EVENT,
@@ -129,6 +130,7 @@ import {
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
   servicioPendienteAsignacion,
 } from "./domain/fleet/servicioAssignment.js";
+import { conductorUidOperativoServicio } from "./domain/fleet/operationalPlaceholderConductor.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
 import {
@@ -10237,7 +10239,7 @@ function MapTab({norma,prof,dark,viajeActivo}){
             <div style={{fontSize:13,fontWeight:800,color:"white"}}>🚨 Para en {fmtDur(norma.canDrive)} · ~{Math.round(norma.canDrive/60*velocidad)} km</div>
             {plan.nearStop&&<div style={{fontSize:12,color:"rgba(255,255,255,.9)",marginTop:2}}>📍 {plan.nearStop.city}</div>}
           </div>
-          {plan.nearStop&&<button onClick={()=>window.open(`https://www.google.com/maps?q=${plan.nearStop.lat},${plan.nearStop.lon}`,"_blank","noopener")} style={{background:"white",color:"#EF4444",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:800,textDecoration:"none",background:"transparent",border:"none",cursor:"pointer"}}>Ir aquí →</button>}
+          {plan.nearStop&&<button onClick={()=>window.open(`https://www.google.com/maps?q=${plan.nearStop.lat},${plan.nearStop.lon}`,"_blank","noopener")} style={{background:"transparent",color:"#EF4444",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:800,textDecoration:"none",border:"none",cursor:"pointer"}}>Ir aquí →</button>}
         </div>
       )}
 
@@ -10389,7 +10391,7 @@ function MapTab({norma,prof,dark,viajeActivo}){
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
                   <span style={{fontSize:14}}>🔴</span>
                   <div style={{fontSize:13,fontWeight:800,color:"#DC2626"}}>{plan.to.name}</div>
-                  <button onClick={()=>window.open(`https://www.google.com/maps/dir/?api=1&origin=${plan.from.lat},${plan.from.lon}&destination=${plan.to.lat},${plan.to.lon}&travelmode=driving`,"_blank","noopener")} style={{marginLeft:"auto",background:"#1E293B",color:"white",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,textDecoration:"none",flexShrink:0,background:"transparent",border:"none",cursor:"pointer"}}>
+                  <button onClick={()=>window.open(`https://www.google.com/maps/dir/?api=1&origin=${plan.from.lat},${plan.from.lon}&destination=${plan.to.lat},${plan.to.lon}&travelmode=driving`,"_blank","noopener")} style={{marginLeft:"auto",background:"transparent",color:"#1E293B",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,textDecoration:"none",flexShrink:0,border:"none",cursor:"pointer"}}>
                     🗺 Google Maps →
                   </button>
                 </div>
@@ -10420,7 +10422,7 @@ function MapTab({norma,prof,dark,viajeActivo}){
                     <div style={{fontSize:14,fontWeight:700,color:tx}}>📍 {plan.nearStop.city}</div>
                     <div style={{fontSize:12,color:su,marginTop:2}}>A ~{plan.nearStop.km} km · En {fmtDur(norma.canDrive)}</div>
                   </div>
-                  <button onClick={()=>window.open(`https://www.google.com/maps?q=${plan.nearStop.lat},${plan.nearStop.lon}`,"_blank","noopener")} style={{background:"#16A34A",color:"white",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:800,textDecoration:"none",flexShrink:0,background:"transparent",border:"none",cursor:"pointer"}}>
+                  <button onClick={()=>window.open(`https://www.google.com/maps?q=${plan.nearStop.lat},${plan.nearStop.lon}`,"_blank","noopener")} style={{background:"transparent",color:"#16A34A",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:800,textDecoration:"none",flexShrink:0,border:"none",cursor:"pointer"}}>
                     Ir →
                   </button>
                 </div>
@@ -11424,6 +11426,13 @@ function normalizeServicioEmpresaId(value){
   return s?s:null;
 }
 
+/** UUID conductor o NULL; cadenas vacías → NULL (evita RLS/UUID rotos en PostgREST). */
+function normalizeServicioConductorIdForInsert(conductorId){
+  if(conductorId===undefined||conductorId===null)return null;
+  const s=String(conductorId).trim();
+  return s||null;
+}
+
 async function resolveEmpresaIdForServicioInsert(empresaIdProp){
   const fromProp=normalizeServicioEmpresaId(empresaIdProp);
   if(fromProp)return fromProp;
@@ -11438,10 +11447,15 @@ async function resolveEmpresaIdForServicioInsert(empresaIdProp){
 }
 
 function buildServicioInsertCorePayload({empresaId,conductorId,estado,origen,destino,referencia,fecha_inicio}){
+  const cid=normalizeServicioConductorIdForInsert(conductorId);
+  const st=
+    cid==null
+      ?SERVICIO_ESTADO_PENDIENTE_ASIGNACION
+      :(estado&&String(estado).trim())||"asignado";
   return{
     empresa_id:empresaId||null,
-    conductor_id:conductorId??null,
-    estado:estado||"asignado",
+    conductor_id:cid,
+    estado:st,
     origen:String(origen||"").trim(),
     destino:String(destino||"").trim(),
     referencia:referencia||null,
@@ -11487,7 +11501,7 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
   const empresaIdRaw=basePayload.empresa_id;
   const empresaId=await resolveEmpresaIdForServicioInsert(empresaIdRaw);
-  const conductorId=basePayload.conductor_id??null;
+  const conductorId=normalizeServicioConductorIdForInsert(basePayload.conductor_id);
   const corePayload=buildServicioInsertCorePayload({
     empresaId,
     conductorId,
@@ -11497,6 +11511,7 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
     referencia,
     fecha_inicio:basePayload.fecha_inicio,
   });
+  const payload=corePayload;
 
   logServiceCreate("SERVICE_CREATE_START",{
     source:_debugSource||"crearServicioConIdentidad",
@@ -11524,19 +11539,50 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   });
 
   if(!empresaId&&!conductorId){
-    const msg="Falta empresa_id y conductor_id: no se puede crear el servicio (RLS).";
+    const msg="Falta empresa_id y conductor_id: no se puede crear el servicio.";
     logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{status:0,errText:msg,empresa_id:null});
+    console.log("SERVICE_CREATE_RESPONSE_FAIL",{
+      error:msg,
+      payload,
+      empresa_id:payload?.empresa_id,
+      conductor_id:payload?.conductor_id,
+    });
     throw new Error(msg);
   }
 
-  const res = await sbFetch("/rest/v1/servicios", {
-    method: "POST",
-    headers: { "Prefer": "return=representation" },
-    body: JSON.stringify(corePayload),
+  const session = getSession();
+  const authUser = session?.user?.id || getUserId?.() || null;
+  console.log("SERVICE_CREATE_START");
+  console.log("AUTH_USER_ID", authUser);
+  console.log("SERVICE_CREATE_PAYLOAD",{
+    payload,
+    empresa_id:payload?.empresa_id,
+    conductor_id:payload?.conductor_id,
+    estado:payload?.estado,
+    authUser,
   });
+
+  let res;
+  try{
+    res=await sbFetch("/rest/v1/servicios", {
+      method: "POST",
+      headers: { "Prefer": "return=representation" },
+      body: JSON.stringify(corePayload),
+    });
+  }catch(error){
+    console.log("SERVICE_CREATE_RESPONSE_FAIL",{
+      error,
+      payload,
+      empresa_id:payload?.empresa_id,
+      conductor_id:payload?.conductor_id,
+    });
+    throw error;
+  }
+
   if (res.ok) {
-    const data=await res.json();
-    const row=Array.isArray(data)?data[0]:data;
+    const result=await res.json();
+    console.log("SERVICE_CREATE_RESPONSE_OK",result);
+    const row=Array.isArray(result)?result[0]:result;
     logServiceCreate("SERVICE_CREATE_RESPONSE_OK",{
       status:res.status,
       row,
@@ -11547,36 +11593,22 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
     if(row?.id&&(referenciaBase||cliente?.trim()||referenciaCliente?.trim())){
       await patchServicioIdentidadOpcional(row.id,{serviceNumber,cliente,referenciaCliente,referencia});
     }
-    return data;
+    return result;
   }
 
   const errText = await res.text().catch(() => "");
-  let errJson=null;
-  try{errJson=JSON.parse(errText);}catch(_){}
-  logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{
-    status:res.status,
-    statusText:res.statusText,
+  let errJson = null;
+  try {
+    errJson = JSON.parse(errText);
+  } catch (_) {}
+  console.log("SERVICE_RAW_RESPONSE", {
+    status: res.status,
+    ok: res.ok,
     errText,
     errJson,
-    payloadEnviado:corePayload,
-    empresa_id:corePayload.empresa_id??null,
-    conductor_id:corePayload.conductor_id??null,
-    rlsHint:corePayload.empresa_id==null
-      ? "empresa_id NULL"
-      : res.status===403
-        ? "403 RLS — migración 20260521150000"
-        : res.status===400
-          ? "400 — CHECK estado pendiente_asignacion (migración 20260521160000)"
-          : "ver errText",
   });
-
-  if(res.status===403||/row-level security|42501/i.test(errText)){
-    throw new Error(
-      `Permisos (RLS). empresa_id=${corePayload.empresa_id||"NULL"}. `+
-      "Ejecuta migración RLS en Supabase y confirma que eres owner de la empresa.",
-    );
-  }
-  throw new Error(errText || `Supabase ${res.status}`);
+  console.log("SERVICE_RAW_PAYLOAD", corePayload);
+  throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
 }
 
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
@@ -12091,6 +12123,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
   const[asignarModal,setAsignarModal]=useState(null);
   const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
+  const[editarServicioModal,setEditarServicioModal]=useState(null);
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
   const[addForm,setAddForm]=useState({nombre:"",matricula:"",email:""});
@@ -12595,7 +12628,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const svsArr=(Array.isArray(svsMerged)?svsMerged:[]).map(normalizarServicioEmpresa);
       setFlotaServicios(prev=>mergeFlotaServicios(prev,svsArr));
       const stopIds=servicioIdsForLightStopsRefresh(svsArr,serviciosListaRef.current);
-      const ubicUids=[...new Set(svsArr.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)).map(s=>s.conductor_id).filter(Boolean))];
+      const ubicUids=[...new Set(svsArr.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)).map(s=>conductorUidOperativoServicio(s)).filter(Boolean))];
       await Promise.all([
         stopIds.length?fetchFlotaStopsMapForServicioIds(stopIds).then((map)=>{
           stopIds.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
@@ -12656,7 +12689,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         const uids=[...new Set(
           flotaServiciosRef.current
             .filter((s)=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado))
-            .map((s)=>s.conductor_id)
+            .map((s)=>conductorUidOperativoServicio(s))
             .filter(Boolean),
         )];
         if(uids.length)void refreshUbicacionRef.current?.(uids,{allowStale:true,requireOpen:false,skipRevGeo:true,silent:true});
@@ -13072,6 +13105,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const handleAsignarConductorServicioId=useCallback((servicioId)=>{
     const sv=flotaServiciosRef.current.find(s=>s.id===servicioId);
     if(sv&&servicioPendienteAsignacion(sv))setAsignarConductorServicio(sv);
+  },[]);
+
+  const handleEditarServicioId=useCallback((servicioId)=>{
+    const sv=flotaServiciosRef.current.find((s)=>s.id===servicioId);
+    if(sv)setEditarServicioModal(sv);
   },[]);
 
   async function crearEmpresa(nombre,cif){
@@ -13571,6 +13609,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   onRefreshServicioId={handleRefreshServicioId}
                   onAnularServicioId={handleAnularServicioId}
                   onAsignarConductorServicioId={handleAsignarConductorServicioId}
+                  onEditarServicioId={handleEditarServicioId}
                   fmtDur={fmtDur}
                   tx={tx}
                   su={su}
@@ -14026,6 +14065,25 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal.nombre||"conductor"));
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
+        />
+      )}
+
+      {editarServicioModal&&(
+        <EmpresaEditarServicioModal
+          key={editarServicioModal.id}
+          servicio={editarServicioModal}
+          conductores={conductores}
+          userId={getUserId?.()||null}
+          onClose={()=>setEditarServicioModal(null)}
+          onApplied={(merged)=>{
+            if(merged?.id){
+              setFlotaServicios((prev)=>prev.map((s)=>(s.id===merged.id?{...s,...merged}:s)));
+            }
+            setEditarServicioModal(null);
+            showToast("Cambios guardados");
+            void refreshFlotaLigeraRef.current?.({instantFeedback:true});
+          }}
+          onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
         />
       )}
 
