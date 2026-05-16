@@ -130,6 +130,7 @@ import {
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
   servicioPendienteAsignacion,
 } from "./domain/fleet/servicioAssignment.js";
+import { bootstrapOperationalFlowOnConductorAssign } from "./domain/fleet/servicioOperationalBootstrap.js";
 import { conductorUidOperativoServicio } from "./domain/fleet/operationalPlaceholderConductor.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
@@ -11713,6 +11714,14 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       if(!sinConductor){
         sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
         sbFetch("/rest/v1/servicio_asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo_asignacion:"principal"})}).catch(()=>{});
+        void bootstrapOperationalFlowOnConductorAssign({
+          servicio:sv,
+          conductorId,
+          conductorNombre:conductorNombre||"Conductor",
+          origen:origen.trim(),
+          destino:destino.trim(),
+          fechaInicio:new Date(fechaInicio).toISOString(),
+        }).catch(()=>{});
         void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
       }
       onCreado(sv);
@@ -11878,9 +11887,11 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
     if(!servicio?.id||!c?.user_id||saving)return;
     setSaving(true);setError("");
     try{
-      await assignConductorPrincipalToServicio({
+      const assignResult=await assignConductorPrincipalToServicio({
         servicioId:servicio.id,
+        servicio,
         conductorId:c.user_id,
+        conductorNombre:c.nombre||"Conductor",
         origen:servicio.origen,
         destino:servicio.destino,
         fechaInicio:servicio.fecha_inicio,
@@ -11892,7 +11903,12 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
         fechaInicio:servicio.fecha_inicio,
         servicioId:servicio.id,
       });
-      onAsignado?.({servicioId:servicio.id,conductorId:c.user_id,conductorNombre:c.nombre||"Conductor"});
+      onAsignado?.({
+        servicioId:servicio.id,
+        conductorId:c.user_id,
+        conductorNombre:c.nombre||"Conductor",
+        referencia:assignResult.referencia,
+      });
     }catch(e){setError(e?.message||"No se pudo asignar");}
     finally{setSaving(false);}
   }
@@ -14092,9 +14108,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           servicio={asignarConductorServicio}
           conductores={conductores}
           onClose={()=>setAsignarConductorServicio(null)}
-          onAsignado={({conductorNombre,conductorId,servicioId})=>{
+          onAsignado={({conductorNombre,conductorId,servicioId,referencia})=>{
             setAsignarConductorServicio(null);
-            setFlotaServicios(prev=>prev.map(s=>s.id===servicioId?{...s,conductor_id:conductorId,estado:"asignado"}:s));
+            setFlotaServicios(prev=>prev.map(s=>s.id===servicioId?{...s,conductor_id:conductorId,estado:"asignado",...(referencia!=null?{referencia}:null)}:s));
             showToast("✅ Conductor asignado: "+conductorNombre);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}

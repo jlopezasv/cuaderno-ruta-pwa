@@ -119,6 +119,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
     if (ty === "entrada_muelle" && typeof title === "string" && title.startsWith("Entrada muelle")) {
       title = title.replace(/^Entrada muelle/, "Llegada muelle");
     }
+    if (ty === "conductor_asignado") title = "Conductor asignado";
     if (ty === "servicio_iniciado" || ty === "servicio") title = "Servicio iniciado";
     if (ty === "carga_finalizada" || ty === "descarga_finalizada") {
       title = "Salida muelle";
@@ -258,6 +259,21 @@ export function buildServiceExpediente({
   });
 
   const timeline = [];
+  const conductorAssignedAt = serviceMeta?.conductor_assigned_at || null;
+  const conductorAssignedLabel =
+    serviceMeta?.conductor_assigned_label ||
+    (typeof nombreConductor === "function" && servicio?.conductor_id
+      ? nombreConductor(servicio.conductor_id)
+      : null);
+  if (conductorAssignedAt) {
+    timeline.push({
+      ts: conductorAssignedAt,
+      time: fmtClock(parseTs(conductorAssignedAt)),
+      type: "conductor_asignado",
+      title: "Conductor asignado",
+      detail: conductorAssignedLabel || "—",
+    });
+  }
   if (servicio?.fecha_inicio) {
     timeline.push({ ts: servicio.fecha_inicio, time: fmtClock(parseTs(servicio.fecha_inicio)), type: "servicio", title: "Servicio iniciado", detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}` });
   }
@@ -317,6 +333,22 @@ export function buildServiceExpediente({
   const documentosExtra = evidencias.filter((ev) => ev.source === "servicio_documentos_extra");
   const window = serviceWindow(servicio, stopRows, evidencias);
   const integrityRecords = [];
+
+  if (conductorAssignedAt) {
+    integrityRecords.push(eventRecord({
+      ts: conductorAssignedAt,
+      type: "conductor_asignado",
+      title: "Conductor asignado",
+      detail: conductorAssignedLabel || "—",
+      servicio,
+      userId: serviceMeta?.conductor_assigned_id || servicio?.conductor_id || null,
+      origin: "servicio",
+      location: servicio?.origen || "",
+      metadata: {
+        conductor_id: serviceMeta?.conductor_assigned_id || servicio?.conductor_id || null,
+      },
+    }));
+  }
 
   if (servicio?.fecha_inicio) {
     integrityRecords.push(eventRecord({

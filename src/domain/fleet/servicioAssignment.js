@@ -1,4 +1,5 @@
 import { sbFetch } from "../../data/supabaseClient.js";
+import { bootstrapOperationalFlowOnConductorAssign } from "./servicioOperationalBootstrap.js";
 
 /** Servicio planificado en empresa, sin chófer aún. */
 export const SERVICIO_ESTADO_PENDIENTE_ASIGNACION = "pendiente_asignacion";
@@ -81,11 +82,16 @@ export async function fetchFlotaServiciosForEmpresa(sbFetchFn, empresaId, conduc
 export async function assignConductorPrincipalToServicio({
   servicioId,
   conductorId,
+  servicio = null,
+  conductorNombre = null,
   origen = null,
   destino = null,
   fechaInicio = null,
 }) {
   if (!servicioId || !conductorId) throw new Error("Servicio o conductor no válido");
+
+  const prevConductorId = servicio?.conductor_id ?? null;
+  const wasUnassigned = !prevConductorId;
 
   const patch = {
     conductor_id: conductorId,
@@ -100,6 +106,9 @@ export async function assignConductorPrincipalToServicio({
     const t = await r.text().catch(() => "");
     throw new Error(t || `PATCH servicio ${r.status}`);
   }
+
+  const patchedRows = await r.json().catch(() => null);
+  const patchedServicio = Array.isArray(patchedRows) ? patchedRows[0] : patchedRows;
 
   const asignacionBody = {
     servicio_id: servicioId,
@@ -123,5 +132,26 @@ export async function assignConductorPrincipalToServicio({
     }),
   }).catch(() => {});
 
-  return { servicioId, conductorId, origen, destino, fechaInicio };
+  let referencia = patchedServicio?.referencia ?? servicio?.referencia ?? null;
+  if (wasUnassigned) {
+    const base = {
+      ...(servicio || {}),
+      ...(patchedServicio || {}),
+      id: servicioId,
+      conductor_id: conductorId,
+      estado: "asignado",
+      referencia,
+    };
+    const bootRef = await bootstrapOperationalFlowOnConductorAssign({
+      servicio: base,
+      conductorId,
+      conductorNombre,
+      origen: origen || base.origen,
+      destino: destino || base.destino,
+      fechaInicio: fechaInicio || base.fecha_inicio,
+    });
+    if (bootRef) referencia = bootRef;
+  }
+
+  return { servicioId, conductorId, origen, destino, fechaInicio, referencia };
 }

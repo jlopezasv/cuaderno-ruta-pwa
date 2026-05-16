@@ -162,15 +162,23 @@ export function EmpresaEditarServicioModal({
         conductorSel &&
         conductorSel !== prevCid
       ) {
-        await assignConductorPrincipalToServicio({
+        const assignResult = await assignConductorPrincipalToServicio({
           servicioId: servicio.id,
+          servicio: { ...servicio, ...merged },
           conductorId: conductorSel,
+          conductorNombre:
+            conductores.find((c) => c.user_id === conductorSel)?.nombre || "Conductor",
           origen: merged.origen,
           destino: merged.destino,
           fechaInicio: merged.fecha_inicio,
         });
         pushAudit("conductor_id", prevCid, conductorSel);
-        merged = { ...merged, conductor_id: conductorSel, estado: "asignado" };
+        merged = {
+          ...merged,
+          conductor_id: conductorSel,
+          estado: "asignado",
+          referencia: assignResult.referencia ?? merged.referencia,
+        };
         onNotifyAssignment?.({
           conductorId: conductorSel,
           origen: merged.origen,
