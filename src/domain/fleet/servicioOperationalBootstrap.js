@@ -143,7 +143,23 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   destino = null,
   fechaInicio = null,
 }) {
-  if (!servicio?.id || !conductorId) return null;
+  const servicioId = servicio?.id ?? null;
+  console.log("BOOTSTRAP_START", servicioId);
+
+  if (!servicio?.id || !conductorId) {
+    const early = { ok: false, reason: !servicio?.id ? "missing_servicio_id" : "missing_conductor_id" };
+    console.log("BOOTSTRAP_DONE", early);
+    return null;
+  }
+
+  console.log("BOOTSTRAP_BEFORE", {
+    servicioId,
+    oldConductorId: servicio.conductor_id ?? null,
+    newConductorId: conductorId,
+    estado: servicio.estado ?? null,
+    origen: origen || servicio.origen || null,
+    destino: destino || servicio.destino || null,
+  });
 
   const assignedAt = new Date().toISOString();
   const metaPatch = {
@@ -158,17 +174,26 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   }
 
   const existingPlan = getOperationalPlanSnapshot(servicio);
-  if (!planReadyForFlota(existingPlan)) {
+  const planAlreadyReady = planReadyForFlota(existingPlan);
+  if (!planAlreadyReady) {
     const plan = await buildEmpresaNeutralOperationalPlanSnapshot({
       origen: origen || servicio.origen,
       destino: destino || servicio.destino,
       fechaInicio: fechaInicio || servicio.fecha_inicio,
       velocidad: existingPlan?.velocidad || 80,
     });
+    console.log("BOOTSTRAP_PLAN_BUILD", {
+      servicioId,
+      planStatus: plan?.status ?? null,
+      planReady: planReadyForFlota(plan),
+      hasPlannedEta: !!plan?.planned_eta,
+    });
     if (plan) metaPatch.operational_plan = plan;
     if (!getOperationalPlanConfirmedAt(servicio) && planReadyForFlota(plan)) {
       metaPatch.operational_plan_confirmed_at = assignedAt;
     }
+  } else {
+    console.log("BOOTSTRAP_PLAN_BUILD", { servicioId, skipped: true, reason: "plan_already_ready" });
   }
 
   const referencia = mergeReferenciaOperacional(servicio.referencia || null, metaPatch);
@@ -179,15 +204,28 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
+    const fail = { ok: false, reason: "patch_referencia_failed", status: res.status, detail: String(t).slice(0, 200) };
     console.warn("bootstrapOperationalFlowOnConductorAssign:", t || res.status);
+    console.log("BOOTSTRAP_DONE", fail);
     return null;
   }
   const rows = await res.json().catch(() => null);
   const row = Array.isArray(rows) ? rows[0] : rows;
+  const outRef = row?.referencia ?? referencia;
+  const resultado = {
+    ok: true,
+    servicioId,
+    patchReferenciaOk: true,
+    rowsReturned: Array.isArray(rows) ? rows.length : rows ? 1 : 0,
+    hasConductorAssignedAt: String(outRef || "").includes("conductor_assigned_at"),
+    hasOperationalPlan: String(outRef || "").includes("operational_plan"),
+    estadoEnRespuesta: row?.estado ?? null,
+  };
   try {
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   } catch {
     /* SSR */
   }
-  return row?.referencia ?? referencia;
+  console.log("BOOTSTRAP_DONE", resultado);
+  return outRef;
 }

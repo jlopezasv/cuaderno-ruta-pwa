@@ -91,7 +91,17 @@ export async function assignConductorPrincipalToServicio({
   if (!servicioId || !conductorId) throw new Error("Servicio o conductor no válido");
 
   const prevConductorId = servicio?.conductor_id ?? null;
+  const prevEstado = servicio?.estado ?? null;
   const wasUnassigned = !prevConductorId;
+
+  console.log("BOOTSTRAP_BEFORE", {
+    servicioId,
+    oldConductorId: prevConductorId,
+    newConductorId: conductorId,
+    oldEstado: prevEstado,
+    wasUnassigned,
+    hasServicioArg: !!servicio,
+  });
 
   const patch = {
     conductor_id: conductorId,
@@ -109,6 +119,14 @@ export async function assignConductorPrincipalToServicio({
 
   const patchedRows = await r.json().catch(() => null);
   const patchedServicio = Array.isArray(patchedRows) ? patchedRows[0] : patchedRows;
+
+  console.log("BOOTSTRAP_PATCH_SERVICIO", {
+    servicioId,
+    patchOk: r.ok,
+    patchedEstado: patchedServicio?.estado ?? null,
+    patchedConductorId: patchedServicio?.conductor_id ?? null,
+    patchedRowsCount: Array.isArray(patchedRows) ? patchedRows.length : patchedRows ? 1 : 0,
+  });
 
   const asignacionBody = {
     servicio_id: servicioId,
@@ -133,13 +151,16 @@ export async function assignConductorPrincipalToServicio({
   }).catch(() => {});
 
   let referencia = patchedServicio?.referencia ?? servicio?.referencia ?? null;
+  let bootstrapResultado = { skipped: true, reason: wasUnassigned ? null : "already_had_conductor" };
+
   if (wasUnassigned) {
+    console.log("BOOTSTRAP_START", servicioId);
     const base = {
       ...(servicio || {}),
       ...(patchedServicio || {}),
       id: servicioId,
       conductor_id: conductorId,
-      estado: "asignado",
+      estado: patchedServicio?.estado || "asignado",
       referencia,
     };
     const bootRef = await bootstrapOperationalFlowOnConductorAssign({
@@ -150,8 +171,16 @@ export async function assignConductorPrincipalToServicio({
       destino: destino || base.destino,
       fechaInicio: fechaInicio || base.fecha_inicio,
     });
+    bootstrapResultado = {
+      skipped: false,
+      bootRef: bootRef != null,
+      referenciaLength: bootRef != null ? String(bootRef).length : 0,
+    };
+    console.log("BOOTSTRAP_DONE", bootstrapResultado);
     if (bootRef) referencia = bootRef;
+  } else {
+    console.log("BOOTSTRAP_DONE", bootstrapResultado);
   }
 
-  return { servicioId, conductorId, origen, destino, fechaInicio, referencia };
+  return { servicioId, conductorId, origen, destino, fechaInicio, referencia, bootstrapResultado };
 }
