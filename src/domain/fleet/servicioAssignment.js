@@ -17,6 +17,7 @@ export function servicioSinConductor(servicio) {
 
 export function servicioPendienteAsignacion(servicio) {
   if (!servicio) return false;
+  if (servicio.conductor_id) return false;
   if (servicio.estado === SERVICIO_ESTADO_PENDIENTE_ASIGNACION) return true;
   return servicioSinConductor(servicio) && servicio.estado !== "completado" && servicio.estado !== "anulado";
 }

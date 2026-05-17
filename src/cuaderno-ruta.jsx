@@ -112,6 +112,7 @@ import {
   servicioIdsForLightStopsRefresh,
   servicioIdsForInitialStopsLoad,
   formatFlotaManualRefreshLabel,
+  patchFlotaServicioTrasAsignar,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
   getOperationalEtaUiState,
@@ -14110,7 +14111,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           onClose={()=>setAsignarConductorServicio(null)}
           onAsignado={({conductorNombre,conductorId,servicioId,referencia})=>{
             setAsignarConductorServicio(null);
-            setFlotaServicios(prev=>prev.map(s=>s.id===servicioId?{...s,conductor_id:conductorId,estado:"asignado",...(referencia!=null?{referencia}:null)}:s));
+            setFlotaServicios((prev)=>patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}));
             showToast("✅ Conductor asignado: "+conductorNombre);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}

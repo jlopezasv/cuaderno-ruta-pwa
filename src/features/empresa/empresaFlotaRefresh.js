@@ -8,6 +8,19 @@ const ESTADOS_ACTIVOS = Object.freeze(["asignado", "en_curso"]);
 const ESTADOS_REFRESH_STOPS = Object.freeze(["pendiente_asignacion", "asignado", "en_curso"]);
 const ESTADOS_CON_PARADAS_EMPRESA = Object.freeze(["pendiente_asignacion", "asignado", "en_curso"]);
 
+/**
+ * Actualiza una fila de flota tras asignar conductor (referencia = meta timeline/expediente).
+ */
+export function patchFlotaServicioTrasAsignar(prev, servicioId, { conductorId, referencia, estado = "asignado" }) {
+  if (!servicioId || !Array.isArray(prev)) return prev;
+  return prev.map((s) => {
+    if (s.id !== servicioId) return s;
+    const next = { ...s, conductor_id: conductorId, estado };
+    if (referencia != null && referencia !== "") next.referencia = referencia;
+    return next;
+  });
+}
+
 export function stopsRowsToMap(stps) {
   const stopsMap = {};
   (Array.isArray(stps) ? stps : []).forEach((st) => {

@@ -128,9 +128,11 @@ function EmpresaFlotaServicioCardImpl({
     [servicio, stops, nowMs, latestLocation, tacografoEstado, stopActual, nextStop, expanded, sinOp],
   );
 
+  const servicioReferencia = servicio?.referencia ?? "";
+
   const dossierMetrics = useMemo(
     () => (expanded ? computeTripOperationalMetrics(servicio, stops) : null),
-    [expanded, servicio, stops],
+    [expanded, servicio, servicioReferencia, stops],
   );
 
   const operativaTimeline = useMemo(() => {
@@ -144,7 +146,17 @@ function EmpresaFlotaServicioCardImpl({
       fmtDur,
       entries: conductor?.entries || [],
     });
-  }, [expanded, servicio, stops, flotaEvs, dossierMetrics, nombreConductor, fmtDur, conductor?.entries]);
+  }, [
+    expanded,
+    servicio,
+    servicioReferencia,
+    stops,
+    flotaEvs,
+    dossierMetrics,
+    nombreConductor,
+    fmtDur,
+    conductor?.entries,
+  ]);
 
   const completados = countCompletedStops(stops);
   const progressLabel = stops.length ? `${completados}/${stops.length}` : "0/0";
