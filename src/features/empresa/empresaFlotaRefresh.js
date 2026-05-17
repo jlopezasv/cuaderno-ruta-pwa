@@ -1,3 +1,5 @@
+import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+
 /** Intervalos panel empresa: datos en background vs tick visual ETA. */
 export const EMPRESA_FLOTA_DATA_POLL_MS = 120_000;
 export const EMPRESA_UBICACION_POLL_MS = 90_000;
@@ -64,17 +66,136 @@ function servicioSyncKey(s) {
   return `${s.id}|${s.estado}|${s.referencia}|${s.conductor_id}|${s.updated_at || ""}|${s.fecha_inicio || ""}`;
 }
 
+function parseServicioUpdatedAtMs(servicio) {
+  const raw = servicio?.updated_at;
+  if (raw == null || raw === "") return 0;
+  const t = Date.parse(String(raw));
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Marca temporal más reciente embebida en referencia (p. ej. tras bootstrap al asignar). */
+function referenciaOperationalMetaMs(servicio) {
+  const meta = getServicioOperacionMeta(servicio);
+  const candidates = [
+    meta?.conductor_assigned_at,
+    meta?.operational_plan_confirmed_at,
+    meta?.operational_trip_started_at,
+    meta?.operational_eta?.calculated_at,
+    meta?.operational_eta?.updated_at,
+  ].filter(Boolean);
+  let max = 0;
+  for (const iso of candidates) {
+    const t = Date.parse(String(iso));
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  return max;
+}
+
+function servicioOperationalFreshnessMs(servicio) {
+  return Math.max(parseServicioUpdatedAtMs(servicio), referenciaOperationalMetaMs(servicio));
+}
+
+function pickNewerReferencia(local, server) {
+  const localRef = local?.referencia;
+  const serverRef = server?.referencia;
+  if (localRef == null || localRef === "") return serverRef ?? localRef;
+  if (serverRef == null || serverRef === "") return localRef;
+  const lMs = referenciaOperationalMetaMs(local);
+  const sMs = referenciaOperationalMetaMs(server);
+  if (lMs !== sMs) return lMs > sMs ? localRef : serverRef;
+  return String(localRef).length >= String(serverRef).length ? localRef : serverRef;
+}
+
+/** true si la fila local debe conservar conductor/estado/referencia tras un refresh con servidor desfasado. */
+export function isLocalFlotaServicioAssignNewer(local, server) {
+  if (!local?.id || !server?.id || local.id !== server.id) return false;
+
+  const localMeta = getServicioOperacionMeta(local);
+  const serverMeta = getServicioOperacionMeta(server);
+
+  if (local?.conductor_id && !server?.conductor_id) return true;
+  if (localMeta?.conductor_assigned_at && !serverMeta?.conductor_assigned_at) return true;
+  if (
+    local?.conductor_id &&
+    local.estado === "asignado" &&
+    server?.estado === "pendiente_asignacion"
+  ) {
+    return true;
+  }
+
+  const localMs = servicioOperationalFreshnessMs(local);
+  const serverMs = servicioOperationalFreshnessMs(server);
+  if (localMs !== serverMs) return localMs > serverMs;
+
+  if (local?.conductor_id && local.conductor_id === server?.conductor_id) {
+    return referenciaOperationalMetaMs(local) > referenciaOperationalMetaMs(server);
+  }
+
+  return false;
+}
+
+/** Fusiona una fila: base servidor + campos sensibles a asignación si local es más reciente. */
+export function mergeFlotaServicioRow(local, server) {
+  if (!server) return local;
+  if (!local || local.id !== server.id) return server;
+
+  const merged = { ...server };
+  if (isLocalFlotaServicioAssignNewer(local, server)) {
+    if (local.conductor_id != null) merged.conductor_id = local.conductor_id;
+    if (local.estado != null) merged.estado = local.estado;
+    if (local.referencia != null && local.referencia !== "") merged.referencia = local.referencia;
+  } else if (local?.conductor_id && local.conductor_id === server?.conductor_id) {
+    merged.referencia = pickNewerReferencia(local, server);
+  }
+  return merged;
+}
+
 /** Reutiliza referencia de array si el contenido operacional no cambió (evita rerender lista). */
 export function mergeFlotaServicios(prev, next) {
   if (!next?.length) return next || [];
   if (!prev?.length) return next;
-  if (prev.length !== next.length) return next;
-  for (let i = 0; i < next.length; i++) {
-    if (prev[i].id !== next[i].id || servicioSyncKey(prev[i]) !== servicioSyncKey(next[i])) {
-      return next;
-    }
+
+  const prevById = new Map();
+  for (const row of prev) {
+    if (row?.id) prevById.set(row.id, row);
   }
-  return prev;
+
+  const mergedRows = next.map((serverRow) => {
+    const localRow = prevById.get(serverRow?.id);
+    if (!localRow) return serverRow;
+    if (servicioSyncKey(localRow) === servicioSyncKey(serverRow)) return localRow;
+    return mergeFlotaServicioRow(localRow, serverRow);
+  });
+
+  if (mergedRows.length === prev.length) {
+    let sameAsPrev = true;
+    for (let i = 0; i < prev.length; i++) {
+      if (mergedRows[i] !== prev[i]) {
+        sameAsPrev = false;
+        break;
+      }
+    }
+    if (sameAsPrev) return prev;
+  }
+
+  for (let i = 0; i < mergedRows.length; i++) {
+    const row = mergedRows[i];
+    const pr = prevById.get(row?.id);
+    if (pr && servicioSyncKey(pr) === servicioSyncKey(row)) mergedRows[i] = pr;
+  }
+
+  if (mergedRows.length === prev.length) {
+    let sameAsPrev = true;
+    for (let i = 0; i < prev.length; i++) {
+      if (mergedRows[i] !== prev[i]) {
+        sameAsPrev = false;
+        break;
+      }
+    }
+    if (sameAsPrev) return prev;
+  }
+
+  return mergedRows;
 }
 
 function stopsArrayKey(stops) {
