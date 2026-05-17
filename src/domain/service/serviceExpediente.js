@@ -473,6 +473,11 @@ export function buildServiceExpediente({
 
   const rawTimeline = timelineFromIntegrity.length ? timelineFromIntegrity : timeline;
   const timelineOperacional = filterExpedienteTimelineOperacional(rawTimeline, servicio);
+  console.log("EXPEDIENTE_DEBUG", {
+    conductorAssignedAt,
+    fecha_inicio: servicio?.fecha_inicio,
+    timeline: timelineOperacional,
+  });
   const rawEvidenciasFlat = [
     ...sortedStops.flatMap((st) => evidenciasByStop?.[st.id] || []),
     ...(extraDocumentos || []),

@@ -471,6 +471,19 @@ function EmpresaFlotaServicioCardImpl({
               Operativa del servicio
             </div>
 
+            {(() => {
+              console.log("TIMELINE_DEBUG", {
+                servicioId: servicio?.id,
+                expanded,
+                estado: servicio?.estado,
+                conductor_id: servicio?.conductor_id,
+                referencia: servicio?.referencia,
+                operativaTimeline,
+                timelineLength: timelineSoloTexto.length,
+              });
+              return null;
+            })()}
+
             {timelineSoloTexto.length > 0 ? (
               <>
                 <div
