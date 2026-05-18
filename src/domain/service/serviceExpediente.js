@@ -166,39 +166,57 @@ function entryTitle(type) {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Evento conductor";
 }
 
-/**
- * Timestamp real de cierre: salida del último muelle de descarga (destino final operativo).
- * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
- */
-function resolveEntregaCompletadaFromStops(stopRows, servicio = null) {
-  if (!Array.isArray(stopRows) || !stopRows.length) return null;
-  let finalDescarga = null;
-  for (const stop of stopRows) {
-    if ((stop.tipo === "descarga" || stop.tipo === "carga_descarga") && stop.salida) {
-      finalDescarga = stop;
-    }
-  }
-  const chosen = finalDescarga || [...stopRows].reverse().find((st) => st.salida) || null;
-  if (!chosen?.salida) return null;
+function entregaCompletadaPayload(stop, servicio) {
+  if (!stop?.salida) return null;
   return {
-    ts: chosen.salida,
-    stopId: chosen.id,
-    stopLabel: chosen.nombre || chosen.label || "",
+    ts: stop.salida,
+    stopId: stop.id,
+    stopLabel: stop.nombre || stop.label || "",
     detail:
       String(servicio?.destino || "").trim() ||
-      chosen.nombre ||
-      chosen.direccion ||
+      stop.nombre ||
+      stop.direccion ||
       null,
   };
 }
 
-function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
-  if (servicio?.estado !== "completado") return false;
-  if ((timeline || []).some((ev) => ev.type === "entrega_completada")) return false;
-  const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
-  if (!entrega) return false;
+/**
+ * Timestamp real de cierre: `hora_salida_real` del stop destino (último en ruta o última descarga).
+ * No usa fecha_inicio, updated_at ni salida de muelles de carga intermedios.
+ * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
+ */
+function resolveEntregaCompletadaFromStops(stopRows, servicio = null, sortedStops = null) {
+  if (!Array.isArray(stopRows) || !stopRows.length) return null;
+
+  const rawById = new Map((sortedStops || []).map((st) => [st.id, st]));
+  const withSalida = (row) => {
+    if (!row) return null;
+    const raw = rawById.get(row.id);
+    const salida = row.salida || raw?.hora_salida_real || null;
+    if (!salida) return null;
+    return { ...row, salida };
+  };
+
+  // 1) Último stop de la ruta (destino operativo habitual)
+  const ultimo = withSalida(stopRows[stopRows.length - 1]);
+  if (ultimo) return entregaCompletadaPayload(ultimo, servicio);
+
+  // 2) Última descarga / carga_descarga con salida (sin tomar cargas de origen)
+  let lastUnload = null;
+  for (const row of stopRows) {
+    if (row.tipo === "descarga" || row.tipo === "carga_descarga") {
+      const hit = withSalida(row);
+      if (hit) lastUnload = hit;
+    }
+  }
+  if (lastUnload) return entregaCompletadaPayload(lastUnload, servicio);
+
+  return null;
+}
+
+function buildEntregaCompletadaTimelineEvent(entrega) {
   const ms = parseTs(entrega.ts);
-  timeline.push({
+  return {
     ts: entrega.ts,
     time: fmtClock(ms),
     type: "entrega_completada",
@@ -208,7 +226,18 @@ function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
     evidenceId: null,
     integrityHash: null,
     origin: "stop",
-  });
+  };
+}
+
+/** Inserta o corrige el único evento entrega_completada con ts de salida del muelle destino. */
+function upsertEntregaCompletadaTimelineEvent(timeline, servicio, stopRows, sortedStops) {
+  if (servicio?.estado !== "completado") return false;
+  const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
+  if (!entrega) return false;
+  const event = buildEntregaCompletadaTimelineEvent(entrega);
+  const idx = (timeline || []).findIndex((ev) => ev.type === "entrega_completada");
+  if (idx >= 0) timeline[idx] = { ...timeline[idx], ...event };
+  else timeline.push(event);
   return true;
 }
 
@@ -455,12 +484,14 @@ export function buildServiceExpediente({
     }
   }
   timelinePushLog.push({ rule: "stop_rows", pushedCount: stopEventsPushed, stopRowsCount: stopRows.length });
-  const entregaPushed = appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows);
+  const entregaResolved = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
+  const entregaPushed = upsertEntregaCompletadaTimelineEvent(timeline, servicio, stopRows, sortedStops);
   timelinePushLog.push({
     rule: "entrega_completada",
     pushed: entregaPushed,
-    ts: entregaPushed ? resolveEntregaCompletadaFromStops(stopRows, servicio)?.ts ?? null : null,
-    source: entregaPushed ? "stop_destino_final.salida" : "sin_salida_muelle_destino",
+    ts: entregaResolved?.ts ?? null,
+    stopId: entregaResolved?.stopId ?? null,
+    source: entregaResolved ? "ultimo_stop.salida_o_ultima_descarga" : "sin_salida_muelle_destino",
   });
   sortOperationalTimeline(timeline);
 
@@ -569,12 +600,13 @@ export function buildServiceExpediente({
   }
 
   if (servicio?.estado === "completado") {
-    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
+    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
     if (entrega) {
       const stopMeta = getStopOperacionMeta(
         sortedStops.find((st) => st.id === entrega.stopId)?.notas,
       );
-      integrityRecords.push(eventRecord({
+      const entregaIdx = integrityRecords.findIndex((row) => row.type === "entrega_completada");
+      const entregaRow = eventRecord({
         ts: entrega.ts,
         type: "entrega_completada",
         title: "Entrega completada",
@@ -584,7 +616,9 @@ export function buildServiceExpediente({
         origin: "stop",
         location: formatOperationalGeoLine(stopMeta?.salida_geo) || entrega.stopLabel || "",
         metadata: { salida_muelle: entrega.ts, geo: stopMeta?.salida_geo || null },
-      }));
+      });
+      if (entregaIdx >= 0) integrityRecords[entregaIdx] = entregaRow;
+      else integrityRecords.push(entregaRow);
     }
   }
 
@@ -637,8 +671,17 @@ export function buildServiceExpediente({
 
   const filteredFromIntegrity = filterExpedienteTimelineOperacional(timelineFromIntegrity, servicio);
   const filteredFromSimple = filterExpedienteTimelineOperacional(timeline, servicio);
-  const timelineOperacional =
+  let timelineOperacional =
     filteredFromIntegrity.length > 0 ? filteredFromIntegrity : filteredFromSimple;
+  if (servicio?.estado === "completado") {
+    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
+    if (entrega) {
+      const event = buildEntregaCompletadaTimelineEvent(entrega);
+      const idx = timelineOperacional.findIndex((ev) => ev.type === "entrega_completada");
+      if (idx >= 0) timelineOperacional[idx] = { ...timelineOperacional[idx], ...event };
+      else timelineOperacional = [...timelineOperacional, event];
+    }
+  }
   const integrityTypes = timelineFromIntegrity.map((ev) => ev.type);
   const tacografoOnlyIntegrity =
     timelineFromIntegrity.length > 0 &&
