@@ -1,8 +1,11 @@
 import { formatStorageBytes } from "./operationalDocumentPipeline.js";
+import { docMetaV2StorageFields, storageUploadUrl, traceMediaV2DocMeta } from "./mediaStorageV2.js";
 import { isOperationalDocTraceEnabled, traceOperationalDoc } from "./operationalDocumentTrace.js";
 import { operationalGroupFromStopTipo } from "../service/tripOperationalDossier.js";
 
+/** Lectura legacy (filas antiguas). Escritura nueva: {@link DOC_META_SCHEMA_V2}. */
 export const DOC_META_SCHEMA = 1;
+export const DOC_META_SCHEMA_V2 = 2;
 
 /** Hooks reservados (QR muelle, check-in, firma…) — sin implementar. */
 export const DOC_FUTURE_HOOKS = Object.freeze({
@@ -21,7 +24,10 @@ export function getDocMeta(ev) {
 
 export function mergeDocMetaIntoDatos(datos, docMeta) {
   const base = datos && typeof datos === "object" && !Array.isArray(datos) ? { ...datos } : {};
-  return { ...base, doc_meta: { schema_version: DOC_META_SCHEMA, ...docMeta, future_hooks: { ...DOC_FUTURE_HOOKS, ...(docMeta?.future_hooks || {}) } } };
+  const version = docMeta?.schema_version ?? DOC_META_SCHEMA_V2;
+  const merged = { schema_version: version, ...docMeta, future_hooks: { ...DOC_FUTURE_HOOKS, ...(docMeta?.future_hooks || {}) } };
+  traceMediaV2DocMeta(merged, { fn: "mergeDocMetaIntoDatos" });
+  return { ...base, doc_meta: merged };
 }
 
 export function buildDocMetaPayload({
@@ -44,9 +50,15 @@ export function buildDocMetaPayload({
   archivoNombre = null,
   geo = null,
   uploadPipeline = null,
+  storagePreview = null,
+  storageOriginal = null,
 }) {
-  return {
-    schema_version: DOC_META_SCHEMA,
+  const resolvedPreviewUrl = previewUrl ?? storageUploadUrl(storagePreview);
+  const resolvedOriginalUrl = originalUrl ?? storageUploadUrl(storageOriginal);
+  const v2 = docMetaV2StorageFields({ storagePreview, storageOriginal });
+
+  const payload = {
+    schema_version: DOC_META_SCHEMA_V2,
     upload_pipeline: uploadPipeline,
     display_name: displayName,
     archivo_nombre: archivoNombre || displayName,
@@ -56,8 +68,12 @@ export function buildDocMetaPayload({
     size_original_bytes: sizeOriginalBytes ?? null,
     width,
     height,
-    preview_url: previewUrl,
-    original_url: originalUrl,
+    preview_url: resolvedPreviewUrl,
+    original_url: resolvedOriginalUrl,
+    bucket: v2.bucket,
+    path_preview: v2.path_preview,
+    path_original: v2.path_original,
+    signed_expires_at: v2.signed_expires_at,
     stop_id: stopId,
     servicio_id: servicioId,
     conductor_id: conductorId,
@@ -69,6 +85,7 @@ export function buildDocMetaPayload({
     future_hooks: { ...DOC_FUTURE_HOOKS },
     created_at: new Date().toISOString(),
   };
+  return payload;
 }
 
 function stopKindLabel(stop) {

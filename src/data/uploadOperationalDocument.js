@@ -9,6 +9,7 @@ import {
   traceBlobColor,
   traceOperationalDoc,
 } from "../domain/documents/operationalDocumentTrace.js";
+import { storageUploadUrl, traceMediaV2DocMeta } from "../domain/documents/mediaStorageV2.js";
 import { compressImageToJpegBlob, uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
 
 /**
@@ -70,6 +71,8 @@ export async function uploadOperationalDocument(file, {
 
   let previewUrl;
   let originalUrl = null;
+  let storagePreview = null;
+  let storageOriginal = null;
   let width = null;
   let height = null;
   let previewBytes = file?.size || 0;
@@ -78,7 +81,8 @@ export async function uploadOperationalDocument(file, {
 
   if (isPdf) {
     if (traceOn) traceOperationalDoc("uploadOperationalDocument:branch_pdf", { tipo });
-    previewUrl = await uploadUserFile(file, folder);
+    storagePreview = await uploadUserFile(file, folder);
+    previewUrl = storageUploadUrl(storagePreview);
     mime = "application/pdf";
   } else if (processImage && isFotoTipo) {
     // Mismo motor que «Archivos adicionales» (FileReader→canvas→JPEG), no processOperationalDocumentImage (objectURL).
@@ -98,11 +102,13 @@ export async function uploadOperationalDocument(file, {
     if (traceOn) {
       await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", jpegBlob, { tipo });
     }
-    previewUrl = await uploadBlobToStorage(jpegBlob, "image/jpeg", folder, previewName);
+    storagePreview = await uploadBlobToStorage(jpegBlob, "image/jpeg", folder, previewName);
+    previewUrl = storageUploadUrl(storagePreview);
     previewBytes = jpegBlob.size;
     if (file.size > 100 * 1024) {
       const origName = buildOperationalFileName(`${displayName}_original`, "jpg");
-      originalUrl = await uploadBlobToStorage(file, file.type || "image/jpeg", `${folder}/original`, origName);
+      storageOriginal = await uploadBlobToStorage(file, file.type || "image/jpeg", `${folder}/original`, origName);
+      originalUrl = storageUploadUrl(storageOriginal);
       originalBytes = file.size;
     }
     if (traceOn) {
@@ -135,7 +141,8 @@ export async function uploadOperationalDocument(file, {
         documentMode,
       });
     }
-    previewUrl = await uploadBlobToStorage(processed.previewBlob, "image/jpeg", folder, previewName);
+    storagePreview = await uploadBlobToStorage(processed.previewBlob, "image/jpeg", folder, previewName);
+    previewUrl = storageUploadUrl(storagePreview);
     previewBytes = processed.previewBytes;
     width = processed.width;
     height = processed.height;
@@ -146,7 +153,13 @@ export async function uploadOperationalDocument(file, {
           blobRole: "original",
         });
       }
-      originalUrl = await uploadBlobToStorage(processed.originalBlob, file.type || "image/jpeg", `${folder}/original`, origName);
+      storageOriginal = await uploadBlobToStorage(
+        processed.originalBlob,
+        file.type || "image/jpeg",
+        `${folder}/original`,
+        origName,
+      );
+      originalUrl = storageUploadUrl(storageOriginal);
       originalBytes = processed.originalBytes;
     }
     if (traceOn) {
@@ -165,7 +178,8 @@ export async function uploadOperationalDocument(file, {
         warning: "Ruta compressImage(uploadUserPhoto) — no operational pipeline",
       });
     }
-    previewUrl = await uploadUserFile(file, folder);
+    storagePreview = await uploadUserFile(file, folder);
+    previewUrl = storageUploadUrl(storagePreview);
   }
 
   const docMeta = buildDocMetaPayload({
@@ -179,6 +193,8 @@ export async function uploadOperationalDocument(file, {
     height,
     previewUrl,
     originalUrl,
+    storagePreview,
+    storageOriginal,
     stopId: stop?.id || null,
     servicioId: servicio?.id || null,
     conductorId: conductorId || servicio?.conductor_id || null,
@@ -190,6 +206,8 @@ export async function uploadOperationalDocument(file, {
     uploadPipeline: isFotoTipo && processImage && !isPdf ? "foto_file_reader_jpeg" : isPdf ? "pdf_raw" : processImage ? "document_canvas" : "legacy_upload_user_file",
   });
 
+  traceMediaV2DocMeta(docMeta, { fn: "uploadOperationalDocument", tipo });
+
   if (traceOn) {
     traceOperationalDoc("uploadOperationalDocument:exit", {
       fn: "uploadOperationalDocument",
@@ -197,6 +215,10 @@ export async function uploadOperationalDocument(file, {
       processImage,
       preview_url: docMeta.preview_url,
       original_url: docMeta.original_url,
+      bucket: docMeta.bucket,
+      path_preview: docMeta.path_preview,
+      path_original: docMeta.path_original,
+      signed_expires_at: docMeta.signed_expires_at,
       mime: docMeta.mime_type,
       sizePreviewBytes: docMeta.size_preview_bytes,
       sizeOriginalBytes: docMeta.size_original_bytes,

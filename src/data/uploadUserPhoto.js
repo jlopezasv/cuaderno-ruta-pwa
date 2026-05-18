@@ -5,6 +5,13 @@ import {
   logStorageDocFail,
 } from "../domain/documents/storageDocumentUploadLog.js";
 import {
+  buildDataUrlStorageResult,
+  buildStorageUploadResult,
+  DEFAULT_OPERATIVE_BUCKET,
+  storageUploadUrl,
+  traceMediaV2,
+} from "../domain/documents/mediaStorageV2.js";
+import {
   isOperationalDocTraceEnabled,
   traceBlobColor,
   traceOperationalDoc,
@@ -13,7 +20,7 @@ import {
 /** Firmas cortas; evitar URLs públicas permanentes para CMR/fotos/PDF. */
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7; // 7 días
 const SIGNED_URL_FALLBACK_SEC = 60 * 60 * 24; // 1 día (reintento)
-export const USER_PHOTOS_BUCKET = "user-photos";
+export const USER_PHOTOS_BUCKET = DEFAULT_OPERATIVE_BUCKET;
 
 const STORAGE_URL_ERROR = "Error generando URL del documento";
 
@@ -94,7 +101,7 @@ function getStorageToken() {
  * @param {string} folder
  * @param {string} [originalName]
  * @param {{ requireHttpUrl?: boolean, allowBase64Fallback?: boolean }} [options]
- * @returns {Promise<string>}
+ * @returns {Promise<import("../domain/documents/mediaStorageV2.js").StorageUploadResult>}
  */
 export async function uploadBlobToStorage(blob, mime, folder, originalName, options = {}) {
   const { requireHttpUrl = false, allowBase64Fallback = !requireHttpUrl } = options;
@@ -139,7 +146,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     });
     if (requireHttpUrl) throw new Error(STORAGE_URL_ERROR);
     if (!allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
-    return fileToBase64(blob);
+    return buildDataUrlStorageResult(await fileToBase64(blob));
   }
 
   const token = getStorageToken();
@@ -167,7 +174,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       });
       if (requireHttpUrl || !allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
       logStorageDoc("DOCUMENT_STORAGE_FINAL_URL", { kind: "base64_fallback_after_upload_fail" });
-      return fileToBase64(blob);
+      return buildDataUrlStorageResult(await fileToBase64(blob));
     }
 
     logStorageDoc("DOCUMENT_STORAGE_UPLOAD_OK", {
@@ -191,6 +198,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       return { signRes, signBody };
     };
 
+    let signExpiresIn = SIGNED_URL_TTL_SEC;
     let { signRes, signBody } = await signOnce(SIGNED_URL_TTL_SEC);
     if (!signRes.ok) {
       logStorageDocFail("DOCUMENT_STORAGE_SIGNED_URL_FAIL", new Error(`HTTP ${signRes.status}`), {
@@ -199,21 +207,36 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
         expiresIn: SIGNED_URL_TTL_SEC,
         supabaseResponse: signBody.json ?? signBody.text,
       });
+      signExpiresIn = SIGNED_URL_FALLBACK_SEC;
       ({ signRes, signBody } = await signOnce(SIGNED_URL_FALLBACK_SEC));
     }
 
     if (signRes.ok) {
       const finalUrl = signedUrlFromSignBody(signBody.json);
+      const expiresInUsed = Number(signBody.json?.expiresIn) || signExpiresIn;
       if (isHttpStorageUrl(finalUrl)) {
+        const result = buildStorageUploadResult({
+          url: finalUrl,
+          bucket,
+          path: objectPath,
+          signedExpiresInSec: expiresInUsed,
+        });
         logStorageDoc("DOCUMENT_STORAGE_SIGNED_URL_OK", {
           bucket,
           path: objectPath,
           signedUrl: finalUrl,
-          expiresIn: signBody.json?.expiresIn ?? null,
+          expiresIn: expiresInUsed,
         });
         logStorageDoc("DOCUMENT_STORAGE_FINAL_URL", {
           url: finalUrl,
           urlLength: finalUrl.length,
+        });
+        traceMediaV2("upload_complete", {
+          bucket: result.bucket,
+          path_preview: result.path,
+          path_original: null,
+          signed_expires_at: result.signedExpiresAt,
+          folder,
         });
         if (isOperationalDocTraceEnabled()) {
           traceOperationalDoc("uploadBlobToStorage:final_url", {
@@ -222,9 +245,10 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
             mime,
             sizeBytes,
             signedUrl: finalUrl,
+            signed_expires_at: result.signedExpiresAt,
           });
         }
-        return finalUrl;
+        return result;
       }
       logStorageDocFail("DOCUMENT_STORAGE_SIGNED_URL_FAIL", new Error("Respuesta sign sin URL"), {
         bucket,
@@ -264,7 +288,14 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     urlLength: dataUrl ? String(dataUrl).length : 0,
     startsWithData: String(dataUrl || "").startsWith("data:"),
   });
-  return dataUrl;
+  traceMediaV2("upload_data_url_fallback", {
+    bucket: null,
+    path_preview: objectPath,
+    path_original: null,
+    signed_expires_at: null,
+    folder,
+  });
+  return buildDataUrlStorageResult(dataUrl);
 }
 
 /**
@@ -323,10 +354,11 @@ export function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.72) {
   });
 }
 
-/** Sube imagen comprimida a `user-photos` en Supabase Storage. */
+/** Sube imagen comprimida a `user-photos`. Devuelve URL string (compat monolito). */
 export async function uploadUserPhoto(file, folder = "misc", options = {}) {
   const compressed = await compressImageToJpegBlob(file, 800, 0.72);
-  return uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
+  const result = await uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
+  return storageUploadUrl(result);
 }
 
 /**
