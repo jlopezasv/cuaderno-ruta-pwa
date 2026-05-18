@@ -88,6 +88,12 @@ function tipoHeadline(tipo, meta, ev) {
   return (tipo || "documento").toUpperCase();
 }
 
+/** URL para mostrar la imagen en color (original si existe; si no, preview). */
+export function resolveEvidenciaDisplayImageUrl(ev) {
+  const meta = getDocMeta(ev);
+  return meta?.original_url || ev?.originalUrl || meta?.preview_url || ev?.previewUrl || ev?.url || null;
+}
+
 export function enrichEvidenciaDisplay(ev, { stop = null, conductorName = null } = {}) {
   const meta = getDocMeta(ev);
   const tipo = ev?.tipo || meta?.tipo_documento || "documento";
@@ -120,6 +126,7 @@ export function enrichEvidenciaDisplay(ev, { stop = null, conductorName = null }
     displayLine2: [kindLabel, sizeLabel].filter(Boolean).join(" · "),
     previewUrl: meta?.preview_url || ev?.url || null,
     originalUrl: meta?.original_url || null,
+    displayImageUrl: resolveEvidenciaDisplayImageUrl(ev),
     lazyThumb: true,
     docMeta: meta,
   };

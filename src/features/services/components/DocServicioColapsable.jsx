@@ -166,7 +166,7 @@ export function DocServicioColapsable({sv,svStops,flotaEvs,totalEvs,nombreConduc
                         {ev.tipo==="incidencia"&&ev.datos?.texto&&<div style={{fontSize:11,color:"#FCA5A5",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.datos.texto}</div>}
                         <div style={{fontSize:10,color:"#475569",marginTop:2}}>{new Date(ev.created_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>
                       </div>
-                      {ev.url&&(ev.tipo==="foto"||ev.tipo==="cmr")&&<img src={ev.url} style={{width:38,height:38,objectFit:"cover",borderRadius:7,flexShrink:0}} alt="thumb"/>}
+                      {ev.url&&(ev.tipo==="foto"||ev.tipo==="cmr")&&<img src={ev.displayImageUrl||ev.originalUrl||ev.url} style={{width:38,height:38,objectFit:"cover",borderRadius:7,flexShrink:0}} alt="thumb"/>}
                       <span style={{color:su,fontSize:14,flexShrink:0}}>›</span>
                     </button>
                   ))}

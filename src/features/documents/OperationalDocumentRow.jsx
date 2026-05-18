@@ -15,7 +15,7 @@ export function OperationalDocumentRow({ ev, panel, onOpen, compact = false }) {
   const subtitle = ev.displaySubtitle || ev.detalle || "";
   const line2 = ev.displayLine2 || "";
   const color = TIPO_COLOR[ev.tipo] || panel?.tx || "#334155";
-  const thumbSrc = ev.previewUrl || ev.url;
+  const thumbSrc = ev.displayImageUrl || ev.originalUrl || ev.previewUrl || ev.url;
 
   return (
     <button

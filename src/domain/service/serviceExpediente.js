@@ -310,7 +310,7 @@ export function buildServiceExpediente({
           detalle: evidenceDetail(ev) || enriched.displaySubtitle,
           created_at: ev.created_at,
           hora: fmtClock(parseTs(ev.created_at)),
-          url: enriched.previewUrl || ev.url || null,
+          url: enriched.displayImageUrl || enriched.previewUrl || ev.url || null,
           nota: ev.nota || null,
           datos: ev.datos || null,
           bucket: bucketForEvidence(ev),
@@ -319,6 +319,8 @@ export function buildServiceExpediente({
           displayLine2: enriched.displayLine2,
           displaySizeLabel: enriched.displaySizeLabel,
           displayKindLabel: enriched.displayKindLabel,
+          displayImageUrl: enriched.displayImageUrl,
+          previewUrl: enriched.previewUrl,
           originalUrl: enriched.originalUrl,
         };
       }),

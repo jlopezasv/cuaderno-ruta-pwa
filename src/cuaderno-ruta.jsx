@@ -100,6 +100,7 @@ import {
   mergeEvidenciaIntoByStop,
 } from "./domain/documents/operationalEvidenciaSync.js";
 import { ExpedienteDocumentsPanel } from "./features/documents/ExpedienteDocumentsPanel.jsx";
+import { resolveEvidenciaDisplayImageUrl } from "./domain/documents/operationalDocumentRecord.js";
 import {
   EMPRESA_ETA_VISUAL_TICK_MS,
   EMPRESA_FLOTA_DATA_POLL_MS,
@@ -13237,7 +13238,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red,ticket:"#0EA5E9",factura:"#6366F1",otro:"#64748B"};
 
   function openExpedienteDocument(ev){
-    const url=ev?.url||ev?.previewUrl;
+    const url=ev?.displayImageUrl||ev?.originalUrl||ev?.url||ev?.previewUrl;
     if(!url)return;
     const mime=ev?.mime_type||"";
     const isPdf=mime.includes("pdf")||String(url).toLowerCase().includes(".pdf");
@@ -16537,18 +16538,18 @@ function ServicioDocsView({ uid, showToast, onBack }) {
             </div>
             <div style={{ padding: "14px 14px 32px" }}>
               <div style={{ fontSize: 10, color: su, marginBottom: 12 }}>{new Date(visorCtx.ev.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
-              {visorCtx.ev.url && (
+              {resolveEvidenciaDisplayImageUrl(visorCtx.ev) && (
                 <DriverCachedMediaImg
                   servicioId={visorCtx.servicioId}
                   evidenciaId={visorCtx.ev.id}
-                  src={visorCtx.ev.url}
+                  src={resolveEvidenciaDisplayImageUrl(visorCtx.ev)}
                   alt="evidencia"
                   style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 12, marginBottom: 12 }}
                 />
               )}
-              {visorCtx.ev.url && (
+              {resolveEvidenciaDisplayImageUrl(visorCtx.ev) && (
                 <a
-                  href={visorCtx.ev.url}
+                  href={resolveEvidenciaDisplayImageUrl(visorCtx.ev)}
                   download
                   target="_blank"
                   rel="noopener noreferrer"

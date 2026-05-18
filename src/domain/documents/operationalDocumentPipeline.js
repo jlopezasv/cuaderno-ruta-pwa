@@ -70,13 +70,15 @@ function findDocumentBounds(ctx, w, h) {
   return { x: minX, y: minY, w: cw, h: ch };
 }
 
+/** Contraste suave por canal RGB; no convierte a escala de grises. */
 function enhanceDocumentContrast(ctx, w, h) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
-    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    const boosted = gray < 128 ? gray * 0.88 : Math.min(255, gray * 1.08 + 12);
-    d[i] = d[i + 1] = d[i + 2] = boosted;
+    for (let c = 0; c < 3; c += 1) {
+      const v = d[i + c];
+      d[i + c] = v < 128 ? v * 0.88 : Math.min(255, v * 1.08 + 12);
+    }
   }
   ctx.putImageData(imgData, 0, 0);
 }
