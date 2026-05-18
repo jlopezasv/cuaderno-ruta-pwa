@@ -142,6 +142,8 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   origen = null,
   destino = null,
   fechaInicio = null,
+  /** Si false, solo calcula `referencia` (sin PATCH ni evento); para unificar PATCH en asignación. */
+  persist = true,
 }) {
   const servicioId = servicio?.id ?? null;
   console.log("BOOTSTRAP_START", servicioId);
@@ -197,6 +199,10 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   }
 
   const referencia = mergeReferenciaOperacional(servicio.referencia || null, metaPatch);
+  if (!persist) {
+    console.log("BOOTSTRAP_DONE", { ok: true, servicioId, persist: false, hasOperationalPlan: !!metaPatch.operational_plan });
+    return referencia;
+  }
   const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
