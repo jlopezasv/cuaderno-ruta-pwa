@@ -1,4 +1,8 @@
-import { getOperationalPlanSnapshot, getServicioOperacionMeta } from "./serviceOperacionMeta.js";
+import {
+  getOperationalPlanSnapshot,
+  getOperationalTripStartedAt,
+  getServicioOperacionMeta,
+} from "./serviceOperacionMeta.js";
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
 import { formatOperationalEtaSnapshotLine } from "./operationalEtaPresentation.js";
@@ -357,11 +361,23 @@ export function buildServiceExpediente({
       conductor_id: servicio?.conductor_id ?? null,
     });
   }
-  if (servicio?.fecha_inicio) {
-    timeline.push({ ts: servicio.fecha_inicio, time: fmtClock(parseTs(servicio.fecha_inicio)), type: "servicio", title: "Servicio iniciado", detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}` });
-    timelinePushLog.push({ rule: "fecha_inicio", pushed: true, ts: servicio.fecha_inicio });
+  const tripStartedAt = getOperationalTripStartedAt(servicio) || servicio?.fecha_inicio || null;
+  if (tripStartedAt) {
+    timeline.push({
+      ts: tripStartedAt,
+      time: fmtClock(parseTs(tripStartedAt)),
+      type: "servicio",
+      title: "Servicio iniciado",
+      detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
+    });
+    timelinePushLog.push({
+      rule: "trip_started",
+      pushed: true,
+      ts: tripStartedAt,
+      source: getOperationalTripStartedAt(servicio) ? "operational_trip_started_at" : "fecha_inicio",
+    });
   } else {
-    timelinePushLog.push({ rule: "fecha_inicio", pushed: false });
+    timelinePushLog.push({ rule: "trip_started", pushed: false });
   }
   const cancellation = serviceMeta?.cancellation || null;
   const cancelledAt = cancellation?.at || serviceMeta?.service_cancelled_at || servicio?.fecha_anulacion || servicio?.anulado_at || null;
@@ -442,16 +458,19 @@ export function buildServiceExpediente({
     }));
   }
 
-  if (servicio?.fecha_inicio) {
+  if (tripStartedAt) {
     integrityRecords.push(eventRecord({
-      ts: servicio.fecha_inicio,
+      ts: tripStartedAt,
       type: "servicio_iniciado",
       title: "Servicio iniciado",
       detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
       servicio,
       origin: "servicio",
       location: servicio.origen || "",
-      metadata: { estado: servicio.estado || null },
+      metadata: {
+        estado: servicio.estado || null,
+        source: getOperationalTripStartedAt(servicio) ? "operational_trip_started_at" : "fecha_inicio",
+      },
     }));
   }
 
@@ -565,8 +584,9 @@ export function buildServiceExpediente({
 
   const filteredFromIntegrity = filterExpedienteTimelineOperacional(timelineFromIntegrity, servicio);
   const filteredFromSimple = filterExpedienteTimelineOperacional(timeline, servicio);
+  /** Fuente única: timeline de paradas/meta (simple); integridad solo si no hay eventos operativos. */
   const timelineOperacional =
-    filteredFromIntegrity.length > 0 ? filteredFromIntegrity : filteredFromSimple;
+    filteredFromSimple.length > 0 ? filteredFromSimple : filteredFromIntegrity;
   const integrityTypes = timelineFromIntegrity.map((ev) => ev.type);
   const tacografoOnlyIntegrity =
     timelineFromIntegrity.length > 0 &&

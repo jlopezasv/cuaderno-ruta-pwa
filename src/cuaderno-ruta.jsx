@@ -11700,8 +11700,8 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       const srData=await crearServicioConIdentidad({
         _debugSource:"AsignarServicioModal",
         empresa_id:empresaId||null,
-        conductor_id:sinConductor?null:conductorId,
-        estado:sinConductor?SERVICIO_ESTADO_PENDIENTE_ASIGNACION:"asignado",
+        conductor_id:null,
+        estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
@@ -11716,16 +11716,18 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
       });
       if(!sinConductor){
-        sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
-        sbFetch("/rest/v1/servicio_asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo_asignacion:"principal"})}).catch(()=>{});
-        await bootstrapOperationalFlowOnConductorAssign({
-          servicio:sv,
+        const assignResult=await assignConductorPrincipalToServicio({
+          servicioId:sv.id,
+          servicio:{...sv,conductor_id:null,estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION},
           conductorId,
           conductorNombre:conductorNombre||"Conductor",
           origen:origen.trim(),
           destino:destino.trim(),
           fechaInicio:new Date(fechaInicio).toISOString(),
-        }).catch(()=>{});
+        });
+        if(!assignResult?.referencia){
+          throw new Error("No se pudo guardar la referencia operativa del servicio");
+        }
         void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
       }
       onCreado(sv);
