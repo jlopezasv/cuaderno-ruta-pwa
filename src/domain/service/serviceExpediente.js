@@ -6,7 +6,6 @@ import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteB
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
-import { resolveSalidaMuelleDescargaFromStops } from "./entregaCompletadaTime.js";
 
 const enc = new TextEncoder();
 
@@ -30,7 +29,6 @@ const EXPEDIENTE_TIMELINE_TYPE_ORDER = Object.freeze({
   carga_finalizada: 50,
   descarga_finalizada: 50,
   servicio_anulado: 90,
-  entrega_completada: 100,
 });
 
 function operationalTimelineTypeRank(type) {
@@ -167,70 +165,6 @@ function entryTitle(type) {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Evento conductor";
 }
 
-function entregaCompletadaPayload(stop, servicio) {
-  if (!stop?.salida) return null;
-  const hora = fmtClock(parseTs(stop.salida));
-  const lugar =
-    String(servicio?.destino || "").trim() ||
-    stop.nombre ||
-    stop.direccion ||
-    null;
-  return {
-    ts: stop.salida,
-    stopId: stop.id,
-    stopLabel: stop.nombre || stop.label || "",
-    detail: lugar ? `Salida muelle descarga · ${hora} · ${lugar}` : `Salida muelle descarga · ${hora}`,
-  };
-}
-
-/**
- * Timestamp de «Entrega completada»: solo `hora_salida_real` del último muelle de descarga.
- * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
- */
-function resolveEntregaCompletadaFromStops(stopRows, servicio = null, sortedStops = null) {
-  const salida = resolveSalidaMuelleDescargaFromStops(sortedStops || []);
-  if (!salida) return null;
-
-  const row = (stopRows || []).find((st) => st.id === salida.stopId);
-  return entregaCompletadaPayload(
-    {
-      id: salida.stopId,
-      salida: salida.ts,
-      nombre: salida.stopName || row?.nombre,
-      label: row?.label,
-      direccion: row?.direccion,
-    },
-    servicio,
-  );
-}
-
-function buildEntregaCompletadaTimelineEvent(entrega) {
-  const ms = parseTs(entrega.ts);
-  return {
-    ts: entrega.ts,
-    time: fmtClock(ms),
-    type: "entrega_completada",
-    title: "Entrega completada",
-    detail: entrega.detail,
-    stopId: entrega.stopId,
-    evidenceId: null,
-    integrityHash: null,
-    origin: "stop",
-  };
-}
-
-/** Inserta o corrige el único evento entrega_completada con ts de salida del muelle destino. */
-function upsertEntregaCompletadaTimelineEvent(timeline, servicio, stopRows, sortedStops) {
-  if (servicio?.estado !== "completado") return false;
-  const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
-  if (!entrega) return false;
-  const event = buildEntregaCompletadaTimelineEvent(entrega);
-  const idx = (timeline || []).findIndex((ev) => ev.type === "entrega_completada");
-  if (idx >= 0) timeline[idx] = { ...timeline[idx], ...event };
-  else timeline.push(event);
-  return true;
-}
-
 /**
  * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
  * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
@@ -239,7 +173,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
   const out = [];
   for (const ev of items || []) {
     const ty = String(ev.type || "");
-    if (ty.startsWith("tacografo_")) continue;
+    if (ty.startsWith("tacografo_") || ty === "entrega_completada") continue;
     let title = ev.title;
     if (ty === "entrada_muelle" && typeof title === "string" && title.startsWith("Entrada muelle")) {
       title = title.replace(/^Entrada muelle/, "Llegada muelle");
@@ -474,15 +408,6 @@ export function buildServiceExpediente({
     }
   }
   timelinePushLog.push({ rule: "stop_rows", pushedCount: stopEventsPushed, stopRowsCount: stopRows.length });
-  const entregaResolved = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
-  const entregaPushed = upsertEntregaCompletadaTimelineEvent(timeline, servicio, stopRows, sortedStops);
-  timelinePushLog.push({
-    rule: "entrega_completada",
-    pushed: entregaPushed,
-    ts: entregaResolved?.ts ?? null,
-    stopId: entregaResolved?.stopId ?? null,
-    source: entregaResolved ? "salida_muelle_descarga" : "sin_salida_muelle_descarga",
-  });
   sortOperationalTimeline(timeline);
 
   let evidencias = stopRows.flatMap((stop) =>
@@ -589,29 +514,6 @@ export function buildServiceExpediente({
     }
   }
 
-  if (servicio?.estado === "completado") {
-    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
-    if (entrega) {
-      const stopMeta = getStopOperacionMeta(
-        sortedStops.find((st) => st.id === entrega.stopId)?.notas,
-      );
-      const entregaIdx = integrityRecords.findIndex((row) => row.type === "entrega_completada");
-      const entregaRow = eventRecord({
-        ts: entrega.ts,
-        type: "entrega_completada",
-        title: "Entrega completada",
-        detail: appendGeoToDetail(entrega.detail || entrega.stopLabel, stopMeta?.salida_geo),
-        servicio,
-        stopId: entrega.stopId,
-        origin: "stop",
-        location: formatOperationalGeoLine(stopMeta?.salida_geo) || entrega.stopLabel || "",
-        metadata: { salida_muelle: entrega.ts, geo: stopMeta?.salida_geo || null },
-      });
-      if (entregaIdx >= 0) integrityRecords[entregaIdx] = entregaRow;
-      else integrityRecords.push(entregaRow);
-    }
-  }
-
   for (const entry of entries || []) {
     const ms = parseTs(entry.ts);
     if (ms == null || !importantEntry(entry.type)) continue;
@@ -661,17 +563,8 @@ export function buildServiceExpediente({
 
   const filteredFromIntegrity = filterExpedienteTimelineOperacional(timelineFromIntegrity, servicio);
   const filteredFromSimple = filterExpedienteTimelineOperacional(timeline, servicio);
-  let timelineOperacional =
+  const timelineOperacional =
     filteredFromIntegrity.length > 0 ? filteredFromIntegrity : filteredFromSimple;
-  if (servicio?.estado === "completado") {
-    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio, sortedStops);
-    if (entrega) {
-      const event = buildEntregaCompletadaTimelineEvent(entrega);
-      const idx = timelineOperacional.findIndex((ev) => ev.type === "entrega_completada");
-      if (idx >= 0) timelineOperacional[idx] = { ...timelineOperacional[idx], ...event };
-      else timelineOperacional = [...timelineOperacional, event];
-    }
-  }
   const integrityTypes = timelineFromIntegrity.map((ev) => ev.type);
   const tacografoOnlyIntegrity =
     timelineFromIntegrity.length > 0 &&

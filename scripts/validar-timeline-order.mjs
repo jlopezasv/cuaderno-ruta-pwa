@@ -10,7 +10,6 @@ import {
 const ts = "2026-05-16T09:05:00.000Z";
 
 const sameClock = [
-  { ts, type: "entrega_completada", title: "Entrega completada" },
   { ts, type: "servicio_iniciado", title: "Servicio iniciado" },
   { ts, type: "conductor_asignado", title: "Conductor asignado" },
   { ts, type: "entrada_muelle", title: "Llegada muelle", stopId: "a" },
@@ -25,7 +24,6 @@ const expected = [
   "servicio_iniciado",
   "entrada_muelle",
   "salida_muelle",
-  "entrega_completada",
 ];
 
 let failed = 0;
@@ -37,13 +35,13 @@ if (JSON.stringify(types) !== JSON.stringify(expected)) {
 }
 
 if (compareOperationalTimelineEvents(
-  { ts, type: "servicio_iniciado" },
-  { ts, type: "entrega_completada" },
+  { ts, type: "entrada_muelle" },
+  { ts, type: "salida_muelle", stopId: "a" },
 ) >= 0) {
-  console.log("FAIL servicio_iniciado debe ir antes que entrega_completada");
+  console.log("FAIL entrada_muelle debe ir antes que salida_muelle");
   failed++;
 } else {
-  console.log("OK servicio_iniciado < entrega_completada con mismo ts");
+  console.log("OK entrada_muelle < salida_muelle con mismo ts");
 }
 
 process.exit(failed ? 1 : 0);
