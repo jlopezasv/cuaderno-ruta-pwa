@@ -42,8 +42,6 @@ export function resolveConductorIdForStop(servicio, stopId, asignacionesPorStop 
   return servicio.conductor_id || null;
 }
 
-const ASSIGN_CHUNK = 40;
-
 function dispatchRecargarServicioActivo() {
   try {
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
@@ -52,10 +50,15 @@ function dispatchRecargarServicioActivo() {
   }
 }
 
+function referenciaOperacionalValida(ref) {
+  return ref != null && String(ref).trim() !== "" && String(ref).includes("__SRV_OP__");
+}
+
 /** Carga servicios de flota empresa: por conductores vinculados + empresa_id. */
 export async function fetchFlotaServiciosForEmpresa(sbFetchFn, empresaId, conductorUids = []) {
   const byId = new Map();
   const uids = [...new Set((conductorUids || []).filter(Boolean))];
+  const ASSIGN_CHUNK = 40;
 
   for (let i = 0; i < uids.length; i += ASSIGN_CHUNK) {
     const slice = uids.slice(i, i + ASSIGN_CHUNK);
@@ -91,8 +94,9 @@ export async function fetchFlotaServiciosForEmpresa(sbFetchFn, empresaId, conduc
  * Asigna conductor principal y pasa a estado asignado.
  *
  * Persistencia de `referencia` (__SRV_OP__):
- * 1) Bootstrap PATCH solo `referencia` (servicio aún sin conductor en BD → RLS empresa).
- * 2) PATCH `conductor_id` + `estado` sin tocar `referencia` (evita pisar o omitir el campo).
+ * 1) Bootstrap PATCH solo `referencia` (servicio sin conductor en BD).
+ * 2) PATCH `conductor_id` + `estado` sin tocar `referencia`.
+ * 3) Si el servidor devuelve referencia null, reintento PATCH solo referencia.
  */
 export async function assignConductorPrincipalToServicio({
   servicioId,
@@ -114,9 +118,11 @@ export async function assignConductorPrincipalToServicio({
     const base = {
       ...(servicio || {}),
       id: servicioId,
+      conductor_id: null,
+      estado: SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
       referencia,
     };
-    const bootRef = await bootstrapOperationalFlowOnConductorAssign({
+    referencia = await bootstrapOperationalFlowOnConductorAssign({
       servicio: base,
       conductorId,
       conductorNombre,
@@ -126,15 +132,10 @@ export async function assignConductorPrincipalToServicio({
       persist: true,
       dispatchRecarga: false,
     });
-    bootstrapResultado = {
-      skipped: false,
-      bootRef: bootRef != null,
-      referenciaLength: bootRef != null ? String(bootRef).length : 0,
-    };
-    if (!bootRef) {
+    bootstrapResultado = { skipped: false, referenciaLength: String(referencia).length };
+    if (!referenciaOperacionalValida(referencia)) {
       throw new Error("No se pudo guardar la referencia operativa del servicio (bootstrap)");
     }
-    referencia = bootRef;
   }
 
   const patch = {
@@ -156,13 +157,28 @@ export async function assignConductorPrincipalToServicio({
   if (!patchedServicio?.id) {
     throw new Error("Asignación no aplicada: el servicio no se actualizó (revisa permisos RLS)");
   }
-  if (patchedServicio.referencia != null) {
+
+  if (referenciaOperacionalValida(patchedServicio.referencia)) {
     referencia = patchedServicio.referencia;
-  } else if (wasUnassigned && referencia != null) {
-    console.warn("assignConductorPrincipalToServicio: PATCH conductor ok pero referencia sigue null en servidor", {
-      servicioId,
-      referenciaLocalLength: String(referencia).length,
+  } else if (wasUnassigned && referenciaOperacionalValida(referencia)) {
+    const refRes = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ referencia }),
     });
+    if (!refRes.ok) {
+      const t = await refRes.text().catch(() => "");
+      throw new Error(t || "No se pudo restaurar referencia operativa tras asignar conductor");
+    }
+    const refRows = await refRes.json().catch(() => null);
+    const refRow = Array.isArray(refRows) ? refRows[0] : refRows;
+    if (referenciaOperacionalValida(refRow?.referencia)) {
+      referencia = refRow.referencia;
+    }
+  }
+
+  if (wasUnassigned && !referenciaOperacionalValida(referencia)) {
+    throw new Error("Asignación incompleta: referencia operativa no persistida");
   }
 
   const asignacionBody = {

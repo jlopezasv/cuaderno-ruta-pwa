@@ -16,7 +16,6 @@ export async function uploadOperationalDocument(file, {
   context = {},
   processImage = true,
 } = {}) {
-  console.log("DOCUMENT_VERSION_TEST_15_MAY");
   const {
     servicio = null,
     stop = null,
@@ -53,7 +52,11 @@ export async function uploadOperationalDocument(file, {
     previewUrl = await uploadUserFile(file, folder);
     mime = "application/pdf";
   } else if (processImage) {
-    const processed = await processOperationalDocumentImage(file);
+    const isFoto = String(tipo || "").toLowerCase() === "foto";
+    const processed = await processOperationalDocumentImage(file, {
+      documentMode: !isFoto,
+      maxBytes: isFoto ? 480 * 1024 : undefined,
+    });
     const previewName = buildOperationalFileName(displayName, "jpg");
     previewUrl = await uploadBlobToStorage(processed.previewBlob, "image/jpeg", folder, previewName);
     previewBytes = processed.previewBytes;

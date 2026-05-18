@@ -129,12 +129,14 @@ import {
 } from "./domain/service/serviceExtraDocuments.js";
 import { groupExtraDocsByServicioId } from "./domain/service/extraDocumentExpediente.js";
 import {
-  assignConductorPrincipalToServicio,
   fetchFlotaServiciosForEmpresa,
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
   servicioPendienteAsignacion,
 } from "./domain/fleet/servicioAssignment.js";
-import { bootstrapOperationalFlowOnConductorAssign } from "./domain/fleet/servicioOperationalBootstrap.js";
+import {
+  asignarConductorEnServicioCreado,
+  mergeServicioTrasAsignacion,
+} from "./domain/fleet/servicioCreateFlow.js";
 import { conductorUidOperativoServicio } from "./domain/fleet/operationalPlaceholderConductor.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
@@ -11492,7 +11494,7 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
 }
 
 /** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
-const SERVICE_CREATE_DEBUG=true;
+const SERVICE_CREATE_DEBUG=false;
 function logServiceCreate(tag,payload){
   if(!SERVICE_CREATE_DEBUG)return;
   const line=`[${tag}]`;
@@ -11555,18 +11557,6 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
     throw new Error(msg);
   }
 
-  const session = getSession();
-  const authUser = session?.user?.id || getUserId?.() || null;
-  console.log("SERVICE_CREATE_START");
-  console.log("AUTH_USER_ID", authUser);
-  console.log("SERVICE_CREATE_PAYLOAD",{
-    payload,
-    empresa_id:payload?.empresa_id,
-    conductor_id:payload?.conductor_id,
-    estado:payload?.estado,
-    authUser,
-  });
-
   let res;
   try{
     res=await sbFetch("/rest/v1/servicios", {
@@ -11575,18 +11565,12 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
       body: JSON.stringify(corePayload),
     });
   }catch(error){
-    console.log("SERVICE_CREATE_RESPONSE_FAIL",{
-      error,
-      payload,
-      empresa_id:payload?.empresa_id,
-      conductor_id:payload?.conductor_id,
-    });
+    logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{error:String(error?.message||error)});
     throw error;
   }
 
   if (res.ok) {
     const result=await res.json();
-    console.log("SERVICE_CREATE_RESPONSE_OK",result);
     const row=Array.isArray(result)?result[0]:result;
     logServiceCreate("SERVICE_CREATE_RESPONSE_OK",{
       status:res.status,
@@ -11606,13 +11590,6 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   try {
     errJson = JSON.parse(errText);
   } catch (_) {}
-  console.log("SERVICE_RAW_RESPONSE", {
-    status: res.status,
-    ok: res.ok,
-    errText,
-    errJson,
-  });
-  console.log("SERVICE_RAW_PAYLOAD", corePayload);
   throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
 }
 
@@ -11716,19 +11693,18 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
       });
       if(!sinConductor){
-        const assignResult=await assignConductorPrincipalToServicio({
+        const assignResult=await asignarConductorEnServicioCreado({
           servicioId:sv.id,
-          servicio:{...sv,conductor_id:null,estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION},
+          servicio:sv,
           conductorId,
           conductorNombre:conductorNombre||"Conductor",
           origen:origen.trim(),
           destino:destino.trim(),
           fechaInicio:new Date(fechaInicio).toISOString(),
         });
-        if(!assignResult?.referencia){
-          throw new Error("No se pudo guardar la referencia operativa del servicio");
-        }
         void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
+        onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorId));
+        return;
       }
       onCreado(sv);
     }catch(e){
@@ -11893,7 +11869,7 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
     if(!servicio?.id||!c?.user_id||saving)return;
     setSaving(true);setError("");
     try{
-      const assignResult=await assignConductorPrincipalToServicio({
+      const assignResult=await asignarConductorEnServicioCreado({
         servicioId:servicio.id,
         servicio,
         conductorId:c.user_id,
@@ -13058,13 +13034,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     setSvCardExpand(prev=>{
       const opening=prev!==id;
       const next=opening?id:null;
-      console.log("CARD_EXPAND_LIFECYCLE",{
-        phase:"toggle_expand",
-        servicioId:id,
-        prevExpandedId:prev,
-        nextExpandedId:next,
-        expanded:next===id,
-      });
       if(opening)void ensureFlotaEvidenciasRef.current?.(id);
       return next;
     });
@@ -14090,10 +14059,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           conductorNombre={asignarModal.nombre}
           empresaId={empresa?.id||null}
           onClose={()=>setAsignarModal(null)}
-          onCreado={()=>{
-            const sinCond=asignarModal?.id==null;
+          onCreado={(merged)=>{
+            const sinCond=!merged?.conductor_id;
             setAsignarModal(null);
-            showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal.nombre||"conductor"));
+            if(merged?.id&&merged.conductor_id){
+              setFlotaServicios((prev)=>
+                patchFlotaServicioTrasAsignar(prev,merged.id,{
+                  conductorId:merged.conductor_id,
+                  referencia:merged.referencia,
+                  estado:"asignado",
+                }),
+              );
+            }
+            showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal?.nombre||"conductor"));
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
         />
@@ -15869,18 +15847,17 @@ function CrearServicioModal({uid,onClose,onCreado}){
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
       await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-      const assignResult=await assignConductorPrincipalToServicio({
+      const assignResult=await asignarConductorEnServicioCreado({
         servicioId:sv.id,
-        servicio:{...sv,conductor_id:null,estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION},
+        servicio:sv,
         conductorId:uid,
         conductorNombre:"Conductor",
         origen:origen.trim(),
         destino:destino.trim(),
         fechaInicio:new Date(fechaInicio).toISOString(),
       });
-      if(!assignResult?.referencia)throw new Error("No se pudo guardar la referencia operativa del servicio");
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-      onCreado({...sv,conductor_id:uid,estado:"asignado",referencia:assignResult.referencia});
+      onCreado(mergeServicioTrasAsignacion(sv,assignResult,uid));
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
@@ -16001,29 +15978,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
           {paso===3&&(
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <button onClick={()=>{setError("");setPaso(2);}} style={{background:"#1E293B",color:su,border:"1px solid #334155",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Editar</button>
-              <button onClick={async()=>{
-                if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
-                setSaving(true);setError("");
-                try{
-                  const srData=await crearServicioConIdentidad({
-                    conductor_id:uid,
-                    estado:"asignado",
-                    origen:origen.trim(),
-                    destino:destino.trim(),
-                    serviceNumber:ref.trim(),
-                    cliente:cliente.trim(),
-                    referenciaCliente:refCliente.trim(),
-                    fecha_inicio:new Date(fechaInicio).toISOString(),
-                  });
-                  const sv=Array.isArray(srData)?srData[0]:srData;
-                  if(!sv?.id)throw new Error("No se pudo crear el servicio");
-                  await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-                  sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
-                  void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-                  onCreado(sv);
-                }catch(e){setError("Error: "+e.message);}
-                finally{setSaving(false);}
-              }} disabled={saving}
+              <button onClick={()=>void guardar()} disabled={saving}
                 style={{background:saving?"#334155":"#22C55E",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:800,cursor:saving?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"✅ CREAR"}
               </button>

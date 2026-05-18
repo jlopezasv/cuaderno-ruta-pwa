@@ -3,6 +3,7 @@ import { sbFetch } from "../../data/supabaseClient.js";
 import { getServiceNumber } from "../../domain/service/serviceIdentity.js";
 import { mergeReferenciaOperacional, getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import { assignConductorPrincipalToServicio } from "../../domain/fleet/servicioAssignment.js";
+import { asignarConductorEnServicioCreado } from "../../domain/fleet/servicioCreateFlow.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { insertServicioCambiosRows, fmtAuditVal } from "../../domain/fleet/servicioAudit.js";
 
@@ -162,7 +163,7 @@ export function EmpresaEditarServicioModal({
         conductorSel &&
         conductorSel !== prevCid
       ) {
-        const assignResult = await assignConductorPrincipalToServicio({
+        const assignArgs = {
           servicioId: servicio.id,
           servicio: { ...servicio, ...merged },
           conductorId: conductorSel,
@@ -171,7 +172,10 @@ export function EmpresaEditarServicioModal({
           origen: merged.origen,
           destino: merged.destino,
           fechaInicio: merged.fecha_inicio,
-        });
+        };
+        const assignResult = !prevCid
+          ? await asignarConductorEnServicioCreado(assignArgs)
+          : await assignConductorPrincipalToServicio(assignArgs);
         pushAudit("conductor_id", prevCid, conductorSel);
         merged = {
           ...merged,

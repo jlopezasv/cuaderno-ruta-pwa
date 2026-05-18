@@ -70,19 +70,6 @@ function findDocumentBounds(ctx, w, h) {
   return { x: minX, y: minY, w: cw, h: ch };
 }
 
-/** Contraste suave por canal RGB; no convierte a escala de grises. */
-function enhanceDocumentContrast(ctx, w, h) {
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const d = imgData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    for (let c = 0; c < 3; c += 1) {
-      const v = d[i + c];
-      d[i + c] = v < 128 ? v * 0.88 : Math.min(255, v * 1.08 + 12);
-    }
-  }
-  ctx.putImageData(imgData, 0, 0);
-}
-
 function scaleToMaxEdge(w, h, maxEdge) {
   if (w <= maxEdge && h <= maxEdge) return { w, h };
   if (w >= h) {
@@ -110,7 +97,10 @@ async function compressCanvasToTarget(canvas, maxBytes) {
 /**
  * @returns {Promise<{ previewBlob: Blob, originalBlob: Blob|null, width: number, height: number, previewBytes: number, originalBytes: number, processed: boolean }>}
  */
-export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT_MAX_BYTES, documentMode = true } = {}) {
+/**
+ * @param {boolean} [documentMode] — recorte automático (CMR/escaneos). Fotos operativas: false.
+ */
+export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT_MAX_BYTES, documentMode = false } = {}) {
   if (!file || !String(file.type || "").startsWith("image/")) {
     return {
       previewBlob: file,
@@ -145,11 +135,13 @@ export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT
       w = bounds.w;
       h = bounds.h;
     }
-    enhanceDocumentContrast(ctx, w, h);
   }
 
   const previewBlob = await compressCanvasToTarget(canvas, maxBytes);
-  const keepOriginal = file.size > (previewBlob?.size || 0) * 1.35;
+  const keepOriginal =
+    !documentMode && file.size > 100 * 1024
+      ? true
+      : file.size > (previewBlob?.size || 0) * 1.25;
 
   return {
     previewBlob: previewBlob || file,

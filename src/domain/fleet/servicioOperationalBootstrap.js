@@ -132,8 +132,8 @@ function planReadyForFlota(plan) {
 }
 
 /**
- * Al pasar de sin conductor → conductor: plan operativo + metadatos de timeline
- * (misma base que servicio creado ya asignado y confirmado en flota).
+ * Bootstrap operacional: meta en `referencia` (__SRV_OP__).
+ * Solo invocado desde assignConductorPrincipalToServicio (persist: true).
  */
 export async function bootstrapOperationalFlowOnConductorAssign({
   servicio,
@@ -142,28 +142,12 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   origen = null,
   destino = null,
   fechaInicio = null,
-  /** Si false, solo calcula `referencia` (sin PATCH). No usar en asignación: PostgREST no recibe el meta en el PATCH combinado. */
   persist = true,
-  /** Si false, no dispara `cuaderno-recargar-servicio` (p. ej. asignación hace un solo dispatch al final). */
-  dispatchRecarga = true,
+  dispatchRecarga = false,
 }) {
-  const servicioId = servicio?.id ?? null;
-  console.log("BOOTSTRAP_START", servicioId);
-
   if (!servicio?.id || !conductorId) {
-    const early = { ok: false, reason: !servicio?.id ? "missing_servicio_id" : "missing_conductor_id" };
-    console.log("BOOTSTRAP_DONE", early);
-    return null;
+    throw new Error("Bootstrap operacional: servicio o conductor no válido");
   }
-
-  console.log("BOOTSTRAP_BEFORE", {
-    servicioId,
-    oldConductorId: servicio.conductor_id ?? null,
-    newConductorId: conductorId,
-    estado: servicio.estado ?? null,
-    origen: origen || servicio.origen || null,
-    destino: destino || servicio.destino || null,
-  });
 
   const assignedAt = new Date().toISOString();
   const metaPatch = {
@@ -178,33 +162,28 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   }
 
   const existingPlan = getOperationalPlanSnapshot(servicio);
-  const planAlreadyReady = planReadyForFlota(existingPlan);
-  if (!planAlreadyReady) {
+  if (!planReadyForFlota(existingPlan)) {
     const plan = await buildEmpresaNeutralOperationalPlanSnapshot({
       origen: origen || servicio.origen,
       destino: destino || servicio.destino,
       fechaInicio: fechaInicio || servicio.fecha_inicio,
       velocidad: existingPlan?.velocidad || 80,
     });
-    console.log("BOOTSTRAP_PLAN_BUILD", {
-      servicioId,
-      planStatus: plan?.status ?? null,
-      planReady: planReadyForFlota(plan),
-      hasPlannedEta: !!plan?.planned_eta,
-    });
     if (plan) metaPatch.operational_plan = plan;
     if (!getOperationalPlanConfirmedAt(servicio) && planReadyForFlota(plan)) {
       metaPatch.operational_plan_confirmed_at = assignedAt;
     }
-  } else {
-    console.log("BOOTSTRAP_PLAN_BUILD", { servicioId, skipped: true, reason: "plan_already_ready" });
   }
 
   const referencia = mergeReferenciaOperacional(servicio.referencia || null, metaPatch);
+  if (!referencia || !String(referencia).includes("__SRV_OP__")) {
+    throw new Error("Bootstrap operacional: referencia inválida tras merge");
+  }
+
   if (!persist) {
-    console.log("BOOTSTRAP_DONE", { ok: true, servicioId, persist: false, hasOperationalPlan: !!metaPatch.operational_plan });
     return referencia;
   }
+
   const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
@@ -212,23 +191,16 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    const fail = { ok: false, reason: "patch_referencia_failed", status: res.status, detail: String(t).slice(0, 200) };
-    console.warn("bootstrapOperationalFlowOnConductorAssign:", t || res.status);
-    console.log("BOOTSTRAP_DONE", fail);
-    return null;
+    throw new Error(t || `No se pudo persistir referencia operativa (${res.status})`);
   }
+
   const rows = await res.json().catch(() => null);
   const row = Array.isArray(rows) ? rows[0] : rows;
   const outRef = row?.referencia ?? referencia;
-  const resultado = {
-    ok: true,
-    servicioId,
-    patchReferenciaOk: true,
-    rowsReturned: Array.isArray(rows) ? rows.length : rows ? 1 : 0,
-    hasConductorAssignedAt: String(outRef || "").includes("conductor_assigned_at"),
-    hasOperationalPlan: String(outRef || "").includes("operational_plan"),
-    estadoEnRespuesta: row?.estado ?? null,
-  };
+  if (!outRef || !String(outRef).includes("__SRV_OP__")) {
+    throw new Error("Bootstrap operacional: servidor devolvió referencia vacía o sin meta");
+  }
+
   if (dispatchRecarga) {
     try {
       window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
@@ -236,6 +208,6 @@ export async function bootstrapOperationalFlowOnConductorAssign({
       /* SSR */
     }
   }
-  console.log("BOOTSTRAP_DONE", resultado);
+
   return outRef;
 }
