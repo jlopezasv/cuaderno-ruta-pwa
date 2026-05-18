@@ -6,7 +6,13 @@ import {
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
 import { formatOperationalEtaSnapshotLine } from "./operationalEtaPresentation.js";
-import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteBytes } from "../documents/operationalDocumentRecord.js";
+import {
+  enrichEvidenciaDisplay,
+  expedienteSizeLabel,
+  getDocMeta,
+  resolveEvidenciaDisplayImageUrl,
+  sumExpedienteBytes,
+} from "../documents/operationalDocumentRecord.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
@@ -648,13 +654,23 @@ function expedienteEvidenceIsImageLike(ev) {
   return mime.startsWith("image/");
 }
 
+/** URL para incrustar en PDF: original si existe en doc_meta, si no preview/columna url. */
+function evidenceUrlForPdfEmbed(ev) {
+  return resolveEvidenciaDisplayImageUrl(ev) || ev?.url || null;
+}
+
 async function fetchEvidenceImages(expediente) {
   const imageEvs = expediente.evidencias.filter((ev) => expedienteEvidenceIsImageLike(ev));
   const many = imageEvs.length > 10;
   const images = new Map();
   for (const ev of imageEvs) {
+    const srcUrl = evidenceUrlForPdfEmbed(ev);
+    if (!srcUrl) {
+      images.set(ev.id, { error: "Sin URL de imagen" });
+      continue;
+    }
     try {
-      const res = await fetch(ev.url);
+      const res = await fetch(srcUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const isAnnexDoc = ev.tipo === "foto" || ev.tipo === "cmr";

@@ -53,6 +53,8 @@ export function OperationalEvidenciasStop({
   const fileRef = useRef(null);
   const fotoRef = useRef(null);
   const previewBlobRef = useRef(null);
+  /** Archivo CMR original de cámara/galería; el PDF y storage deben usar este, no solo previewBlob. */
+  const cmrSourceFileRef = useRef(null);
 
   const allowedTipos = useMemo(() => {
     if (!Array.isArray(tiposPermitidos) || !tiposPermitidos.length) return null;
@@ -203,12 +205,14 @@ export function OperationalEvidenciasStop({
     setPreviewUrl(null);
     setPreviewMeta(null);
     previewBlobRef.current = null;
+    cmrSourceFileRef.current = null;
   }
 
   async function escanearCmr(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    cmrSourceFileRef.current = file;
     setError("");
     setCmrFase("procesando");
     try {
@@ -244,14 +248,13 @@ export function OperationalEvidenciasStop({
     try {
       let url = null;
       let datos = { ...cmrCampos };
-      if (previewBlobRef.current) {
-        const file = new File([previewBlobRef.current], "cmr.jpg", { type: "image/jpeg" });
+      const sourceFile = cmrSourceFileRef.current;
+      if (sourceFile) {
         const geo = await captureUploadGeo();
-        const up = await uploadOperationalDocument(file, {
+        const up = await uploadOperationalDocument(sourceFile, {
           folder: "cmr",
           tipo: "cmr",
           context: { ...uploadContext, eventoOperacional: "CMR escaneado", geo },
-          processImage: false,
         });
         url = up.previewUrl;
         datos = mergeDocMetaIntoDatos(cmrCampos, up.docMeta);
