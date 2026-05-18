@@ -1,14 +1,13 @@
 // api/admin.js — Vercel Serverless Function
 // Gestiona emails transaccionales (Brevo) y archivado lógico de perfiles (service_role).
 
+import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
+
 const BREVO_KEY = process.env.BREVO_API_KEY;
-const SUPABASE_URL =
-  process.env.SUPABASE_URL || "https://glyexutcypmhkndvmcxd.supabase.co";
-const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdseWV4dXRjeXBtaGtuZHZtY3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5OTg1MzQsImV4cCI6MjA5MTU3NDUzNH0.hYcNca-LxPz9KrTP65OFDp0WUiWx7fqR8uxYdl2ByLA";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+function sbServer() {
+  return getSupabaseServerEnv();
+}
 
 const DEFAULT_ADMIN_UIDS = "ca5dd314-2e37-4f08-86d7-09103cb8e510";
 const ADMIN_PANEL_USER_IDS = (process.env.ADMIN_PANEL_USER_IDS || DEFAULT_ADMIN_UIDS)
@@ -20,9 +19,9 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function supabaseAuthUserId(accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+  const res = await fetch(`${sbServer().url}/auth/v1/user`, {
     headers: {
-      apikey: SUPABASE_ANON_KEY,
+      apikey: sbServer().anonKey,
       Authorization: `Bearer ${accessToken}`,
     },
   });
@@ -33,12 +32,12 @@ async function supabaseAuthUserId(accessToken) {
 
 async function archiveProfileById(userId) {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
+    `${sbServer().url}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`,
     {
       method: "PATCH",
       headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: sbServer().serviceRoleKey,
+        Authorization: `Bearer ${sbServer().serviceRoleKey}`,
         "Content-Type": "application/json",
         Prefer: "return=minimal",
       },
@@ -69,15 +68,15 @@ function isPurgeTestCompanyServerAllowed() {
 
 function srRestHeaders(json = true) {
   const h = {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    apikey: sbServer().serviceRoleKey,
+    Authorization: `Bearer ${sbServer().serviceRoleKey}`,
   };
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
 
 async function restSelect(pathWithQuery) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${pathWithQuery}`, {
+  const r = await fetch(`${sbServer().url}/rest/v1/${pathWithQuery}`, {
     headers: {
       ...srRestHeaders(false),
       Accept: "application/json",
@@ -88,7 +87,7 @@ async function restSelect(pathWithQuery) {
 }
 
 async function restDelete(pathWithQuery) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${pathWithQuery}`, {
+  const r = await fetch(`${sbServer().url}/rest/v1/${pathWithQuery}`, {
     method: "DELETE",
     headers: { ...srRestHeaders(true), Prefer: "return=minimal" },
   });
@@ -110,7 +109,7 @@ async function storageListAll(bucket, userId) {
     const prefix = stack.pop();
     const prefixSlash = prefix ? `${prefix}/` : "";
     const r = await fetch(
-      `${SUPABASE_URL}/storage/v1/object/list/${encodeURIComponent(bucket)}`,
+      `${sbServer().url}/storage/v1/object/list/${encodeURIComponent(bucket)}`,
       {
         method: "POST",
         headers: srRestHeaders(true),
@@ -146,7 +145,7 @@ async function storageRemoveObjects(items) {
       .map((s) => encodeURIComponent(s))
       .join("/");
     await fetch(
-      `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(bucket)}/${enc}`,
+      `${sbServer().url}/storage/v1/object/${encodeURIComponent(bucket)}/${enc}`,
       { method: "DELETE", headers: srRestHeaders(false) },
     ).catch(() => {});
   }
@@ -166,7 +165,7 @@ async function purgeStorageForUserIds(userIds) {
 
 async function authAdminDeleteUser(userId) {
   const r = await fetch(
-    `${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    `${sbServer().url}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
     {
       method: "DELETE",
       headers: srRestHeaders(false),
@@ -443,11 +442,11 @@ export default async function handler(req, res) {
         code: "ADMIN_UNAUTHORIZED",
       });
     }
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
+    if (!sbServer().serviceRoleKey) {
       return res.status(503).json({
         ok: false,
         error:
-          "Servidor sin SUPABASE_SERVICE_ROLE_KEY: no se puede archivar desde API",
+          "Servidor sin sbServer().serviceRoleKey: no se puede archivar desde API",
         code: "ADMIN_MISCONFIGURED",
       });
     }
@@ -526,10 +525,10 @@ export default async function handler(req, res) {
         code: "ADMIN_UNAUTHORIZED",
       });
     }
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
+    if (!sbServer().serviceRoleKey) {
       return res.status(503).json({
         ok: false,
-        error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY",
+        error: "Servidor sin sbServer().serviceRoleKey",
         code: "ADMIN_MISCONFIGURED",
       });
     }

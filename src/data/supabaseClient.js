@@ -1,5 +1,6 @@
-export const SB_URL = "https://glyexutcypmhkndvmcxd.supabase.co";
-export const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdseWV4dXRjeXBtaGtuZHZtY3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5OTg1MzQsImV4cCI6MjA5MTU3NDUzNH0.hYcNca-LxPz9KrTP65OFDp0WUiWx7fqR8uxYdl2ByLA";
+import { SB_URL, SB_KEY } from "../config/env.js";
+
+export { SB_URL, SB_KEY };
 
 /** TEMP: auditar JWT en REST (PostgREST auth.uid). Quitar cuando RLS esté validado. */
 const SBFETCH_AUTH_DEBUG = true;

@@ -1385,7 +1385,6 @@ function CmrScanner({prof,dark}){
   const fileRef=useRef(null);
 
   const uid=getUserId();
-  const SB_URL=window.__SB_URL__||"https://glyexutcypmhkndvmcxd.supabase.co";
 
   // Cargar CMR guardados
   useEffect(()=>{
@@ -2008,9 +2007,8 @@ function AppInner(){
       params.delete("pago");
       const uidPay=getUserId();
       if(uidPay){
-        fetch(`https://glyexutcypmhkndvmcxd.supabase.co/rest/v1/subscriptions?user_id=eq.${uidPay}`,{
+        sbFetch(`/rest/v1/subscriptions?user_id=eq.${uidPay}`,{
           method:"PATCH",
-          headers:{apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdsex11dGN5cG1oa25kdm1jeGQiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc0NDIxMzM4MSwiZXhwIjoyMDU5Nzg5MzgxfQ.0q_DhkD3fFBST4G0K9UBGYIhbFVhDkEBnX-yPEByLA","Content-Type":"application/json"},
           body:JSON.stringify({status:"active",plan:"monthly"})
         }).then(()=>setSubStatus({status:"active"})).catch(()=>setSubStatus({status:"active"}));
       } else {

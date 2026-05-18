@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { GoogleAuth } from "google-auth-library";
+import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
 
 function pushSendLog(...args) {
   console.log("[push-send]", ...args);
@@ -307,8 +308,7 @@ export default async function handler(req, res) {
 
   try {
     const { action, payload } = resolveActionAndPayload(req);
-    const sbUrl = process.env.SUPABASE_URL || "https://glyexutcypmhkndvmcxd.supabase.co";
-    const sbServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const { url: sbUrl, serviceRoleKey: sbServiceKey } = getSupabaseServerEnv();
 
     if (!action) {
       return res.status(400).json({
