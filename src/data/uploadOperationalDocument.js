@@ -11,6 +11,15 @@ import {
 } from "../domain/documents/operationalDocumentTrace.js";
 import { uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
 
+function extFromImageMime(mime, originalName) {
+  const m = String(mime || "").toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic") || m.includes("heif")) return "heic";
+  if (originalName && /\.png$/i.test(originalName)) return "png";
+  return "jpg";
+}
+
 /**
  * Sube preview operacional (+ original opcional) con metadatos.
  * @returns {Promise<{ previewUrl: string, originalUrl: string|null, docMeta: object, displayName: string }>}
@@ -80,13 +89,39 @@ export async function uploadOperationalDocument(file, {
     if (traceOn) traceOperationalDoc("uploadOperationalDocument:branch_pdf", { tipo });
     previewUrl = await uploadUserFile(file, folder);
     mime = "application/pdf";
+  } else if (processImage && isFotoTipo) {
+    // Fotos: sin canvas (drawImage→JPEG pierde color en HEIC/Display P3 en móvil).
+    const ext = extFromImageMime(file.type, file.name);
+    mime = file.type || (ext === "png" ? "image/png" : "image/jpeg");
+    const fileName = buildOperationalFileName(displayName, ext);
+    if (traceOn) {
+      traceOperationalDoc("uploadOperationalDocument:branch_foto_raw", {
+        tipo,
+        processImage: true,
+        canvasPipeline: false,
+        reason: "preserve_camera_color",
+      });
+      await traceBlobColor("uploadOperationalDocument:foto_raw_file", file, { tipo });
+    }
+    previewUrl = await uploadBlobToStorage(file, mime, folder, fileName);
+    originalUrl = previewUrl;
+    previewBytes = file.size || 0;
+    originalBytes = file.size || 0;
+    if (traceOn) {
+      traceOperationalDoc("uploadOperationalDocument:after_storage", {
+        preview_url: previewUrl,
+        original_url: originalUrl,
+        previewBytes,
+        originalBytes,
+        sameBlob: true,
+      });
+    }
   } else if (processImage) {
-    const isFoto = isFotoTipo;
-    const documentMode = !isFoto;
+    const documentMode = true;
     if (traceOn) {
       traceOperationalDoc("uploadOperationalDocument:branch_processImage", {
         tipo,
-        isFoto,
+        isFoto: false,
         documentMode,
         processImage: true,
         calls: "processOperationalDocumentImage",
@@ -94,7 +129,6 @@ export async function uploadOperationalDocument(file, {
     }
     const processed = await processOperationalDocumentImage(file, {
       documentMode,
-      maxBytes: isFoto ? 480 * 1024 : undefined,
     });
     const previewName = buildOperationalFileName(displayName, "jpg");
     if (traceOn) {
@@ -123,8 +157,6 @@ export async function uploadOperationalDocument(file, {
         original_url: originalUrl,
         previewBytes,
         originalBytes,
-        persistedPreviewUrl: previewUrl,
-        persistedOriginalUrl: originalUrl,
       });
     }
   } else {

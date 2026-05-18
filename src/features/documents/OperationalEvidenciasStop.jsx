@@ -175,14 +175,24 @@ export function OperationalEvidenciasStop({
     }
   }
 
-  async function preparePreview(file) {
+  async function preparePreview(file, { forFoto = false } = {}) {
+    if (forFoto) {
+      previewBlobRef.current = file;
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      setPreviewMeta({
+        bytes: file.size || 0,
+        label: formatStorageBytes(file.size || 0),
+      });
+      return { previewBlob: file, previewBytes: file.size || 0 };
+    }
     if (isOperationalDocTraceEnabled()) {
       traceOperationalDoc("OperationalEvidenciasStop:preparePreview", {
-        documentMode: false,
-        note: "UI-only; upload vuelve a procesar en uploadOperationalDocument",
+        documentMode: true,
+        note: "CMR/escaneo — canvas con recorte documental",
       });
     }
-    const processed = await processOperationalDocumentImage(file, { documentMode: false });
+    const processed = await processOperationalDocumentImage(file, { documentMode: true });
     previewBlobRef.current = processed.previewBlob;
     const url = URL.createObjectURL(processed.previewBlob);
     setPreviewUrl(url);
@@ -207,13 +217,14 @@ export function OperationalEvidenciasStop({
           processImage: true,
         });
       }
-      await preparePreview(file);
+      await preparePreview(file, { forFoto: true });
       const geo = await captureUploadGeo();
-      const { previewUrl: url, docMeta } = await uploadOperationalDocument(file, {
+      const { previewUrl, originalUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
         context: { ...uploadContext, eventoOperacional: "Foto operativa", geo },
       });
+      const url = originalUrl || previewUrl;
       const datos = mergeDocMetaIntoDatos({}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
