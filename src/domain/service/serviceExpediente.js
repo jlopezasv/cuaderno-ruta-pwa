@@ -6,6 +6,7 @@ import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteB
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
+import { resolveSalidaMuelleDescargaFromStops } from "./entregaCompletadaTime.js";
 
 const enc = new TextEncoder();
 
@@ -168,50 +169,39 @@ function entryTitle(type) {
 
 function entregaCompletadaPayload(stop, servicio) {
   if (!stop?.salida) return null;
+  const hora = fmtClock(parseTs(stop.salida));
+  const lugar =
+    String(servicio?.destino || "").trim() ||
+    stop.nombre ||
+    stop.direccion ||
+    null;
   return {
     ts: stop.salida,
     stopId: stop.id,
     stopLabel: stop.nombre || stop.label || "",
-    detail:
-      String(servicio?.destino || "").trim() ||
-      stop.nombre ||
-      stop.direccion ||
-      null,
+    detail: lugar ? `Salida muelle descarga · ${hora} · ${lugar}` : `Salida muelle descarga · ${hora}`,
   };
 }
 
 /**
- * Timestamp real de cierre: `hora_salida_real` del stop destino (último en ruta o última descarga).
- * No usa fecha_inicio, updated_at ni salida de muelles de carga intermedios.
+ * Timestamp de «Entrega completada»: solo `hora_salida_real` del último muelle de descarga.
  * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
  */
 function resolveEntregaCompletadaFromStops(stopRows, servicio = null, sortedStops = null) {
-  if (!Array.isArray(stopRows) || !stopRows.length) return null;
+  const salida = resolveSalidaMuelleDescargaFromStops(sortedStops || []);
+  if (!salida) return null;
 
-  const rawById = new Map((sortedStops || []).map((st) => [st.id, st]));
-  const withSalida = (row) => {
-    if (!row) return null;
-    const raw = rawById.get(row.id);
-    const salida = row.salida || raw?.hora_salida_real || null;
-    if (!salida) return null;
-    return { ...row, salida };
-  };
-
-  // 1) Último stop de la ruta (destino operativo habitual)
-  const ultimo = withSalida(stopRows[stopRows.length - 1]);
-  if (ultimo) return entregaCompletadaPayload(ultimo, servicio);
-
-  // 2) Última descarga / carga_descarga con salida (sin tomar cargas de origen)
-  let lastUnload = null;
-  for (const row of stopRows) {
-    if (row.tipo === "descarga" || row.tipo === "carga_descarga") {
-      const hit = withSalida(row);
-      if (hit) lastUnload = hit;
-    }
-  }
-  if (lastUnload) return entregaCompletadaPayload(lastUnload, servicio);
-
-  return null;
+  const row = (stopRows || []).find((st) => st.id === salida.stopId);
+  return entregaCompletadaPayload(
+    {
+      id: salida.stopId,
+      salida: salida.ts,
+      nombre: salida.stopName || row?.nombre,
+      label: row?.label,
+      direccion: row?.direccion,
+    },
+    servicio,
+  );
 }
 
 function buildEntregaCompletadaTimelineEvent(entrega) {
@@ -491,7 +481,7 @@ export function buildServiceExpediente({
     pushed: entregaPushed,
     ts: entregaResolved?.ts ?? null,
     stopId: entregaResolved?.stopId ?? null,
-    source: entregaResolved ? "ultimo_stop.salida_o_ultima_descarga" : "sin_salida_muelle_destino",
+    source: entregaResolved ? "salida_muelle_descarga" : "sin_salida_muelle_descarga",
   });
   sortOperationalTimeline(timeline);
 
@@ -791,7 +781,6 @@ export {
   sortOperationalTimeline,
   compareOperationalTimelineEvents,
   operationalTimelineTypeRank,
-  resolveEntregaCompletadaFromStops,
 };
 
 /** Timeline operacional filtrado (misma lógica que expediente) para tarjetas empresa. */
