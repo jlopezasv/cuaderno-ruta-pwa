@@ -4,7 +4,11 @@ import { uploadOperationalDocument } from "../../data/uploadOperationalDocument.
 import { DOCUMENT_TYPES } from "../../domain/service/serviceDocuments.js";
 import { enrichEvidenciaDisplay, mergeDocMetaIntoDatos } from "../../domain/documents/operationalDocumentRecord.js";
 import { processOperationalDocumentImage, formatStorageBytes } from "../../domain/documents/operationalDocumentPipeline.js";
-import { isOperationalDocTraceEnabled, traceOperationalDoc } from "../../domain/documents/operationalDocumentTrace.js";
+import {
+  diagnoseEvidencia,
+  isOperationalDocTraceEnabled,
+  traceOperationalDoc,
+} from "../../domain/documents/operationalDocumentTrace.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documents/universalCamera.js";
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
@@ -146,9 +150,15 @@ export function OperationalEvidenciasStop({
         evidencias_url_column: saved.url ?? url,
         preview_url_meta: meta?.preview_url ?? null,
         original_url_meta: meta?.original_url ?? null,
+        upload_pipeline: meta?.upload_pipeline ?? null,
         mime: meta?.mime_type ?? null,
         sizePreviewBytes: meta?.size_preview_bytes ?? null,
       });
+      if (tipo === "foto") {
+        void diagnoseEvidencia(saved).then((r) => {
+          traceOperationalDoc("persistEvidencia:auto_diagnose", { verdict: r.verdict });
+        });
+      }
     }
     setEvidencias((prev) => [...prev, saved]);
     notifyEvidenciaSaved({

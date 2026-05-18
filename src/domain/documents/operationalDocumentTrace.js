@@ -1,5 +1,7 @@
 /** Tracing temporal de pipeline documental operacional. Activar: localStorage.docTrace=1 o ?docTrace=1 */
 
+import { getDocMeta, resolveEvidenciaDisplayImageUrl } from "./operationalDocumentRecord.js";
+
 const PREFIX = "[DOC_TRACE]";
 const BUFFER_KEY = "docTraceBuffer";
 const MAX_BUFFER = 250;
@@ -188,6 +190,147 @@ export function logOperationalBundleAudit() {
   });
 }
 
+/** Descarga una URL y mide si el blob es escala de grises. */
+export async function diagnoseImageUrl(url, label = "url") {
+  if (!url || typeof url !== "string") {
+    return { label, ok: false, reason: "sin_url" };
+  }
+  if (url.startsWith("data:")) {
+    try {
+      const r = await fetch(url);
+      const blob = await r.blob();
+      const color = await sampleBlobColorStats(blob, { label });
+      return { label, url: "(data url)", fetchOk: true, color };
+    } catch (e) {
+      return { label, ok: false, reason: e?.message || String(e) };
+    }
+  }
+  try {
+    const res = await fetch(url, { mode: "cors", credentials: "omit" });
+    if (!res.ok) {
+      return { label, url: url.slice(0, 120), ok: false, httpStatus: res.status };
+    }
+    const blob = await res.blob();
+    const color = await sampleBlobColorStats(blob, { label });
+    return {
+      label,
+      url: url.split("?")[0].slice(-80),
+      fetchOk: true,
+      mime: blob.type,
+      size: blob.size,
+      color,
+    };
+  } catch (e) {
+    return { label, url: url.slice(0, 120), ok: false, reason: e?.message || String(e) };
+  }
+}
+
+/**
+ * Diagnóstico completo de una evidencia guardada (parada o extra).
+ * Uso: await __docTraceDiagnoseEvidencia(ev)  — ev = fila de evidencias o objeto del listado.
+ */
+export async function diagnoseEvidencia(ev) {
+  const meta = getDocMeta(ev);
+  const urls = {
+    display: resolveEvidenciaDisplayImageUrl(ev),
+    evidencias_url: ev?.url || null,
+    preview_url: meta?.preview_url || ev?.previewUrl || null,
+    original_url: meta?.original_url || ev?.originalUrl || null,
+  };
+  const unique = [];
+  const seen = new Set();
+  for (const [key, u] of Object.entries(urls)) {
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    unique.push([key, u]);
+  }
+
+  const checks = [];
+  for (const [key, u] of unique) {
+    checks.push(await diagnoseImageUrl(u, key));
+  }
+
+  const colorResults = checks.filter((c) => c.color?.ok);
+  const allGray = colorResults.length > 0 && colorResults.every((c) => c.color.isLikelyGrayscale);
+  const anyColor = colorResults.some((c) => !c.color.isLikelyGrayscale);
+
+  let verdict;
+  if (!colorResults.length) {
+    verdict = "No se pudo leer ninguna URL (CORS, caducada o sin imagen). Abre la URL firmada en otra pestaña.";
+  } else if (allGray) {
+    verdict =
+      "TODAS las URLs analizadas parecen B/N en bytes → el problema está en SUBIDA/STORAGE (o la cámara ya entregó la imagen sin color). Revisa [DOC_TRACE] foto_input vs foto_jpeg_blob.";
+  } else if (anyColor && urls.original_url && urls.preview_url && urls.original_url !== urls.preview_url) {
+    const prev = checks.find((c) => c.label === "preview_url" || c.label === "evidencias_url");
+    const orig = checks.find((c) => c.label === "original_url");
+    if (prev?.color?.isLikelyGrayscale && orig?.color && !orig.color.isLikelyGrayscale) {
+      verdict =
+        "Preview/columna url en B/N pero original en COLOR → el visor debe usar original_url (resolveEvidenciaDisplayImageUrl). Si ves B/N, la UI no está usando displayImageUrl.";
+    } else {
+      verdict = "Hay al menos una URL en color en Storage.";
+    }
+  } else {
+    verdict = "Hay color en Storage; si la pantalla se ve B/N, el fallo es de VISUALIZACIÓN (CSS, caché local, img equivocada).";
+  }
+
+  const report = {
+    evId: ev?.id,
+    tipo: ev?.tipo,
+    upload_pipeline: meta?.upload_pipeline ?? null,
+    urls,
+    checks,
+    verdict,
+  };
+
+  console.log(PREFIX, "DIAGNOSE_EVIDENCIA", report);
+  console.table(
+    checks.map((c) => ({
+      fuente: c.label,
+      gris: c.color?.isLikelyGrayscale ?? "?",
+      maxSpread: c.color?.maxChannelSpread ?? "—",
+      avgRGB: c.color?.ok ? `${c.color.avgR},${c.color.avgG},${c.color.avgB}` : "—",
+      size: c.size ?? c.color?.size ?? "—",
+    })),
+  );
+  return report;
+}
+
+/** Resumen del último upload de foto en el buffer de trace. */
+export function diagnoseLastFotoUploadFromTrace() {
+  const rows = dumpOperationalDocTrace();
+  const relevant = rows.filter(
+    (r) =>
+      String(r.step || "").includes("foto") ||
+      String(r.step || "").includes("uploadOperationalDocument") ||
+      String(r.step || "").includes("persistEvidencia"),
+  );
+  const last = relevant.slice(-12);
+  const branch = [...rows].reverse().find((r) => String(r.step || "").includes("branch_foto"));
+  const inputGray = [...rows]
+    .reverse()
+    .find((r) => r.colorSample?.label?.includes("foto_input") || r.step?.includes("foto_input"));
+  const jpegGray = [...rows]
+    .reverse()
+    .find((r) => r.colorSample?.label?.includes("foto_jpeg") || r.step?.includes("foto_jpeg"));
+
+  const report = {
+    lastSteps: last.map((r) => ({ t: r.t, step: r.step, pipeline: r.upload_pipeline || r.pipeline })),
+    lastBranch: branch
+      ? {
+          step: branch.step,
+          pipeline: branch.pipeline,
+          sameAsExtraDocs: branch.sameAsExtraDocs,
+        }
+      : null,
+    inputFromCamera: inputGray?.colorSample ?? null,
+    afterJpegEncode: jpegGray?.colorSample ?? null,
+    hint:
+      "Si input isLikelyGrayscale=true → la cámara/archivo ya viene sin color. Si solo jpeg es gris → fallo en compressImage/canvas.",
+  };
+  console.log(PREFIX, "LAST_FOTO_UPLOAD", report);
+  return report;
+}
+
 if (typeof window !== "undefined") {
   window.__docTraceEnable = enableOperationalDocTrace;
   window.__docTraceDump = () => {
@@ -195,10 +338,13 @@ if (typeof window !== "undefined") {
     console.table(rows);
     return rows;
   };
+  window.__docTraceDiagnoseUrl = diagnoseImageUrl;
+  window.__docTraceDiagnoseEvidencia = diagnoseEvidencia;
+  window.__docTraceLastFoto = diagnoseLastFotoUploadFromTrace;
   if (isOperationalDocTraceEnabled()) {
     logOperationalBundleAudit();
     traceOperationalDoc("trace_enabled", {
-      hint: "localStorage.docTrace=1 | ?docTrace=1 | __docTraceEnable()",
+      hint: "localStorage.docTrace=1 | ?docTrace=1 | __docTraceEnable() | __docTraceDiagnoseEvidencia(ev)",
     });
   }
 }
