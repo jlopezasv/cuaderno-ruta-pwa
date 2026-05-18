@@ -16,6 +16,7 @@ import {
 } from "../../domain/service/serviceIdentity.js";
 import { ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
+import { entregaServicioEstadoLabel } from "../../domain/service/entregaServicioTime.js";
 
 function isDescansoCr(crType) {
   const t = String(crType || "");
@@ -51,7 +52,7 @@ export function resolveEmpresaFlotaContextLine({
 }) {
   const st = servicio?.estado;
   if (st === "anulado") return "Servicio anulado";
-  if (st === "completado") return "Completado";
+  if (st === "completado") return entregaServicioEstadoLabel(stops);
   if (st === "pendiente_asignacion") return "Pendiente de asignar conductor";
   if (st === "asignado") return "Pendiente de salida";
   if (st !== "en_curso") return null;
@@ -165,7 +166,7 @@ export function buildEmpresaFlotaCardSummary({
   }
 
   if (servicio.estado === "completado") {
-    return { ...base, contextLine: "Completado" };
+    return { ...base, contextLine: entregaServicioEstadoLabel(stops) };
   }
 
   if (servicioSinConductorOperacional(servicio)) {

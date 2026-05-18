@@ -6,6 +6,11 @@ import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteB
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
+import {
+  ENTREGA_SERVICIO_TITLE,
+  ENTREGA_SERVICIO_TYPE,
+  resolveSalidaMuelleDescargaFromStops,
+} from "./entregaServicioTime.js";
 
 const enc = new TextEncoder();
 
@@ -29,6 +34,7 @@ const EXPEDIENTE_TIMELINE_TYPE_ORDER = Object.freeze({
   carga_finalizada: 50,
   descarga_finalizada: 50,
   servicio_anulado: 90,
+  entrega_servicio: 100,
 });
 
 function operationalTimelineTypeRank(type) {
@@ -165,6 +171,65 @@ function entryTitle(type) {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Evento conductor";
 }
 
+function entregaServicioPayload(stop, servicio) {
+  if (!stop?.salida) return null;
+  const lugar =
+    String(servicio?.destino || "").trim() ||
+    stop.nombre ||
+    stop.direccion ||
+    null;
+  return {
+    ts: stop.salida,
+    stopId: stop.id,
+    stopLabel: stop.nombre || stop.label || "",
+    detail: lugar,
+  };
+}
+
+function resolveEntregaServicioFromStops(stopRows, servicio, sortedStops) {
+  const salida = resolveSalidaMuelleDescargaFromStops(sortedStops || []);
+  if (!salida) return null;
+  const row = (stopRows || []).find((st) => st.id === salida.stopId);
+  return entregaServicioPayload(
+    {
+      id: salida.stopId,
+      salida: salida.ts,
+      nombre: salida.stopName || row?.nombre,
+      label: row?.label,
+      direccion: row?.direccion,
+    },
+    servicio,
+  );
+}
+
+function buildEntregaServicioTimelineEvent(entrega) {
+  const ms = parseTs(entrega.ts);
+  return {
+    ts: entrega.ts,
+    time: fmtClock(ms),
+    type: ENTREGA_SERVICIO_TYPE,
+    title: ENTREGA_SERVICIO_TITLE,
+    detail: entrega.detail,
+    stopId: entrega.stopId,
+    evidenceId: null,
+    integrityHash: null,
+    origin: "stop",
+  };
+}
+
+function upsertEntregaServicioTimelineEvent(timeline, servicio, stopRows, sortedStops) {
+  if (servicio?.estado !== "completado") return false;
+  const entrega = resolveEntregaServicioFromStops(stopRows, servicio, sortedStops);
+  if (!entrega) return false;
+  const event = buildEntregaServicioTimelineEvent(entrega);
+  const idx = (timeline || []).findIndex(
+    (ev) => ev.type === ENTREGA_SERVICIO_TYPE || ev.type === "entrega_completada",
+  );
+  if (idx >= 0) timeline[idx] = { ...timeline[idx], ...event };
+  else timeline.push(event);
+  return true;
+}
+
 /**
  * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
  * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
@@ -184,6 +249,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
       title = "Salida muelle";
     }
     if (ty === "salida_muelle") title = "Salida muelle";
+    if (ty === ENTREGA_SERVICIO_TYPE) title = ENTREGA_SERVICIO_TITLE;
     out.push({ ...ev, title });
   }
   sortOperationalTimeline(out);
@@ -408,6 +474,14 @@ export function buildServiceExpediente({
     }
   }
   timelinePushLog.push({ rule: "stop_rows", pushedCount: stopEventsPushed, stopRowsCount: stopRows.length });
+  const entregaResolved = resolveEntregaServicioFromStops(stopRows, servicio, sortedStops);
+  const entregaPushed = upsertEntregaServicioTimelineEvent(timeline, servicio, stopRows, sortedStops);
+  timelinePushLog.push({
+    rule: "entrega_servicio",
+    pushed: entregaPushed,
+    ts: entregaResolved?.ts ?? null,
+    stopId: entregaResolved?.stopId ?? null,
+  });
   sortOperationalTimeline(timeline);
 
   let evidencias = stopRows.flatMap((stop) =>
@@ -514,6 +588,31 @@ export function buildServiceExpediente({
     }
   }
 
+  if (servicio?.estado === "completado") {
+    const entrega = resolveEntregaServicioFromStops(stopRows, servicio, sortedStops);
+    if (entrega) {
+      const stopMeta = getStopOperacionMeta(
+        sortedStops.find((st) => st.id === entrega.stopId)?.notas,
+      );
+      const entregaRow = eventRecord({
+        ts: entrega.ts,
+        type: ENTREGA_SERVICIO_TYPE,
+        title: ENTREGA_SERVICIO_TITLE,
+        detail: appendGeoToDetail(entrega.detail || entrega.stopLabel, stopMeta?.salida_geo),
+        servicio,
+        stopId: entrega.stopId,
+        origin: "stop",
+        location: formatOperationalGeoLine(stopMeta?.salida_geo) || entrega.stopLabel || "",
+        metadata: { salida_muelle: entrega.ts, geo: stopMeta?.salida_geo || null },
+      });
+      const entregaIdx = integrityRecords.findIndex(
+        (row) => row.type === ENTREGA_SERVICIO_TYPE || row.type === "entrega_completada",
+      );
+      if (entregaIdx >= 0) integrityRecords[entregaIdx] = entregaRow;
+      else integrityRecords.push(entregaRow);
+    }
+  }
+
   for (const entry of entries || []) {
     const ms = parseTs(entry.ts);
     if (ms == null || !importantEntry(entry.type)) continue;
@@ -563,8 +662,20 @@ export function buildServiceExpediente({
 
   const filteredFromIntegrity = filterExpedienteTimelineOperacional(timelineFromIntegrity, servicio);
   const filteredFromSimple = filterExpedienteTimelineOperacional(timeline, servicio);
-  const timelineOperacional =
+  let timelineOperacional =
     filteredFromIntegrity.length > 0 ? filteredFromIntegrity : filteredFromSimple;
+  if (servicio?.estado === "completado") {
+    const entrega = resolveEntregaServicioFromStops(stopRows, servicio, sortedStops);
+    if (entrega) {
+      const event = buildEntregaServicioTimelineEvent(entrega);
+      const idx = timelineOperacional.findIndex(
+        (ev) => ev.type === ENTREGA_SERVICIO_TYPE || ev.type === "entrega_completada",
+      );
+      if (idx >= 0) timelineOperacional[idx] = { ...timelineOperacional[idx], ...event };
+      else timelineOperacional = [...timelineOperacional, event];
+      sortOperationalTimeline(timelineOperacional);
+    }
+  }
   const integrityTypes = timelineFromIntegrity.map((ev) => ev.type);
   const tacografoOnlyIntegrity =
     timelineFromIntegrity.length > 0 &&
