@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { getCurrentStop, countCompletedStops } from "../../domain/service/serviceStops.js";
 import {
@@ -93,13 +93,41 @@ function EmpresaFlotaServicioCardImpl({
   tx,
   su,
 }) {
-  console.log("CARD_RENDER_REAL", {
-    source: "EmpresaFlotaServicioCard",
-    servicioId: servicio?.id,
-    expanded,
-    estado: servicio?.estado,
-    conductor_id: servicio?.conductor_id,
-  });
+  const reactKey = servicio?.id ?? "sin-id";
+  const mountIdRef = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+
+  useEffect(() => {
+    console.log("CARD_EXPAND_LIFECYCLE", {
+      phase: "mount",
+      servicioId: servicio?.id,
+      expanded,
+      reactKey,
+      mountId: mountIdRef.current,
+    });
+    return () => {
+      console.log("CARD_EXPAND_LIFECYCLE", {
+        phase: "unmount",
+        servicioId: servicio?.id,
+        expanded,
+        reactKey,
+        mountId: mountIdRef.current,
+      });
+    };
+  }, [servicio?.id, reactKey]);
+
+  useEffect(() => {
+    console.log("CARD_EXPAND_LIFECYCLE", {
+      phase: "expanded_changed",
+      servicioId: servicio?.id,
+      expanded,
+      reactKey,
+      mountId: mountIdRef.current,
+    });
+  }, [expanded, servicio?.id, reactKey]);
 
   const expandedOnceRef = useRef(false);
   if (expanded) expandedOnceRef.current = true;

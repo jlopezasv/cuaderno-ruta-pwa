@@ -1,4 +1,71 @@
+import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
+import { getLastServiceActivity } from "../../domain/service/serviceActivity.js";
+import { needsAttention } from "../../domain/service/serviceAttention.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+
+const EMPRESA_VISTA_ESTADOS_ACTIVOS = Object.freeze(["asignado", "en_curso"]);
+
+function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
+  const stops = flotaStops?.[servicioId] || [];
+  const o = {};
+  for (const st of stops) {
+    if (flotaEvs?.[st.id]) o[st.id] = flotaEvs[st.id];
+  }
+  return o;
+}
+
+/**
+ * Misma regla que el listado Servicios (pestaña activa).
+ * @param {object} ctx — { archivedExpedienteIds, flotaStops, flotaEvs, countIncidencias(servicioId, flotaStops, flotaEvs) }
+ */
+export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
+  if (!servicio?.id || !tab || tab === "todos") return true;
+
+  const archived = ctx.archivedExpedienteIds;
+  const archSet =
+    archived instanceof Set ? archived : new Set(Array.isArray(archived) ? archived : []);
+
+  if (tab === "activos") {
+    return EMPRESA_VISTA_ESTADOS_ACTIVOS.includes(servicio.estado) && !archSet.has(servicio.id);
+  }
+  if (tab === "en_curso") return servicio.estado === "en_curso";
+  if (tab === "asignados") return servicio.estado === "asignado";
+  if (tab === "sin_asignar") return servicioPendienteAsignacion(servicio);
+  if (tab === "completados") return servicio.estado === "completado";
+  if (tab === "archivados") return archSet.has(servicio.id);
+  if (tab === "anulados") return servicio.estado === "anulado";
+  if (tab === "incidencias") {
+    const flotaStops = ctx.flotaStops || {};
+    const flotaEvs = ctx.flotaEvs || {};
+    const svStops = flotaStops[servicio.id] || [];
+    const evs = evidenciasForServicioStops(servicio.id, flotaStops, flotaEvs);
+    const lastActivity = getLastServiceActivity({ service: servicio, stops: svStops, evidencias: evs });
+    const attention = needsAttention({
+      service: servicio,
+      stops: svStops,
+      evidencias: evs,
+      lastActivity,
+    });
+    const incN =
+      typeof ctx.countIncidencias === "function"
+        ? ctx.countIncidencias(servicio.id, flotaStops, flotaEvs)
+        : 0;
+    return attention || incN > 0;
+  }
+  return true;
+}
+
+export function filterServiciosForEmpresaVistaTab(servicios, tab, ctx = {}) {
+  const list = Array.isArray(servicios) ? servicios : [];
+  if (!tab || tab === "todos") return [...list];
+  return list.filter((sv) => servicioMatchesEmpresaVistaTab(sv, tab, ctx));
+}
+
+/** Si el servicio ya no encaja en la pestaña, usar "todos" para no desmontar la card expandida. */
+export function resolveEmpresaVistaTabKeepingExpandedServicio(currentTab, servicio, ctx = {}) {
+  if (servicioMatchesEmpresaVistaTab(servicio, currentTab, ctx)) return currentTab;
+  return "todos";
+}
 
 /** Intervalos panel empresa: datos en background vs tick visual ETA. */
 export const EMPRESA_FLOTA_DATA_POLL_MS = 120_000;

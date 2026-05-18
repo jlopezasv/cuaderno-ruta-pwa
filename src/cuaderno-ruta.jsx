@@ -113,6 +113,8 @@ import {
   servicioIdsForInitialStopsLoad,
   formatFlotaManualRefreshLabel,
   patchFlotaServicioTrasAsignar,
+  filterServiciosForEmpresaVistaTab,
+  resolveEmpresaVistaTabKeepingExpandedServicio,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
   getOperationalEtaUiState,
@@ -12195,6 +12197,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[expedientePreview,setExpedientePreview]=useState(null);
   const[mailExpediente,setMailExpediente]=useState(null);
   const[svCardExpand,setSvCardExpand]=useState(null);
+  const svCardExpandRef=useRef(null);
+  svCardExpandRef.current=svCardExpand;
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[anularModal,setAnularModal]=useState(null);
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
@@ -12756,28 +12760,21 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return m;
   },[flotaServicios,flotaStops,flotaEvs]);
 
+  const empresaVistaTabCtx=useMemo(
+    ()=>({
+      archivedExpedienteIds,
+      flotaStops,
+      flotaEvs,
+      countIncidencias: incidenciasCountServicio,
+    }),
+    [archivedExpedienteIds,flotaStops,flotaEvs],
+  );
+
   const serviciosListaOperativa=useMemo(()=>{
-    let list=[...flotaServicios];
-    if(serviciosVistaTab==="activos") list=list.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)&&!archivedExpedienteIds.has(s.id));
-    else if(serviciosVistaTab==="en_curso") list=list.filter(s=>s.estado==="en_curso");
-    else if(serviciosVistaTab==="asignados") list=list.filter(s=>s.estado==="asignado");
-    else if(serviciosVistaTab==="sin_asignar") list=list.filter(s=>servicioPendienteAsignacion(s));
-    else if(serviciosVistaTab==="completados") list=list.filter(s=>s.estado==="completado");
-    else if(serviciosVistaTab==="archivados") list=list.filter(s=>archivedExpedienteIds.has(s.id));
-    else if(serviciosVistaTab==="anulados") list=list.filter(s=>s.estado==="anulado");
-    else if(serviciosVistaTab==="incidencias"){
-      list=list.filter(sv=>{
-        const svStops=flotaStops[sv.id]||[];
-        const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
-        const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:evs});
-        const attention=needsAttention({service:sv,stops:svStops,evidencias:evs,lastActivity});
-        const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
-        return attention||incN>0;
-      });
-    }
+    const list=filterServiciosForEmpresaVistaTab(flotaServicios,serviciosVistaTab,empresaVistaTabCtx);
     list.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
     return list;
-  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab,archivedExpedienteIds,flotaActivityTsById]);
+  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById]);
 
   useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length]);
 
@@ -13057,8 +13054,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const handleToggleExpandId=useCallback((id)=>{
     setSvCardExpand(prev=>{
       const opening=prev!==id;
+      const next=opening?id:null;
+      console.log("CARD_EXPAND_LIFECYCLE",{
+        phase:"toggle_expand",
+        servicioId:id,
+        prevExpandedId:prev,
+        nextExpandedId:next,
+        expanded:next===id,
+      });
       if(opening)void ensureFlotaEvidenciasRef.current?.(id);
-      return opening?id:null;
+      return next;
     });
   },[]);
 
@@ -14116,8 +14121,30 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           conductores={conductores}
           onClose={()=>setAsignarConductorServicio(null)}
           onAsignado={({conductorNombre,conductorId,servicioId,referencia})=>{
+            const expandedServicioId=svCardExpandRef.current;
+            const prevRow=
+              flotaServiciosRef.current.find((s)=>s.id===servicioId)||asignarConductorServicio;
+            const patchedPreview={
+              ...prevRow,
+              id:servicioId,
+              conductor_id:conductorId,
+              estado:"asignado",
+              referencia:referencia??prevRow?.referencia,
+            };
+
+            if(expandedServicioId===servicioId){
+              const nextTab=resolveEmpresaVistaTabKeepingExpandedServicio(
+                serviciosVistaTab,
+                patchedPreview,
+                empresaVistaTabCtx,
+              );
+              if(nextTab!==serviciosVistaTab)setServiciosVistaTab(nextTab);
+            }
+
             setAsignarConductorServicio(null);
-            setFlotaServicios((prev)=>patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}));
+            setFlotaServicios((prev)=>
+              patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}),
+            );
             showToast("✅ Conductor asignado: "+conductorNombre);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}

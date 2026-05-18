@@ -52,6 +52,14 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
     [onAsignarConductorServicioId, servicioId],
   );
   const pendienteAsignacion = servicioPendienteAsignacion(servicio);
+  const reactKey = servicioId;
+
+  console.log("CARD_EXPAND_LIFECYCLE", {
+    phase: "row_render",
+    servicioId,
+    expanded,
+    reactKey,
+  });
 
   return (
     <EmpresaFlotaServicioCard
