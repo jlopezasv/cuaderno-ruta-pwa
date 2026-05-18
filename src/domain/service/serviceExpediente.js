@@ -15,6 +15,66 @@ function parseTs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** Prioridad operacional cuando varios eventos comparten el mismo reloj (informe / PDF). */
+const EXPEDIENTE_TIMELINE_TYPE_ORDER = Object.freeze({
+  conductor_asignado: 10,
+  servicio: 20,
+  servicio_iniciado: 20,
+  entrada_muelle: 30,
+  foto: 45,
+  cmr: 46,
+  incidencia: 47,
+  nota: 48,
+  salida_muelle: 50,
+  carga_finalizada: 50,
+  descarga_finalizada: 50,
+  servicio_anulado: 90,
+  entrega_completada: 100,
+});
+
+function operationalTimelineTypeRank(type) {
+  const t = String(type || "").toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(EXPEDIENTE_TIMELINE_TYPE_ORDER, t)) {
+    return EXPEDIENTE_TIMELINE_TYPE_ORDER[t];
+  }
+  if (t.startsWith("tacografo_")) return 80;
+  return 55;
+}
+
+function tieBreakOperationalTimeline(a, b) {
+  const ra = operationalTimelineTypeRank(a.type);
+  const rb = operationalTimelineTypeRank(b.type);
+  if (ra !== rb) return ra - rb;
+  const sa = a.stopId ?? a.stop_id ?? "";
+  const sb = b.stopId ?? b.stop_id ?? "";
+  if (sa !== sb) return String(sa).localeCompare(String(sb));
+  const ea = a.evidenceId ?? a.metadata?.evidencia_id ?? "";
+  const eb = b.evidenceId ?? b.metadata?.evidencia_id ?? "";
+  if (ea !== eb) return String(ea).localeCompare(String(eb));
+  return String(a.title || "").localeCompare(String(b.title || ""));
+}
+
+/** Orden cronológico + secuencia operacional (mismo timestamp → prioridad de tipo). */
+function compareOperationalTimelineEvents(a, b, tsKey = "ts") {
+  const ta = parseTs(a[tsKey]);
+  const tb = parseTs(b[tsKey]);
+  if (ta == null && tb == null) return tieBreakOperationalTimeline(a, b);
+  if (ta == null) return 1;
+  if (tb == null) return -1;
+  if (ta !== tb) return ta - tb;
+  return tieBreakOperationalTimeline(a, b);
+}
+
+function sortOperationalTimeline(items) {
+  items.sort((a, b) => compareOperationalTimelineEvents(a, b, "ts"));
+  return items;
+}
+
+function sortOperationalIntegrityRecords(records) {
+  records.sort((a, b) => compareOperationalTimelineEvents(a, b, "timestamp_utc"));
+  return records;
+}
+
 function fmtClock(ms) {
   if (ms == null) return "—";
   return new Date(ms).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
@@ -127,7 +187,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
     if (ty === "salida_muelle") title = "Salida muelle";
     out.push({ ...ev, title });
   }
-  out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+  sortOperationalTimeline(out);
   if (servicio?.estado === "completado") {
     const ts = servicio.updated_at || servicio.fecha_inicio || new Date().toISOString();
     const ms = parseTs(ts);
@@ -142,7 +202,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
       integrityHash: null,
       origin: "servicio",
     });
-    out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+    sortOperationalTimeline(out);
   }
   return out;
 }
@@ -365,7 +425,7 @@ export function buildServiceExpediente({
     }
   }
   timelinePushLog.push({ rule: "stop_rows", pushedCount: stopEventsPushed, stopRowsCount: stopRows.length });
-  timeline.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+  sortOperationalTimeline(timeline);
 
   let evidencias = stopRows.flatMap((stop) =>
     stop.evidencias.map((ev) => ({ ...ev, stopId: stop.id, stopLabel: stop.label, stopName: stop.nombre })),
@@ -488,7 +548,7 @@ export function buildServiceExpediente({
     }));
   }
 
-  integrityRecords.sort((a, b) => parseTs(a.timestamp_utc) - parseTs(b.timestamp_utc));
+  sortOperationalIntegrityRecords(integrityRecords);
   const chronologyConsistent = integrityRecords.every((row, idx, arr) => idx === 0 || parseTs(row.timestamp_utc) >= parseTs(arr[idx - 1].timestamp_utc));
   const geoAvailable = integrityRecords.some((row) => !!row.location_label);
   const integrity = {
@@ -626,6 +686,8 @@ export function buildServiceExpediente({
     documentosExtra,
   };
 }
+
+export { sortOperationalTimeline, compareOperationalTimelineEvents, operationalTimelineTypeRank };
 
 /** Timeline operacional filtrado (misma lógica que expediente) para tarjetas empresa. */
 export function getServicioOperativaTimelineForCard(args) {
