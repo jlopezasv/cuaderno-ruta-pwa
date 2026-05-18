@@ -15857,8 +15857,8 @@ function CrearServicioModal({uid,onClose,onCreado}){
     setSaving(true);setError("");
     try{
       const srData=await crearServicioConIdentidad({
-        conductor_id:uid,
-        estado:"asignado",
+        conductor_id:null,
+        estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
@@ -15869,10 +15869,18 @@ function CrearServicioModal({uid,onClose,onCreado}){
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
       await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-      // Registrar asignación
-      sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
+      const assignResult=await assignConductorPrincipalToServicio({
+        servicioId:sv.id,
+        servicio:{...sv,conductor_id:null,estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION},
+        conductorId:uid,
+        conductorNombre:"Conductor",
+        origen:origen.trim(),
+        destino:destino.trim(),
+        fechaInicio:new Date(fechaInicio).toISOString(),
+      });
+      if(!assignResult?.referencia)throw new Error("No se pudo guardar la referencia operativa del servicio");
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-      onCreado(sv);
+      onCreado({...sv,conductor_id:uid,estado:"asignado",referencia:assignResult.referencia});
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
