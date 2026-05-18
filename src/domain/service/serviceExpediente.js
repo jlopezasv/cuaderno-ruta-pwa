@@ -13,6 +13,11 @@ import {
   resolveEvidenciaDisplayImageUrl,
   sumExpedienteBytes,
 } from "../documents/operationalDocumentRecord.js";
+import {
+  isOperationalDocTraceEnabled,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "../documents/operationalDocumentTrace.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
@@ -670,9 +675,20 @@ async function fetchEvidenceImages(expediente) {
       continue;
     }
     try {
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("fetchEvidenceImages:fetch", {
+          evId: ev.id,
+          evTipo: ev.tipo,
+          srcUrl,
+          sourceFn: "evidenceUrlForPdfEmbed→resolveEvidenciaDisplayImageUrl",
+        });
+      }
       const res = await fetch(srcUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
+      if (isOperationalDocTraceEnabled()) {
+        await traceBlobColor("fetchEvidenceImages:fetched_blob", blob, { evId: ev.id, evTipo: ev.tipo });
+      }
       const isAnnexDoc = ev.tipo === "foto" || ev.tipo === "cmr";
       const maxSide = isAnnexDoc
         ? ev.tipo === "cmr"

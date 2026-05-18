@@ -1,5 +1,12 @@
 /** Procesado ligero de fotos documentales: recorte, contraste, compresión (~500 KB). */
 
+import {
+  isOperationalDocTraceEnabled,
+  sampleCanvasColorStats,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "./operationalDocumentTrace.js";
+
 const DEFAULT_MAX_BYTES = 500 * 1024;
 const MAX_EDGE = 1600;
 
@@ -101,7 +108,28 @@ async function compressCanvasToTarget(canvas, maxBytes) {
  * @param {boolean} [documentMode] — recorte automático (CMR/escaneos). Fotos operativas: false.
  */
 export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT_MAX_BYTES, documentMode = false } = {}) {
+  const traceOn = isOperationalDocTraceEnabled();
+  if (traceOn) {
+    traceOperationalDoc("processOperationalDocumentImage:enter", {
+      fn: "processOperationalDocumentImage",
+      documentMode,
+      maxBytes,
+      fileName: file?.name ?? null,
+      fileMime: file?.type ?? null,
+      fileSize: file?.size ?? null,
+      enhanceDocumentContrast: false,
+      ocrBranch: false,
+    });
+    if (file) await traceBlobColor("processOperationalDocumentImage:input_file", file, { documentMode });
+  }
+
   if (!file || !String(file.type || "").startsWith("image/")) {
+    if (traceOn) {
+      traceOperationalDoc("processOperationalDocumentImage:skip_non_image", {
+        passthrough: true,
+        documentMode,
+      });
+    }
     return {
       previewBlob: file,
       originalBlob: null,
@@ -123,6 +151,14 @@ export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT
   let { canvas, ctx } = drawToCanvas(img, w, h);
 
   if (documentMode) {
+    if (traceOn) {
+      traceOperationalDoc("processOperationalDocumentImage:document_crop_branch", {
+        documentMode: true,
+        enhanceDocumentContrast: false,
+        getImageDataForBounds: true,
+        putImageDataCrop: true,
+      });
+    }
     const bounds = findDocumentBounds(ctx, w, h);
     if (bounds.w < w || bounds.h < h) {
       const cropped = ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
@@ -135,6 +171,18 @@ export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT
       w = bounds.w;
       h = bounds.h;
     }
+  } else if (traceOn) {
+    traceOperationalDoc("processOperationalDocumentImage:foto_branch", {
+      documentMode: false,
+      skippedCrop: true,
+      enhanceDocumentContrast: false,
+    });
+  }
+
+  if (traceOn) {
+    traceOperationalDoc("processOperationalDocumentImage:after_draw", {
+      canvasColor: sampleCanvasColorStats(canvas, { label: "post_draw_pre_jpeg" }),
+    });
   }
 
   const previewBlob = await compressCanvasToTarget(canvas, maxBytes);
@@ -143,7 +191,7 @@ export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT
       ? true
       : file.size > (previewBlob?.size || 0) * 1.25;
 
-  return {
+  const result = {
     previewBlob: previewBlob || file,
     originalBlob: keepOriginal ? file : null,
     width: w,
@@ -152,6 +200,43 @@ export async function processOperationalDocumentImage(file, { maxBytes = DEFAULT
     originalBytes: file.size,
     processed: true,
   };
+
+  if (traceOn) {
+    await traceBlobColor("processOperationalDocumentImage:preview_blob", result.previewBlob, {
+      documentMode,
+      keepOriginal,
+    });
+    if (result.originalBlob) {
+      await traceBlobColor("processOperationalDocumentImage:original_blob", result.originalBlob, {
+        documentMode,
+      });
+    }
+    traceOperationalDoc("processOperationalDocumentImage:exit", {
+      fn: "processOperationalDocumentImage",
+      documentMode,
+      previewBytes: result.previewBytes,
+      originalBytes: result.originalBytes,
+      width: result.width,
+      height: result.height,
+      hasOriginalBlob: !!result.originalBlob,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Alias legacy — si aparece en logs, hay import/ruta antigua activa.
+ * @deprecated usar processOperationalDocumentImage
+ */
+export async function processDocumentImage(file, options = {}) {
+  traceOperationalDoc("processDocumentImage:LEGACY_ALIAS_CALLED", {
+    fn: "processDocumentImage",
+    documentMode: options.documentMode ?? false,
+    enhanceDocumentContrast: false,
+    redirectedTo: "processOperationalDocumentImage",
+  });
+  return processOperationalDocumentImage(file, options);
 }
 
 export function formatStorageBytes(bytes) {

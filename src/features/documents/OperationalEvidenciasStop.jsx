@@ -4,6 +4,7 @@ import { uploadOperationalDocument } from "../../data/uploadOperationalDocument.
 import { DOCUMENT_TYPES } from "../../domain/service/serviceDocuments.js";
 import { enrichEvidenciaDisplay, mergeDocMetaIntoDatos } from "../../domain/documents/operationalDocumentRecord.js";
 import { processOperationalDocumentImage, formatStorageBytes } from "../../domain/documents/operationalDocumentPipeline.js";
+import { isOperationalDocTraceEnabled, traceOperationalDoc } from "../../domain/documents/operationalDocumentTrace.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documents/universalCamera.js";
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
@@ -136,6 +137,19 @@ export function OperationalEvidenciasStop({
     }
     const saved = Array.isArray(payload) ? payload[0] : payload;
     if (!saved?.id) throw new Error("No se guardó la evidencia");
+    if (isOperationalDocTraceEnabled()) {
+      const meta = saved?.datos?.doc_meta;
+      traceOperationalDoc("persistEvidencia:supabase_row", {
+        fn: "persistEvidencia",
+        tipo,
+        evId: saved.id,
+        evidencias_url_column: saved.url ?? url,
+        preview_url_meta: meta?.preview_url ?? null,
+        original_url_meta: meta?.original_url ?? null,
+        mime: meta?.mime_type ?? null,
+        sizePreviewBytes: meta?.size_preview_bytes ?? null,
+      });
+    }
     setEvidencias((prev) => [...prev, saved]);
     notifyEvidenciaSaved({
       ev: saved,
@@ -162,7 +176,13 @@ export function OperationalEvidenciasStop({
   }
 
   async function preparePreview(file) {
-    const processed = await processOperationalDocumentImage(file);
+    if (isOperationalDocTraceEnabled()) {
+      traceOperationalDoc("OperationalEvidenciasStop:preparePreview", {
+        documentMode: false,
+        note: "UI-only; upload vuelve a procesar en uploadOperationalDocument",
+      });
+    }
+    const processed = await processOperationalDocumentImage(file, { documentMode: false });
     previewBlobRef.current = processed.previewBlob;
     const url = URL.createObjectURL(processed.previewBlob);
     setPreviewUrl(url);
@@ -180,6 +200,13 @@ export function OperationalEvidenciasStop({
     setSaving(true);
     setError("");
     try {
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("OperationalEvidenciasStop:onFotoSelected", {
+          route: "uploadOperationalDocument",
+          tipo: "foto",
+          processImage: true,
+        });
+      }
       await preparePreview(file);
       const geo = await captureUploadGeo();
       const { previewUrl: url, docMeta } = await uploadOperationalDocument(file, {
@@ -223,6 +250,12 @@ export function OperationalEvidenciasStop({
         r.onerror = rej;
         r.readAsDataURL(previewBlobRef.current || file);
       });
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("OperationalEvidenciasStop:escanearCmr_ocr", {
+          ocrBranch: true,
+          api: "/api/cmr",
+        });
+      }
       const resp = await fetch("/api/cmr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -250,6 +283,13 @@ export function OperationalEvidenciasStop({
       let datos = { ...cmrCampos };
       const sourceFile = cmrSourceFileRef.current;
       if (sourceFile) {
+        if (isOperationalDocTraceEnabled()) {
+          traceOperationalDoc("OperationalEvidenciasStop:guardarCmr_upload", {
+            route: "uploadOperationalDocument",
+            tipo: "cmr",
+            documentModeExpected: true,
+          });
+        }
         const geo = await captureUploadGeo();
         const up = await uploadOperationalDocument(sourceFile, {
           folder: "cmr",

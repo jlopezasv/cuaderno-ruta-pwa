@@ -1,4 +1,5 @@
 import { formatStorageBytes } from "./operationalDocumentPipeline.js";
+import { isOperationalDocTraceEnabled, traceOperationalDoc } from "./operationalDocumentTrace.js";
 import { operationalGroupFromStopTipo } from "../service/tripOperationalDossier.js";
 
 export const DOC_META_SCHEMA = 1;
@@ -91,7 +92,23 @@ function tipoHeadline(tipo, meta, ev) {
 /** URL para mostrar la imagen en color (original si existe; si no, preview). */
 export function resolveEvidenciaDisplayImageUrl(ev) {
   const meta = getDocMeta(ev);
-  return meta?.original_url || ev?.originalUrl || meta?.preview_url || ev?.previewUrl || ev?.url || null;
+  const original = meta?.original_url || ev?.originalUrl || null;
+  const preview = meta?.preview_url || ev?.previewUrl || null;
+  const legacyUrl = ev?.url || null;
+  const chosen = original || preview || legacyUrl;
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("resolveEvidenciaDisplayImageUrl", {
+      fn: "resolveEvidenciaDisplayImageUrl",
+      evId: ev?.id ?? null,
+      evTipo: ev?.tipo ?? meta?.tipo_documento ?? null,
+      original_url: original,
+      preview_url: preview,
+      evidencias_url_column: legacyUrl,
+      chosen,
+      source: original ? "original_url" : preview ? "preview_url" : legacyUrl ? "evidencias.url" : "none",
+    });
+  }
+  return chosen;
 }
 
 export function enrichEvidenciaDisplay(ev, { stop = null, conductorName = null } = {}) {

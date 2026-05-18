@@ -4,6 +4,11 @@ import {
   logStorageDoc,
   logStorageDocFail,
 } from "../domain/documents/storageDocumentUploadLog.js";
+import {
+  isOperationalDocTraceEnabled,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "../domain/documents/operationalDocumentTrace.js";
 
 /** Firmas cortas; evitar URLs públicas permanentes para CMR/fotos/PDF. */
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7; // 7 días
@@ -98,6 +103,19 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
   const objectPath = `${uid}/${folder}/${Date.now()}.${ext}`;
   const bucket = USER_PHOTOS_BUCKET;
   const sizeBytes = blobByteSize(blob);
+
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("uploadBlobToStorage:start", {
+      bucket,
+      path: objectPath,
+      mime: mime || null,
+      sizeBytes,
+      folder,
+    });
+    if (blob && String(mime || "").startsWith("image/")) {
+      await traceBlobColor("uploadBlobToStorage:input", blob, { path: objectPath, folder });
+    }
+  }
 
   logStorageDoc("DOCUMENT_STORAGE_START", {
     bucket,
@@ -197,6 +215,15 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
           url: finalUrl,
           urlLength: finalUrl.length,
         });
+        if (isOperationalDocTraceEnabled()) {
+          traceOperationalDoc("uploadBlobToStorage:final_url", {
+            path: objectPath,
+            folder,
+            mime,
+            sizeBytes,
+            signedUrl: finalUrl,
+          });
+        }
         return finalUrl;
       }
       logStorageDocFail("DOCUMENT_STORAGE_SIGNED_URL_FAIL", new Error("Respuesta sign sin URL"), {
@@ -241,6 +268,19 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
 }
 
 function compressImage(file, maxWidth = 800, quality = 0.72) {
+  const traceOn = isOperationalDocTraceEnabled();
+  if (traceOn) {
+    traceOperationalDoc("compressImage:enter", {
+      fn: "compressImage",
+      pipeline: "uploadUserPhoto_legacy",
+      maxWidth,
+      quality,
+      enhanceDocumentContrast: false,
+      fileName: file?.name,
+      fileMime: file?.type,
+      fileSize: file?.size,
+    });
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
@@ -259,10 +299,13 @@ function compressImage(file, maxWidth = 800, quality = 0.72) {
         canvas.height = h;
         canvas.getContext("2d").drawImage(img, 0, 0, w, h);
         canvas.toBlob(
-          (blob) => {
+          async (blob) => {
             if (!blob || blob.size <= 0) {
               reject(new Error("Compresión devolvió blob vacío"));
               return;
+            }
+            if (traceOn) {
+              await traceBlobColor("compressImage:output", blob, { pipeline: "uploadUserPhoto_legacy" });
             }
             resolve(blob);
           },

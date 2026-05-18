@@ -4,6 +4,11 @@ import {
   buildOperationalFileName,
 } from "../domain/documents/operationalDocumentNaming.js";
 import { buildDocMetaPayload } from "../domain/documents/operationalDocumentRecord.js";
+import {
+  isOperationalDocTraceEnabled,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "../domain/documents/operationalDocumentTrace.js";
 import { uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
 
 /**
@@ -16,6 +21,29 @@ export async function uploadOperationalDocument(file, {
   context = {},
   processImage = true,
 } = {}) {
+  const traceOn = isOperationalDocTraceEnabled();
+  const isFotoTipo = String(tipo || "").toLowerCase() === "foto";
+  const isPdfEarly =
+    String(file?.type || "").includes("pdf") || String(file?.name || "").toLowerCase().endsWith(".pdf");
+  if (traceOn) {
+    traceOperationalDoc("uploadOperationalDocument:enter", {
+      fn: "uploadOperationalDocument",
+      tipo,
+      folder,
+      processImage,
+      documentModeWillBe: processImage ? !isFotoTipo : null,
+      isPdf: isPdfEarly,
+      fileName: file?.name ?? null,
+      fileMime: file?.type ?? null,
+      fileSize: file?.size ?? null,
+      enhanceDocumentContrast: false,
+      legacyUploadUserFileBranch: !processImage && !isPdfEarly,
+    });
+    if (file && String(file.type || "").startsWith("image/")) {
+      await traceBlobColor("uploadOperationalDocument:input", file, { tipo, processImage });
+    }
+  }
+
   const {
     servicio = null,
     stop = null,
@@ -49,25 +77,64 @@ export async function uploadOperationalDocument(file, {
   let mime = file?.type || "image/jpeg";
 
   if (isPdf) {
+    if (traceOn) traceOperationalDoc("uploadOperationalDocument:branch_pdf", { tipo });
     previewUrl = await uploadUserFile(file, folder);
     mime = "application/pdf";
   } else if (processImage) {
-    const isFoto = String(tipo || "").toLowerCase() === "foto";
+    const isFoto = isFotoTipo;
+    const documentMode = !isFoto;
+    if (traceOn) {
+      traceOperationalDoc("uploadOperationalDocument:branch_processImage", {
+        tipo,
+        isFoto,
+        documentMode,
+        processImage: true,
+        calls: "processOperationalDocumentImage",
+      });
+    }
     const processed = await processOperationalDocumentImage(file, {
-      documentMode: !isFoto,
+      documentMode,
       maxBytes: isFoto ? 480 * 1024 : undefined,
     });
     const previewName = buildOperationalFileName(displayName, "jpg");
+    if (traceOn) {
+      await traceBlobColor("uploadOperationalDocument:preview_blob_before_storage", processed.previewBlob, {
+        blobRole: "preview",
+        documentMode,
+      });
+    }
     previewUrl = await uploadBlobToStorage(processed.previewBlob, "image/jpeg", folder, previewName);
     previewBytes = processed.previewBytes;
     width = processed.width;
     height = processed.height;
     if (processed.originalBlob) {
       const origName = buildOperationalFileName(`${displayName}_original`, "jpg");
+      if (traceOn) {
+        await traceBlobColor("uploadOperationalDocument:original_blob_before_storage", processed.originalBlob, {
+          blobRole: "original",
+        });
+      }
       originalUrl = await uploadBlobToStorage(processed.originalBlob, file.type || "image/jpeg", `${folder}/original`, origName);
       originalBytes = processed.originalBytes;
     }
+    if (traceOn) {
+      traceOperationalDoc("uploadOperationalDocument:after_storage", {
+        preview_url: previewUrl,
+        original_url: originalUrl,
+        previewBytes,
+        originalBytes,
+        persistedPreviewUrl: previewUrl,
+        persistedOriginalUrl: originalUrl,
+      });
+    }
   } else {
+    if (traceOn) {
+      traceOperationalDoc("uploadOperationalDocument:branch_legacy_uploadUserFile", {
+        tipo,
+        processImage: false,
+        warning: "Ruta compressImage(uploadUserPhoto) — no operational pipeline",
+      });
+    }
     previewUrl = await uploadUserFile(file, folder);
   }
 
@@ -91,6 +158,19 @@ export async function uploadOperationalDocument(file, {
     eventoOperacional,
     geo,
   });
+
+  if (traceOn) {
+    traceOperationalDoc("uploadOperationalDocument:exit", {
+      fn: "uploadOperationalDocument",
+      tipo,
+      processImage,
+      preview_url: docMeta.preview_url,
+      original_url: docMeta.original_url,
+      mime: docMeta.mime_type,
+      sizePreviewBytes: docMeta.size_preview_bytes,
+      sizeOriginalBytes: docMeta.size_original_bytes,
+    });
+  }
 
   return { previewUrl, originalUrl, docMeta, displayName };
 }
