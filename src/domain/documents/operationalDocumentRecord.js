@@ -43,9 +43,11 @@ export function buildDocMetaPayload({
   eventoOperacional = null,
   archivoNombre = null,
   geo = null,
+  uploadPipeline = null,
 }) {
   return {
     schema_version: DOC_META_SCHEMA,
+    upload_pipeline: uploadPipeline,
     display_name: displayName,
     archivo_nombre: archivoNombre || displayName,
     mime_type: mimeType || "image/jpeg",

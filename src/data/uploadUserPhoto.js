@@ -267,7 +267,11 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
   return dataUrl;
 }
 
-function compressImage(file, maxWidth = 800, quality = 0.72) {
+/**
+ * JPEG vía FileReader+canvas (mismo motor que documentos extra / «foto adicional»).
+ * En iOS/HEIC suele conservar color mejor que createObjectURL + canvas del pipeline operacional antiguo.
+ */
+export function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.72) {
   const traceOn = isOperationalDocTraceEnabled();
   if (traceOn) {
     traceOperationalDoc("compressImage:enter", {
@@ -321,7 +325,7 @@ function compressImage(file, maxWidth = 800, quality = 0.72) {
 
 /** Sube imagen comprimida a `user-photos` en Supabase Storage. */
 export async function uploadUserPhoto(file, folder = "misc", options = {}) {
-  const compressed = await compressImage(file, 800, 0.72);
+  const compressed = await compressImageToJpegBlob(file, 800, 0.72);
   return uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
 }
 

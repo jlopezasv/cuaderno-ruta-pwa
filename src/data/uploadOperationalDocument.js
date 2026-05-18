@@ -9,16 +9,7 @@ import {
   traceBlobColor,
   traceOperationalDoc,
 } from "../domain/documents/operationalDocumentTrace.js";
-import { uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
-
-function extFromImageMime(mime, originalName) {
-  const m = String(mime || "").toLowerCase();
-  if (m.includes("png")) return "png";
-  if (m.includes("webp")) return "webp";
-  if (m.includes("heic") || m.includes("heif")) return "heic";
-  if (originalName && /\.png$/i.test(originalName)) return "png";
-  return "jpg";
-}
+import { compressImageToJpegBlob, uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
 
 /**
  * Sube preview operacional (+ original opcional) con metadatos.
@@ -90,30 +81,37 @@ export async function uploadOperationalDocument(file, {
     previewUrl = await uploadUserFile(file, folder);
     mime = "application/pdf";
   } else if (processImage && isFotoTipo) {
-    // Fotos: sin canvas (drawImage→JPEG pierde color en HEIC/Display P3 en móvil).
-    const ext = extFromImageMime(file.type, file.name);
-    mime = file.type || (ext === "png" ? "image/png" : "image/jpeg");
-    const fileName = buildOperationalFileName(displayName, ext);
+    // Mismo motor que «Archivos adicionales» (FileReader→canvas→JPEG), no processOperationalDocumentImage (objectURL).
+    mime = "image/jpeg";
+    const previewName = buildOperationalFileName(displayName, "jpg");
     if (traceOn) {
-      traceOperationalDoc("uploadOperationalDocument:branch_foto_raw", {
+      traceOperationalDoc("uploadOperationalDocument:branch_foto_file_reader_jpeg", {
         tipo,
         processImage: true,
-        canvasPipeline: false,
-        reason: "preserve_camera_color",
+        pipeline: "compressImageToJpegBlob",
+        sameAsExtraDocs: true,
+        operationalCanvasPipeline: false,
       });
-      await traceBlobColor("uploadOperationalDocument:foto_raw_file", file, { tipo });
+      await traceBlobColor("uploadOperationalDocument:foto_input", file, { tipo });
     }
-    previewUrl = await uploadBlobToStorage(file, mime, folder, fileName);
-    originalUrl = previewUrl;
-    previewBytes = file.size || 0;
-    originalBytes = file.size || 0;
+    const jpegBlob = await compressImageToJpegBlob(file, 1600, 0.82);
+    if (traceOn) {
+      await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", jpegBlob, { tipo });
+    }
+    previewUrl = await uploadBlobToStorage(jpegBlob, "image/jpeg", folder, previewName);
+    previewBytes = jpegBlob.size;
+    if (file.size > 100 * 1024) {
+      const origName = buildOperationalFileName(`${displayName}_original`, "jpg");
+      originalUrl = await uploadBlobToStorage(file, file.type || "image/jpeg", `${folder}/original`, origName);
+      originalBytes = file.size;
+    }
     if (traceOn) {
       traceOperationalDoc("uploadOperationalDocument:after_storage", {
         preview_url: previewUrl,
         original_url: originalUrl,
         previewBytes,
         originalBytes,
-        sameBlob: true,
+        upload_pipeline: "foto_file_reader_jpeg",
       });
     }
   } else if (processImage) {
@@ -189,6 +187,7 @@ export async function uploadOperationalDocument(file, {
     ciudad: ciudad || stop?.nombre || null,
     eventoOperacional,
     geo,
+    uploadPipeline: isFotoTipo && processImage && !isPdf ? "foto_file_reader_jpeg" : isPdf ? "pdf_raw" : processImage ? "document_canvas" : "legacy_upload_user_file",
   });
 
   if (traceOn) {
