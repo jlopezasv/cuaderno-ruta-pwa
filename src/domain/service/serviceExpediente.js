@@ -204,6 +204,7 @@ export function buildServiceExpediente({
   fmtDur,
   entries = [],
 }) {
+  console.log("EXPEDIENTE_DEBUG_ENTER", { servicioId: servicio?.id, stopsCount: stops?.length ?? 0 });
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
   const plan = getOperationalPlanSnapshot(servicio);

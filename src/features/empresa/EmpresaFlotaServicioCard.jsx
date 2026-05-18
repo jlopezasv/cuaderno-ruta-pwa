@@ -93,6 +93,14 @@ function EmpresaFlotaServicioCardImpl({
   tx,
   su,
 }) {
+  console.log("CARD_RENDER_REAL", {
+    source: "EmpresaFlotaServicioCard",
+    servicioId: servicio?.id,
+    expanded,
+    estado: servicio?.estado,
+    conductor_id: servicio?.conductor_id,
+  });
+
   const expandedOnceRef = useRef(false);
   if (expanded) expandedOnceRef.current = true;
 
@@ -137,7 +145,7 @@ function EmpresaFlotaServicioCardImpl({
 
   const operativaTimeline = useMemo(() => {
     if (!expanded) return [];
-    return getServicioOperativaTimelineForCard({
+    const timeline = getServicioOperativaTimelineForCard({
       servicio,
       stops,
       evidenciasByStop: flotaEvs,
@@ -146,6 +154,16 @@ function EmpresaFlotaServicioCardImpl({
       fmtDur,
       entries: conductor?.entries || [],
     });
+    console.log("TIMELINE_DEBUG", {
+      servicioId: servicio?.id,
+      expanded,
+      estado: servicio?.estado,
+      conductor_id: servicio?.conductor_id,
+      referencia: servicio?.referencia,
+      operativaTimeline: timeline,
+      timelineLength: timeline.length,
+    });
+    return timeline;
   }, [
     expanded,
     servicio,

@@ -153,6 +153,12 @@ function EmpresaFlotaServiciosListImpl({
     return meta;
   }, [servicios, flotaStops, flotaEvs]);
 
+  console.log("CARD_RENDER_REAL", {
+    source: "EmpresaFlotaServiciosList",
+    serviciosCount: servicios?.length ?? 0,
+    expandedId,
+  });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "6px 0 10px" }}>
       {servicios.map((sv) => {

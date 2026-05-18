@@ -13740,6 +13740,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
                   )}
                   <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"14px 14px 12px",marginBottom:12}}>
+                    {console.log("CARD_RENDER_REAL", {
+                      source: "EmpresaPanel.expedientePreviewModal",
+                      servicioId: expedientePreview?.id,
+                      timelineLength: expedientePreview?.timeline?.length ?? 0,
+                      flotaTab: "documentos",
+                    })}
                     <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>Timeline operacional</div>
                       <div style={{fontSize:11,color:"#64748b",fontWeight:700}}>{expedientePreview.timeline.length} eventos</div>
