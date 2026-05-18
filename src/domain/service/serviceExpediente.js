@@ -194,6 +194,28 @@ export function buildServiceExpedienteListPreview({ servicio, stops = [], nombre
   };
 }
 
+function referenciaRuntimeSnapshot(servicio) {
+  const ref = servicio?.referencia;
+  const refType = ref == null ? "null" : Array.isArray(ref) ? "array" : typeof ref;
+  let refFull = "";
+  if (refType === "string") refFull = ref;
+  else if (refType === "object") {
+    try {
+      refFull = JSON.stringify(ref);
+    } catch {
+      refFull = "[object unserializable]";
+    }
+  } else if (ref != null) refFull = String(ref);
+  return {
+    refType,
+    refLength: refFull.length,
+    refFull,
+    hasSrvOpMark: refFull.includes("__SRV_OP__:"),
+    hasNewlineSrvOpMark: refFull.includes("\n__SRV_OP__:"),
+    hasConductorAssignedAtString: refFull.includes("conductor_assigned_at"),
+  };
+}
+
 export function buildServiceExpediente({
   servicio,
   stops,
@@ -204,9 +226,10 @@ export function buildServiceExpediente({
   fmtDur,
   entries = [],
 }) {
-  console.log("EXPEDIENTE_DEBUG_ENTER", { servicioId: servicio?.id, stopsCount: stops?.length ?? 0 });
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
+  const refSnap = referenciaRuntimeSnapshot(servicio);
+  const timelinePushLog = [];
   const plan = getOperationalPlanSnapshot(servicio);
   const ref = getServiceNumber(servicio);
   const counters = {};
@@ -274,9 +297,26 @@ export function buildServiceExpediente({
       title: "Conductor asignado",
       detail: conductorAssignedLabel || "—",
     });
+    timelinePushLog.push({
+      rule: "conductor_assigned_at",
+      pushed: true,
+      ts: conductorAssignedAt,
+      source: "serviceMeta.conductor_assigned_at",
+    });
+  } else {
+    timelinePushLog.push({
+      rule: "conductor_assigned_at",
+      pushed: false,
+      source: "serviceMeta.conductor_assigned_at",
+      serviceMetaKeys: Object.keys(serviceMeta || {}),
+      conductor_id: servicio?.conductor_id ?? null,
+    });
   }
   if (servicio?.fecha_inicio) {
     timeline.push({ ts: servicio.fecha_inicio, time: fmtClock(parseTs(servicio.fecha_inicio)), type: "servicio", title: "Servicio iniciado", detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}` });
+    timelinePushLog.push({ rule: "fecha_inicio", pushed: true, ts: servicio.fecha_inicio });
+  } else {
+    timelinePushLog.push({ rule: "fecha_inicio", pushed: false });
   }
   const cancellation = serviceMeta?.cancellation || null;
   const cancelledAt = cancellation?.at || serviceMeta?.service_cancelled_at || servicio?.fecha_anulacion || servicio?.anulado_at || null;
@@ -292,10 +332,13 @@ export function buildServiceExpediente({
       title: "Servicio anulado",
       detail: cancellationDetail,
     });
+    timelinePushLog.push({ rule: "anulado", pushed: true, ts });
   }
+  let stopEventsPushed = 0;
   for (const stop of stopRows) {
     const stopMeta = getStopOperacionMeta(stop.notas);
     if (stop.entrada) {
+      stopEventsPushed += 1;
       timeline.push({
         ts: stop.entrada,
         time: stop.entradaHora,
@@ -306,9 +349,11 @@ export function buildServiceExpediente({
       });
     }
     for (const ev of stop.evidencias) {
+      stopEventsPushed += 1;
       timeline.push({ ts: ev.created_at, time: ev.hora, type: ev.tipo, title: ev.titulo, detail: ev.detalle, stopId: stop.id, evidenceId: ev.id });
     }
     if (stop.salida) {
+      stopEventsPushed += 1;
       timeline.push({
         ts: stop.salida,
         time: stop.salidaHora,
@@ -319,6 +364,7 @@ export function buildServiceExpediente({
       });
     }
   }
+  timelinePushLog.push({ rule: "stop_rows", pushedCount: stopEventsPushed, stopRowsCount: stopRows.length });
   timeline.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
 
   let evidencias = stopRows.flatMap((stop) =>
@@ -472,12 +518,57 @@ export function buildServiceExpediente({
   const cliente = getServiceClient(servicio);
   const referenciaCliente = getServiceClientReference(servicio);
 
-  const rawTimeline = timelineFromIntegrity.length ? timelineFromIntegrity : timeline;
-  const timelineOperacional = filterExpedienteTimelineOperacional(rawTimeline, servicio);
-  console.log("EXPEDIENTE_DEBUG", {
+  const filteredFromIntegrity = filterExpedienteTimelineOperacional(timelineFromIntegrity, servicio);
+  const filteredFromSimple = filterExpedienteTimelineOperacional(timeline, servicio);
+  const timelineOperacional =
+    filteredFromIntegrity.length > 0 ? filteredFromIntegrity : filteredFromSimple;
+  const integrityTypes = timelineFromIntegrity.map((ev) => ev.type);
+  const tacografoOnlyIntegrity =
+    timelineFromIntegrity.length > 0 &&
+    integrityTypes.length > 0 &&
+    integrityTypes.every((ty) => String(ty).startsWith("tacografo_"));
+  let timelineEmptyReason = null;
+  if (!timelineOperacional.length) {
+    if (!conductorAssignedAt && !servicio?.fecha_inicio && stopEventsPushed === 0) {
+      timelineEmptyReason = "sin_eventos_en_timeline_simple_y_meta_sin_conductor_assigned_at";
+    } else if (tacografoOnlyIntegrity && filteredFromIntegrity.length === 0 && filteredFromSimple.length > 0) {
+      timelineEmptyReason = "BUG_evitado: integrity_solo_tacografo_filtrado_pero_simple_tenia_eventos";
+    } else if (timelineFromIntegrity.length > 0 && filteredFromIntegrity.length === 0) {
+      timelineEmptyReason = "integrity_filtrada_vacia_tras_quitar_tacografo";
+    } else if (timeline.length > 0 && filteredFromSimple.length === 0) {
+      timelineEmptyReason = "timeline_simple_filtrada_vacia";
+    } else {
+      timelineEmptyReason = "sin_eventos_tras_filtro";
+    }
+  }
+  console.log("EXPEDIENTE_TIMELINE_BUILD", {
+    servicioId: servicio?.id,
+    estado: servicio?.estado,
+    conductor_id: servicio?.conductor_id,
+    referencia: refSnap,
+    serviceMeta,
     conductorAssignedAt,
-    fecha_inicio: servicio?.fecha_inicio,
-    timeline: timelineOperacional,
+    conductorAssignedLabel,
+    fecha_inicio: servicio?.fecha_inicio ?? null,
+    entriesCount: (entries || []).length,
+    timelinePushLog,
+    timelineSimpleCount: timeline.length,
+    timelineSimpleTypes: timeline.map((ev) => ev.type),
+    integrityRecordsCount: integrityRecords.length,
+    timelineFromIntegrityCount: timelineFromIntegrity.length,
+    timelineFromIntegrityTypes: integrityTypes,
+    tacografoOnlyIntegrity,
+    filteredFromIntegrityCount: filteredFromIntegrity.length,
+    filteredFromSimpleCount: filteredFromSimple.length,
+    timelineOperacionalCount: timelineOperacional.length,
+    timelineSourceChosen:
+      filteredFromIntegrity.length > 0
+        ? "integrity_filtered"
+        : filteredFromSimple.length > 0
+          ? "simple_filtered"
+          : "empty",
+    timelineEmptyReason,
+    timelineOperacional,
   });
   const rawEvidenciasFlat = [
     ...sortedStops.flatMap((st) => evidenciasByStop?.[st.id] || []),
