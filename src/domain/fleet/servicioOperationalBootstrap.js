@@ -142,8 +142,10 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   origen = null,
   destino = null,
   fechaInicio = null,
-  /** Si false, solo calcula `referencia` (sin PATCH ni evento); para unificar PATCH en asignación. */
+  /** Si false, solo calcula `referencia` (sin PATCH). No usar en asignación: PostgREST no recibe el meta en el PATCH combinado. */
   persist = true,
+  /** Si false, no dispara `cuaderno-recargar-servicio` (p. ej. asignación hace un solo dispatch al final). */
+  dispatchRecarga = true,
 }) {
   const servicioId = servicio?.id ?? null;
   console.log("BOOTSTRAP_START", servicioId);
@@ -227,10 +229,12 @@ export async function bootstrapOperationalFlowOnConductorAssign({
     hasOperationalPlan: String(outRef || "").includes("operational_plan"),
     estadoEnRespuesta: row?.estado ?? null,
   };
-  try {
-    window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
-  } catch {
-    /* SSR */
+  if (dispatchRecarga) {
+    try {
+      window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+    } catch {
+      /* SSR */
+    }
   }
   console.log("BOOTSTRAP_DONE", resultado);
   return outRef;
