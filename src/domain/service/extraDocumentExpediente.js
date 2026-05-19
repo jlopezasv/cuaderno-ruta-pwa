@@ -37,8 +37,9 @@ function tipoLabel(tipo) {
 /** Fila servicio_documentos_extra → evidencia unificada para expediente empresa. */
 export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } = {}) {
   const url = extraDocFileUrl(row);
+  const docMeta = row?.datos?.doc_meta && typeof row.datos.doc_meta === "object" ? row.datos.doc_meta : null;
   const tipo = String(row?.tipo || "otro").toLowerCase();
-  const mime = row?.mime_type || "";
+  const mime = row?.mime_type || docMeta?.mime_type || "";
   const archivoNombre = row?.archivo_nombre || null;
   const tipoLbl = tipoLabel(tipo);
   const title = archivoNombre || tipoLbl;
@@ -58,8 +59,9 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
     detalle: row?.descripcion?.trim() || "",
     created_at: row?.created_at,
     hora: fmtClock(ms),
-    url,
-    previewUrl: url,
+    url: docMeta?.preview_url || url,
+    previewUrl: docMeta?.preview_url || url,
+    originalUrl: docMeta?.original_url || null,
     nota: row?.descripcion || null,
     datos: {
       ...(row?.datos && typeof row.datos === "object" ? row.datos : {}),

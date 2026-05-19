@@ -108,13 +108,50 @@ function tipoHeadline(tipo, meta, ev) {
   return (tipo || "documento").toUpperCase();
 }
 
-/** URL para mostrar la imagen en color (original si existe; si no, preview). */
+function evidenceMimeType(ev, meta) {
+  return meta?.mime_type || ev?.mime_type || ev?.datos?.mime_type || "";
+}
+
+/** HEIC/HEIF y similares: el navegador suele mostrarlos desaturados; usar preview JPEG. */
+function isBrowserFriendlyImageMime(mime) {
+  const m = String(mime || "").toLowerCase();
+  return (
+    m.includes("jpeg") ||
+    m.includes("jpg") ||
+    m.includes("png") ||
+    m.includes("webp") ||
+    m.includes("gif")
+  );
+}
+
+function isBrowserFriendlyImageUrl(url) {
+  const u = String(url || "").toLowerCase().split("?")[0];
+  return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(u);
+}
+
+/** URL para UI/visor: JPEG preview si el original no es web-safe (típ. iOS HEIC). */
 export function resolveEvidenciaDisplayImageUrl(ev) {
   const meta = getDocMeta(ev);
   const original = meta?.original_url || ev?.originalUrl || null;
   const preview = meta?.preview_url || ev?.previewUrl || null;
   const legacyUrl = ev?.url || null;
-  const chosen = original || preview || legacyUrl;
+  const mime = evidenceMimeType(ev, meta);
+
+  let chosen;
+  let source;
+  if (
+    preview &&
+    original &&
+    original !== preview &&
+    (!isBrowserFriendlyImageMime(mime) || !isBrowserFriendlyImageUrl(original))
+  ) {
+    chosen = preview;
+    source = "preview_url_heic_safe";
+  } else {
+    chosen = original || preview || legacyUrl;
+    source = original ? "original_url" : preview ? "preview_url" : legacyUrl ? "evidencias.url" : "none";
+  }
+
   if (isOperationalDocTraceEnabled()) {
     traceOperationalDoc("resolveEvidenciaDisplayImageUrl", {
       fn: "resolveEvidenciaDisplayImageUrl",
@@ -123,8 +160,26 @@ export function resolveEvidenciaDisplayImageUrl(ev) {
       original_url: original,
       preview_url: preview,
       evidencias_url_column: legacyUrl,
+      mime,
       chosen,
-      source: original ? "original_url" : preview ? "preview_url" : legacyUrl ? "evidencias.url" : "none",
+      source,
+    });
+  }
+  return chosen;
+}
+
+/** URL para incrustar en PDF (siempre prioriza preview JPEG decodificable). */
+export function resolveEvidenciaPdfEmbedUrl(ev) {
+  const meta = getDocMeta(ev);
+  const preview = meta?.preview_url || ev?.previewUrl || null;
+  const display = resolveEvidenciaDisplayImageUrl(ev);
+  const chosen = preview || display || ev?.url || null;
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("resolveEvidenciaPdfEmbedUrl", {
+      fn: "resolveEvidenciaPdfEmbedUrl",
+      evId: ev?.id ?? null,
+      preview_url: preview,
+      chosen,
     });
   }
   return chosen;

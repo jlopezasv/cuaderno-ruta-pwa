@@ -96,24 +96,14 @@ export async function uploadOperationalDocument(file, {
       });
       await traceBlobColor("uploadOperationalDocument:foto_input", file, { tipo });
     }
-    const jpegBlob = await compressImageToJpegBlob(file, 1600, 0.82);
+    // Mismos parámetros que documentos extra (color fiable en iOS).
+    const jpegBlob = await compressImageToJpegBlob(file, 800, 0.72);
     if (traceOn) {
       await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", jpegBlob, { tipo });
     }
     storagePreview = await uploadBlobToStorage(jpegBlob, "image/jpeg", folder, previewName);
     previewUrl = storageUploadUrl(storagePreview);
     previewBytes = jpegBlob.size;
-    if (file.size > 100 * 1024) {
-      const origName = buildOperationalFileName(`${displayName}_original`, "jpg");
-      storageOriginal = await uploadBlobToStorage(
-        file,
-        file.type || "image/jpeg",
-        `${folder}/original`,
-        origName,
-      );
-      originalUrl = storageUploadUrl(storageOriginal);
-      originalBytes = file.size;
-    }
     uploadPipeline = "foto_file_reader_jpeg";
     if (traceOn) {
       traceOperationalDoc("uploadOperationalDocument:after_storage", {

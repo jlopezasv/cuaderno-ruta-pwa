@@ -11,6 +11,7 @@ import {
   expedienteSizeLabel,
   getDocMeta,
   resolveEvidenciaDisplayImageUrl,
+  resolveEvidenciaPdfEmbedUrl,
   sumExpedienteBytes,
 } from "../documents/operationalDocumentRecord.js";
 import {
@@ -652,16 +653,32 @@ async function blobToJpeg(blob, { maxSide = 900, quality = 0.7 } = {}) {
   return { bytes: new Uint8Array(await jpg.arrayBuffer()), width, height, outputBytes: jpg.size, inputBytes: blob.size };
 }
 
+function evidenceMimeForPdf(ev) {
+  return ev.mime_type || getDocMeta(ev)?.mime_type || ev?.datos?.mime_type || "";
+}
+
 function expedienteEvidenceIsImageLike(ev) {
   if (!ev?.url) return false;
   if (ev.tipo === "foto" || ev.tipo === "cmr" || ev.tipo === "incidencia") return true;
-  const mime = ev.mime_type || getDocMeta(ev)?.mime_type || "";
-  return mime.startsWith("image/");
+  return evidenceMimeForPdf(ev).startsWith("image/");
 }
 
-/** URL para incrustar en PDF: original si existe en doc_meta, si no preview/columna url. */
+/** Foto/CMR parada + imágenes de documentos extra → hoja A4 en anexo PDF. */
+function expedienteEvidenceAnnexA4(ev) {
+  if (!ev?.url) return false;
+  if (ev.tipo === "foto" || ev.tipo === "cmr") return true;
+  if (ev.source === "servicio_documentos_extra") {
+    const mime = evidenceMimeForPdf(ev);
+    if (mime.startsWith("image/")) return true;
+    const name = String(ev.archivo_nombre || ev.url || "").toLowerCase();
+    return /\.(jpe?g|png|webp|gif|heic|heif)(\?|$)/i.test(name);
+  }
+  return false;
+}
+
+/** URL para incrustar en PDF (preview JPEG primero). */
 function evidenceUrlForPdfEmbed(ev) {
-  return resolveEvidenciaDisplayImageUrl(ev) || ev?.url || null;
+  return resolveEvidenciaPdfEmbedUrl(ev) || ev?.url || null;
 }
 
 async function fetchEvidenceImages(expediente) {
@@ -689,7 +706,7 @@ async function fetchEvidenceImages(expediente) {
       if (isOperationalDocTraceEnabled()) {
         await traceBlobColor("fetchEvidenceImages:fetched_blob", blob, { evId: ev.id, evTipo: ev.tipo });
       }
-      const isAnnexDoc = ev.tipo === "foto" || ev.tipo === "cmr";
+      const isAnnexDoc = expedienteEvidenceAnnexA4(ev);
       const maxSide = isAnnexDoc
         ? ev.tipo === "cmr"
           ? 1400
@@ -833,7 +850,7 @@ async function makePdfBlob(expediente) {
   section("Timeline operacional");
   for (const ev of expediente.timeline) {
     const evidence = ev.evidenceId ? evById.get(ev.evidenceId) : null;
-    const isAnnexDoc = evidence && (evidence.tipo === "foto" || evidence.tipo === "cmr");
+    const isAnnexDoc = evidence && expedienteEvidenceAnnexA4(evidence);
     const img = !isAnnexDoc && evidence?.id ? imageRefs.get(evidence.id) : null;
     const failedImage = !isAnnexDoc && evidence?.id ? imageMap.get(evidence.id)?.error : null;
     ensure(img ? 205 : 52);
@@ -890,10 +907,11 @@ async function makePdfBlob(expediente) {
     expediente.integrity?.geoAvailable ? "Geolocalizacion operacional disponible" : "Geolocalizacion operacional no disponible",
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
 
-  const annexDocs = expediente.evidencias.filter((ev) => ev.url && (ev.tipo === "foto" || ev.tipo === "cmr"));
+  const annexDocs = expediente.evidencias.filter((ev) => expedienteEvidenceAnnexA4(ev));
   const extraPdfDocs = expediente.evidencias.filter((ev) => {
     if (!ev.url || ev.source !== "servicio_documentos_extra") return false;
-    const mime = ev.mime_type || "";
+    if (expedienteEvidenceAnnexA4(ev)) return false;
+    const mime = evidenceMimeForPdf(ev);
     return mime.includes("pdf") || String(ev.archivo_nombre || ev.url).toLowerCase().includes(".pdf");
   });
   if (extraPdfDocs.length) {
@@ -912,7 +930,11 @@ async function makePdfBlob(expediente) {
       y = 812;
       rect(0, pageHeight, pageWidth, 36, "#f1f5f9");
       text("ANEXO DOCUMENTAL · A4", margin, 818, 10, "#64748b");
-      text(doc.titulo || doc.displayTitle || "Documento", margin, 798, 13, "#0f172a");
+      const annexTitle =
+        doc.source === "servicio_documentos_extra"
+          ? doc.titulo || doc.displayTitle || "Documento extra"
+          : doc.titulo || doc.displayTitle || "Documento";
+      text(annexTitle, margin, 798, 13, "#0f172a");
       y = 778;
       const metaLine = [doc.stopLabel, doc.stopName, doc.hora].filter(Boolean).join(" · ");
       if (metaLine) lines(metaLine, margin, 9, "#475569", 92, 12);

@@ -230,12 +230,12 @@ export function OperationalEvidenciasStop({
       }
       await preparePreview(file, { forFoto: true });
       const geo = await captureUploadGeo();
-      const { previewUrl, originalUrl, docMeta } = await uploadOperationalDocument(file, {
+      const { previewUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
         context: { ...uploadContext, eventoOperacional: "Foto operativa", geo },
       });
-      const url = originalUrl || previewUrl;
+      const url = previewUrl;
       const datos = mergeDocMetaIntoDatos({}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
