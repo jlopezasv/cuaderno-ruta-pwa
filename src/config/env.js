@@ -49,6 +49,16 @@ export function getClientDeployKind() {
   return import.meta.env.MODE || "unknown";
 }
 
+/**
+ * Marca visible en panel empresa — cambiar en cada despliegue de prueba (demo/QA).
+ * Si no ves este texto en pantalla, el build no llegó al entorno.
+ */
+export const EMPRESA_BUILD_MARKER = Object.freeze({
+  tag: "DOC-PDF-COLOR",
+  rev: "3",
+  date: "2026-05-19",
+});
+
 /** Referencia corta del proyecto (subdominio Supabase). */
 export function getSupabaseProjectRef() {
   try {

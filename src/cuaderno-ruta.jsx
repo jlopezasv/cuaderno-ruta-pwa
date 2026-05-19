@@ -92,6 +92,7 @@ import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForS
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
+import { EmpresaDeployMarker } from "./features/empresa/EmpresaDeployMarker.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
@@ -13328,6 +13329,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
       {/* Identidad empresa + código de equipo */}
       <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"10px 14px 12px",display:"flex",flexDirection:"column",gap:10}}>
+        <EmpresaDeployMarker />
         <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
           <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
           {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}

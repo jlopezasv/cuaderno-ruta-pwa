@@ -183,6 +183,52 @@ function entryTitle(type) {
 }
 
 /**
+ * Timestamp real de cierre: salida del último muelle de descarga (destino final operativo).
+ * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
+ */
+function resolveEntregaCompletadaFromStops(stopRows, servicio = null) {
+  if (!Array.isArray(stopRows) || !stopRows.length) return null;
+  let finalDescarga = null;
+  for (const stop of stopRows) {
+    if ((stop.tipo === "descarga" || stop.tipo === "carga_descarga") && stop.salida) {
+      finalDescarga = stop;
+    }
+  }
+  const chosen = finalDescarga || [...stopRows].reverse().find((st) => st.salida) || null;
+  if (!chosen?.salida) return null;
+  return {
+    ts: chosen.salida,
+    stopId: chosen.id,
+    stopLabel: chosen.nombre || chosen.label || "",
+    detail:
+      String(servicio?.destino || "").trim() ||
+      chosen.nombre ||
+      chosen.direccion ||
+      null,
+  };
+}
+
+function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
+  if (servicio?.estado !== "completado") return false;
+  if ((timeline || []).some((ev) => ev.type === "entrega_completada")) return false;
+  const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
+  if (!entrega) return false;
+  const ms = parseTs(entrega.ts);
+  timeline.push({
+    ts: entrega.ts,
+    time: fmtClock(ms),
+    type: "entrega_completada",
+    title: "Entrega completada",
+    detail: entrega.detail,
+    stopId: entrega.stopId,
+    evidenceId: null,
+    integrityHash: null,
+    origin: "stop",
+  });
+  return true;
+}
+
+/**
  * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
  * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
  */
@@ -387,6 +433,7 @@ export function buildServiceExpediente({
       });
     }
   }
+  appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows);
   sortOperationalTimeline(timeline);
   const timelineOperacional = filterExpedienteTimelineOperacional(timeline, servicio);
 
@@ -515,6 +562,26 @@ export function buildServiceExpediente({
         origin: "stop",
         location: geoLine || stop.nombre || stop.direccion || "",
         metadata: { espera_min: stop.esperaMin, geo: stopMeta.salida_geo || null },
+      }));
+    }
+  }
+
+  if (servicio?.estado === "completado") {
+    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
+    if (entrega) {
+      const stopMeta = getStopOperacionMeta(
+        sortedStops.find((st) => st.id === entrega.stopId)?.notas,
+      );
+      integrityRecords.push(eventRecord({
+        ts: entrega.ts,
+        type: "entrega_completada",
+        title: "Entrega completada",
+        detail: appendGeoToDetail(entrega.detail || entrega.stopLabel, stopMeta?.salida_geo),
+        servicio,
+        stopId: entrega.stopId,
+        origin: "stop",
+        location: formatOperationalGeoLine(stopMeta?.salida_geo) || entrega.stopLabel || "",
+        metadata: { salida_muelle: entrega.ts, geo: stopMeta?.salida_geo || null },
       }));
     }
   }
