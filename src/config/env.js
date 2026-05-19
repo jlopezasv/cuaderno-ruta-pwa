@@ -55,7 +55,7 @@ export function getClientDeployKind() {
  */
 export const EMPRESA_BUILD_MARKER = Object.freeze({
   tag: "DOC-PDF-COLOR",
-  rev: "3",
+  rev: "4",
   date: "2026-05-19",
 });
 
