@@ -129,27 +129,45 @@ function isBrowserFriendlyImageUrl(url) {
   return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(u);
 }
 
-/** URL para UI/visor: JPEG preview si el original no es web-safe (típ. iOS HEIC). */
+function urlHintsHeicOrRawStorage(url) {
+  const u = String(url || "").toLowerCase().split("?")[0];
+  return /\.(heic|heif)$/i.test(u) || u.includes("/original/");
+}
+
+/** URL para UI/visor: prioriza JPEG preview (evita HEIC en columna url / iOS). */
 export function resolveEvidenciaDisplayImageUrl(ev) {
   const meta = getDocMeta(ev);
   const original = meta?.original_url || ev?.originalUrl || null;
   const preview = meta?.preview_url || ev?.previewUrl || null;
   const legacyUrl = ev?.url || null;
   const mime = evidenceMimeType(ev, meta);
+  const tipo = ev?.tipo || meta?.tipo_documento || "";
 
   let chosen;
   let source;
-  if (
-    preview &&
-    original &&
-    original !== preview &&
-    (!isBrowserFriendlyImageMime(mime) || !isBrowserFriendlyImageUrl(original))
-  ) {
+
+  if (preview && (tipo === "foto" || tipo === "cmr")) {
+    chosen = preview;
+    source = "preview_url_tipo";
+  } else if (preview && original && original !== preview && (urlHintsHeicOrRawStorage(original) || !isBrowserFriendlyImageUrl(original))) {
     chosen = preview;
     source = "preview_url_heic_safe";
+  } else if (preview && legacyUrl && urlHintsHeicOrRawStorage(legacyUrl)) {
+    chosen = preview;
+    source = "preview_url_legacy_heic";
+  } else if (preview && (!original || !isBrowserFriendlyImageMime(mime))) {
+    chosen = preview;
+    source = "preview_url_preferred";
   } else {
-    chosen = original || preview || legacyUrl;
-    source = original ? "original_url" : preview ? "preview_url" : legacyUrl ? "evidencias.url" : "none";
+    chosen = preview || (!urlHintsHeicOrRawStorage(original) ? original : null) || legacyUrl || original;
+    source =
+      chosen === preview
+        ? "preview_url"
+        : chosen === original
+          ? "original_url"
+          : chosen === legacyUrl
+            ? "evidencias.url"
+            : "none";
   }
 
   if (isOperationalDocTraceEnabled()) {
@@ -168,12 +186,16 @@ export function resolveEvidenciaDisplayImageUrl(ev) {
   return chosen;
 }
 
-/** URL para incrustar en PDF (siempre prioriza preview JPEG decodificable). */
+/** URL para incrustar en PDF (JPEG / URL web-safe; nunca HEIC crudo). */
 export function resolveEvidenciaPdfEmbedUrl(ev) {
   const meta = getDocMeta(ev);
   const preview = meta?.preview_url || ev?.previewUrl || null;
-  const display = resolveEvidenciaDisplayImageUrl(ev);
-  const chosen = preview || display || ev?.url || null;
+  const legacyUrl = ev?.url || null;
+  const original = meta?.original_url || ev?.originalUrl || null;
+  let chosen = preview;
+  if (!chosen && legacyUrl && isBrowserFriendlyImageUrl(legacyUrl)) chosen = legacyUrl;
+  if (!chosen && original && isBrowserFriendlyImageUrl(original)) chosen = original;
+  if (!chosen) chosen = resolveEvidenciaDisplayImageUrl(ev) || legacyUrl;
   if (isOperationalDocTraceEnabled()) {
     traceOperationalDoc("resolveEvidenciaPdfEmbedUrl", {
       fn: "resolveEvidenciaPdfEmbedUrl",

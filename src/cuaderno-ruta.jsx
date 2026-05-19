@@ -13207,7 +13207,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red,ticket:"#0EA5E9",factura:"#6366F1",otro:"#64748B"};
 
   function openExpedienteDocument(ev){
-    const url=ev?.displayImageUrl||ev?.originalUrl||ev?.url||ev?.previewUrl;
+    const url=ev?.displayImageUrl||resolveEvidenciaDisplayImageUrl(ev)||ev?.previewUrl||ev?.url;
     if(!url)return;
     const mime=ev?.mime_type||"";
     const isPdf=mime.includes("pdf")||String(url).toLowerCase().includes(".pdf");

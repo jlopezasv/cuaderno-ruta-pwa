@@ -12,6 +12,10 @@ import {
   traceMediaV2,
 } from "../domain/documents/mediaStorageV2.js";
 import {
+  decodeImageFileForCanvas,
+  releaseDecodedImage,
+} from "../domain/documents/imageBlobLoad.js";
+import {
   isOperationalDocTraceEnabled,
   traceBlobColor,
   traceOperationalDoc,
@@ -306,59 +310,53 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
 }
 
 /**
- * JPEG vía FileReader+canvas (mismo motor que documentos extra / «foto adicional»).
- * En iOS/HEIC suele conservar color mejor que createObjectURL + canvas del pipeline operacional antiguo.
+ * JPEG con createImageBitmap (orientación EXIF) u objectURL — evita FileReader+dataURL en iOS (B/N).
  */
-export function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.72) {
+export async function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.72) {
   const traceOn = isOperationalDocTraceEnabled();
   if (traceOn) {
     traceOperationalDoc("compressImage:enter", {
-      fn: "compressImage",
-      pipeline: "uploadUserPhoto_legacy",
+      fn: "compressImageToJpegBlob",
+      pipeline: "imageBitmap_or_objectUrl",
       maxWidth,
       quality,
-      enhanceDocumentContrast: false,
       fileName: file?.name,
       fileMime: file?.type,
       fileSize: file?.size,
     });
   }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Imagen no válida"));
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width;
-        let h = img.height;
-        if (w > maxWidth) {
-          h = Math.round((h * maxWidth) / w);
-          w = maxWidth;
-        }
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        canvas.toBlob(
-          async (blob) => {
-            if (!blob || blob.size <= 0) {
-              reject(new Error("Compresión devolvió blob vacío"));
-              return;
-            }
-            if (traceOn) {
-              await traceBlobColor("compressImage:output", blob, { pipeline: "uploadUserPhoto_legacy" });
-            }
-            resolve(blob);
-          },
-          "image/jpeg",
-          quality,
-        );
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
+
+  const decoded = await decodeImageFileForCanvas(file);
+  try {
+    let w = decoded.width;
+    let h = decoded.height;
+    if (w > maxWidth) {
+      h = Math.round((h * maxWidth) / w);
+      w = maxWidth;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(decoded.draw, 0, 0, w, h);
+
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b && b.size > 0 ? resolve(b) : reject(new Error("Compresión devolvió blob vacío"))),
+        "image/jpeg",
+        quality,
+      );
+    });
+
+    if (traceOn) {
+      await traceBlobColor("compressImage:output", blob, { pipeline: "imageBitmap_or_objectUrl" });
+    }
+    return blob;
+  } finally {
+    releaseDecodedImage(decoded);
+  }
 }
 
 /** Sube imagen comprimida a `user-photos`. Devuelve URL string (compat monolito). */

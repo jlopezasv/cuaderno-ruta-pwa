@@ -19,6 +19,7 @@ import {
   traceBlobColor,
   traceOperationalDoc,
 } from "../documents/operationalDocumentTrace.js";
+import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
@@ -396,6 +397,28 @@ export function buildServiceExpediente({
     nombreConductor,
     servicio,
   });
+  evidencias = evidencias.map((ev) => {
+    const stopRow = stopRows.find((s) => s.id === ev.stopId);
+    const enriched = enrichEvidenciaDisplay(ev, {
+      stop: stopRow || (ev.stopName ? { nombre: ev.stopName, tipo: null } : null),
+      conductorName:
+        typeof nombreConductor === "function"
+          ? nombreConductor(ev.conductor_id || servicio?.conductor_id)
+          : null,
+    });
+    return {
+      ...ev,
+      displayTitle: enriched.displayTitle,
+      displaySubtitle: enriched.displaySubtitle,
+      displayLine2: enriched.displayLine2,
+      displaySizeLabel: enriched.displaySizeLabel,
+      displayKindLabel: enriched.displayKindLabel,
+      displayImageUrl: enriched.displayImageUrl,
+      previewUrl: enriched.previewUrl,
+      originalUrl: enriched.originalUrl,
+      mime_type: ev.mime_type || enriched.docMeta?.mime_type || null,
+    };
+  });
   const incidencias = evidencias.filter((ev) => ev.tipo === "incidencia");
   const cmr = evidencias.filter((ev) => ev.tipo === "cmr");
   const fotos = evidencias.filter((ev) => ev.tipo === "foto");
@@ -663,15 +686,15 @@ function expedienteEvidenceIsImageLike(ev) {
   return evidenceMimeForPdf(ev).startsWith("image/");
 }
 
-/** Foto/CMR parada + imágenes de documentos extra → hoja A4 en anexo PDF. */
+/** Foto/CMR parada + cualquier imagen en documentos extra → hoja A4 en anexo PDF. */
 function expedienteEvidenceAnnexA4(ev) {
-  if (!ev?.url) return false;
+  const url = ev?.url || ev?.previewUrl || ev?.displayImageUrl || null;
+  if (!url) return false;
   if (ev.tipo === "foto" || ev.tipo === "cmr") return true;
   if (ev.source === "servicio_documentos_extra") {
-    const mime = evidenceMimeForPdf(ev);
-    if (mime.startsWith("image/")) return true;
-    const name = String(ev.archivo_nombre || ev.url || "").toLowerCase();
-    return /\.(jpe?g|png|webp|gif|heic|heif)(\?|$)/i.test(name);
+    if (expedienteEvidenceIsImageLike({ ...ev, url })) return true;
+    const name = String(ev.archivo_nombre || url).toLowerCase();
+    return /\.(jpe?g|png|webp|gif|heic|heif|bmp)(\?|$)/i.test(name);
   }
   return false;
 }
@@ -700,9 +723,7 @@ async function fetchEvidenceImages(expediente) {
           sourceFn: "evidenceUrlForPdfEmbed→resolveEvidenciaDisplayImageUrl",
         });
       }
-      const res = await fetch(srcUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
+      const blob = await loadRemoteImageBlob(srcUrl);
       if (isOperationalDocTraceEnabled()) {
         await traceBlobColor("fetchEvidenceImages:fetched_blob", blob, { evId: ev.id, evTipo: ev.tipo });
       }
@@ -908,6 +929,12 @@ async function makePdfBlob(expediente) {
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
 
   const annexDocs = expediente.evidencias.filter((ev) => expedienteEvidenceAnnexA4(ev));
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("makePdfBlob:annexDocs", {
+      count: annexDocs.length,
+      ids: annexDocs.map((d) => ({ id: d.id, tipo: d.tipo, source: d.source, url: !!(d.url || d.previewUrl) })),
+    });
+  }
   const extraPdfDocs = expediente.evidencias.filter((ev) => {
     if (!ev.url || ev.source !== "servicio_documentos_extra") return false;
     if (expedienteEvidenceAnnexA4(ev)) return false;

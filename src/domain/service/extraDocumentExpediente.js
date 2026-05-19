@@ -68,6 +68,7 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
       source: "servicio_documentos_extra",
       mime_type: mime || null,
       archivo_nombre: archivoNombre,
+      doc_meta: docMeta,
     },
     bucket: bucketForExtraTipo(tipo),
     displayTitle: tipoLbl,
