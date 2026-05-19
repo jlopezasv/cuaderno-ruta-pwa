@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 // Inicializar el adaptador de almacenamiento ANTES del bundle principal
 import './storage.js';
+import { BuildDebugShell } from './components/BuildDebugShell.jsx';
 
 const CuadernoRuta = lazy(() => import('./cuaderno-ruta.jsx'));
 
@@ -26,8 +27,10 @@ function AppLoading() {
 
 export default function App() {
   return (
-    <Suspense fallback={<AppLoading />}>
-      <CuadernoRuta />
-    </Suspense>
+    <BuildDebugShell>
+      <Suspense fallback={<AppLoading />}>
+        <CuadernoRuta />
+      </Suspense>
+    </BuildDebugShell>
   );
 }
