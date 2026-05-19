@@ -60,7 +60,14 @@ function extFromMime(mime, originalName) {
   const m = String(mime || "").toLowerCase();
   if (m.includes("pdf")) return "pdf";
   if (m.includes("png")) return "png";
-  if (originalName && String(originalName).toLowerCase().endsWith(".pdf")) return "pdf";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic") || m.includes("heif")) return "heic";
+  if (originalName) {
+    const lower = String(originalName).toLowerCase();
+    if (lower.endsWith(".pdf")) return "pdf";
+    const match = lower.match(/\.([a-z0-9]{2,5})$/);
+    if (match) return match[1];
+  }
   return "jpg";
 }
 

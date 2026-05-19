@@ -75,6 +75,18 @@ export function traceMediaV2(step, payload = {}) {
   }
 }
 
+/** Foto operativa: subida raw sin canvas/FileReader (siempre canvasPipeline=false). */
+export function traceRawPhotoMode(step, payload = {}) {
+  const entry = {
+    canvasPipeline: false,
+    ...payload,
+  };
+  console.log("[RAW_PHOTO_MODE]", step, entry);
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc(`[RAW_PHOTO_MODE] ${step}`, entry);
+  }
+}
+
 /** Trazar doc_meta v2 tras persistencia. */
 export function traceMediaV2DocMeta(docMeta, context = {}) {
   if (!docMeta || docMeta.schema_version !== 2) return;
