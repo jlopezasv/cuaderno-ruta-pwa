@@ -81,16 +81,30 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   );
 });
 
+function stopsOperativaSig(stops) {
+  return (stops || [])
+    .map(
+      (s) =>
+        `${s.id}:${s.estado}:${s.hora_llegada_real || ""}:${s.hora_salida_real || ""}`,
+    )
+    .join("|");
+}
+
+function operationalEtaSig(servicio) {
+  const op = servicio?.operational_eta;
+  if (!op || typeof op !== "object") return "";
+  return `${op.updated_at || op.calculated_at || ""}:${op.eta || ""}:${op.remaining_km}:${op.remaining_mins}`;
+}
+
 function rowPropsEqual(prev, next) {
   if (prev.expanded !== next.expanded) return false;
   if (prev.expanded && prev.nowMs !== next.nowMs) return false;
-  if (prev.servicio !== next.servicio) {
-    if (prev.servicio?.id !== next.servicio?.id) return false;
-    if (prev.servicio?.estado !== next.servicio?.estado) return false;
-    if (prev.servicio?.referencia !== next.servicio?.referencia) return false;
-    if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
-  }
-  if (prev.stops !== next.stops) return false;
+  if (prev.servicio?.id !== next.servicio?.id) return false;
+  if (prev.servicio?.estado !== next.servicio?.estado) return false;
+  if (prev.servicio?.referencia !== next.servicio?.referencia) return false;
+  if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (operationalEtaSig(prev.servicio) !== operationalEtaSig(next.servicio)) return false;
+  if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
   if (prev.ubicRefresh !== next.ubicRefresh) return false;
   if (prev.rowMeta !== next.rowMeta) return false;
   const la = prev.ubicInfo;
@@ -151,12 +165,6 @@ function EmpresaFlotaServiciosListImpl({
     }
     return meta;
   }, [servicios, flotaStops, flotaEvs]);
-
-  console.log("CARD_RENDER_REAL", {
-    source: "EmpresaFlotaServiciosList",
-    serviciosCount: servicios?.length ?? 0,
-    expandedId,
-  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "6px 0 10px" }}>

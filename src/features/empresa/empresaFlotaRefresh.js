@@ -2,6 +2,7 @@ import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignme
 import { getLastServiceActivity } from "../../domain/service/serviceActivity.js";
 import { needsAttention } from "../../domain/service/serviceAttention.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+import { ETA_UI_VISUAL_TICK_MS } from "../../domain/service/operationalEtaPresentation.js";
 
 const EMPRESA_VISTA_ESTADOS_ACTIVOS = Object.freeze(["asignado", "en_curso"]);
 
@@ -70,8 +71,8 @@ export function resolveEmpresaVistaTabKeepingExpandedServicio(currentTab, servic
 /** Intervalos panel empresa: datos en background vs tick visual ETA. */
 export const EMPRESA_FLOTA_DATA_POLL_MS = 120_000;
 export const EMPRESA_UBICACION_POLL_MS = 90_000;
-/** Tick visual ETA en cards (solo afecta etiquetas; sin red). */
-export const EMPRESA_ETA_VISUAL_TICK_MS = 300_000;
+/** Tick visual ETA en cards (textos auxiliares; sin red). */
+export const EMPRESA_ETA_VISUAL_TICK_MS = ETA_UI_VISUAL_TICK_MS;
 
 const ESTADOS_ACTIVOS = Object.freeze(["asignado", "en_curso"]);
 const ESTADOS_REFRESH_STOPS = Object.freeze(["pendiente_asignacion", "asignado", "en_curso"]);

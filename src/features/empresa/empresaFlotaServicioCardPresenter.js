@@ -1,10 +1,14 @@
 import {
-  formatOperationalEtaLabel,
   formatEmpresaOperationalRestLine,
 } from "../../domain/service/etaFormatter.js";
 import {
+  ETA_LABEL_ACTUAL,
+  ETA_LABEL_INICIAL,
   OPERATIONAL_ETA_CALCULATING,
+  formatStableEtaClockLabel,
+  resolveEtaInicialDisplayLabel,
   resolveEtaVisual,
+  resolvePersistedEtaActualLabel,
 } from "../../domain/service/operationalEtaPresentation.js";
 import {
   buildOperationalEtaVisual,
@@ -62,7 +66,7 @@ export function resolveEmpresaFlotaContextLine({
       tacografoEstado,
       activeStop,
       latestLocation: null,
-      nowMs: Number(nowMs),
+      nowMs: Number(nowMs) || Date.now(),
     });
 
   if (sit === "rest_break" || isDescansoCr(tacografoEstado?.crType)) return "Descanso reglamentario";
@@ -128,6 +132,12 @@ export function formatEmpresaFlotaRemainingLine(remainingKm, remainingMins) {
   return null;
 }
 
+function arrivalLabelFromVisual(servicio, v) {
+  if (v.tier === "operational") return resolvePersistedEtaActualLabel(v.operational);
+  if (v.tier === "plan") return resolveEtaInicialDisplayLabel(servicio) || formatStableEtaClockLabel(v.etaIso);
+  return null;
+}
+
 export function buildEmpresaFlotaCardSummary({
   servicio,
   stops = [],
@@ -138,8 +148,8 @@ export function buildEmpresaFlotaCardSummary({
   nextStop = null,
   useLiveEta = true,
 }) {
-  const clockMs = Number(nowMs ?? Date.now());
-  const now = new Date(clockMs);
+  const hasAuxClock = Number(nowMs) > 0;
+  const auxNow = hasAuxClock ? new Date(Number(nowMs)) : new Date();
   const { origen, destino } = resolveServiceRouteEndpoints(servicio, stops);
   const cliente = getServiceClient(servicio);
   const clienteLine = cliente?.trim() ? `Cliente · ${cliente.trim()}` : null;
@@ -158,6 +168,7 @@ export function buildEmpresaFlotaCardSummary({
     remainingLine: null,
     deviation: null,
     calculating: false,
+    etaCaption: ETA_LABEL_INICIAL,
   };
 
   if (!servicio || servicio.estado === "anulado") {
@@ -178,7 +189,7 @@ export function buildEmpresaFlotaCardSummary({
         nextStop: null,
         tacografoEstado: null,
         situation: null,
-        nowMs: clockMs,
+        nowMs: hasAuxClock ? Number(nowMs) : Date.now(),
       }),
       arrivalLabel: null,
       remainingLine: null,
@@ -187,17 +198,13 @@ export function buildEmpresaFlotaCardSummary({
     };
   }
 
-  const v = resolveEtaVisual(servicio, now);
+  const v = resolveEtaVisual(servicio, auxNow);
 
   if (servicio.estado === "asignado") {
-    const planArrival =
-      v.tier === "plan" && v.etaIso
-        ? formatOperationalEtaLabel(v.etaIso, now) || v.etaLabel
-        : v.etaLabel || null;
     return {
       ...base,
       contextLine: "Pendiente de salida",
-      arrivalLabel: planArrival,
+      arrivalLabel: resolveEtaInicialDisplayLabel(servicio),
       remainingLine: formatEmpresaFlotaRemainingLine(v.remainingKm, v.remainingMins),
     };
   }
@@ -205,28 +212,30 @@ export function buildEmpresaFlotaCardSummary({
   if (v.tier === "calculating") {
     return {
       ...base,
-      contextLine: "Calculando previsión",
+      contextLine: "En viaje",
       arrivalLabel: OPERATIONAL_ETA_CALCULATING,
       calculating: true,
+      etaCaption: ETA_LABEL_ACTUAL,
     };
   }
 
-  if (!useLiveEta) {
-    const arrivalLabel =
-      v.etaLabel ||
-      (v.tier === "plan" && v.etaIso ? formatOperationalEtaLabel(v.etaIso, now) : null) ||
-      null;
+  const stableArrival = arrivalLabelFromVisual(servicio, v);
+
+  if (!useLiveEta || !hasAuxClock) {
+    const remainingKm = v.tier === "operational" ? v.operational?.remaining_km : v.remainingKm;
+    const remainingMins = v.tier === "operational" ? v.operational?.remaining_mins : v.remainingMins;
     return {
       ...base,
       contextLine: servicio.estado === "en_curso" ? "En curso" : estadoServicio || "—",
-      arrivalLabel,
-      remainingLine: formatEmpresaFlotaRemainingLine(v.remainingKm, v.remainingMins),
+      arrivalLabel: stableArrival,
+      remainingLine: formatEmpresaFlotaRemainingLine(remainingKm, remainingMins),
+      etaCaption: v.tier === "operational" ? ETA_LABEL_ACTUAL : ETA_LABEL_INICIAL,
     };
   }
 
   const live = buildOperationalEtaVisual({
     servicio,
-    now,
+    now: auxNow,
     latestLocation,
     tacografoEstado,
     activeStop,
@@ -241,18 +250,13 @@ export function buildEmpresaFlotaCardSummary({
     nextStop,
     tacografoEstado,
     situation,
-    nowMs: clockMs,
+    nowMs: Number(nowMs),
   });
 
-  const arrivalLabel =
-    live.operationalEtaLiveLabel ||
-    live.operationalEtaLabel ||
-    (v.tier === "plan" && v.etaIso ? formatOperationalEtaLabel(v.etaIso, now) : null) ||
-    v.etaLabel ||
-    null;
-
-  const remainingKm = live.remainingKmVisual ?? v.remainingKm ?? v.operational?.remaining_km;
-  const remainingMins = live.remainingMinsVisual ?? v.remainingMins ?? v.operational?.remaining_mins;
+  const remainingKm =
+    v.tier === "operational" ? v.operational?.remaining_km : v.remainingKm ?? live.remainingKmVisual;
+  const remainingMins =
+    v.tier === "operational" ? v.operational?.remaining_mins : v.remainingMins ?? live.remainingMinsVisual;
   const remainingLine =
     formatEmpresaFlotaRemainingLine(remainingKm, remainingMins) ||
     formatEmpresaOperationalRestLine(remainingMins, remainingKm);
@@ -260,9 +264,10 @@ export function buildEmpresaFlotaCardSummary({
   return {
     ...base,
     contextLine,
-    arrivalLabel,
+    arrivalLabel: stableArrival,
     remainingLine,
     deviation: formatEmpresaFlotaDeviationLine(live.delay),
     calculating: false,
+    etaCaption: v.tier === "operational" ? ETA_LABEL_ACTUAL : ETA_LABEL_INICIAL,
   };
 }

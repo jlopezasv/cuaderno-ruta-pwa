@@ -122,6 +122,7 @@ import {
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaSnapshotLine,
 } from "./domain/service/operationalEtaPresentation.js";
+import { useEtaVisualClockMs } from "./domain/service/useEtaVisualClock.js";
 import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
 import {
   fetchEmpresaDocumentosExtra,
@@ -4864,7 +4865,7 @@ async function persistServiceOperationalEta({
     let errTxt="";
     try{errTxt=await res.text();}catch(_){}
     trackingLog("operativa persist_eta_failed",{servicio_id:servicio.id,status:res.status,detail:String(errTxt).slice(0,400)});
-    throw new Error(`No se pudo guardar la ETA operacional`);
+    throw new Error(`No se pudo guardar la ETA actual`);
   }
   trackingLog("operativa persist_eta_ok",{servicio_id:servicio.id,refresh_reason:decision.reason});
   try{window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));}catch(_){/* SSR */}
@@ -5349,12 +5350,12 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
               <div style={{fontSize:9,color:"#64748B",marginTop:2}}>km/h</div>
             </div>
           </div>
-          <div style={{fontSize:10,color:"#475569",marginTop:8,textAlign:"center"}}>Por defecto 80 km/h · ajuste fino de 1 en 1 para el snapshot del servicio</div>
+          <div style={{fontSize:10,color:"#475569",marginTop:8,textAlign:"center"}}>Por defecto 80 km/h · ajuste fino de 1 en 1</div>
         </div>
 
         {loading&&(
           <div style={{background:"#0F2A1A",border:"1px solid #22C55E40",borderRadius:10,padding:"9px 11px",fontSize:12,color:"#86EFAC",fontWeight:700,marginBottom:10}}>
-            Calculando ruta operacional completa y guardando snapshot estable...
+            Calculando planificación del servicio…
           </div>
         )}
 
@@ -12106,8 +12107,8 @@ function empresaListaEtaChip(servicio, nowMs){
   const st=getOperationalEtaUiState(servicio,new Date(nowMs??Date.now()));
   if(st.kind==="cancelled")return{label:"—",color:"#64748B"};
   if(st.kind==="calculating")return{label:OPERATIONAL_ETA_CALCULATING,color:"#64748B"};
-  if(st.kind==="plan_fallback")return{label:"Previa · plan",color:EMPRESA_UI.accent};
-  return{label:"ETA operacional",color:EMPRESA_UI.green};
+  if(st.kind==="plan_fallback")return{label:"Planificado",color:EMPRESA_UI.accent};
+  return{label:"ETA actual",color:EMPRESA_UI.green};
 }
 
 function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
@@ -13755,7 +13756,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         ["Conducción",expedientePreview.metrics.conduccion],
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
-                        ["ETA prevista vs real",expedientePreview.header.eta],
+                        ["ETA inicial vs actual",expedientePreview.header.eta],
                       ].map(([l,v])=>(
                         <div key={l} style={{display:"flex",justifyContent:"space-between",gap:10,borderBottom:"1px solid #e2e8f0",padding:"7px 0",fontSize:12}}>
                           <span style={{color:"#64748b"}}>{l}</span>
@@ -16881,6 +16882,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
   const[viajeLocal,setViajeLocal]=useState(()=>readViajeActivoFromStorage());
+  const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
 
@@ -17006,7 +17008,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                 <div style={{marginTop:6}}>
                   <OperationalEtaSnapshotBlock
                     servicio={primerCurso}
-                    nowMs={Date.now()}
+                    nowMs={etaVisualClockMs}
                     tx={tx}
                     su={su}
                     subtle={EMPRESA_UI.subtle}
@@ -17102,7 +17104,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                 <div style={{marginTop:4}}>
                   <OperationalEtaSnapshotBlock
                     servicio={sv}
-                    nowMs={Date.now()}
+                    nowMs={etaVisualClockMs}
                     tx={tx}
                     su={su}
                     subtle={EMPRESA_UI.subtle}

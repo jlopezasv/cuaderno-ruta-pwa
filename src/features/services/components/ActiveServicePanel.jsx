@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
@@ -438,7 +439,7 @@ function OperationalStopCard({
   const docs = stopDocumentSummary(evidencias);
   const operationName = operationNameForStop(stop);
   const inOperation = entrada && !salida;
-  const stateText = salida ? "Hecho" : inOperation ? "En planta" : "Pendiente";
+  const stateText = salida ? "Salida muelle" : inOperation ? "En planta" : "Pendiente";
   const stateTone = salida
     ? { bg: DRIVER_UI.greenSoft, fg: DRIVER_UI.green }
     : inOperation
@@ -493,7 +494,9 @@ function OperationalStopCard({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                {salida ? `${operationName} · completada` : inOperation ? `${label}` : `${label}`}
+                {salida
+                  ? `${operationName} finalizada · ${stopTime(stop.hora_salida_real)}`
+                  : label}
               </div>
               <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 3, fontWeight: 650, lineHeight: 1.35 }}>
                 {stopPlace(stop)}
@@ -577,12 +580,12 @@ function OperationalStopCard({
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${DRIVER_UI.line}` }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
                 <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Entrada</div>
-                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida muelle</div>
+                  <div style={{ color: DRIVER_UI.amber, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
                 </div>
                 <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida</div>
-                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Llegada muelle</div>
+                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
                 </div>
               </div>
               {docs.total > 0 ? (
@@ -672,6 +675,7 @@ export function ActiveServicePanel({
   conductorNombre = "Conductor",
   norma = null,
 }) {
+  const etaVisualClockMs = useEtaVisualClockMs();
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
@@ -759,7 +763,7 @@ export function ActiveServicePanel({
         <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
           {confirmMuelle.kind === "entrada"
             ? "Se registra la hora de entrada y esta parada pasa a estar en operación."
-            : `Se registra la hora de salida y ${confirmOperationName.toLowerCase()} queda completada.`}
+            : `Se registra la hora de salida del muelle (fin de la operación en planta).`}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button
@@ -830,7 +834,7 @@ export function ActiveServicePanel({
         >
           <OperationalEtaSnapshotBlock
             servicio={servicio}
-            nowMs={Date.now()}
+            nowMs={etaVisualClockMs}
             tx={DRIVER_UI.tx}
             su={DRIVER_UI.su}
             subtle={DRIVER_UI.muted}

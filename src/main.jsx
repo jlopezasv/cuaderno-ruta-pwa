@@ -1,7 +1,11 @@
-import './config/env.js';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
+import { getSupabasePublicHost } from './data/supabaseClient.js';
+
+if (import.meta.env.PROD) {
+  console.info('[Cuaderno] Supabase host:', getSupabasePublicHost());
+}
 
 // Registrar Service Worker tras el primer paint (no compite con carga JS)
 function registerAppServiceWorker() {

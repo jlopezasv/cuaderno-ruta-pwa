@@ -10,8 +10,43 @@ import {
   isRelativeEtaLabel,
 } from "./etaFormatter.js";
 
-/** Transitorio: aún no hay ETA persistida ni dato de plan utilizable. */
-export const OPERATIONAL_ETA_CALCULATING = "Calculando ETA…";
+/** Sin ETA dinámica todavía (solo UI). */
+export const OPERATIONAL_ETA_CALCULATING = "Calculando ETA actual…";
+
+/** Tick compartido empresa/conductor para textos auxiliares (“hace X min”), no para la hora ETA. */
+export const ETA_UI_VISUAL_TICK_MS = 5 * 60 * 1000;
+
+export const ETA_LABEL_INICIAL = "ETA inicial";
+export const ETA_LABEL_ACTUAL = "ETA actual";
+
+/** Etiqueta de hora estable (no depende del reloj de la UI). */
+export function formatStableEtaClockLabel(value) {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(d.getTime())) return null;
+  return formatOperationalEtaLabel(value, d);
+}
+
+/** ETA actual: solo valor guardado en servicio, sin capa “live”. */
+export function resolvePersistedEtaActualLabel(operationalEta) {
+  if (!operationalEta?.eta) return null;
+  const stored = operationalEta.label || operationalEta.eta_label;
+  if (stored && !isRelativeEtaLabel(stored)) return String(stored).trim();
+  return formatStableEtaClockLabel(operationalEta.eta);
+}
+
+/** Primera estimación del servicio (plan o copia en operational_eta). */
+export function resolveEtaInicialDisplayLabel(servicio) {
+  const plan = getOperationalPlanSnapshot(servicio);
+  const op = getOperationalEtaSnapshot(servicio);
+  const fromPlan =
+    plan?.planned_eta_label && !isRelativeEtaLabel(plan.planned_eta_label)
+      ? String(plan.planned_eta_label).trim()
+      : null;
+  if (fromPlan) return fromPlan;
+  const iso = op?.planned_eta || plan?.planned_eta;
+  return formatStableEtaClockLabel(iso);
+}
 
 function parseValidIsoEta(raw) {
   if (raw == null || raw === "") return null;
@@ -85,15 +120,20 @@ export function formatOperationalEtaSnapshotLine(servicio, now = new Date()) {
 
   if (v.tier === "operational") {
     const op = v.operational;
-    const etaPart =
-      formatOperationalEtaLabel(op.eta, now) || (!isRelativeEtaLabel(op.label) ? op.label : null) || "—";
+    const etaPart = resolvePersistedEtaActualLabel(op) || "—";
     const rest = formatEmpresaOperationalRestLine(op.remaining_mins, op.remaining_km);
     const restPart = rest && rest !== "—" ? rest : null;
     const ago = formatSpanishAgo(op.updated_at || op.calculated_at, now);
     return [etaPart, restPart, ago].filter(Boolean).join(" · ");
   }
 
-  const etaPart = v.etaLabel || (v.etaIso ? formatOperationalEtaLabel(v.etaIso, now) : null) || "—";
+  const etaPart =
+    (v.tier === "plan" && v.plan?.planned_eta_label && !isRelativeEtaLabel(v.plan.planned_eta_label)
+      ? String(v.plan.planned_eta_label).trim()
+      : null) ||
+    formatStableEtaClockLabel(v.etaIso) ||
+    v.etaLabel ||
+    "—";
   const rest = formatEmpresaOperationalRestLine(v.remainingMins, v.remainingKm);
   const restPart = rest && rest !== "—" ? rest : null;
   const ago = v.updatedIso ? formatSpanishAgo(v.updatedIso, now) : null;

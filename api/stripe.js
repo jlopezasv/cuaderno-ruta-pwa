@@ -11,7 +11,11 @@ function sbServer() {
 }
 
 function resolveServiceKey() {
-  return sbServer().serviceRoleKey || process.env.SUPABASE_SERVICE_KEY || '';
+  const key = sbServer().serviceRoleKey;
+  if (!key) {
+    throw new Error('[Cuaderno API] SUPABASE_SERVICE_ROLE_KEY no definida (Stripe requiere service role).');
+  }
+  return key;
 }
 
 /**

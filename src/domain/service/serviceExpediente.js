@@ -975,7 +975,7 @@ async function makePdfBlob(expediente) {
     ["Conduccion", expediente.metrics.conduccion],
     ["Espera carga", expediente.metrics.esperaCarga],
     ["Espera descarga", expediente.metrics.esperaDescarga],
-    ["ETA prevista vs real", expediente.header.eta],
+    ["ETA inicial vs actual", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
     ["Incidencias", String(expediente.metrics.incidencias)],
     ["Docs. extra", String(expediente.metrics.documentosExtra ?? 0)],

@@ -12,6 +12,7 @@ import {
   getServiceNumber,
 } from "../../domain/service/serviceIdentity.js";
 import { buildEmpresaFlotaCardSummary } from "./empresaFlotaServicioCardPresenter.js";
+import { OperationalEtaSnapshotBlock } from "../services/components/OperationalEtaSnapshotBlock.jsx";
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 
@@ -137,7 +138,7 @@ function EmpresaFlotaServicioCardImpl({
 
   const operativaTimeline = useMemo(() => {
     if (!expanded) return [];
-    const timeline = getServicioOperativaTimelineForCard({
+    return getServicioOperativaTimelineForCard({
       servicio,
       stops,
       evidenciasByStop: flotaEvs,
@@ -146,16 +147,6 @@ function EmpresaFlotaServicioCardImpl({
       fmtDur,
       entries: conductor?.entries || [],
     });
-    console.log("TIMELINE_DEBUG", {
-      servicioId: servicio?.id,
-      expanded,
-      estado: servicio?.estado,
-      conductor_id: servicio?.conductor_id,
-      referencia: servicio?.referencia,
-      operativaTimeline: timeline,
-      timelineLength: timeline.length,
-    });
-    return timeline;
   }, [
     expanded,
     servicio,
@@ -330,7 +321,7 @@ function EmpresaFlotaServicioCardImpl({
                   letterSpacing: 0.35,
                 }}
               >
-                Llegada prevista
+                {summary.etaCaption || "ETA inicial"}
               </div>
               <div
                 style={{
@@ -481,18 +472,36 @@ function EmpresaFlotaServicioCardImpl({
               Operativa del servicio
             </div>
 
-            {(() => {
-              console.log("TIMELINE_DEBUG", {
-                servicioId: servicio?.id,
-                expanded,
-                estado: servicio?.estado,
-                conductor_id: servicio?.conductor_id,
-                referencia: servicio?.referencia,
-                operativaTimeline,
-                timelineLength: timelineSoloTexto.length,
-              });
-              return null;
-            })()}
+            {!sinOp && servicio.estado !== "anulado" ? (
+              <div
+                style={{
+                  marginBottom: 12,
+                  paddingBottom: 12,
+                  borderBottom: `1px solid ${UI.border}`,
+                }}
+              >
+                <OperationalEtaSnapshotBlock
+                  servicio={servicio}
+                  nowMs={nowMs}
+                  tx={tx}
+                  su={su}
+                  subtle={UI.subtle}
+                  layout="empresa"
+                  latestLocation={latestLocation}
+                  tacografoEstado={tacografoEstado}
+                  activeStop={stopActual}
+                />
+                {nextStop ? (
+                  <div style={{ marginTop: 8, fontSize: 12, color: su, lineHeight: 1.35 }}>
+                    ETA / siguiente punto ·{" "}
+                    <strong style={{ color: tx }}>{nextStop.nombre || "—"}</strong>
+                    {nextStop.tipo ? (
+                      <span style={{ fontWeight: 600 }}> · {stopTipoCompacto(nextStop)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {timelineSoloTexto.length > 0 ? (
               <>
@@ -576,6 +585,12 @@ function EmpresaFlotaServicioCardImpl({
                       <div>
                         <span style={{ color: "#94A3B8" }}>Entrada muelle · </span>
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.entradaMuelleMs)}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#94A3B8" }}>Tiempo espera · </span>
+                        <span style={{ color: "#F59E0B", fontWeight: 700 }}>
+                          {row.esperaAntesOperacionMin != null ? fmtDur(row.esperaAntesOperacionMin) : "—"}
+                        </span>
                       </div>
                       <div>
                         <span style={{ color: "#94A3B8" }}>Inicio operación · </span>

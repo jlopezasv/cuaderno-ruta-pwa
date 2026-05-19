@@ -1,17 +1,30 @@
 /**
- * Configuración Supabase para Vercel Serverless (api/*).
- * Sin URLs ni anon keys por defecto — cada entorno define SUPABASE_URL y SUPABASE_ANON_KEY.
+ * Supabase en Vercel Serverless (api/*).
+ * Sin fallback: SUPABASE_URL, SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY vía entorno.
  */
+
+/** Ref. proyecto REAL — no debe usarse en Preview/demo salvo opt-in explícito. */
+export const SUPABASE_REAL_PROJECT_REF = "glyexutcypmhkndvmcxd";
 
 let cached = null;
 
-function missingVars() {
-  const m = [];
-  const url = (process.env.SUPABASE_URL || "").trim();
-  const anon = (process.env.SUPABASE_ANON_KEY || "").trim();
-  if (!url) m.push("SUPABASE_URL");
-  if (!anon) m.push("SUPABASE_ANON_KEY");
-  return m;
+function requireProcessEnv(name) {
+  const value = (process.env[name] || "").trim();
+  if (!value) {
+    throw new Error(
+      `[Cuaderno API] Falta ${name}. Configúrala en Vercel (mismo proyecto que VITE_* del entorno). No hay credenciales embebidas.`,
+    );
+  }
+  return value;
+}
+
+function assertSupabaseUrlAllowed(url) {
+  if (!url.includes(SUPABASE_REAL_PROJECT_REF)) return;
+  if (process.env.ALLOW_PROD_SUPABASE === "1") return;
+  throw new Error(
+    `[Cuaderno API] SUPABASE_URL apunta al proyecto REAL (${SUPABASE_REAL_PROJECT_REF}). ` +
+      "En Preview/demo configura el proyecto DEMO. En Vercel Production usa ALLOW_PROD_SUPABASE=1.",
+  );
 }
 
 /**
@@ -20,24 +33,15 @@ function missingVars() {
 export function getSupabaseServerEnv() {
   if (cached) return cached;
 
-  const missing = missingVars();
-  if (missing.length) {
-    throw new Error(
-      `[Cuaderno API] Variables obligatorias no definidas: ${missing.join(", ")}. ` +
-        "Configúralas en Vercel (Production = REAL, Preview = DEMO) o en .env.local para `vercel dev`. " +
-        "Ver docs/HARDENING_ENV_FASE1.md",
-    );
-  }
-
-  const url = process.env.SUPABASE_URL.trim().replace(/\/+$/, "");
-  const anonKey = process.env.SUPABASE_ANON_KEY.trim();
+  const url = requireProcessEnv("SUPABASE_URL").replace(/\/+$/, "");
+  assertSupabaseUrlAllowed(url);
+  const anonKey = requireProcessEnv("SUPABASE_ANON_KEY");
   const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
   cached = { url, anonKey, serviceRoleKey };
   return cached;
 }
 
-/** Service role — obligatoria solo para operaciones admin/archivado. */
 export function getSupabaseServiceRoleKey() {
   const { serviceRoleKey } = getSupabaseServerEnv();
   if (!serviceRoleKey) {
@@ -48,7 +52,6 @@ export function getSupabaseServiceRoleKey() {
   return serviceRoleKey;
 }
 
-/** Invalida caché (tests). */
 export function resetSupabaseServerEnvCache() {
   cached = null;
 }
