@@ -9,7 +9,6 @@ import {
   isOperationalDocTraceEnabled,
   traceOperationalDoc,
 } from "../../domain/documents/operationalDocumentTrace.js";
-import { traceRawPhotoMode } from "../../domain/documents/mediaStorageV2.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documents/universalCamera.js";
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
@@ -190,12 +189,6 @@ export function OperationalEvidenciasStop({
     if (forFoto) {
       previewBlobRef.current = file;
       const url = URL.createObjectURL(file);
-      traceRawPhotoMode("local_preview", {
-        mime: file?.type || null,
-        sizeBytes: file?.size ?? 0,
-        canvasPipeline: false,
-        objectUrl: true,
-      });
       setPreviewUrl(url);
       setPreviewMeta({
         bytes: file.size || 0,
@@ -227,28 +220,22 @@ export function OperationalEvidenciasStop({
     setSaving(true);
     setError("");
     try {
-      traceRawPhotoMode("capture_selected", {
-        mime: file?.type || null,
-        sizeBytes: file?.size ?? 0,
-        canvasPipeline: false,
-        fileName: file?.name ?? null,
-      });
       if (isOperationalDocTraceEnabled()) {
         traceOperationalDoc("OperationalEvidenciasStop:onFotoSelected", {
           route: "uploadOperationalDocument",
           tipo: "foto",
-          rawPhotoMode: true,
-          canvasPipeline: false,
+          processImage: true,
+          pipeline: "foto_file_reader_jpeg",
         });
       }
       await preparePreview(file, { forFoto: true });
       const geo = await captureUploadGeo();
-      const { previewUrl, docMeta } = await uploadOperationalDocument(file, {
+      const { previewUrl, originalUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
         context: { ...uploadContext, eventoOperacional: "Foto operativa", geo },
       });
-      const url = previewUrl;
+      const url = originalUrl || previewUrl;
       const datos = mergeDocMetaIntoDatos({}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
