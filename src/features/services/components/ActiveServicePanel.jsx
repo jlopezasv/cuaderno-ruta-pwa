@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
@@ -7,8 +6,7 @@ import { getLastServiceActivity } from "../../../domain/service/serviceActivity"
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
-import { OperationalEtaSnapshotBlock } from "./OperationalEtaSnapshotBlock.jsx";
-import { VisualEtaFence } from "../../../ui/VisualEtaFence.jsx";
+import { EtaPrevistaBlock } from "./EtaPrevistaBlock.jsx";
 import {
   getFixedServiceRoute,
   getServiceClient,
@@ -701,7 +699,6 @@ export function ActiveServicePanel({
   conductorNombre = "Conductor",
   norma = null,
 }) {
-  const etaVisualClockMs = useEtaVisualClockMs();
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
@@ -916,18 +913,7 @@ export function ActiveServicePanel({
             background: DRIVER_UI.surface,
           }}
         >
-          <VisualEtaFence resetKey={servicio?.id} su={DRIVER_UI.su}>
-            <OperationalEtaSnapshotBlock
-              servicio={servicio}
-              nowMs={etaVisualClockMs}
-              tx={DRIVER_UI.tx}
-              su={DRIVER_UI.su}
-              subtle={DRIVER_UI.muted}
-              latestLocation={null}
-              tacografoEstado={null}
-              activeStop={null}
-            />
-          </VisualEtaFence>
+          <EtaPrevistaBlock servicio={servicio} tx={DRIVER_UI.tx} su={DRIVER_UI.su} subtle={DRIVER_UI.muted} />
         </div>
 
         <div style={{ marginTop: 20 }}>

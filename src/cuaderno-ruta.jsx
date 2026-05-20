@@ -139,6 +139,8 @@ import {
   asignarConductorEnServicioCreado,
   mergeServicioTrasAsignacion,
 } from "./domain/fleet/servicioCreateFlow.js";
+import { insertStopsForServicio } from "./domain/fleet/servicioStopsInsert.js";
+import { ensureServicioHasStops } from "./domain/fleet/servicioAssignment.js";
 import { conductorUidOperativoServicio } from "./domain/fleet/operationalPlaceholderConductor.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
@@ -155,6 +157,7 @@ import {
   getOperationalEtaSnapshot,
   getOperationalPlanConfirmedAt,
 } from "./domain/service/serviceOperacionMeta.js";
+import { buildEtaPrevistaFromRoutePlan } from "./domain/service/etaPrevista.js";
 import {
   buildServiceIdentityMeta,
   getFixedServiceRoute,
@@ -4087,10 +4090,12 @@ function AppInner(){
           if(v.origen?.trim()&&v.origen.trim()!==String(pref?.origenActual||"").trim())patch.origen=v.origen.trim();
           if(v.destino?.trim()&&v.destino.trim()!==String(pref?.destinoActual||"").trim())patch.destino=v.destino.trim();
           if(v.operationalPlan){
+            const etaPrevista=buildEtaPrevistaFromRoutePlan(v.operationalPlan);
             patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{
               operational_plan:v.operationalPlan,
               operational_eta:null,
               operational_plan_confirmed_at:new Date().toISOString(),
+              ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
             });
           }
           if(Object.keys(patch).length){
@@ -10098,7 +10103,11 @@ function MapTab({norma,prof,dark,viajeActivo}){
       try{
         const snap=operationalPlanSnapshotFromMapTabPlan(planPayload,velArg,spl,mod,sdt);
         if(!snap)return;
-        const referencia=mergeReferenciaOperacional(sv.referencia||null,{operational_plan:snap});
+        const etaPrevista=buildEtaPrevistaFromRoutePlan(snap);
+        const referencia=mergeReferenciaOperacional(sv.referencia||null,{
+          operational_plan:snap,
+          ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
+        });
         const res=await sbFetch(`/rest/v1/servicios?id=eq.${sv.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
         if(res.ok){
           window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
@@ -11537,10 +11546,42 @@ async function resolveEmpresaIdForServicioInsert(empresaIdProp){
   if(!uid)return null;
   try{
     const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-    return normalizeServicioEmpresaId(emps?.[0]?.id);
+    const ownerEmp=normalizeServicioEmpresaId(emps?.[0]?.id);
+    if(ownerEmp)return ownerEmp;
+    const links=await sbSelect("conductor_empresa",`user_id=eq.${uid}`);
+    const link=Array.isArray(links)?links.find(r=>r?.activo!==false):links;
+    return normalizeServicioEmpresaId(link?.empresa_id);
   }catch(_){
     return null;
   }
+}
+
+async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,logTag}){
+  const result=await insertStopsForServicio(servicioId,stops);
+  if(result.ok){
+    if(result.partial){
+      console.warn(`[OP3] create stops partial (${logTag})`,{servicioId,error:result.error});
+    }else{
+      console.log(`[OP3] create stops ok (${logTag})`,{servicioId,rows:result.rows?.length||stops?.length});
+    }
+    return;
+  }
+  console.warn(`[OP3] create stops failed (${logTag})`,{
+    servicioId,
+    status:result.status,
+    detail:String(result.detail||"").slice(0,400),
+  });
+  try{
+    await ensureServicioHasStops({servicioId,origen,destino});
+    console.log(`[OP3] create stops fallback ok (${logTag})`,{servicioId});
+    return;
+  }catch(fallbackErr){
+    console.warn(`[OP3] create stops fallback failed (${logTag})`,{
+      servicioId,
+      error:fallbackErr?.message||fallbackErr,
+    });
+  }
+  throw new Error(result.error||"No se pudieron crear las paradas del servicio");
 }
 
 function buildServicioInsertCorePayload({empresaId,conductorId,estado,origen,destino,referencia,fecha_inicio}){
@@ -11778,26 +11819,9 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      const stopsRes=await sbFetch("/rest/v1/stops",{
-        method:"POST",
-        body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
-      });
-      if(!stopsRes.ok){
-        let detail="";
-        try{detail=await stopsRes.text();}catch(_){}
-        console.warn("[OP3] create stops failed (AsignarServicioModal)",{
-          servicioId:sv?.id||null,
-          status:stopsRes.status,
-          detail:String(detail||"").slice(0,400),
-        });
-        throw new Error("No se pudieron crear las paradas del servicio");
-      }
-      console.log("[OP3] create stops ok (AsignarServicioModal)",{
-        servicioId:sv?.id||null,
-        rows:stops.length,
-      });
+      let assignResult=null;
       if(!sinConductor){
-        const assignResult=await asignarConductorEnServicioCreado({
+        assignResult=await asignarConductorEnServicioCreado({
           servicioId:sv.id,
           servicio:sv,
           conductorId,
@@ -11805,7 +11829,17 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
           origen:origen.trim(),
           destino:destino.trim(),
           fechaInicio:new Date(fechaInicio).toISOString(),
+          skipEnsureStops:true,
         });
+      }
+      await persistServicioStopsTrasCrear({
+        servicioId:sv.id,
+        stops,
+        origen:origen.trim(),
+        destino:destino.trim(),
+        logTag:"AsignarServicioModal",
+      });
+      if(!sinConductor){
         void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
         onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorId));
         return;
@@ -14130,12 +14164,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               </div>
                               <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
                                 {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
-                                {servicioPendienteAsignacion(sv)&&(
-                                  <button type="button" onClick={()=>setAsignarConductorServicio(sv)}
-                                    style={{background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
-                                    Asignar conductor
-                                  </button>
-                                )}
                                 <button type="button" onClick={()=>void abrirExpedientePreview(sv)}
                                   style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Ver
@@ -16092,21 +16120,6 @@ function CrearServicioModal({uid,onClose,onCreado}){
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      const stopsRes=await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-      if(!stopsRes.ok){
-        let detail="";
-        try{detail=await stopsRes.text();}catch(_){}
-        console.warn("[OP3] create stops failed (CrearServicioModal)",{
-          servicioId:sv?.id||null,
-          status:stopsRes.status,
-          detail:String(detail||"").slice(0,400),
-        });
-        throw new Error("No se pudieron crear las paradas del servicio");
-      }
-      console.log("[OP3] create stops ok (CrearServicioModal)",{
-        servicioId:sv?.id||null,
-        rows:stops.length,
-      });
       const assignResult=await asignarConductorEnServicioCreado({
         servicioId:sv.id,
         servicio:sv,
@@ -16115,6 +16128,14 @@ function CrearServicioModal({uid,onClose,onCreado}){
         origen:origen.trim(),
         destino:destino.trim(),
         fechaInicio:new Date(fechaInicio).toISOString(),
+        skipEnsureStops:true,
+      });
+      await persistServicioStopsTrasCrear({
+        servicioId:sv.id,
+        stops,
+        origen:origen.trim(),
+        destino:destino.trim(),
+        logTag:"CrearServicioModal",
       });
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
       onCreado(mergeServicioTrasAsignacion(sv,assignResult,uid));

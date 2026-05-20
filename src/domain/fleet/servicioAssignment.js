@@ -1,5 +1,6 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { bootstrapOperationalFlowOnConductorAssign } from "./servicioOperationalBootstrap.js";
+import { insertStopsForServicio } from "./servicioStopsInsert.js";
 
 /** Servicio planificado en empresa, sin chófer aún. */
 export const SERVICIO_ESTADO_PENDIENTE_ASIGNACION = "pendiente_asignacion";
@@ -54,7 +55,7 @@ function referenciaOperacionalValida(ref) {
   return ref != null && String(ref).trim() !== "" && String(ref).includes("__SRV_OP__");
 }
 
-async function ensureServicioHasStops({
+export async function ensureServicioHasStops({
   servicioId,
   origen = null,
   destino = null,
@@ -67,17 +68,12 @@ async function ensureServicioHasStops({
 
   const origenLabel = String(origen || "").trim() || "Origen";
   const destinoLabel = String(destino || "").trim() || "Destino";
-  const baselineStops = [
-    { servicio_id: servicioId, orden: 1, tipo: "carga", nombre: origenLabel, direccion: null, notas: null, estado: "pendiente" },
-    { servicio_id: servicioId, orden: 2, tipo: "descarga", nombre: destinoLabel, direccion: null, notas: null, estado: "pendiente" },
-  ];
-  const insertRes = await sbFetch("/rest/v1/stops", {
-    method: "POST",
-    body: JSON.stringify(baselineStops),
-  });
-  if (!insertRes.ok) {
-    const detail = await insertRes.text().catch(() => "");
-    throw new Error(detail || "No se pudieron crear paradas base para el servicio");
+  const result = await insertStopsForServicio(servicioId, [
+    { orden: 1, tipo: "carga", nombre: origenLabel, direccion: null, notas: null },
+    { orden: 2, tipo: "descarga", nombre: destinoLabel, direccion: null, notas: null },
+  ]);
+  if (!result.ok) {
+    throw new Error(result.error || "No se pudieron crear paradas base para el servicio");
   }
 }
 
@@ -133,6 +129,8 @@ export async function assignConductorPrincipalToServicio({
   origen = null,
   destino = null,
   fechaInicio = null,
+  /** Si true, no crea paradas base (el caller insertará paradas justo después). */
+  skipEnsureStops = false,
 }) {
   if (!servicioId || !conductorId) throw new Error("Servicio o conductor no válido");
 
@@ -165,12 +163,13 @@ export async function assignConductorPrincipalToServicio({
     }
   }
 
-  // Garantiza operativa mínima: todo servicio asignado debe tener recorrido base.
-  await ensureServicioHasStops({
-    servicioId,
-    origen: origen || servicio?.origen || null,
-    destino: destino || servicio?.destino || null,
-  });
+  if (!skipEnsureStops) {
+    await ensureServicioHasStops({
+      servicioId,
+      origen: origen || servicio?.origen || null,
+      destino: destino || servicio?.destino || null,
+    });
+  }
 
   const patch = {
     conductor_id: conductorId,

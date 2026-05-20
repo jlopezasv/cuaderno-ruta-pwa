@@ -15,6 +15,7 @@ export async function asignarConductorEnServicioCreado({
   origen = null,
   destino = null,
   fechaInicio = null,
+  skipEnsureStops = false,
 }) {
   if (!servicioId || !conductorId) {
     throw new Error("Servicio o conductor no válido");
@@ -33,6 +34,7 @@ export async function asignarConductorEnServicioCreado({
     origen: origen ?? base.origen,
     destino: destino ?? base.destino,
     fechaInicio: fechaInicio ?? base.fecha_inicio,
+    skipEnsureStops,
   });
 }
 
