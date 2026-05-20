@@ -15741,10 +15741,12 @@ function useServicioActivo(uid,norma=null,showToast=null){
   useEffect(()=>{
     function onRecarga(){cargar();}
     const onVisible=()=>{if(document.visibilityState==="visible")cargar();};
+    const pollId=setInterval(()=>{cargar();},30000);
     window.addEventListener("cuaderno-recargar-servicio",onRecarga);
     window.addEventListener("focus",onRecarga);
     document.addEventListener("visibilitychange",onVisible);
     return()=>{
+      clearInterval(pollId);
       window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
       window.removeEventListener("focus",onRecarga);
       document.removeEventListener("visibilitychange",onVisible);
