@@ -12,9 +12,10 @@ import {
   traceMediaV2,
 } from "../domain/documents/mediaStorageV2.js";
 import {
-  decodeImageFileForCanvas,
-  releaseDecodedImage,
-} from "../domain/documents/imageBlobLoad.js";
+  compressOperationalImageFile,
+  OPERATIONAL_UPLOAD_JPEG_QUALITY,
+  OPERATIONAL_UPLOAD_MAX_EDGE,
+} from "../domain/documents/operationalDocumentPipeline.js";
 import {
   isOperationalDocTraceEnabled,
   traceBlobColor,
@@ -310,14 +311,18 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
 }
 
 /**
- * JPEG con createImageBitmap (orientación EXIF) u objectURL — evita FileReader+dataURL en iOS (B/N).
+ * JPEG operativo (~500 KB, 1600 px, EXIF/iOS). Usado por tacógrafo, gastos y extras.
  */
-export async function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.72) {
+export async function compressImageToJpegBlob(
+  file,
+  maxWidth = OPERATIONAL_UPLOAD_MAX_EDGE,
+  quality = OPERATIONAL_UPLOAD_JPEG_QUALITY,
+) {
   const traceOn = isOperationalDocTraceEnabled();
   if (traceOn) {
     traceOperationalDoc("compressImage:enter", {
       fn: "compressImageToJpegBlob",
-      pipeline: "imageBitmap_or_objectUrl",
+      pipeline: "compressOperationalImageFile",
       maxWidth,
       quality,
       fileName: file?.name,
@@ -326,42 +331,21 @@ export async function compressImageToJpegBlob(file, maxWidth = 800, quality = 0.
     });
   }
 
-  const decoded = await decodeImageFileForCanvas(file);
-  try {
-    let w = decoded.width;
-    let h = decoded.height;
-    if (w > maxWidth) {
-      h = Math.round((h * maxWidth) / w);
-      w = maxWidth;
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d", { alpha: false });
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(decoded.draw, 0, 0, w, h);
+  const { blob } = await compressOperationalImageFile(file, {
+    maxEdge: maxWidth,
+    initialQuality: quality,
+  });
+  if (!blob?.size) throw new Error("Compresión devolvió blob vacío");
 
-    const blob = await new Promise((resolve, reject) => {
-      canvas.toBlob(
-        (b) => (b && b.size > 0 ? resolve(b) : reject(new Error("Compresión devolvió blob vacío"))),
-        "image/jpeg",
-        quality,
-      );
-    });
-
-    if (traceOn) {
-      await traceBlobColor("compressImage:output", blob, { pipeline: "imageBitmap_or_objectUrl" });
-    }
-    return blob;
-  } finally {
-    releaseDecodedImage(decoded);
+  if (traceOn) {
+    await traceBlobColor("compressImage:output", blob, { pipeline: "compressOperationalImageFile" });
   }
+  return blob;
 }
 
 /** Sube imagen comprimida a `user-photos`. Devuelve URL string (compat monolito). */
 export async function uploadUserPhoto(file, folder = "misc", options = {}) {
-  const compressed = await compressImageToJpegBlob(file, 800, 0.72);
+  const compressed = await compressImageToJpegBlob(file);
   const result = await uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
   return storageUploadUrl(result);
 }

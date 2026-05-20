@@ -14,6 +14,8 @@ import {
   getServiceNumberForDisplay,
 } from "../../../domain/service/serviceIdentity.js";
 import { stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
+import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
+import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -696,12 +698,18 @@ export function ActiveServicePanel({
   EvidenciasStopComponent,
   onOpenViajeModal,
   onEvidenciaSaved,
+  onCerrarExpediente,
   conductorNombre = "Conductor",
   norma = null,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
+  const [cierreSaving, setCierreSaving] = useState(false);
+  const showCierreDocumental = useMemo(
+    () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
+    [servicio, stops, onCerrarExpediente],
+  );
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
@@ -719,7 +727,7 @@ export function ActiveServicePanel({
   const referenciaCliente = getServiceClientReference(servicio) || "—";
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
-  const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso";
+  const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso" && !showCierreDocumental;
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
 
@@ -919,7 +927,7 @@ export function ActiveServicePanel({
         <div style={{ marginTop: 20 }}>
           <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
         </div>
-        {servicio && typeof onOpenViajeModal === "function" ? (
+        {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
           <button
             type="button"
             title="Ruta, destino y ETA"
@@ -941,6 +949,24 @@ export function ActiveServicePanel({
           >
             🗺 Ajustar ruta o destino
           </button>
+        ) : null}
+
+        {showCierreDocumental ? (
+          <ExpedienteClosureBlock
+            saving={cierreSaving}
+            onConfirm={async ({ comentario, firmaCanvas }) => {
+              if (cierreSaving) return;
+              setCierreSaving(true);
+              try {
+                await onCerrarExpediente?.({ comentario, firmaCanvas });
+                showToast?.("Expediente cerrado");
+              } catch (e) {
+                showToast?.(e?.message || "No se pudo cerrar el expediente");
+              } finally {
+                setCierreSaving(false);
+              }
+            }}
+          />
         ) : null}
       </CockpitShell>
       {confirmMuelleDialog}

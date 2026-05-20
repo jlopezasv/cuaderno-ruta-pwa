@@ -10,7 +10,8 @@ import {
   traceOperationalDoc,
 } from "../domain/documents/operationalDocumentTrace.js";
 import { storageUploadUrl, traceMediaV2DocMeta } from "../domain/documents/mediaStorageV2.js";
-import { compressImageToJpegBlob, uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
+import { uploadBlobToStorage, uploadUserFile } from "./uploadUserPhoto.js";
+import { stripServicioOperacionDisplay } from "../domain/service/serviceOperacionMeta.js";
 
 /**
  * Sube preview operacional (+ original opcional) con metadatos.
@@ -60,7 +61,7 @@ export async function uploadOperationalDocument(file, {
     cliente: cliente || servicio?.cliente,
     ciudad: ciudad || stop?.nombre,
     conductor: conductorName,
-    servicioRef: servicio?.referencia,
+    servicioRef: stripServicioOperacionDisplay(servicio?.referencia),
     stop,
   });
 
@@ -88,23 +89,25 @@ export async function uploadOperationalDocument(file, {
     mime = "image/jpeg";
     const previewName = buildOperationalFileName(displayName, "jpg");
     if (traceOn) {
-      traceOperationalDoc("uploadOperationalDocument:branch_foto_file_reader_jpeg", {
+      traceOperationalDoc("uploadOperationalDocument:branch_foto_operational_compress", {
         tipo,
         processImage: true,
-        pipeline: "compressImageToJpegBlob",
-        operationalCanvasPipeline: false,
+        pipeline: "processOperationalDocumentImage",
+        documentMode: false,
+        forUpload: true,
       });
       await traceBlobColor("uploadOperationalDocument:foto_input", file, { tipo });
     }
-    // Mismos parámetros que documentos extra (color fiable en iOS).
-    const jpegBlob = await compressImageToJpegBlob(file, 800, 0.72);
+    const processed = await processOperationalDocumentImage(file, { documentMode: false, forUpload: true });
     if (traceOn) {
-      await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", jpegBlob, { tipo });
+      await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", processed.previewBlob, { tipo });
     }
-    storagePreview = await uploadBlobToStorage(jpegBlob, "image/jpeg", folder, previewName);
+    storagePreview = await uploadBlobToStorage(processed.previewBlob, "image/jpeg", folder, previewName);
     previewUrl = storageUploadUrl(storagePreview);
-    previewBytes = jpegBlob.size;
-    uploadPipeline = "foto_file_reader_jpeg";
+    previewBytes = processed.previewBytes;
+    width = processed.width;
+    height = processed.height;
+    uploadPipeline = "foto_operational_compress_v1";
     if (traceOn) {
       traceOperationalDoc("uploadOperationalDocument:after_storage", {
         preview_url: previewUrl,
@@ -126,7 +129,7 @@ export async function uploadOperationalDocument(file, {
       });
     }
     mime = "image/jpeg";
-    const processed = await processOperationalDocumentImage(file, { documentMode });
+    const processed = await processOperationalDocumentImage(file, { documentMode, forUpload: true });
     const previewName = buildOperationalFileName(displayName, "jpg");
     if (traceOn) {
       await traceBlobColor("uploadOperationalDocument:preview_blob_before_storage", processed.previewBlob, {

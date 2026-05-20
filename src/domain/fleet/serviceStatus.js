@@ -9,6 +9,7 @@ export const ESTADO_COLOR = Object.freeze({
   asignado: "#3B82F6",
   en_curso: "#F59E0B",
   completado: "#22C55E",
+  cerrado: "#0D9488",
   cancelado: "#EF4444",
   anulado: "#64748B",
 });
@@ -19,6 +20,7 @@ export const ESTADO_LABEL = Object.freeze({
   asignado: "Asignado",
   en_curso: "En curso",
   completado: "Completado",
+  cerrado: "Expediente cerrado",
   cancelado: "Cancelado",
   anulado: "Anulado",
 });
@@ -29,6 +31,7 @@ export const ESTADO_ICON = Object.freeze({
   asignado: "📋",
   en_curso: "🚛",
   completado: "🏁",
+  cerrado: "✓",
   cancelado: "❌",
   anulado: "○",
 });

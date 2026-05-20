@@ -1,4 +1,6 @@
 import { formatStorageBytes } from "../documents/operationalDocumentPipeline.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
+import { stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
 import { EXTRA_DOC_TIPOS, extraDocFileUrl } from "./serviceExtraDocuments.js";
 
 function parseTs(value) {
@@ -51,18 +53,19 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
   const sizeBytes = row?.size_bytes != null ? Number(row.size_bytes) : null;
   const sizeLabel = sizeBytes != null && sizeBytes > 0 ? formatStorageBytes(sizeBytes) : null;
   const isPdf = mime.includes("pdf") || String(archivoNombre || "").toLowerCase().endsWith(".pdf");
+  const comentario = sanitizeDocumentCommentText(row?.descripcion);
 
   return {
     id: `extra:${row.id}`,
     tipo,
     titulo: `${tipoLbl} · ${title}`,
-    detalle: row?.descripcion?.trim() || "",
+    detalle: comentario,
     created_at: row?.created_at,
     hora: fmtClock(ms),
     url: docMeta?.preview_url || url,
     previewUrl: docMeta?.preview_url || url,
     originalUrl: docMeta?.original_url || null,
-    nota: row?.descripcion || null,
+    nota: comentario || null,
     datos: {
       ...(row?.datos && typeof row.datos === "object" ? row.datos : {}),
       source: "servicio_documentos_extra",
@@ -72,13 +75,13 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
     },
     bucket: bucketForExtraTipo(tipo),
     displayTitle: tipoLbl,
-    displaySubtitle: row?.descripcion?.trim() || archivoNombre || title,
+    displaySubtitle: comentario || archivoNombre || title,
     displayLine2: [conductorName, sizeLabel, isPdf ? "PDF" : "Archivo"].filter(Boolean).join(" · "),
     displaySizeLabel: sizeLabel,
     displayKindLabel: isPdf ? "PDF" : mime.startsWith("image/") ? "Foto" : "Archivo",
     stopId: null,
     stopLabel: "Documento extra",
-    stopName: servicio?.cliente || servicio?.referencia || "Servicio",
+    stopName: servicio?.cliente || stripServicioOperacionDisplay(servicio?.referencia) || "Servicio",
     source: "servicio_documentos_extra",
     extraDocId: row.id,
     conductor_id: row?.conductor_id ?? null,

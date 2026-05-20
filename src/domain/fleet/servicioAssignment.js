@@ -20,7 +20,12 @@ export function servicioPendienteAsignacion(servicio) {
   if (!servicio) return false;
   if (servicio.conductor_id) return false;
   if (servicio.estado === SERVICIO_ESTADO_PENDIENTE_ASIGNACION) return true;
-  return servicioSinConductor(servicio) && servicio.estado !== "completado" && servicio.estado !== "anulado";
+  return (
+    servicioSinConductor(servicio) &&
+    servicio.estado !== "completado" &&
+    servicio.estado !== "cerrado" &&
+    servicio.estado !== "anulado"
+  );
 }
 
 /** El conductor solo ve servicios ya asignados a su uid. */

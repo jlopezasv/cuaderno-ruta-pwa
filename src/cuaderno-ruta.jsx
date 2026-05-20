@@ -91,6 +91,8 @@ import {
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
+import { getExpedienteCierre } from "./domain/service/expedienteCierre.js";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -130,6 +132,7 @@ import {
   fetchServicioDocumentosExtra,
 } from "./domain/service/serviceExtraDocuments.js";
 import { groupExtraDocsByServicioId } from "./domain/service/extraDocumentExpediente.js";
+import { sanitizeDocumentCommentText } from "./domain/documents/documentCommentSanitize.js";
 import {
   fetchFlotaServiciosForEmpresa,
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
@@ -13836,7 +13839,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
                   )}
                   {visorEv.tipo==="incidencia"&&visorEv.datos?.texto&&(<div style={{background:"#450a0a",border:"1px solid #EF444440",borderRadius:10,padding:"12px 14px",fontSize:14,color:"#FCA5A5",lineHeight:1.6}}>{visorEv.datos.texto}</div>)}
-                  {visorEv.nota&&<div style={{marginTop:12,fontSize:13,color:su,background:bg,borderRadius:8,padding:"9px 11px"}}>📝 {visorEv.nota}</div>}
+                  {sanitizeDocumentCommentText(visorEv.nota)&&<div style={{marginTop:12,fontSize:13,color:su,background:bg,borderRadius:8,padding:"9px 11px"}}>📝 {sanitizeDocumentCommentText(visorEv.nota)}</div>}
                 </div>
               </div>
             </div>
@@ -15747,7 +15750,7 @@ function ServiciosTimelineView({uid}){
 // ─────────────────────────────────────────────────────────────
 //  HOOK — SERVICIO ACTIVO
 // ─────────────────────────────────────────────────────────────
-function useServicioActivo(uid,norma=null,showToast=null){
+function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   const[servicio,setServicio]=useState(null);
   const[stops,setStops]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -15984,7 +15987,36 @@ function useServicioActivo(uid,norma=null,showToast=null){
     if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar:cargar};
+  async function cerrarExpediente({ comentario, firmaCanvas }) {
+    if (!servicio?.id) throw new Error("Sin servicio activo");
+    const { servicio: updated, referencia } = await cerrarExpedienteServicio({
+      servicio,
+      comentario,
+      firmaCanvas,
+      conductorId: uid,
+      conductorNombre: conductorNombre || null,
+    });
+    setServicio((prev) => ({
+      ...prev,
+      ...updated,
+      estado: "cerrado",
+      referencia: referencia ?? updated?.referencia ?? prev?.referencia,
+    }));
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
+  return{
+    servicio,
+    stops,
+    completados,
+    loading,
+    marcarLlegado,
+    marcarCompletado,
+    iniciarServicio,
+    iniciarViajeOperacional,
+    marcarInicioOperacionStop,
+    cerrarExpediente,
+    recargar:cargar,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -16845,7 +16877,11 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                   {visorCtx.ev.datos.texto}
                 </div>
               )}
-              {visorCtx.ev.nota && <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>📝 {visorCtx.ev.nota}</div>}
+              {sanitizeDocumentCommentText(visorCtx.ev.nota) && (
+                <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>
+                  📝 {sanitizeDocumentCommentText(visorCtx.ev.nota)}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -16950,7 +16986,7 @@ function PushDebugTraceView({pre,result,caught,tx,su}){
 }
 
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid,norma,showToast);
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const[pushDebugSession,setPushDebugSession]=useState(()=>isPushDebugSessionEnabled());
@@ -17020,7 +17056,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
   },[]);
 
   useEffect(()=>{
-    if(servicio?.id&&["completado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
+    if(servicio?.id&&["completado","cerrado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
       markServiceArchived(servicio.id);
       void runRetentionSweep();
     }
@@ -17092,18 +17128,51 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     </div>
   );
 
+  if(servicio.estado==="cerrado"){
+    const cierre=getExpedienteCierre(servicio);
+    const cerradoLabel=cierre?.closed_at
+      ?new Date(cierre.closed_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})
+      :null;
+    return(
+      <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+        {pushActivator}
+        {pushDebugBar}
+        <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#0F766E",letterSpacing:.8,marginBottom:10}}>EXPEDIENTE CERRADO</div>
+          <div style={{fontSize:18,fontWeight:750,color:"#0F766E",marginBottom:6}}>Viaje cerrado</div>
+          <div style={{fontSize:14,color:su,marginBottom:8}}>{servicio.origen} → {servicio.destino}</div>
+          {cerradoLabel?<div style={{fontSize:12,color:su,marginBottom:20}}>Cerrado {cerradoLabel}</div>:null}
+          {cierre?.comentario?<div style={{fontSize:13,color:tx,textAlign:"left",background:"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:16,lineHeight:1.45}}>{cierre.comentario}</div>:null}
+          <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Nuevo servicio</button>
+        </div>
+        {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+      </div>
+    );
+  }
+
   if(servicio.estado==="completado")return(
-    <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+    <>
       {pushActivator}
       {pushDebugBar}
-      <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
-        <div style={{fontSize:12,fontWeight:800,color:"#16A34A",letterSpacing:.8,marginBottom:10}}>COMPLETADO</div>
-        <div style={{fontSize:18,fontWeight:750,color:"#16A34A",marginBottom:6}}>Servicio completado</div>
-        <div style={{fontSize:14,color:su,marginBottom:20}}>{servicio.origen} → {servicio.destino}</div>
-        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Nuevo servicio</button>
-      </div>
+      <ActiveServicePanel
+        mode="cierre_documental"
+        servicio={servicio}
+        stops={stops}
+        evidenciasByStop={evidenciasByStop}
+        showToast={showToast}
+        onIniciarServicio={iniciarServicio}
+        marcarLlegado={marcarLlegado}
+        marcarCompletado={marcarCompletado}
+        recargar={recargar}
+        EvidenciasStopComponent={EvidenciasStop}
+        onOpenViajeModal={onOpenViajeModal}
+        onEvidenciaSaved={handleEvidenciaSaved}
+        onCerrarExpediente={cerrarExpediente}
+        conductorNombre={conductorNombre}
+        norma={norma}
+      />
       {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
-    </div>
+    </>
   );
 
   if(servicio.estado==="asignado")return(

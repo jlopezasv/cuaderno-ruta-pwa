@@ -22,6 +22,7 @@ import {
 import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 
 const enc = new TextEncoder();
@@ -137,7 +138,7 @@ function evidenceDetail(ev) {
     const d = ev.datos || {};
     base = [d.remitente && `Remitente: ${d.remitente}`, d.destinatario && `Destinatario: ${d.destinatario}`, d.mercancia && `Mercancía: ${d.mercancia}`].filter(Boolean).join(" · ");
   } else base = ev?.nota || "";
-  return appendGeoToDetail(base, getGeoFromDocMeta(ev));
+  return appendGeoToDetail(sanitizeDocumentCommentText(base), getGeoFromDocMeta(ev));
 }
 
 function stopLabel(stop, counters) {

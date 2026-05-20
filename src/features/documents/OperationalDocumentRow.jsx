@@ -1,4 +1,5 @@
 import { resolveEvidenciaDisplayImageUrl } from "../../domain/documents/operationalDocumentRecord.js";
+import { sanitizeDocumentCommentText } from "../../domain/documents/documentCommentSanitize.js";
 import { LazyDocumentThumb } from "./LazyDocumentThumb.jsx";
 
 const TIPO_COLOR = {
@@ -13,7 +14,7 @@ const TIPO_COLOR = {
 
 export function OperationalDocumentRow({ ev, panel, onOpen, compact = false }) {
   const title = ev.displayTitle || ev.titulo || ev.tipo;
-  const subtitle = ev.displaySubtitle || ev.detalle || "";
+  const subtitle = sanitizeDocumentCommentText(ev.displaySubtitle || ev.detalle || "");
   const line2 = ev.displayLine2 || "";
   const color = TIPO_COLOR[ev.tipo] || panel?.tx || "#334155";
   const thumbSrc = ev.displayImageUrl || resolveEvidenciaDisplayImageUrl(ev) || ev.previewUrl || ev.url;

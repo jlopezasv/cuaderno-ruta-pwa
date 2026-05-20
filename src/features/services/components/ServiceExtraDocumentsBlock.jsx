@@ -7,6 +7,7 @@ import {
   uploadServicioDocumentoExtra,
 } from "../../../domain/service/serviceExtraDocuments.js";
 import { logExtraDoc } from "../../../domain/documents/extraDocumentUploadLog.js";
+import { sanitizeDocumentCommentText } from "../../../domain/documents/documentCommentSanitize.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../../domain/documents/universalCamera.js";
 
 export function ServiceExtraDocumentsBlock({
@@ -196,6 +197,7 @@ export function ServiceExtraDocumentsBlock({
         <div style={{ display: "flex", flexDirection: "column", gap: compact ? 6 : 8 }}>
           {rows.map((r) => {
             const canOpen = isExtraDocUrlOpenable(extraDocFileUrl(r));
+            const comentario = sanitizeDocumentCommentText(r.descripcion);
             return (
               <div
                 key={r.id}
@@ -219,7 +221,9 @@ export function ServiceExtraDocumentsBlock({
                     {new Date(r.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                     {uploaderName ? ` · ${uploaderName}` : ""}
                   </div>
-                  {r.descripcion ? <div style={{ fontSize: 11, color: shell.desc, marginTop: 4, lineHeight: 1.35 }}>{r.descripcion}</div> : null}
+                  {comentario ? (
+                    <div style={{ fontSize: 11, color: shell.desc, marginTop: 4, lineHeight: 1.35 }}>{comentario}</div>
+                  ) : null}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
                   <button

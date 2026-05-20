@@ -8,6 +8,7 @@ import {
   parseSupabaseErrorBody,
 } from "../documents/extraDocumentUploadLog.js";
 import { isHttpStorageUrl } from "../documents/storageDocumentUploadLog.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 
 const STORAGE_URL_ERROR = "Error generando URL del documento";
 
@@ -88,7 +89,7 @@ function buildInsertPayloadModern({
     empresa_id: servicio?.empresa_id ?? null,
     conductor_id: conductorId || null,
     tipo: String(tipo || "otro"),
-    descripcion: descripcion?.trim() || null,
+    descripcion: sanitizeDocumentCommentText(descripcion) || null,
     archivo_url: archivoUrl || null,
     mime_type: mimeType || null,
     size_bytes: sizeBytes != null ? Number(sizeBytes) : null,
@@ -108,7 +109,7 @@ function buildInsertPayloadLegacy({ servicioId, tipo, descripcion, archivoUrl, a
   return {
     servicio_id: servicioId,
     tipo: String(tipo || "otro"),
-    descripcion: descripcion?.trim() || null,
+    descripcion: sanitizeDocumentCommentText(descripcion) || null,
     url: archivoUrl || null,
     archivo_nombre: archivoNombre || null,
     creado_por: conductorId || null,
