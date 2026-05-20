@@ -710,6 +710,24 @@ export function ActiveServicePanel({
     () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
     [servicio, stops, onCerrarExpediente],
   );
+  useEffect(() => {
+    if (showCierreDocumental) {
+      console.log("[CLOSE1] render cierre", {
+        servicioId: servicio?.id ?? null,
+        estado: servicio?.estado ?? null,
+        mode,
+      });
+      console.log("[CLOSE2] open=true");
+    } else {
+      console.log("[CLOSE4] condición ocultación", {
+        servicioId: servicio?.id ?? null,
+        estado: servicio?.estado ?? null,
+        needsClosure: needsExpedienteClosure(servicio, stops),
+        hasCerrarHandler: typeof onCerrarExpediente === "function",
+        mode,
+      });
+    }
+  }, [showCierreDocumental, servicio?.id, servicio?.estado, mode, stops, onCerrarExpediente]);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;

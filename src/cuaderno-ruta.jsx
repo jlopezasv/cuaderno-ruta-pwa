@@ -4993,8 +4993,16 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
 async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
+  /** Incluye `completado` para cierre documental (firma); excluye `cerrado`. */
+  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado";
+  const estadoRank=(estado)=>{
+    if(estado==="en_curso")return 0;
+    if(estado==="asignado")return 1;
+    if(estado==="completado")return 2;
+    return 9;
+  };
   async function fetchServiciosByConductorId(){
-    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(en_curso,asignado)&order=created_at.desc&limit=20`);
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=20`);
     if(!r.ok)return[];
     const rows=await r.json();
     return Array.isArray(rows)?rows:[];
@@ -5005,7 +5013,7 @@ async function resolveDriverActiveServiceAndStops(uid){
     const arows=await ar.json();
     const ids=[...new Set((Array.isArray(arows)?arows:[]).map(r=>r?.servicio_id).filter(Boolean))];
     if(!ids.length)return[];
-    const sr=await sbFetch(`/rest/v1/servicios?id=in.(${ids.join(",")})&estado=in.(en_curso,asignado)&order=created_at.desc&limit=40`);
+    const sr=await sbFetch(`/rest/v1/servicios?id=in.(${ids.join(",")})&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=40`);
     if(!sr.ok)return[];
     const srows=await sr.json();
     return Array.isArray(srows)?srows:[];
@@ -5014,7 +5022,12 @@ async function resolveDriverActiveServiceAndStops(uid){
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
-  const candidates=[...byId.values()].sort((a,b)=>new Date(b?.created_at||0)-new Date(a?.created_at||0));
+  const candidates=[...byId.values()].sort((a,b)=>{
+    const ra=estadoRank(a?.estado);
+    const rb=estadoRank(b?.estado);
+    if(ra!==rb)return ra-rb;
+    return new Date(b?.created_at||0)-new Date(a?.created_at||0);
+  });
   console.log("[OP2] active service candidates",{
     uid,
     rows:candidates.length,
@@ -15769,7 +15782,23 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
         estados:Array.isArray(data)?data.map(s=>s?.estado):[],
       });
       if(data.length){
-        setServicio(data[0]);
+        setServicio((prev)=>{
+          const next=data[0];
+          if(
+            prev?.id===next?.id&&
+            String(prev?.estado||"")==="completado"&&
+            String(next?.estado||"")!=="completado"&&
+            String(next?.estado||"")!=="cerrado"
+          ){
+            console.log("[CLOSE4] condición ocultación — preservar completado local tras recarga",{
+              prevEstado:prev.estado,
+              nextEstado:next.estado,
+              servicioId:prev.id,
+            });
+            return{...next,estado:"completado"};
+          }
+          return next;
+        });
         const stopsRows=Array.isArray(resolved?.stops)?resolved.stops:[];
         console.log("[OP1] useServicioActivo stops query",{
           servicioId:data[0]?.id||null,
@@ -17150,12 +17179,15 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     );
   }
 
-  if(servicio.estado==="completado")return(
+  if(servicio.estado==="asignado"||servicio.estado==="en_curso"||servicio.estado==="completado"){
+    const panelMode=
+      servicio.estado==="asignado"?"asignado":servicio.estado==="completado"?"cierre_documental":"en_curso";
+    return(
     <>
       {pushActivator}
       {pushDebugBar}
       <ActiveServicePanel
-        mode="cierre_documental"
+        mode={panelMode}
         servicio={servicio}
         stops={stops}
         evidenciasByStop={evidenciasByStop}
@@ -17173,61 +17205,10 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       />
       {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>
-  );
+    );
+  }
 
-  if(servicio.estado==="asignado")return(
-    <>
-      {pushActivator}
-      {pushDebugBar}
-      <ActiveServicePanel
-      mode="asignado"
-      servicio={servicio}
-      stops={stops}
-      completados={completados}
-      evidenciasByStop={evidenciasByStop}
-      showToast={showToast}
-      onIniciarServicio={iniciarServicio}
-      marcarLlegado={marcarLlegado}
-      marcarCompletado={marcarCompletado}
-      recargar={recargar}
-      EvidenciasStopComponent={EvidenciasStop}
-      card={card}
-      tx={tx}
-      su={su}
-      onOpenViajeModal={onOpenViajeModal}
-      onEvidenciaSaved={handleEvidenciaSaved}
-      conductorNombre={conductorNombre}
-      norma={norma}
-    />
-    </>
-  );
-
-  return(
-    <>
-      {pushActivator}
-      {pushDebugBar}
-      <ActiveServicePanel
-      mode="en_curso"
-      servicio={servicio}
-      stops={stops}
-      completados={completados}
-      evidenciasByStop={evidenciasByStop}
-      showToast={showToast}
-      onIniciarServicio={iniciarServicio}
-      marcarLlegado={marcarLlegado}
-      marcarCompletado={marcarCompletado}
-      recargar={recargar}
-      EvidenciasStopComponent={EvidenciasStop}
-      card={card}
-      tx={tx}
-      su={su}
-      onOpenViajeModal={onOpenViajeModal}
-      onEvidenciaSaved={handleEvidenciaSaved}
-      conductorNombre={conductorNombre}
-      norma={norma}
-    />
-    </>
-  );
+  return null;
 });
 
 

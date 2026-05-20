@@ -136,6 +136,14 @@ export function ExpedienteClosureBlock({ onConfirm, saving = false }) {
   const [hasFirma, setHasFirma] = useState(false);
   const firmaCanvasRef = useRef(null);
 
+  useEffect(() => {
+    console.log("[CLOSE1] render cierre (ExpedienteClosureBlock)");
+    console.log("[CLOSE2] open=true");
+    return () => {
+      console.log("[CLOSE3] unmount cierre");
+    };
+  }, []);
+
   return (
     <div
       style={{
