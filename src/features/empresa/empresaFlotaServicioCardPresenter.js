@@ -138,7 +138,7 @@ function arrivalLabelFromVisual(servicio, v) {
   return null;
 }
 
-export function buildEmpresaFlotaCardSummary({
+function buildEmpresaFlotaCardSummaryInner({
   servicio,
   stops = [],
   nowMs,
@@ -146,7 +146,7 @@ export function buildEmpresaFlotaCardSummary({
   tacografoEstado = null,
   activeStop = null,
   nextStop = null,
-  useLiveEta = true,
+  useLiveEta = false,
 }) {
   const hasAuxClock = Number(nowMs) > 0;
   const auxNow = hasAuxClock ? new Date(Number(nowMs)) : new Date();
@@ -233,16 +233,21 @@ export function buildEmpresaFlotaCardSummary({
     };
   }
 
-  const live = buildOperationalEtaVisual({
-    servicio,
-    now: auxNow,
-    latestLocation,
-    tacografoEstado,
-    activeStop,
-    resolvedVisual: v,
-  });
+  let live = null;
+  try {
+    live = buildOperationalEtaVisual({
+      servicio,
+      now: auxNow,
+      latestLocation,
+      tacografoEstado,
+      activeStop,
+      resolvedVisual: v,
+    });
+  } catch {
+    live = null;
+  }
 
-  const situation = live.delay?.situation;
+  const situation = live?.delay?.situation;
   const contextLine = resolveEmpresaFlotaContextLine({
     servicio,
     stops,
@@ -254,9 +259,9 @@ export function buildEmpresaFlotaCardSummary({
   });
 
   const remainingKm =
-    v.tier === "operational" ? v.operational?.remaining_km : v.remainingKm ?? live.remainingKmVisual;
+    v.tier === "operational" ? v.operational?.remaining_km : v.remainingKm ?? live?.remainingKmVisual;
   const remainingMins =
-    v.tier === "operational" ? v.operational?.remaining_mins : v.remainingMins ?? live.remainingMinsVisual;
+    v.tier === "operational" ? v.operational?.remaining_mins : v.remainingMins ?? live?.remainingMinsVisual;
   const remainingLine =
     formatEmpresaFlotaRemainingLine(remainingKm, remainingMins) ||
     formatEmpresaOperationalRestLine(remainingMins, remainingKm);
@@ -266,8 +271,34 @@ export function buildEmpresaFlotaCardSummary({
     contextLine,
     arrivalLabel: stableArrival,
     remainingLine,
-    deviation: formatEmpresaFlotaDeviationLine(live.delay),
+    deviation: live?.delay ? formatEmpresaFlotaDeviationLine(live.delay) : null,
     calculating: false,
     etaCaption: v.tier === "operational" ? ETA_LABEL_ACTUAL : ETA_LABEL_INICIAL,
   };
+}
+
+/** Resumen compacto de tarjeta: solo ETA persistida/plan; sin motor live (no bloquea operativa). */
+export function buildEmpresaFlotaCardSummary(args) {
+  try {
+    return buildEmpresaFlotaCardSummaryInner(args);
+  } catch (err) {
+    console.warn("[buildEmpresaFlotaCardSummary]", err);
+    const servicio = args?.servicio;
+    const stops = args?.stops || [];
+    const { origen, destino } = resolveServiceRouteEndpoints(servicio, stops);
+    const cliente = getServiceClient(servicio);
+    const completados = stops.filter((s) => s.estado === "completado").length;
+    return {
+      routeLabel: `${String(origen || "—").toUpperCase()} → ${String(destino || "—").toUpperCase()}`,
+      clienteLine: cliente?.trim() ? `Cliente · ${cliente.trim()}` : null,
+      contextLine: servicio?.estado === "en_curso" ? "En curso" : null,
+      estadoServicio: servicio?.estado ? ESTADO_LABEL[servicio.estado] || servicio.estado : null,
+      progressLine: stops.length ? `Paradas · ${completados}/${stops.length}` : null,
+      arrivalLabel: null,
+      remainingLine: null,
+      deviation: null,
+      calculating: false,
+      etaCaption: ETA_LABEL_INICIAL,
+    };
+  }
 }

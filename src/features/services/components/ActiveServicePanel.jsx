@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
@@ -8,6 +8,7 @@ import { getAttentionReason, needsAttention } from "../../../domain/service/serv
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
 import { OperationalEtaSnapshotBlock } from "./OperationalEtaSnapshotBlock.jsx";
+import { VisualEtaFence } from "../../../ui/VisualEtaFence.jsx";
 import {
   getFixedServiceRoute,
   getServiceClient,
@@ -447,6 +448,7 @@ function OperationalStopCard({
       : { bg: DRIVER_UI.surfaceHi, fg: DRIVER_UI.su };
   const Ev = EvidenciasStopComponent;
   const icon = stopTimelineIcon(group);
+  const stopId = stop?.id;
 
   return (
     <article
@@ -524,7 +526,21 @@ function OperationalStopCard({
           {!entrada ? (
             <div style={{ marginTop: 12 }}>
               {canOperate ? (
-                <button type="button" onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })} style={actionButtonStyle("green")}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.log("[OP2] click entrada_muelle", {
+                      stopId,
+                      canOperate,
+                      isCurrent,
+                      estadoStop: stop?.estado || null,
+                      entrada: !!stop?.hora_llegada_real,
+                      salida: !!stop?.hora_salida_real,
+                    });
+                    onConfirmMuelle?.({ kind: "entrada", stopId: stop.id });
+                  }}
+                  style={actionButtonStyle("green")}
+                >
                   Entrada en muelle
                 </button>
               ) : (
@@ -562,7 +578,17 @@ function OperationalStopCard({
               ) : null}
               <button
                 type="button"
-                onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
+                onClick={() => {
+                  console.log("[OP2] click salida_muelle", {
+                    stopId,
+                    canOperate,
+                    isCurrent,
+                    estadoStop: stop?.estado || null,
+                    entrada: !!stop?.hora_llegada_real,
+                    salida: !!stop?.hora_salida_real,
+                  });
+                  onConfirmMuelle?.({ kind: "salida", stopId: stop.id });
+                }}
                 disabled={!canOperate}
                 style={{
                   ...actionButtonStyle("amber"),
@@ -700,9 +726,28 @@ export function ActiveServicePanel({
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
 
+  useEffect(() => {
+    console.log("[OP1] panel state", {
+      servicioId: servicio?.id || null,
+      mode,
+      estadoServicio: servicio?.estado || null,
+      canOperateStops,
+      currentStopId: stopMostrar?.id || null,
+      timelineItems: timelineItems.length,
+    });
+  }, [servicio?.id, mode, servicio?.estado, canOperateStops, stopMostrar?.id, timelineItems.length]);
+
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
+    console.log("[OP2] confirm callback start", {
+      servicioId: servicio?.id || null,
+      kind,
+      stopId,
+      canOperateStops,
+      mode,
+      estadoServicio: servicio?.estado || null,
+    });
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
@@ -713,7 +758,14 @@ export function ActiveServicePanel({
         await recargar?.();
       }
       setConfirmMuelle(null);
+      console.log("[OP2] confirm callback success", { kind, stopId, servicioId: servicio?.id || null });
     } catch (error) {
+      console.warn("[OP2] confirm callback error", {
+        kind,
+        stopId,
+        servicioId: servicio?.id || null,
+        error: error?.message || String(error),
+      });
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
@@ -820,30 +872,6 @@ export function ActiveServicePanel({
           serviceAction={serviceAction}
         />
 
-        <div
-          style={{
-            marginTop: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            padding: "12px 14px",
-            borderRadius: 12,
-            border: `1px solid ${DRIVER_UI.line}`,
-            background: DRIVER_UI.surface,
-          }}
-        >
-          <OperationalEtaSnapshotBlock
-            servicio={servicio}
-            nowMs={etaVisualClockMs}
-            tx={DRIVER_UI.tx}
-            su={DRIVER_UI.su}
-            subtle={DRIVER_UI.muted}
-            latestLocation={null}
-            tacografoEstado={tacografoEstado}
-            activeStop={stopMostrar}
-          />
-        </div>
-
         <ServiceDetailsCollapsible
           cliente={cliente}
           referenciaCliente={referenciaCliente}
@@ -874,6 +902,32 @@ export function ActiveServicePanel({
             conductorNombre={conductorNombre}
             onEvidenciaSaved={onEvidenciaSaved}
           />
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            padding: "12px 14px",
+            borderRadius: 12,
+            border: `1px solid ${DRIVER_UI.line}`,
+            background: DRIVER_UI.surface,
+          }}
+        >
+          <VisualEtaFence resetKey={servicio?.id} su={DRIVER_UI.su}>
+            <OperationalEtaSnapshotBlock
+              servicio={servicio}
+              nowMs={etaVisualClockMs}
+              tx={DRIVER_UI.tx}
+              su={DRIVER_UI.su}
+              subtle={DRIVER_UI.muted}
+              latestLocation={null}
+              tacografoEstado={null}
+              activeStop={null}
+            />
+          </VisualEtaFence>
         </div>
 
         <div style={{ marginTop: 20 }}>

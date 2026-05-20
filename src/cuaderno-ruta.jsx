@@ -116,6 +116,7 @@ import {
   patchFlotaServicioTrasAsignar,
   filterServiciosForEmpresaVistaTab,
   resolveEmpresaVistaTabKeepingExpandedServicio,
+  stopsOperativaSig,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
   getOperationalEtaUiState,
@@ -4874,6 +4875,14 @@ async function persistServiceOperationalEta({
 
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
   const depStopsIn=Array.isArray(stops)?stops:[];
+  console.log("[OP3] register start",{
+    uid:uid||null,
+    eventType:eventType||null,
+    servicioId:servicio?.id||null,
+    stopId:stopId||null,
+    estadoServicio:servicio?.estado||null,
+    stopsCount:depStopsIn.length,
+  });
   const successMsgs={
     entrada_muelle:"Entrada en muelle registrada",
     salida_muelle:"Muelle finalizado",
@@ -4887,11 +4896,25 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   const gps=await getDriverActionGps({fresh:true,timeoutMs:15000});
   if(!gps.ok){
+    console.warn("[OP3] gps fail",{
+      eventType:eventType||null,
+      servicioId:servicio?.id||null,
+      stopId:stopId||null,
+      error:gps.error,
+    });
     showToast?.(`${gps.error}. Sin ubicación operativa.`,"#F97316",4200);
     trackingLog("operativa flow_gps_fail",{uid,error:gps.error});
     return{gpsOk:false,error:gps.error};
   }
   const point=gps.point;
+  console.log("[OP3] gps ok",{
+    eventType:eventType||null,
+    servicioId:servicio?.id||null,
+    stopId:stopId||null,
+    lat:point?.lat,
+    lon:point?.lon,
+    accuracy:point?.accuracy,
+  });
   trackingLog("operativa flow_gps_ok",{uid,lat:point.lat,lon:point.lon,accuracy:point.accuracy});
 
   const snap=await resolveOperationalUbicacionSnapshot(uid,servicio,depStopsIn);
@@ -4899,6 +4922,12 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   try{
     await saveDriverActionLocation(uid,point,{preResolved:snap,eventType,stopId});
+    console.log("[OP3] saveDriverActionLocation ok",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      empresaId:snap?.empresa_id||null,
+    });
   }catch(e){
     console.warn("ubicacion evento save failed:",e);
     trackingLog("operativa ubicacion save_exception",{uid,error:String(e?.message||e)});
@@ -4932,30 +4961,72 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
       empresa_id:snap.empresa_id,
       has_eta:!!etaLabel,
     });
+    console.log("[OP3] register success",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      gpsOk:true,
+    });
     return{gpsOk:true,point,...(etaRes||{})};
   }catch(e){
     console.warn("eta operacional failed:",e);
     showToast?.("Ubicación guardada. ETA no recalculada","#F97316",3200);
     showToast?.(successBase,"#166534",2400);
     trackingLog("operativa flow_eta_fail",{uid,error:String(e?.message||e)});
+    console.warn("[OP3] register eta branch fail",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      error:String(e?.message||e),
+    });
     return{gpsOk:true,point};
   }
 }
 
-async function readActiveServiceForDriver(uid){
+async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
-  async function fetchOne(estadoEq){
-    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=eq.${estadoEq}&order=created_at.desc&limit=1`);
-    if(!r.ok)return null;
-    const data=await r.json();
-    return Array.isArray(data)?data[0]:null;
+  const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(en_curso,asignado)&order=created_at.desc&limit=20`);
+  if(!r.ok)return{servicio:null,stops:[]};
+  const servicios=await r.json();
+  const candidates=Array.isArray(servicios)?servicios:[];
+  console.log("[OP2] active service candidates",{
+    uid,
+    rows:candidates.length,
+    ids:candidates.map(s=>s?.id),
+    estados:candidates.map(s=>s?.estado),
+  });
+  if(!candidates.length)return{servicio:null,stops:[]};
+  for(const sv of candidates){
+    if(!sv?.id)continue;
+    const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${sv.id}&order=orden.asc`);
+    const stops=sr.ok?await sr.json():[];
+    const arr=Array.isArray(stops)?stops:[];
+    console.log("[OP2] candidate stops",{
+      servicioId:sv.id,
+      estado:sv?.estado||null,
+      status:sr?.status,
+      rows:arr.length,
+      stopIds:arr.map(s=>s?.id),
+    });
+    if(arr.length>0)return{servicio:sv,stops:arr};
   }
-  let servicio=await fetchOne("en_curso");
-  if(!servicio?.id)servicio=await fetchOne("asignado");
-  if(!servicio?.id)return{servicio:null,stops:[]};
-  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicio.id}&order=orden.asc`);
+  const fallback=candidates[0];
+  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${fallback.id}&order=orden.asc`);
   const stops=sr.ok?await sr.json():[];
-  return{servicio,stops:Array.isArray(stops)?stops:[]};
+  const arr=Array.isArray(stops)?stops:[];
+  return{servicio:fallback,stops:arr};
+}
+
+async function readActiveServiceForDriver(uid){
+  const out=await resolveDriverActiveServiceAndStops(uid);
+  console.log("[OP2] readActiveServiceForDriver resolved",{
+    uid,
+    servicioId:out?.servicio?.id||null,
+    estado:out?.servicio?.estado||null,
+    conductor_id:out?.servicio?.conductor_id||null,
+    stopsRows:Array.isArray(out?.stops)?out.stops.length:0,
+  });
+  return out;
 }
 
 async function registerDriverEventOperationalPoint({uid,norma,eventType,showToast}){
@@ -11687,9 +11758,23 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      await sbFetch("/rest/v1/stops",{
+      const stopsRes=await sbFetch("/rest/v1/stops",{
         method:"POST",
         body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
+      });
+      if(!stopsRes.ok){
+        let detail="";
+        try{detail=await stopsRes.text();}catch(_){}
+        console.warn("[OP3] create stops failed (AsignarServicioModal)",{
+          servicioId:sv?.id||null,
+          status:stopsRes.status,
+          detail:String(detail||"").slice(0,400),
+        });
+        throw new Error("No se pudieron crear las paradas del servicio");
+      }
+      console.log("[OP3] create stops ok (AsignarServicioModal)",{
+        servicioId:sv?.id||null,
+        rows:stops.length,
       });
       if(!sinConductor){
         const assignResult=await asignarConductorEnServicioCreado({
@@ -12438,6 +12523,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   async function fetchFlotaStopsMapForServicioIds(ids){
     if(!ids?.length)return{};
     const stps=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids.join(",")})&order=servicio_id.asc,orden.asc`).then(r=>r.json());
+    console.log("[OP3] fetchFlotaStopsMapForServicioIds",{
+      requestedIds:ids,
+      rows:Array.isArray(stps)?stps.length:null,
+      servicioIdsInRows:Array.isArray(stps)?[...new Set(stps.map(s=>s?.servicio_id).filter(Boolean))]:[],
+      sample:Array.isArray(stps)?stps.slice(0,8).map(s=>({
+        id:s?.id,
+        servicio_id:s?.servicio_id,
+        estado:s?.estado,
+        orden:s?.orden,
+      })) : [],
+    });
     return stopsRowsToMap(stps);
   }
 
@@ -12446,10 +12542,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const missing=ids.filter((id)=>!flotaStopsFetchedIdsRef.current.has(id));
     if(!missing.length)return;
     try{
+      console.log("[TL2] ensure stops request",{ids,missing});
       const map=await fetchFlotaStopsMapForServicioIds(missing);
+      console.log("[TL2] ensure stops response",{
+        servicios:Object.keys(map||{}),
+        counts:Object.fromEntries(Object.entries(map||{}).map(([k,v])=>[k,Array.isArray(v)?v.length:0])),
+      });
       missing.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
       setFlotaStops((prev)=>{
         const next=mergeFlotaStopsMap(prev,map);
+        console.log("[TL2] ensure stops merged",{
+          servicios:Object.keys(next||{}).length,
+          changed:next!==prev,
+          targetIds:missing,
+        });
         flotaStopsRef.current=next;
         return next;
       });
@@ -13033,7 +13139,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     setSvCardExpand(prev=>{
       const opening=prev!==id;
       const next=opening?id:null;
-      if(opening)void ensureFlotaEvidenciasRef.current?.(id);
+      if(opening){
+        void (async()=>{
+          await ensureFlotaStopsForServicioIds([id]);
+          await ensureFlotaEvidenciasRef.current?.(id);
+        })();
+      }
       return next;
     });
   },[]);
@@ -15595,12 +15706,33 @@ function useServicioActivo(uid,norma=null,showToast=null){
   const cargar=useCallback(async()=>{
     if(!uid){setLoading(false);return;}
     try{
-      const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
-      const data=await r.json();
+      const resolved=await resolveDriverActiveServiceAndStops(uid);
+      const data=resolved?.servicio?[resolved.servicio]:[];
+      console.log("[OP1] useServicioActivo servicio query",{
+        uid,
+        status:resolved?.servicio?200:204,
+        rows:Array.isArray(data)?data.length:null,
+        servicioIds:Array.isArray(data)?data.map(s=>s?.id):[],
+        estados:Array.isArray(data)?data.map(s=>s?.estado):[],
+      });
       if(data.length){
         setServicio(data[0]);
-        const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${data[0].id}&order=orden.asc`);
-        setStops(await sr.json());
+        const stopsRows=Array.isArray(resolved?.stops)?resolved.stops:[];
+        console.log("[OP1] useServicioActivo stops query",{
+          servicioId:data[0]?.id||null,
+          status:200,
+          rows:Array.isArray(stopsRows)?stopsRows.length:null,
+          stopIds:Array.isArray(stopsRows)?stopsRows.map(s=>s?.id):[],
+          payload:Array.isArray(stopsRows)?stopsRows.map(s=>({
+            id:s?.id,
+            servicio_id:s?.servicio_id,
+            estado:s?.estado,
+            orden:s?.orden,
+            hora_llegada_real:s?.hora_llegada_real||null,
+            hora_salida_real:s?.hora_salida_real||null,
+          })) : [],
+        });
+        setStops(stopsRows);
       }else{setServicio(null);setStops([]);}
     }catch(e){console.warn("useServicioActivo:",e);}
     finally{setLoading(false);}
@@ -15621,8 +15753,42 @@ function useServicioActivo(uid,norma=null,showToast=null){
   const completados=countCompletedStops(stops);
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
+    console.log("[TL1] click entrada_muelle",{
+      servicioId:servicio?.id||null,
+      stopId,
+      now,
+      estadoServicio:servicio?.estado||null,
+    });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
-    if(!res.ok)throw new Error("No se pudo guardar la entrada en muelle");
+    console.log("[TL1] patch entrada_muelle",{
+      ok:res.ok,
+      status:res.status,
+      servicioId:servicio?.id||null,
+      stopId,
+      payload:{estado:"llegado",hora_llegada_real:now},
+    });
+    if(!res.ok){
+      let detail="";
+      try{detail=await res.text();}catch(_){}
+      console.warn("[OP3] patch entrada_muelle failed",{
+        status:res.status,
+        detail:String(detail||"").slice(0,300),
+        servicioId:servicio?.id||null,
+        stopId,
+      });
+      throw new Error("No se pudo guardar la entrada en muelle");
+    }
+    try{
+      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
+      const verifyRows=verify.ok?await verify.json():null;
+      console.log("[TL1] verify entrada_muelle",{
+        ok:verify.ok,
+        status:verify.status,
+        row:verifyRows?.[0]||null,
+      });
+    }catch(e){
+      console.warn("[TL1] verify entrada_muelle failed",e?.message||e);
+    }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
     setStops(updated);
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
@@ -15639,8 +15805,42 @@ function useServicioActivo(uid,norma=null,showToast=null){
   }
   async function marcarCompletado(stopId){
     const now=new Date().toISOString();
+    console.log("[TL1] click salida_muelle",{
+      servicioId:servicio?.id||null,
+      stopId,
+      now,
+      estadoServicio:servicio?.estado||null,
+    });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
-    if(!res.ok)throw new Error("No se pudo guardar la salida de muelle");
+    console.log("[TL1] patch salida_muelle",{
+      ok:res.ok,
+      status:res.status,
+      servicioId:servicio?.id||null,
+      stopId,
+      payload:{estado:"completado",hora_salida_real:now},
+    });
+    if(!res.ok){
+      let detail="";
+      try{detail=await res.text();}catch(_){}
+      console.warn("[OP3] patch salida_muelle failed",{
+        status:res.status,
+        detail:String(detail||"").slice(0,300),
+        servicioId:servicio?.id||null,
+        stopId,
+      });
+      throw new Error("No se pudo guardar la salida de muelle");
+    }
+    try{
+      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
+      const verifyRows=verify.ok?await verify.json():null;
+      console.log("[TL1] verify salida_muelle",{
+        ok:verify.ok,
+        status:verify.status,
+        row:verifyRows?.[0]||null,
+      });
+    }catch(e){
+      console.warn("[TL1] verify salida_muelle failed",e?.message||e);
+    }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
     setStops(updated);
 
@@ -15845,7 +16045,21 @@ function CrearServicioModal({uid,onClose,onCreado}){
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
+      const stopsRes=await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
+      if(!stopsRes.ok){
+        let detail="";
+        try{detail=await stopsRes.text();}catch(_){}
+        console.warn("[OP3] create stops failed (CrearServicioModal)",{
+          servicioId:sv?.id||null,
+          status:stopsRes.status,
+          detail:String(detail||"").slice(0,400),
+        });
+        throw new Error("No se pudieron crear las paradas del servicio");
+      }
+      console.log("[OP3] create stops ok (CrearServicioModal)",{
+        servicioId:sv?.id||null,
+        rows:stops.length,
+      });
       const assignResult=await asignarConductorEnServicioCreado({
         servicioId:sv.id,
         servicio:sv,
@@ -16700,8 +16914,10 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     }
   }
 
+  const stopsOperativaSigKey=useMemo(()=>stopsOperativaSig(stops),[stops]);
+
   useEffect(()=>{
-    if(!servicio?.id||!stops.length){
+    if(!servicio?.id||!stopsOperativaSigKey){
       setEvidenciasByStop({});
       return;
     }
@@ -16720,11 +16936,18 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       }
     })();
     return()=>{cancelled=true;};
-  },[servicio?.id,stops]);
+  },[servicio?.id,stopsOperativaSigKey,stops]);
 
   const handleEvidenciaSaved=useCallback((ev)=>{
     const stopId=ev?.stop_id;
     if(!ev?.id||!stopId)return;
+    console.log("[TL1] evidencia saved callback",{
+      evidenciaId:ev.id,
+      servicioId:servicio?.id||null,
+      stopId,
+      tipo:ev?.tipo||null,
+      created_at:ev?.created_at||null,
+    });
     setEvidenciasByStop((prev)=>mergeEvidenciaIntoByStop(prev,stopId,ev));
   },[]);
 

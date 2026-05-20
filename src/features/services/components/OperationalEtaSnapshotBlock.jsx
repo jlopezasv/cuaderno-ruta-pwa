@@ -96,15 +96,19 @@ function OperationalEtaSnapshotBlockImpl({
 
   const liveVisual = useMemo(() => {
     if (v.tier !== "operational") return null;
-    return buildOperationalEtaVisual({
-      servicio,
-      now: auxNowRef,
-      latestLocation,
-      tacografoEstado,
-      activeStop,
-      progressMemory: kmStableMs == null ? null : { kmStableMs },
-      resolvedVisual: v,
-    });
+    try {
+      return buildOperationalEtaVisual({
+        servicio,
+        now: auxNowRef,
+        latestLocation,
+        tacografoEstado,
+        activeStop,
+        progressMemory: kmStableMs == null ? null : { kmStableMs },
+        resolvedVisual: v,
+      });
+    } catch {
+      return null;
+    }
   }, [servicio, v, auxNowRef, latestLocation, tacografoEstado, activeStop, kmStableMs]);
 
   if (!servicio || servicio.estado === "anulado" || v.tier === "none") {
@@ -149,6 +153,17 @@ function OperationalEtaSnapshotBlockImpl({
   }
 
   const opEta = v.operational;
+  if (!opEta || typeof opEta !== "object") {
+    return (
+      <>
+        <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>
+        <EtaTime tx={txU}>{inicialHead || "—"}</EtaTime>
+        <EtaLabel su={suU}>{ETA_LABEL_ACTUAL}</EtaLabel>
+        <EtaTime tx={txU}>—</EtaTime>
+      </>
+    );
+  }
+
   const delay = liveVisual?.delay;
   const d = Math.round(Number(delay?.delayMins) || 0);
   const actualHead = resolvePersistedEtaActualLabel(opEta) || "—";

@@ -13,8 +13,11 @@ import {
 } from "../../domain/service/serviceIdentity.js";
 import { buildEmpresaFlotaCardSummary } from "./empresaFlotaServicioCardPresenter.js";
 import { OperationalEtaSnapshotBlock } from "../services/components/OperationalEtaSnapshotBlock.jsx";
+import { VisualEtaFence } from "../../ui/VisualEtaFence.jsx";
+import { flotaEvsSigForStops, stopsOperativaSig } from "./empresaFlotaRefresh.js";
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
+import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -120,33 +123,47 @@ function EmpresaFlotaServicioCardImpl({
         servicio,
         stops,
         nowMs,
-        latestLocation,
         tacografoEstado,
-        activeStop: stopActual,
         nextStop,
-        useLiveEta: expanded && !sinOp,
+        useLiveEta: false,
       }),
-    [servicio, stops, nowMs, latestLocation, tacografoEstado, stopActual, nextStop, expanded, sinOp],
+    [servicio, stops, nowMs, tacografoEstado, nextStop],
   );
 
   const servicioReferencia = servicio?.referencia ?? "";
 
-  const dossierMetrics = useMemo(
-    () => (expanded ? computeTripOperationalMetrics(servicio, stops) : null),
-    [expanded, servicio, servicioReferencia, stops],
-  );
+  const dossierMetrics = useMemo(() => {
+    if (!expanded) return null;
+    try {
+      return computeTripOperationalMetrics(servicio, stops);
+    } catch (err) {
+      console.warn("[EmpresaFlotaServicioCard] dossierMetrics", err);
+      return null;
+    }
+  }, [expanded, servicio, servicioReferencia, stops]);
 
   const operativaTimeline = useMemo(() => {
     if (!expanded) return [];
-    return getServicioOperativaTimelineForCard({
-      servicio,
-      stops,
-      evidenciasByStop: flotaEvs,
-      metrics: dossierMetrics,
-      nombreConductor,
-      fmtDur,
-      entries: conductor?.entries || [],
-    });
+    try {
+      console.log("[TL3] timeline build input",{
+        servicioId:servicio?.id||null,
+        expanded,
+        stopsCount:Array.isArray(stops)?stops.length:0,
+        evidenciasStops:Object.keys(flotaEvs||{}).length,
+      });
+      return getServicioOperativaTimelineForCard({
+        servicio,
+        stops,
+        evidenciasByStop: flotaEvs,
+        metrics: dossierMetrics,
+        nombreConductor,
+        fmtDur,
+        entries: conductor?.entries || [],
+      });
+    } catch (err) {
+      console.warn("[EmpresaFlotaServicioCard] operativaTimeline", err);
+      return [];
+    }
   }, [
     expanded,
     servicio,
@@ -173,6 +190,16 @@ function EmpresaFlotaServicioCardImpl({
         ? "Sin asignar"
         : null;
   const timelineSoloTexto = operativaTimeline;
+  useEffect(() => {
+    if (!expanded) return;
+    console.log("[TL3] timeline render",{
+      servicioId:servicio?.id||null,
+      expanded,
+      timelineCount:Array.isArray(timelineSoloTexto)?timelineSoloTexto.length:0,
+      stopsCount:Array.isArray(stops)?stops.length:0,
+      sinOp,
+    });
+  }, [expanded, servicio?.id, timelineSoloTexto, stops, sinOp]);
   const ubicLine = ubicInfo?.label || (ubicInfo?.missing ? "Sin ubicación registrada" : "—");
   const ubicUpdated =
     ubicInfo?.recent === false ? "Sin actualización reciente" : ubicInfo ? "Ubicación reciente" : null;
@@ -472,38 +499,7 @@ function EmpresaFlotaServicioCardImpl({
               Operativa del servicio
             </div>
 
-            {!sinOp && servicio.estado !== "anulado" ? (
-              <div
-                style={{
-                  marginBottom: 12,
-                  paddingBottom: 12,
-                  borderBottom: `1px solid ${UI.border}`,
-                }}
-              >
-                <OperationalEtaSnapshotBlock
-                  servicio={servicio}
-                  nowMs={nowMs}
-                  tx={tx}
-                  su={su}
-                  subtle={UI.subtle}
-                  layout="empresa"
-                  latestLocation={latestLocation}
-                  tacografoEstado={tacografoEstado}
-                  activeStop={stopActual}
-                />
-                {nextStop ? (
-                  <div style={{ marginTop: 8, fontSize: 12, color: su, lineHeight: 1.35 }}>
-                    ETA / siguiente punto ·{" "}
-                    <strong style={{ color: tx }}>{nextStop.nombre || "—"}</strong>
-                    {nextStop.tipo ? (
-                      <span style={{ fontWeight: 600 }}> · {stopTipoCompacto(nextStop)}</span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {timelineSoloTexto.length > 0 ? (
+            {!sinOp ? (
               <>
                 <div
                   style={{
@@ -517,6 +513,7 @@ function EmpresaFlotaServicioCardImpl({
                 >
                   Línea de tiempo
                 </div>
+                {timelineSoloTexto.length > 0 ? (
                 <div style={{ maxHeight: 220, overflowY: "auto", marginBottom: 12 }}>
                   {timelineSoloTexto.map((ev, i) => (
                     <div
@@ -554,6 +551,11 @@ function EmpresaFlotaServicioCardImpl({
                     </div>
                   ))}
                 </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: su, marginBottom: 12, lineHeight: 1.4 }}>
+                    Sin eventos en la línea de tiempo todavía.
+                  </div>
+                )}
               </>
             ) : null}
 
@@ -623,6 +625,36 @@ function EmpresaFlotaServicioCardImpl({
                 );
               })
             )}
+
+            {!sinOp && servicio.estado !== "anulado" ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  paddingTop: 12,
+                  borderTop: `1px solid ${UI.border}`,
+                }}
+              >
+                <VisualEtaFence resetKey={servicio?.id} su={su}>
+                  <OperationalEtaSnapshotBlock
+                    servicio={servicio}
+                    nowMs={nowMs}
+                    tx={tx}
+                    su={su}
+                    subtle={UI.subtle}
+                    layout="empresa"
+                  />
+                </VisualEtaFence>
+                {nextStop ? (
+                  <div style={{ marginTop: 8, fontSize: 12, color: su, lineHeight: 1.35 }}>
+                    ETA / siguiente punto ·{" "}
+                    <strong style={{ color: tx }}>{nextStop.nombre || "—"}</strong>
+                    {nextStop.tipo ? (
+                      <span style={{ fontWeight: 600 }}> · {stopTipoCompacto(nextStop)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div
@@ -929,12 +961,17 @@ function EmpresaFlotaServicioCardImpl({
 function propsEqual(prev, next) {
   if (prev.expanded !== next.expanded) return false;
   if (prev.nowMs !== next.nowMs) return false;
-  if (prev.servicio !== next.servicio) {
-    if (prev.servicio?.id !== next.servicio?.id) return false;
-    if (prev.servicio?.estado !== next.servicio?.estado) return false;
-    if (prev.servicio?.referencia !== next.servicio?.referencia) return false;
+  if (prev.servicio?.id !== next.servicio?.id) return false;
+  if (prev.servicio?.estado !== next.servicio?.estado) return false;
+  if (
+    stripServicioOperacionDisplay(prev.servicio?.referencia) !==
+    stripServicioOperacionDisplay(next.servicio?.referencia)
+  ) {
+    return false;
   }
-  if (prev.stops !== next.stops) return false;
+  if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
+  if (flotaEvsSigForStops(prev.stops, prev.flotaEvs) !== flotaEvsSigForStops(next.stops, next.flotaEvs)) return false;
   if (prev.attention !== next.attention) return false;
   if (prev.ubicRefresh !== next.ubicRefresh) return false;
   const la = prev.ubicInfo;

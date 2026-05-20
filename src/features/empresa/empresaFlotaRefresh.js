@@ -97,6 +97,11 @@ export function stopsRowsToMap(stps) {
     if (!stopsMap[st.servicio_id]) stopsMap[st.servicio_id] = [];
     stopsMap[st.servicio_id].push(st);
   });
+  console.log("[OP3] stopsRowsToMap", {
+    rows: Array.isArray(stps) ? stps.length : 0,
+    servicioIds: Object.keys(stopsMap),
+    perServicio: Object.fromEntries(Object.entries(stopsMap).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])),
+  });
   return stopsMap;
 }
 
@@ -266,15 +271,41 @@ export function mergeFlotaServicios(prev, next) {
   return mergedRows;
 }
 
-function stopsArrayKey(stops) {
+/** Firma de paradas para memo / merge (timeline, muelle, dossier). */
+export function stopsOperativaSig(stops) {
   if (!stops?.length) return "";
-  return stops.map((st) => `${st.id}|${st.estado}|${st.hora_llegada_real || ""}|${st.hora_salida_real || ""}|${st.orden}`).join(";");
+  return stops
+    .map((st) => `${st.id}|${st.estado}|${st.hora_llegada_real || ""}|${st.hora_salida_real || ""}|${st.orden}`)
+    .join(";");
+}
+
+function stopsArrayKey(stops) {
+  return stopsOperativaSig(stops);
+}
+
+/** Evidencias de las paradas de un servicio (mapa global flotaEvs). */
+export function flotaEvsSigForStops(stops, flotaEvs) {
+  return (stops || [])
+    .map((st) => {
+      const arr = flotaEvs?.[st.id] || [];
+      return `${st.id}:${arr.map((e) => `${e.id}|${e.created_at}|${e.tipo}`).join(",")}`;
+    })
+    .join("|");
+}
+
+/** ETA persistida en referencia (no columna suelta). */
+export function operationalEtaMetaSig(servicio) {
+  const meta = getServicioOperacionMeta(servicio);
+  const op = meta?.operational_eta;
+  if (!op || typeof op !== "object") return "";
+  return `${op.updated_at || op.calculated_at || ""}:${op.eta || ""}:${op.remaining_km}:${op.remaining_mins}`;
 }
 
 export function mergeFlotaStopsMap(prev, next) {
   if (!next) return prev || {};
   const out = { ...(prev || {}) };
   let changed = false;
+  const changedIds = [];
   const ids = new Set([...Object.keys(prev || {}), ...Object.keys(next)]);
   for (const id of ids) {
     const p = prev?.[id] || [];
@@ -285,6 +316,7 @@ export function mergeFlotaStopsMap(prev, next) {
     }
     out[id] = n;
     changed = true;
+    changedIds.push(id);
   }
   if (!changed && prev) {
     let sameRef = true;
@@ -296,6 +328,13 @@ export function mergeFlotaStopsMap(prev, next) {
     }
     if (sameRef) return prev;
   }
+  console.log("[TL2] mergeFlotaStopsMap",{
+    incomingServicios:Object.keys(next||{}),
+    changed,
+    changedIds,
+    prevServicios:Object.keys(prev||{}).length,
+    nextServicios:Object.keys(out||{}).length,
+  });
   return out;
 }
 
