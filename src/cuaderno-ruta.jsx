@@ -4985,15 +4985,35 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
 async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
-  const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(en_curso,asignado)&order=created_at.desc&limit=20`);
-  if(!r.ok)return{servicio:null,stops:[]};
-  const servicios=await r.json();
-  const candidates=Array.isArray(servicios)?servicios:[];
+  async function fetchServiciosByConductorId(){
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(en_curso,asignado)&order=created_at.desc&limit=20`);
+    if(!r.ok)return[];
+    const rows=await r.json();
+    return Array.isArray(rows)?rows:[];
+  }
+  async function fetchServiciosByAsignacionesFallback(){
+    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.desc&limit=40&select=servicio_id`);
+    if(!ar.ok)return[];
+    const arows=await ar.json();
+    const ids=[...new Set((Array.isArray(arows)?arows:[]).map(r=>r?.servicio_id).filter(Boolean))];
+    if(!ids.length)return[];
+    const sr=await sbFetch(`/rest/v1/servicios?id=in.(${ids.join(",")})&estado=in.(en_curso,asignado)&order=created_at.desc&limit=40`);
+    if(!sr.ok)return[];
+    const srows=await sr.json();
+    return Array.isArray(srows)?srows:[];
+  }
+  const primaryCandidates=await fetchServiciosByConductorId();
+  const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
+  const byId=new Map();
+  [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
+  const candidates=[...byId.values()].sort((a,b)=>new Date(b?.created_at||0)-new Date(a?.created_at||0));
   console.log("[OP2] active service candidates",{
     uid,
     rows:candidates.length,
     ids:candidates.map(s=>s?.id),
     estados:candidates.map(s=>s?.estado),
+    sourceByConductorId:primaryCandidates.length,
+    sourceByAsignaciones:fallbackCandidates.length,
   });
   if(!candidates.length)return{servicio:null,stops:[]};
   for(const sv of candidates){
@@ -15703,6 +15723,8 @@ function useServicioActivo(uid,norma=null,showToast=null){
   const[servicio,setServicio]=useState(null);
   const[stops,setStops]=useState([]);
   const[loading,setLoading]=useState(true);
+  const emptyStopsRetryRef=useRef(0);
+  const emptyStopsRetryTimerRef=useRef(null);
   const cargar=useCallback(async()=>{
     if(!uid){setLoading(false);return;}
     try{
@@ -15733,6 +15755,25 @@ function useServicioActivo(uid,norma=null,showToast=null){
           })) : [],
         });
         setStops(stopsRows);
+        if(stopsRows.length>0){
+          emptyStopsRetryRef.current=0;
+          if(emptyStopsRetryTimerRef.current){
+            clearTimeout(emptyStopsRetryTimerRef.current);
+            emptyStopsRetryTimerRef.current=null;
+          }
+        }else{
+          const retryN=emptyStopsRetryRef.current+1;
+          emptyStopsRetryRef.current=retryN;
+          if(retryN<=6){
+            if(emptyStopsRetryTimerRef.current)clearTimeout(emptyStopsRetryTimerRef.current);
+            emptyStopsRetryTimerRef.current=setTimeout(()=>{cargar();},3000);
+            console.warn("[OP1] servicio sin paradas, reintento",{
+              servicioId:data[0]?.id||null,
+              estado:data[0]?.estado||null,
+              retry:retryN,
+            });
+          }
+        }
       }else{setServicio(null);setStops([]);}
     }catch(e){console.warn("useServicioActivo:",e);}
     finally{setLoading(false);}
@@ -15746,6 +15787,10 @@ function useServicioActivo(uid,norma=null,showToast=null){
     window.addEventListener("focus",onRecarga);
     document.addEventListener("visibilitychange",onVisible);
     return()=>{
+      if(emptyStopsRetryTimerRef.current){
+        clearTimeout(emptyStopsRetryTimerRef.current);
+        emptyStopsRetryTimerRef.current=null;
+      }
       clearInterval(pollId);
       window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
       window.removeEventListener("focus",onRecarga);
