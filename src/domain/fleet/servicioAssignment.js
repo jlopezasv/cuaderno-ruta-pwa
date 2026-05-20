@@ -54,6 +54,33 @@ function referenciaOperacionalValida(ref) {
   return ref != null && String(ref).trim() !== "" && String(ref).includes("__SRV_OP__");
 }
 
+async function ensureServicioHasStops({
+  servicioId,
+  origen = null,
+  destino = null,
+}) {
+  if (!servicioId) return;
+  const existingRes = await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicioId}&select=id&limit=1`);
+  if (!existingRes.ok) return;
+  const existingRows = await existingRes.json().catch(() => []);
+  if (Array.isArray(existingRows) && existingRows.length > 0) return;
+
+  const origenLabel = String(origen || "").trim() || "Origen";
+  const destinoLabel = String(destino || "").trim() || "Destino";
+  const baselineStops = [
+    { servicio_id: servicioId, orden: 1, tipo: "carga", nombre: origenLabel, direccion: null, notas: null, estado: "pendiente" },
+    { servicio_id: servicioId, orden: 2, tipo: "descarga", nombre: destinoLabel, direccion: null, notas: null, estado: "pendiente" },
+  ];
+  const insertRes = await sbFetch("/rest/v1/stops", {
+    method: "POST",
+    body: JSON.stringify(baselineStops),
+  });
+  if (!insertRes.ok) {
+    const detail = await insertRes.text().catch(() => "");
+    throw new Error(detail || "No se pudieron crear paradas base para el servicio");
+  }
+}
+
 /** Carga servicios de flota empresa: por conductores vinculados + empresa_id. */
 export async function fetchFlotaServiciosForEmpresa(sbFetchFn, empresaId, conductorUids = []) {
   const byId = new Map();
@@ -137,6 +164,13 @@ export async function assignConductorPrincipalToServicio({
       throw new Error("No se pudo guardar la referencia operativa del servicio (bootstrap)");
     }
   }
+
+  // Garantiza operativa mínima: todo servicio asignado debe tener recorrido base.
+  await ensureServicioHasStops({
+    servicioId,
+    origen: origen || servicio?.origen || null,
+    destino: destino || servicio?.destino || null,
+  });
 
   const patch = {
     conductor_id: conductorId,
