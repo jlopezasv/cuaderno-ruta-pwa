@@ -7358,6 +7358,7 @@ function CambiarPassword(){
     try{
       // Actualizar contraseña via Supabase auth
       const session=getSession();
+      guardDemoCannotUseProduction(SB_URL,"auth:change-password");
       const res=await fetch(`${SB_URL}/auth/v1/user`,{
         method:"PUT",
         headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":`Bearer ${session?.access_token}`},
