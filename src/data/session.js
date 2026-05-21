@@ -1,10 +1,16 @@
 import { SB_URL, SB_KEY, sbFetch } from "./supabaseClient";
 import { clearAuthContext } from "./authContext";
 import { isPublicRegistrationAllowed } from "../config/appEnvironment.js";
+import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
 
 export { getSession, getUserId } from "./supabaseClient";
 
+function assertAuthTargetSafe(context) {
+  guardDemoCannotUseProduction(SB_URL, context);
+}
+
 export async function signUp(email, password) {
+  assertAuthTargetSafe("auth:signup");
   if (!isPublicRegistrationAllowed()) {
     throw new Error(
       "El registro libre está desactivado en este entorno. Usa las cuentas demo o contacta con soporte.",
@@ -24,6 +30,7 @@ export async function signUp(email, password) {
 }
 
 export async function signIn(email, password) {
+  assertAuthTargetSafe("auth:signIn");
   clearAuthContext();
   localStorage.removeItem("sb_session");
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
@@ -70,6 +77,7 @@ export async function signOut() {
 }
 
 export async function refreshSession() {
+  assertAuthTargetSafe("auth:refresh");
   const session = JSON.parse(localStorage.getItem("sb_session") || "null");
   if (!session?.refresh_token) return null;
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {

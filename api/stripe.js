@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseServerEnv } from './lib/supabaseEnv.js';
+import { guardDemoCannotUseProduction } from './lib/demoSafety.js';
 
 const PRICE_MONTHLY = 'price_1TNpMxC03Kg4wBdS3eqhhVsg';
 const PRICE_ANNUAL  = 'price_1TNpNyC03Kg4wBdSHfAUkSeB';
@@ -36,6 +37,7 @@ async function getUserIdFromAuthorizationHeader(req) {
   } catch (e) {
     return { userId: null, error: 'supabase_not_configured' };
   }
+  guardDemoCannotUseProduction(url, 'stripe:getUserFromBearer');
   const sb = createClient(url, anon);
   const { data, error } = await sb.auth.getUser(jwt);
   if (error || !data?.user?.id) return { userId: null, error: error?.message || 'invalid_bearer' };

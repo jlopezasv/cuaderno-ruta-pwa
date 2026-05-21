@@ -1,10 +1,16 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
+import { assertClientEnvironmentSafe, isDemoApp } from './config/appEnvironment.js';
 import { getSupabasePublicHost } from './data/supabaseClient.js';
+
+assertClientEnvironmentSafe();
 
 if (import.meta.env.PROD) {
   console.info('[Cuaderno] Supabase host:', getSupabasePublicHost());
+  if (isDemoApp()) {
+    console.info('[Cuaderno DEMO] Aislamiento activo — ref REAL bloqueado en cliente.');
+  }
 }
 
 // Registrar Service Worker tras el primer paint (no compite con carga JS)
