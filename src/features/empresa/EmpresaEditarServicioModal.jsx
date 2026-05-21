@@ -1,7 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { sbFetch } from "../../data/supabaseClient.js";
-import { getServiceNumber } from "../../domain/service/serviceIdentity.js";
+import { getServiceClient, getServiceNumber } from "../../domain/service/serviceIdentity.js";
 import { mergeReferenciaOperacional, getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+import {
+  buildOperationalPlacesMetaPatch,
+  getServiceOperationalPlaces,
+  routeTextFromOperationalPlaces,
+} from "../../domain/service/serviceOperationalPlaces.js";
 import { assignConductorPrincipalToServicio } from "../../domain/fleet/servicioAssignment.js";
 import { asignarConductorEnServicioCreado } from "../../domain/fleet/servicioCreateFlow.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
@@ -41,8 +46,12 @@ export function EmpresaEditarServicioModal({
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
   const wide = mode === "wide";
 
-  const [origen, setOrigen] = useState("");
-  const [destino, setDestino] = useState("");
+  const [cargaNombre, setCargaNombre] = useState("");
+  const [cargaEmpresa, setCargaEmpresa] = useState("");
+  const [cargaDir, setCargaDir] = useState("");
+  const [descargaNombre, setDescargaNombre] = useState("");
+  const [descargaEmpresa, setDescargaEmpresa] = useState("");
+  const [descargaDir, setDescargaDir] = useState("");
   const [fechaInicioLocal, setFechaInicioLocal] = useState("");
   const [serviceNumber, setServiceNumber] = useState("");
   const [cliente, setCliente] = useState("");
@@ -54,11 +63,16 @@ export function EmpresaEditarServicioModal({
 
   useEffect(() => {
     if (!servicio?.id) return;
-    setOrigen(String(servicio.origen || "").trim());
-    setDestino(String(servicio.destino || "").trim());
+    const places = getServiceOperationalPlaces(servicio);
+    setCargaNombre(places.carga_nombre);
+    setCargaEmpresa(places.carga_empresa);
+    setCargaDir(places.carga_direccion);
+    setDescargaNombre(places.descarga_nombre);
+    setDescargaEmpresa(places.descarga_empresa);
+    setDescargaDir(places.descarga_direccion);
     setFechaInicioLocal(servicio.fecha_inicio ? toDTL(servicio.fecha_inicio) : "");
     setServiceNumber(String(servicio.service_number ?? "").trim());
-    setCliente(String(servicio.cliente ?? "").trim());
+    setCliente(String(getServiceClient(servicio) || "").trim());
     setRefCliente(String(servicio.referencia_cliente ?? "").trim());
     setAdminNotas(String(getServicioOperacionMeta(servicio).admin_notas ?? "").trim());
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
@@ -88,15 +102,40 @@ export function EmpresaEditarServicioModal({
     };
 
     try {
+      const operationalPlaces = {
+        cliente_nombre: String(cliente || "").trim(),
+        carga_nombre: String(cargaNombre || "").trim(),
+        carga_empresa: String(cargaEmpresa || "").trim(),
+        carga_direccion: String(cargaDir || "").trim(),
+        descarga_nombre: String(descargaNombre || "").trim(),
+        descarga_empresa: String(descargaEmpresa || "").trim(),
+        descarga_direccion: String(descargaDir || "").trim(),
+      };
+      const placesMetaPatch = buildOperationalPlacesMetaPatch(operationalPlaces);
+      const prevPlaces = getServiceOperationalPlaces(servicio);
+      const placesChanged =
+        operationalPlaces.cliente_nombre !== prevPlaces.cliente_nombre ||
+        operationalPlaces.carga_nombre !== prevPlaces.carga_nombre ||
+        operationalPlaces.carga_empresa !== prevPlaces.carga_empresa ||
+        operationalPlaces.carga_direccion !== prevPlaces.carga_direccion ||
+        operationalPlaces.descarga_nombre !== prevPlaces.descarga_nombre ||
+        operationalPlaces.descarga_empresa !== prevPlaces.descarga_empresa ||
+        operationalPlaces.descarga_direccion !== prevPlaces.descarga_direccion;
+
+      if (placesChanged) {
+        patch.referencia = mergeReferenciaOperacional(servicio.referencia || "", placesMetaPatch);
+      }
+
       if (wide) {
+        const { origen: origenRuta, destino: destinoRuta } = routeTextFromOperationalPlaces(operationalPlaces);
         const o0 = String(servicio.origen || "").trim();
-        const o1 = String(origen || "").trim();
+        const o1 = String(origenRuta || "").trim();
         if (o1 !== o0) {
           patch.origen = o1;
           pushAudit("origen", o0, o1);
         }
         const d0 = String(servicio.destino || "").trim();
-        const d1 = String(destino || "").trim();
+        const d1 = String(destinoRuta || "").trim();
         if (d1 !== d0) {
           patch.destino = d1;
           pushAudit("destino", d0, d1);
@@ -138,9 +177,10 @@ export function EmpresaEditarServicioModal({
       const prevAdm = prevMeta == null ? "" : String(prevMeta).trim();
       const adm1 = String(adminNotas || "").trim();
       if (adm1 !== prevAdm) {
-        patch.referencia = mergeReferenciaOperacional(servicio.referencia || "", {
-          admin_notas: adm1 || null,
-        });
+        patch.referencia = mergeReferenciaOperacional(
+          (patch.referencia ?? servicio.referencia) || "",
+          { admin_notas: adm1 || null },
+        );
         pushAudit("admin_notas", prevAdm, adm1);
       }
 
@@ -206,8 +246,12 @@ export function EmpresaEditarServicioModal({
     servicio,
     mode,
     wide,
-    origen,
-    destino,
+    cargaNombre,
+    cargaEmpresa,
+    cargaDir,
+    descargaNombre,
+    descargaEmpresa,
+    descargaDir,
     fechaInicioLocal,
     serviceNumber,
     cliente,
@@ -261,15 +305,42 @@ export function EmpresaEditarServicioModal({
         </div>
 
         <div style={{ padding: "12px 16px", overflowY: "auto", flex: 1 }}>
+          <label style={labelStyle}>
+            Cliente (comercial)
+            <input value={cliente} onChange={(e) => setCliente(e.target.value)} style={inputStyle} placeholder="Ej. Mercadona" />
+          </label>
+
           {wide ? (
             <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "4px 0 8px", letterSpacing: 0.4 }}>
+                ORIGEN (CARGA)
+              </div>
               <label style={labelStyle}>
-                Origen
-                <input value={origen} onChange={(e) => setOrigen(e.target.value)} style={inputStyle} />
+                Lugar
+                <input value={cargaNombre} onChange={(e) => setCargaNombre(e.target.value)} style={inputStyle} placeholder="Ciudad, muelle…" />
               </label>
               <label style={labelStyle}>
-                Destino
-                <input value={destino} onChange={(e) => setDestino(e.target.value)} style={inputStyle} />
+                Empresa
+                <input value={cargaEmpresa} onChange={(e) => setCargaEmpresa(e.target.value)} style={inputStyle} placeholder="Planta, operador logístico…" />
+              </label>
+              <label style={labelStyle}>
+                Dirección (opcional)
+                <input value={cargaDir} onChange={(e) => setCargaDir(e.target.value)} style={inputStyle} />
+              </label>
+              <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "8px 0 8px", letterSpacing: 0.4 }}>
+                DESTINO (DESCARGA)
+              </div>
+              <label style={labelStyle}>
+                Lugar
+                <input value={descargaNombre} onChange={(e) => setDescargaNombre(e.target.value)} style={inputStyle} placeholder="Ciudad, muelle…" />
+              </label>
+              <label style={labelStyle}>
+                Empresa
+                <input value={descargaEmpresa} onChange={(e) => setDescargaEmpresa(e.target.value)} style={inputStyle} placeholder="Centro de distribución…" />
+              </label>
+              <label style={labelStyle}>
+                Dirección (opcional)
+                <input value={descargaDir} onChange={(e) => setDescargaDir(e.target.value)} style={inputStyle} />
               </label>
               <label style={labelStyle}>
                 Salida prevista
@@ -290,10 +361,6 @@ export function EmpresaEditarServicioModal({
               onChange={(e) => setServiceNumber(e.target.value)}
               style={inputStyle}
             />
-          </label>
-          <label style={labelStyle}>
-            Cliente
-            <input value={cliente} onChange={(e) => setCliente(e.target.value)} style={inputStyle} />
           </label>
           <label style={labelStyle}>
             Referencia cliente

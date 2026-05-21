@@ -1,9 +1,15 @@
 import { SB_URL, SB_KEY, sbFetch } from "./supabaseClient";
 import { clearAuthContext } from "./authContext";
+import { isPublicRegistrationAllowed } from "../config/appEnvironment.js";
 
 export { getSession, getUserId } from "./supabaseClient";
 
 export async function signUp(email, password) {
+  if (!isPublicRegistrationAllowed()) {
+    throw new Error(
+      "El registro libre está desactivado en este entorno. Usa las cuentas demo o contacta con soporte.",
+    );
+  }
   const res = await fetch(`${SB_URL}/auth/v1/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: SB_KEY },

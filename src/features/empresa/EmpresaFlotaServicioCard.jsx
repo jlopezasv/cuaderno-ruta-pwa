@@ -9,7 +9,7 @@ import {
 import { getServicioOperativaTimelineForCard } from "../../domain/service/serviceExpediente.js";
 import {
   getServiceClientReference,
-  getServiceNumber,
+  getServiceNumberForDisplay,
 } from "../../domain/service/serviceIdentity.js";
 import { buildEmpresaFlotaCardSummary } from "./empresaFlotaServicioCardPresenter.js";
 import { OperationalEtaSnapshotBlock } from "../services/components/OperationalEtaSnapshotBlock.jsx";
@@ -179,7 +179,7 @@ function EmpresaFlotaServicioCardImpl({
   const completados = countCompletedStops(stops);
   const progressLabel = stops.length ? `${completados}/${stops.length}` : "0/0";
   const incNCompact = expanded ? incidenciasCountServicio(servicio.id, flotaStopsMap, flotaEvs) : 0;
-  const serviceNumber = getServiceNumber(servicio);
+  const serviceNumber = getServiceNumberForDisplay(servicio) || "—";
   const refClienteCompact = getServiceClientReference(servicio);
   const stateColor = ESTADO_COLOR[servicio.estado] || su;
   const conductorLine = sinOp
@@ -241,29 +241,13 @@ function EmpresaFlotaServicioCardImpl({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 15,
-              fontWeight: 800,
-              color: tx,
-              lineHeight: 1.25,
-              letterSpacing: 0.02,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {summary.routeLabel}
-          </div>
-
           {summary.clienteLine ? (
             <div
               style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: UI.subtle,
-                marginTop: 5,
-                lineHeight: 1.3,
+                fontSize: 14,
+                fontWeight: 750,
+                color: tx,
+                lineHeight: 1.25,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -272,6 +256,21 @@ function EmpresaFlotaServicioCardImpl({
               {summary.clienteLine}
             </div>
           ) : null}
+
+          <div
+            style={{
+              fontSize: summary.clienteLine ? 13 : 15,
+              fontWeight: summary.clienteLine ? 700 : 800,
+              color: summary.clienteLine ? UI.subtle : tx,
+              marginTop: summary.clienteLine ? 4 : 0,
+              lineHeight: 1.3,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {summary.routeLabel}
+          </div>
 
           {conductorLine ? (
             <div

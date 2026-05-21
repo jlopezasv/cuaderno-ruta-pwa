@@ -283,7 +283,8 @@ async function purgeTestCompanyData(empresaId, { killAuth = true } = {}) {
 
 const ADMIN_EMAIL = "axiskeelb2b@gmail.com";
 const APP_NAME = "Cuaderno de Ruta";
-const APP_URL = "https://tacografo-pro.vercel.app";
+const APP_URL =
+  process.env.APP_URL || "https://cuaderno-demo-ab.vercel.app";
 
 async function sendEmail(to, subject, html) {
   if (!BREVO_KEY) return { ok: false, error: "No BREVO_API_KEY" };

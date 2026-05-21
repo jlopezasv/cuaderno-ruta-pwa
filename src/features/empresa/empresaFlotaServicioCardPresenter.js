@@ -14,10 +14,8 @@ import {
   buildOperationalEtaVisual,
   classifyOperationalSituation,
 } from "../../domain/service/operationalDeviationEngine.js";
-import {
-  getServiceClient,
-  resolveServiceRouteEndpoints,
-} from "../../domain/service/serviceIdentity.js";
+import { getServiceClient } from "../../domain/service/serviceIdentity.js";
+import { getServiceOperationalPresentation } from "../../domain/service/serviceOperationalPlaces.js";
 import { ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 
@@ -150,10 +148,10 @@ function buildEmpresaFlotaCardSummaryInner({
 }) {
   const hasAuxClock = Number(nowMs) > 0;
   const auxNow = hasAuxClock ? new Date(Number(nowMs)) : new Date();
-  const { origen, destino } = resolveServiceRouteEndpoints(servicio, stops);
+  const pres = getServiceOperationalPresentation(servicio, stops);
   const cliente = getServiceClient(servicio);
-  const clienteLine = cliente?.trim() ? `Cliente · ${cliente.trim()}` : null;
-  const routeLabel = `${String(origen).toUpperCase()} → ${String(destino).toUpperCase()}`;
+  const clienteLine = cliente?.trim() ? cliente.trim() : null;
+  const routeLabel = pres.routeLine;
   const completados = stops.filter((s) => s.estado === "completado").length;
   const progressLine = stops.length ? `Paradas · ${completados}/${stops.length}` : null;
   const estadoServicio = servicio?.estado ? ESTADO_LABEL[servicio.estado] || servicio.estado : null;
@@ -285,12 +283,12 @@ export function buildEmpresaFlotaCardSummary(args) {
     console.warn("[buildEmpresaFlotaCardSummary]", err);
     const servicio = args?.servicio;
     const stops = args?.stops || [];
-    const { origen, destino } = resolveServiceRouteEndpoints(servicio, stops);
+    const pres = getServiceOperationalPresentation(servicio, stops);
     const cliente = getServiceClient(servicio);
     const completados = stops.filter((s) => s.estado === "completado").length;
     return {
-      routeLabel: `${String(origen || "—").toUpperCase()} → ${String(destino || "—").toUpperCase()}`,
-      clienteLine: cliente?.trim() ? `Cliente · ${cliente.trim()}` : null,
+      routeLabel: pres.routeLine,
+      clienteLine: cliente?.trim() ? cliente.trim() : null,
       contextLine: servicio?.estado === "en_curso" ? "En curso" : null,
       estadoServicio: servicio?.estado ? ESTADO_LABEL[servicio.estado] || servicio.estado : null,
       progressLine: stops.length ? `Paradas · ${completados}/${stops.length}` : null,

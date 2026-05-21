@@ -13,6 +13,7 @@ import {
   getServiceClientReference,
   getServiceNumberForDisplay,
 } from "../../../domain/service/serviceIdentity.js";
+import { getServiceOperationalPresentation } from "../../../domain/service/serviceOperationalPlaces.js";
 import { stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
@@ -272,7 +273,8 @@ function openOperationalRouteModal(servicio, onOpenViajeModal) {
 }
 
 function ServiceHero({
-  routeTitle,
+  clienteNombre,
+  routeLine,
   operationalLabel,
   scheduleLabel,
   serviceNumber,
@@ -282,16 +284,30 @@ function ServiceHero({
 }) {
   return (
     <header style={{ marginBottom: 2 }}>
+      {clienteNombre ? (
+        <div
+          style={{
+            fontSize: 22,
+            fontWeight: 850,
+            letterSpacing: -0.45,
+            lineHeight: 1.22,
+            color: DRIVER_UI.tx,
+          }}
+        >
+          {clienteNombre}
+        </div>
+      ) : null}
       <div
         style={{
-          fontSize: 22,
-          fontWeight: 850,
-          letterSpacing: -0.45,
-          lineHeight: 1.22,
-          color: DRIVER_UI.tx,
+          fontSize: clienteNombre ? 16 : 22,
+          fontWeight: clienteNombre ? 700 : 850,
+          letterSpacing: clienteNombre ? -0.2 : -0.45,
+          lineHeight: 1.28,
+          color: clienteNombre ? DRIVER_UI.su : DRIVER_UI.tx,
+          marginTop: clienteNombre ? 6 : 0,
         }}
       >
-        {routeTitle}
+        {routeLine}
       </div>
       <div
         style={{
@@ -739,9 +755,17 @@ export function ActiveServicePanel({
       crDur: Number(norma.crDur),
     };
   }, [norma]);
-  const routeTitle = getFixedServiceRoute(servicio, "Origen", "Destino", sortedStops);
+  const operationalPres = useMemo(
+    () => getServiceOperationalPresentation(servicio, sortedStops),
+    [servicio, sortedStops],
+  );
+  const routeLine =
+    operationalPres.routeLine !== "— → —"
+      ? operationalPres.routeLine
+      : getFixedServiceRoute(servicio, "Origen", "Destino", sortedStops);
+  const heroCliente = operationalPres.clienteNombre || getServiceClient(servicio) || "";
   const serviceNumber = getServiceNumberForDisplay(servicio);
-  const cliente = getServiceClient(servicio) || "—";
+  const cliente = heroCliente || "—";
   const referenciaCliente = getServiceClientReference(servicio) || "—";
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
@@ -886,7 +910,8 @@ export function ActiveServicePanel({
     <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
       <CockpitShell>
         <ServiceHero
-          routeTitle={routeTitle}
+          clienteNombre={heroCliente}
+          routeLine={routeLine}
           operationalLabel={sig.operationalMeta.label}
           scheduleLabel={scheduleLabel}
           serviceNumber={serviceNumber}

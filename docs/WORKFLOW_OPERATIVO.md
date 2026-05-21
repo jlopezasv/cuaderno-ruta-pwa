@@ -40,7 +40,8 @@ Relaciones actuales:
 
 - `asignado`
 - `en_curso`
-- `completado`
+- `completado` (operativa en muelles terminada)
+- `cerrado` (expediente firmado; requiere migración `servicios_estado_check` en Supabase)
 - `cancelado` (existe en vocabulario UI, pero sin flujo operativo activo en handlers actuales)
 
 ### Stops

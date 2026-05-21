@@ -35,21 +35,34 @@ export function EtaPrevistaBlock({ servicio, tx = "#0f172a", su = "#64748b", sub
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, maxWidth: "100%" }}>
       <span style={{ ...lblStyle, color: su }}>ETA prevista</span>
       <span
         style={{
           fontSize: 17,
           fontWeight: 800,
           color: tx,
-          lineHeight: 1.2,
+          lineHeight: 1.25,
           fontVariantNumeric: "tabular-nums",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
         }}
       >
         {arrival}
       </span>
       {rest ? (
-        <span style={{ fontSize: 12.5, fontWeight: 650, color: subtle, lineHeight: 1.35 }}>{rest}</span>
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 650,
+            color: subtle,
+            lineHeight: 1.35,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+          }}
+        >
+          {rest}
+        </span>
       ) : null}
     </div>
   );

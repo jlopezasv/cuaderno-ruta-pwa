@@ -1,3 +1,8 @@
+import {
+  SERVICIO_ESTADO_CERRADO,
+  SERVICIO_ESTADO_COMPLETADO,
+  SERVICIO_ESTADO_EN_CURSO,
+} from "../fleet/serviceStatus.js";
 import { countCompletedStops } from "./serviceStops.js";
 import { getServicioOperacionMeta, mergeReferenciaOperacional } from "./serviceOperacionMeta.js";
 
@@ -9,7 +14,7 @@ export function getExpedienteCierre(servicio) {
 
 export function isServicioExpedienteCerrado(servicio) {
   if (!servicio) return false;
-  if (String(servicio.estado || "").toLowerCase() === "cerrado") return true;
+  if (String(servicio.estado || "").toLowerCase() === SERVICIO_ESTADO_CERRADO) return true;
   return !!getExpedienteCierre(servicio)?.closed_at;
 }
 
@@ -27,7 +32,7 @@ export function needsExpedienteClosure(servicio, stops) {
   if (!servicio?.id || isServicioExpedienteCerrado(servicio)) return false;
   if (!isOperativaMuellesCompletada(stops)) return false;
   const st = String(servicio.estado || "").toLowerCase();
-  return st === "completado" || st === "en_curso";
+  return st === SERVICIO_ESTADO_COMPLETADO || st === SERVICIO_ESTADO_EN_CURSO;
 }
 
 export function operativaProgressLabel(stops) {

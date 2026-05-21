@@ -4,6 +4,7 @@ import {
   ETA_LABEL_ACTUAL,
   ETA_LABEL_INICIAL,
   OPERATIONAL_ETA_CALCULATING,
+  formatOperationalEtaDisplayLines,
   resolveEtaInicialDisplayLabel,
   resolveEtaVisual,
   resolvePersistedEtaActualLabel,
@@ -172,35 +173,44 @@ function OperationalEtaSnapshotBlockImpl({
   const updatedAgo = formatSpanishAgo(opEta.updated_at || opEta.calculated_at, auxNowRef);
 
   if (isEmpresa) {
+    const compact = formatOperationalEtaDisplayLines(servicio, auxNowRef);
     return (
-      <>
-        <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>
-        <EtaTime tx={txU}>{inicialHead || "—"}</EtaTime>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, maxWidth: "100%" }}>
         <EtaLabel su={suU}>{ETA_LABEL_ACTUAL}</EtaLabel>
         <EtaTime tx={txU} accent>
-          {actualHead}
+          {compact.line1}
         </EtaTime>
+        {compact.line2 ? (
+          <span
+            style={{
+              fontSize: 12.5,
+              fontWeight: 650,
+              color: sub,
+              lineHeight: 1.35,
+              fontVariantNumeric: "tabular-nums",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            }}
+          >
+            {compact.line2}
+          </span>
+        ) : null}
         {d > 0 ? (
-          <span style={{ fontSize: 12, color: "#b45309", fontWeight: 750, marginTop: 6, lineHeight: 1.35 }}>
+          <span style={{ fontSize: 12, color: "#b45309", fontWeight: 750, marginTop: 4, lineHeight: 1.35 }}>
             +{d} min de retraso
           </span>
         ) : null}
         {hint ? (
-          <span style={{ fontSize: 11, color: "#92400e", fontWeight: 650, marginTop: 4, lineHeight: 1.4 }}>
+          <span style={{ fontSize: 11, color: "#92400e", fontWeight: 650, marginTop: 2, lineHeight: 1.4 }}>
             {hint}
           </span>
         ) : null}
-        {restLine && restLine !== "—" ? (
-          <span style={{ fontSize: 12.5, fontWeight: 650, color: sub, marginTop: 8, display: "block" }}>
-            {restLine}
+        {compact.line3 ? (
+          <span style={{ fontSize: 11, color: sub, fontWeight: 600, marginTop: 2, display: "block" }}>
+            {compact.line3}
           </span>
         ) : null}
-        {updatedAgo && updatedAgo !== "—" ? (
-          <span style={{ fontSize: 11, color: sub, fontWeight: 600, marginTop: 6, display: "block" }}>
-            Actualizado {updatedAgo}
-          </span>
-        ) : null}
-      </>
+      </div>
     );
   }
 

@@ -19,6 +19,7 @@ import {
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
 } from "./data/session";
+import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -169,6 +170,11 @@ import {
   getServiceNumber,
   resolveServiceRouteEndpoints,
 } from "./domain/service/serviceIdentity.js";
+import {
+  buildOperationalPlacesMetaPatch,
+  routeTextFromOperationalPlaces,
+  servicioMatchesSearchQuery,
+} from "./domain/service/serviceOperationalPlaces.js";
 import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
@@ -318,6 +324,8 @@ async function resolveAuthContextForUid(uid) {
 }
 
 function AuthScreen({ onAuth }) {
+  const demoMode = isDemoApp();
+  const allowRegister = isPublicRegistrationAllowed();
   const [mode, setMode] = useState("login");
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
@@ -355,6 +363,7 @@ function AuthScreen({ onAuth }) {
     }
     if (!password) { setError("Introduce tu contraseña"); return; }
     if (mode === "register") {
+      if (!allowRegister) { setError("Registro desactivado en este entorno"); return; }
       if (!nombre.trim()) { setError("El nombre es obligatorio"); return; }
       if (!tipo) { setError("Indica si eres conductor/autónomo o empresa"); return; }
       if (!pwdOk) { setError("La contraseña no cumple los requisitos"); return; }
@@ -419,12 +428,23 @@ function AuthScreen({ onAuth }) {
         <circle cx="10" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
         <circle cx="26" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
       </svg>
-      <div style={{ fontSize:24, fontWeight:800, color:"#F59E0B", marginBottom:4, fontFamily:"sans-serif" }}>CUADERNO DE RUTA</div>
-      <div style={{ fontSize:13, color:"#475569", marginBottom:32, fontFamily:"sans-serif" }}>El copiloto del transportista · EU 561/2006</div>
+      <div style={{ fontSize:24, fontWeight:800, color:"#F59E0B", marginBottom:4, fontFamily:"sans-serif" }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
+      <div style={{ fontSize:13, color:"#475569", marginBottom:demoMode?12:32, fontFamily:"sans-serif" }}>El copiloto del transportista · EU 561/2006</div>
+
+      {demoMode?(
+        <div style={{ width:"100%", maxWidth:380, background:"#172554", border:"1.5px solid #3b82f6", borderRadius:12, padding:"12px 14px", marginBottom:16, fontFamily:"sans-serif" }}>
+          <div style={{ fontSize:12, fontWeight:800, color:"#93c5fd", marginBottom:6 }}>Entorno demo aislado</div>
+          <div style={{ fontSize:11, color:"#cbd5e1", lineHeight:1.5 }}>
+            Empresa: <strong>{DEMO_LOGIN_HINT.empresa}</strong><br/>
+            Conductor: <strong>{DEMO_LOGIN_HINT.conductor}</strong><br/>
+            Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong>
+          </div>
+        </div>
+      ):null}
 
       <div style={{ width:"100%", maxWidth:380, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 8px 32px rgba(0,0,0,.4)" }}>
 
-        {mode !== "forgot" && (
+        {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
               <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");setLoginContext("conductor");}}
@@ -11649,10 +11669,27 @@ function logServiceCreate(tag,payload){
   if(tag.includes("FAIL"))console.warn(line,payload);
 }
 
-async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, _debugSource, ...basePayload }) {
+async function crearServicioConIdentidad({
+  serviceNumber,
+  cliente,
+  referenciaCliente,
+  operationalPlaces = null,
+  _debugSource,
+  ...basePayload
+}) {
   const referenciaBase = serviceNumber?.trim() || null;
-  const identityMeta = buildServiceIdentityMeta({ cliente, referenciaCliente });
-  const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
+  const placesPatch = operationalPlaces
+    ? buildOperationalPlacesMetaPatch(operationalPlaces)
+    : {};
+  const identityMeta = buildServiceIdentityMeta({
+    cliente,
+    referenciaCliente,
+    lugaresOperativos: placesPatch.lugares_operativos,
+  });
+  const referencia =
+    Object.keys(identityMeta).length || Object.keys(placesPatch).length
+      ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch })
+      : referenciaBase;
   const empresaIdRaw=basePayload.empresa_id;
   const empresaId=await resolveEmpresaIdForServicioInsert(empresaIdRaw);
   const conductorId=normalizeServicioConductorIdForInsert(basePayload.conductor_id);
@@ -11761,17 +11798,33 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
+function findStopIndexByTipo(stops,kind){
+  if(kind==="carga"){
+    const i=stops.findIndex(s=>/carga/.test(String(s.tipo||""))&&!/solo_descarga/.test(String(s.tipo||"")));
+    return i>=0?i:0;
+  }
+  let i=-1;
+  for(let j=stops.length-1;j>=0;j--){
+    if(/descarga/.test(String(stops[j]?.tipo||""))){i=j;break;}
+  }
+  return i>=0?i:Math.max(0,stops.length-1);
+}
+
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
   const sinConductor=!conductorId;
-  const[origen,setOrigen]=useState("");
-  const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
+  const[cargaNombre,setCargaNombre]=useState("");
+  const[cargaEmpresa,setCargaEmpresa]=useState("");
+  const[cargaDir,setCargaDir]=useState("");
+  const[descargaNombre,setDescargaNombre]=useState("");
+  const[descargaEmpresa,setDescargaEmpresa]=useState("");
+  const[descargaDir,setDescargaDir]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
-    {orden:1,tipo:"carga",nombre:"",direccion:"",notas:""},
-    {orden:2,tipo:"descarga",nombre:"",direccion:"",notas:""},
+    {orden:1,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""},
+    {orden:2,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""},
   ]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
@@ -11779,7 +11832,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const card=EMPRESA_UI.surface,bg=EMPRESA_UI.surfaceSoft,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
 
-  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:""}]);}
+  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""}]);}
   function addStopAfter(i){
     // Insertar después del índice i con orden intermedio
     setStops(prev=>{
@@ -11787,7 +11840,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       const ordenAntes=arr[i].orden;
       const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
       const nuevoOrden=(ordenAntes+ordenDespues)/2;
-      const newStop={orden:nuevoOrden,tipo:"carga",nombre:"",direccion:"",notas:""};
+      const newStop={orden:nuevoOrden,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""};
       arr.splice(i+1,0,newStop);
       return arr;
     });
@@ -11805,11 +11858,52 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       return [...arr].sort((a,b)=>a.orden-b.orden);
     });
   }
-  function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
+  function changeStop(i,field,val){
+    setStops(prev=>{
+      const next=prev.map((s,idx)=>idx===i?{...s,[field]:val}:s);
+      const ci=findStopIndexByTipo(next,"carga");
+      const di=findStopIndexByTipo(next,"descarga");
+      if(i===ci){
+        if(field==="nombre")setCargaNombre(val);
+        else if(field==="empresa")setCargaEmpresa(val);
+        else if(field==="direccion")setCargaDir(val);
+      }
+      if(i===di){
+        if(field==="nombre")setDescargaNombre(val);
+        else if(field==="empresa")setDescargaEmpresa(val);
+        else if(field==="direccion")setDescargaDir(val);
+      }
+      return next;
+    });
+  }
+
+  function setCargaFields(lugar,empresa,dir){
+    setCargaNombre(lugar);
+    setCargaEmpresa(empresa);
+    setCargaDir(dir);
+    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"carga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
+  }
+
+  function setDescargaFields(lugar,empresa,dir){
+    setDescargaNombre(lugar);
+    setDescargaEmpresa(empresa);
+    setDescargaDir(dir);
+    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"descarga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
+  }
 
   async function guardar(){
-    if(!origen.trim()||!destino.trim()){setError("Origen y destino son obligatorios");return;}
-    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
+    const operationalPlaces={
+      cliente_nombre:cliente.trim(),
+      carga_nombre:cargaNombre.trim(),
+      carga_empresa:cargaEmpresa.trim(),
+      carga_direccion:cargaDir.trim(),
+      descarga_nombre:descargaNombre.trim(),
+      descarga_empresa:descargaEmpresa.trim(),
+      descarga_direccion:descargaDir.trim(),
+    };
+    const {origen:origenRuta,destino:destinoRuta}=routeTextFromOperationalPlaces(operationalPlaces);
+    if(!origenRuta||!destinoRuta){setError("Indica el lugar de origen y destino (localidad o dirección)");return;}
+    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre de lugar");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     setSaving(true);setError("");
     try{
@@ -11826,11 +11920,12 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         empresa_id:empresaId||null,
         conductor_id:null,
         estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
-        origen:origen.trim(),
-        destino:destino.trim(),
+        origen:origenRuta,
+        destino:destinoRuta,
         serviceNumber:ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
+        operationalPlaces,
         fecha_inicio:new Date(fechaInicio).toISOString(),
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
@@ -11842,21 +11937,26 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
           servicio:sv,
           conductorId,
           conductorNombre:conductorNombre||"Conductor",
-          origen:origen.trim(),
-          destino:destino.trim(),
+          origen:origenRuta,
+          destino:destinoRuta,
           fechaInicio:new Date(fechaInicio).toISOString(),
           skipEnsureStops:true,
         });
       }
+      const stopsPrepared=stops.map(s=>{
+        const emp=String(s.empresa||"").trim();
+        if(!emp)return s;
+        return{...s,notas:mergeStopOperacionMeta(s.notas,{empresa_logistica:emp})};
+      });
       await persistServicioStopsTrasCrear({
         servicioId:sv.id,
-        stops,
-        origen:origen.trim(),
-        destino:destino.trim(),
+        stops:stopsPrepared,
+        origen:origenRuta,
+        destino:destinoRuta,
         logTag:"AsignarServicioModal",
       });
       if(!sinConductor){
-        void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
+        void sendAssignmentPush({conductorId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
         onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorId));
         return;
       }
@@ -11915,40 +12015,51 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         {/* BODY — scrollable */}
         <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"12px 16px"}}>
 
-          {/* Origen / Destino */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Origen</div>
-              <input value={origen} onChange={e=>setOrigen(e.target.value)} placeholder="Almería"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Destino</div>
-              <input value={destino} onChange={e=>setDestino(e.target.value)} placeholder="Bilbao"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
+          {/* Cliente (comercial) — separado de lugares operativos */}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:3,letterSpacing:.3}}>CLIENTE</div>
+            <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
+              style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
           </div>
 
-          {/* Identidad documental */}
+          <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:6,letterSpacing:.3}}>LUGARES OPERATIVOS</div>
+          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:8}}>
+            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Origen (carga)</div>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
+            <input value={cargaNombre} onChange={e=>setCargaFields(e.target.value,cargaEmpresa,cargaDir)} placeholder="Antequera"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+            <input value={cargaEmpresa} onChange={e=>setCargaFields(cargaNombre,e.target.value,cargaDir)} placeholder="Planta, operador logístico…"
+              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
+            <input value={cargaDir} onChange={e=>setCargaFields(cargaNombre,cargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+          </div>
+          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:12}}>
+            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Destino (descarga)</div>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
+            <input value={descargaNombre} onChange={e=>setDescargaFields(e.target.value,descargaEmpresa,descargaDir)} placeholder="Pamplona"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+            <input value={descargaEmpresa} onChange={e=>setDescargaFields(descargaNombre,e.target.value,descargaDir)} placeholder="Centro de distribución…"
+              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
+            <input value={descargaDir} onChange={e=>setDescargaFields(descargaNombre,descargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+          </div>
+
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Servicio</div>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Ref. servicio</div>
               <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Cliente</div>
-              <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Ref cliente</div>
               <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
-            <div>
+            <div style={{gridColumn:"1 / -1"}}>
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}
                 style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"light",marginBottom:0}}/>
@@ -11975,12 +12086,18 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
                     {stops.length>1&&<button onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
                   </div>
                 </div>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
                 <input value={stop.nombre} onChange={e=>changeStop(i,"nombre",e.target.value)}
-                  placeholder="Lugar / empresa" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                  placeholder="Ciudad, muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+                <input value={stop.empresa||""} onChange={e=>changeStop(i,"empresa",e.target.value)}
+                  placeholder="Planta, operador…" style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
                 <input value={stop.direccion} onChange={e=>changeStop(i,"direccion",e.target.value)}
-                  placeholder="Dirección (opcional)" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                  placeholder="Calle, polígono…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Detalles de carga/descarga</div>
                 <input value={stop.notas||""} onChange={e=>changeStop(i,"notas",e.target.value)}
-                  placeholder="Notas" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+                  placeholder="Puerta, horario, referencia muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
               </div>
               {i<stops.length-1&&(
                 <button onClick={()=>addStopAfter(i)}
@@ -12232,6 +12349,9 @@ const EMPRESA_UI=Object.freeze({
   accentSoft:"#eff6ff",
   green:"#15803d",
   greenSoft:"#dcfce7",
+  btnPrimary:"#16a34a",
+  btnPrimaryHover:"#15803d",
+  btnPrimaryBorder:"#86efac",
   amber:"#b45309",
   amberSoft:"#ffedd5",
   red:"#b91c1c",
@@ -12335,6 +12455,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[anularModal,setAnularModal]=useState(null);
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
+  const[serviciosBusqueda,setServiciosBusqueda]=useState("");
   const[serviciosPage,setServiciosPage]=useState(1);
   const[etaOperativaById,setEtaOperativaById]=useState({});
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
@@ -12926,11 +13047,21 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const serviciosListaOperativa=useMemo(()=>{
     const list=filterServiciosForEmpresaVistaTab(flotaServicios,serviciosVistaTab,empresaVistaTabCtx);
-    list.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
-    return list;
-  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById]);
+    const q=String(serviciosBusqueda||"").trim();
+    const filtered=q
+      ?list.filter((sv)=>{
+          const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+          return servicioMatchesSearchQuery(sv,q,{
+            stops:flotaStops[sv.id]||[],
+            conductor,
+          });
+        })
+      :list;
+    filtered.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
+    return filtered;
+  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores]);
 
-  useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length]);
+  useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length,serviciosBusqueda]);
 
   const serviciosPageSize=15;
   const serviciosTotal=serviciosListaOperativa.length;
@@ -13699,17 +13830,18 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               <button type="button" onClick={openNuevoViaje}
                 style={{
                   width:"100%",
-                  background:EMPRESA_UI.tx,
+                  background:EMPRESA_UI.btnPrimary,
                   color:"white",
-                  border:"none",
+                  border:`1px solid ${EMPRESA_UI.btnPrimaryBorder}`,
                   borderRadius:10,
-                  padding:"11px 14px",
+                  padding:"12px 14px",
                   fontSize:14,
-                  fontWeight:600,
+                  fontWeight:700,
                   cursor:"pointer",
                   marginBottom:12,
+                  boxShadow:"0 1px 3px rgba(22,163,74,.22)",
                 }}>
-                Nuevo servicio
+                + Nuevo servicio
               </button>
               <div style={{fontSize:15,fontWeight:650,color:tx,marginBottom:6}}>Sin servicios todavía</div>
               <div style={{fontSize:13,color:su,lineHeight:1.45}}>Crea un servicio nuevo o asígnalo desde Conductores.</div>
@@ -13724,33 +13856,53 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   </div>
                   <button type="button" onClick={openNuevoViaje}
                     style={{
-                      background:EMPRESA_UI.tx,
+                      background:EMPRESA_UI.btnPrimary,
                       color:"white",
-                      border:"none",
+                      border:`1px solid ${EMPRESA_UI.btnPrimaryBorder}`,
                       borderRadius:10,
-                      padding:"9px 13px",
+                      padding:"10px 14px",
                       fontSize:13,
-                      fontWeight:600,
+                      fontWeight:700,
                       cursor:"pointer",
                       flexShrink:0,
+                      boxShadow:"0 1px 3px rgba(22,163,74,.2)",
                     }}>
-                    Nuevo servicio
+                    + Nuevo servicio
                   </button>
                 </div>
                 <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
+                <input
+                  type="search"
+                  value={serviciosBusqueda}
+                  onChange={e=>setServiciosBusqueda(e.target.value)}
+                  placeholder="Buscar: cliente, conductor, matrícula, ref., ruta, lugares…"
+                  style={{
+                    width:"100%",
+                    boxSizing:"border-box",
+                    marginBottom:10,
+                    background:EMPRESA_UI.surfaceSoft,
+                    border:`1px solid ${EMPRESA_UI.border}`,
+                    borderRadius:10,
+                    padding:"9px 12px",
+                    fontSize:13,
+                    color:EMPRESA_UI.tx,
+                    outline:"none",
+                  }}
+                />
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
                   {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
-                        background:serviciosVistaTab===tab.id?EMPRESA_UI.accentSoft:EMPRESA_UI.surface,
-                        border:`1px solid ${serviciosVistaTab===tab.id?"#bfdbfe":EMPRESA_UI.border}`,
+                        background:serviciosVistaTab===tab.id?EMPRESA_UI.accentSoft:"#f8fafc",
+                        border:`1px solid ${serviciosVistaTab===tab.id?"#93c5fd":EMPRESA_UI.border}`,
                         borderRadius:20,
-                        padding:"5px 11px",
+                        padding:"6px 12px",
                         fontSize:11,
-                        fontWeight:serviciosVistaTab===tab.id?650:500,
+                        fontWeight:serviciosVistaTab===tab.id?700:550,
                         color:serviciosVistaTab===tab.id?"#1d4ed8":EMPRESA_UI.subtle,
                         cursor:"pointer",
+                        transition:"background .12s ease, border-color .12s ease",
                       }}>
                       {tab.label}
                     </button>
@@ -13875,16 +14027,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ["Cliente",expedientePreview.header.cliente],
                       ["Ref cliente",expedientePreview.header.referenciaCliente],
                       ["Estado",ESTADO_LABEL[expedientePreview.header.estado]||expedientePreview.header.estado],
-                      ["ETA",expedientePreview.header.eta],
-                      ["Km",expedientePreview.header.km!=null?`${expedientePreview.header.km}`:"—"],
                       ["Documentos",String(expedientePreview.evidencias.length)],
                       ["Peso expediente",expedientePreview.storage?.totalLabel||"—"],
                     ].map(([l,v])=>(
-                      <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px"}}>
+                      <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0}}>
                         <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>{l}</div>
                         <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v}</div>
                       </div>
                     ))}
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0,gridColumn:"span 1"}}>
+                      <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>ETA</div>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",lineHeight:1.3,overflowWrap:"anywhere",wordBreak:"break-word"}}>
+                        {expedientePreview.header.etaLine1||expedientePreview.header.eta||"—"}
+                      </div>
+                      {expedientePreview.header.etaLine2?(
+                        <div style={{fontSize:12,fontWeight:600,color:"#64748b",marginTop:4,lineHeight:1.35,overflowWrap:"anywhere"}}>
+                          {expedientePreview.header.etaLine2}
+                        </div>
+                      ):null}
+                    </div>
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0}}>
+                      <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>Km</div>
+                      <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>
+                        {expedientePreview.header.km!=null?`${expedientePreview.header.km} km`:"—"}
+                      </div>
+                    </div>
                   </div>
                   {expedientePreview.header.cancellation&&(
                     <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px 13px",marginBottom:12}}>
@@ -14096,14 +14263,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   if(filtRef&&(!refSearch||!refSearch.includes(filtRef.toLowerCase())))return false;
                   if(filtCliente){
                     const q=filtCliente.toLowerCase();
-                    const clienteSearch=[getServiceClient(sv),sv.destino,sv.origen].filter(Boolean).join(" ").toLowerCase();
-                    if(!clienteSearch.includes(q))return false;
+                    if(!getServiceClient(sv).toLowerCase().includes(q))return false;
                   }
                   if(docsSearch){
-                    const q=lower(docsSearch);
-                    const hay=[refVisible,refClienteVisible,getServiceClient(sv),sv.origen,sv.destino,conductor?.nombre,matricula,...svStops.map(st=>st.nombre),...svStops.map(st=>st.direccion)]
-                      .filter(Boolean).join(" ").toLowerCase();
-                    if(!hay.includes(q))return false;
+                    if(!servicioMatchesSearchQuery(sv,docsSearch,{stops:svStops,conductor}))return false;
                   }
                   return true;
                 }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
@@ -17172,7 +17335,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
           <div style={{fontSize:14,color:su,marginBottom:8}}>{servicio.origen} → {servicio.destino}</div>
           {cerradoLabel?<div style={{fontSize:12,color:su,marginBottom:20}}>Cerrado {cerradoLabel}</div>:null}
           {cierre?.comentario?<div style={{fontSize:13,color:tx,textAlign:"left",background:"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:16,lineHeight:1.45}}>{cierre.comentario}</div>:null}
-          <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Nuevo servicio</button>
+          <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
         </div>
         {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
       </div>

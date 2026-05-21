@@ -3,10 +3,14 @@ import { uploadBlobToStorage } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../documents/mediaStorageV2.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
 import { geoFromGpsPoint } from "./operationalGeo.js";
+import { SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
 import {
   buildExpedienteCierreMetaPatch,
   mergeReferenciaConCierre,
 } from "./expedienteCierre.js";
+
+const ESTADO_CHECK_HINT =
+  "El estado «cerrado» no está permitido en la base de datos. Ejecuta scripts/apply-servicios-estado-cerrado.sql en Supabase (SQL Editor).";
 
 function canvasToPngBlob(canvas) {
   return new Promise((resolve, reject) => {
@@ -76,7 +80,7 @@ export async function cerrarExpedienteServicio({
   const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ estado: "cerrado", referencia }),
+    body: JSON.stringify({ estado: SERVICIO_ESTADO_CERRADO, referencia }),
   });
 
   let payload = null;
@@ -87,13 +91,19 @@ export async function cerrarExpedienteServicio({
   }
 
   if (!res.ok) {
-    const msg = payload?.message || payload?.hint || `Error al cerrar expediente (${res.status})`;
+    const raw = [payload?.message, payload?.hint, payload?.details, payload?.code]
+      .filter(Boolean)
+      .join(" ");
+    const constraintFail = /servicios_estado_check|violates check constraint/i.test(raw);
+    const msg = constraintFail
+      ? ESTADO_CHECK_HINT
+      : payload?.message || payload?.hint || `Error al cerrar expediente (${res.status})`;
     throw new Error(msg);
   }
 
   const row = Array.isArray(payload) ? payload[0] : payload;
   return {
-    servicio: row || { ...servicio, estado: "cerrado", referencia },
+    servicio: row || { ...servicio, estado: SERVICIO_ESTADO_CERRADO, referencia },
     referencia: row?.referencia ?? referencia,
     closedAt,
     firmaUrl,

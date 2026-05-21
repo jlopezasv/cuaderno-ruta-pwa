@@ -3,8 +3,10 @@
  * Sin fallback: SUPABASE_URL, SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY vía entorno.
  */
 
-/** Ref. proyecto REAL — no debe usarse en Preview/demo salvo opt-in explícito. */
-export const SUPABASE_REAL_PROJECT_REF = "glyexutcypmhkndvmcxd";
+import { assertServerEnvironmentSafe, isDemoApp } from "./appEnvironment.js";
+import { SUPABASE_REAL_PROJECT_REF } from "./supabaseConstants.js";
+
+export { SUPABASE_REAL_PROJECT_REF };
 
 let cached = null;
 
@@ -19,6 +21,12 @@ function requireProcessEnv(name) {
 }
 
 function assertSupabaseUrlAllowed(url) {
+  assertServerEnvironmentSafe(url);
+  if (isDemoApp() && url.includes(SUPABASE_REAL_PROJECT_REF)) {
+    throw new Error(
+      `[Cuaderno API DEMO] SUPABASE_URL no puede usar el proyecto REAL (${SUPABASE_REAL_PROJECT_REF}).`,
+    );
+  }
   if (!url.includes(SUPABASE_REAL_PROJECT_REF)) return;
   if (process.env.ALLOW_PROD_SUPABASE === "1") return;
   throw new Error(

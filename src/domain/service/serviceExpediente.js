@@ -5,7 +5,11 @@ import {
 } from "./serviceOperacionMeta.js";
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
-import { formatOperationalEtaSnapshotLine } from "./operationalEtaPresentation.js";
+import {
+  formatOperationalEtaDisplayLines,
+  formatOperationalEtaSnapshotLine,
+} from "./operationalEtaPresentation.js";
+import { getServiceNumberForDisplay } from "./serviceIdentity.js";
 import {
   enrichEvidenciaDisplay,
   expedienteSizeLabel,
@@ -23,6 +27,8 @@ import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
 import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
+import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
+import { getExpedienteCierre } from "./expedienteCierre.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 
 const enc = new TextEncoder();
@@ -117,6 +123,30 @@ function plain(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\x20-\x7E\n\r\t]/g, "")
     .trim();
+}
+
+/** Bloque de cierre documental (`referencia` → `__SRV_OP__.expediente_cierre`). */
+function buildCierreDocumentalForExpediente(servicio, nombreConductor) {
+  const cierre = getExpedienteCierre(servicio);
+  const estadoRaw = String(servicio?.estado || "").toLowerCase();
+  const isCerrado = estadoRaw === SERVICIO_ESTADO_CERRADO || !!cierre?.closed_at;
+  if (!isCerrado && !cierre) return null;
+  const closedMs = parseTs(cierre?.closed_at);
+  const conductorNombre =
+    cierre?.conductor_nombre ||
+    (typeof nombreConductor === "function" && servicio?.conductor_id
+      ? nombreConductor(servicio.conductor_id)
+      : null) ||
+    "—";
+  return {
+    estado: ESTADO_LABEL[SERVICIO_ESTADO_CERRADO] || "Expediente cerrado",
+    closedAt: cierre?.closed_at || null,
+    closedAtLabel: closedMs != null ? fmtDateTime(closedMs) : "—",
+    comentario: sanitizeDocumentCommentText(cierre?.comentario || "") || null,
+    firmaUrl: cierre?.firma_url || null,
+    conductorNombre,
+    hasFirma: !!(cierre?.firma_url && String(cierre.firma_url).trim()),
+  };
 }
 
 function evidenceTitle(ev) {
@@ -314,7 +344,8 @@ export function buildServiceExpediente({
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
   const plan = getOperationalPlanSnapshot(servicio);
-  const ref = getServiceNumber(servicio);
+  const ref = getServiceNumberForDisplay(servicio) || getServiceNumber(servicio);
+  const etaDisplay = formatOperationalEtaDisplayLines(servicio);
   const counters = {};
   const stopRows = sortedStops.map((stop) => {
     const label = stopLabel(stop, counters);
@@ -636,16 +667,27 @@ export function buildServiceExpediente({
       totalBytes: sumExpedienteBytes(rawEvidenciasFlat),
       totalLabel: expedienteSizeLabel(rawEvidenciasFlat),
     },
+    cierreDocumental: buildCierreDocumentalForExpediente(servicio, nombreConductor),
     header: {
       referencia: ref,
       ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
-      estado: servicio?.estado === "anulado" ? "ANULADO" : (servicio?.estado || "—"),
+      estado:
+        servicio?.estado === "anulado"
+          ? "ANULADO"
+          : servicio?.estado === SERVICIO_ESTADO_CERRADO
+            ? String(ESTADO_LABEL[SERVICIO_ESTADO_CERRADO] || "Expediente cerrado").toUpperCase()
+            : servicio?.estado
+              ? String(servicio.estado).replace(/_/g, " ").toUpperCase()
+              : "—",
       conductor: servicio?.conductor_id
         ? (nombreConductor?.(servicio.conductor_id) || "—")
         : "Sin asignar",
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
       eta: formatOperationalEtaSnapshotLine(servicio),
+      etaLine1: etaDisplay.line1,
+      etaLine2: etaDisplay.line2,
+      etaLine3: etaDisplay.line3,
       km: Number.isFinite(Number(plan?.planned_km)) ? Math.round(Number(plan.planned_km)) : null,
       fechaInicio: servicio?.fecha_inicio || null,
       fecha: fechaDocumento,
@@ -772,6 +814,17 @@ function evidenceUrlForPdfEmbed(ev) {
   return resolveEvidenciaPdfEmbedUrl(ev) || ev?.url || null;
 }
 
+async function fetchCierreFirmaForPdf(cierreDocumental) {
+  const url = cierreDocumental?.firmaUrl;
+  if (!url) return { error: "Sin firma registrada" };
+  try {
+    const blob = await loadRemoteImageBlob(url);
+    return await blobToJpeg(blob, { maxSide: 480, quality: 0.86 });
+  } catch (error) {
+    return { error: error?.message || "Firma no disponible" };
+  }
+}
+
 async function fetchEvidenceImages(expediente) {
   const imageEvs = expediente.evidencias.filter((ev) => expedienteEvidenceIsImageLike(ev));
   const many = imageEvs.length > 10;
@@ -826,6 +879,9 @@ function imageObject(bytesData, width, height) {
 
 async function makePdfBlob(expediente) {
   const imageMap = await fetchEvidenceImages(expediente);
+  const cierreFirmaMap = expediente.cierreDocumental
+    ? await fetchCierreFirmaForPdf(expediente.cierreDocumental)
+    : { error: "Sin cierre documental" };
   const objects = [];
   const add = (data) => {
     objects.push(bytes(data));
@@ -848,6 +904,12 @@ async function makePdfBlob(expediente) {
     const objectId = addRaw(imageObject(img.bytes, img.width, img.height));
     imageRefs.set(evId, { ...img, name, objectId });
   }
+  let cierreFirmaRef = null;
+  if (cierreFirmaMap?.bytes) {
+    const name = `Im${imageIndex++}`;
+    const objectId = addRaw(imageObject(cierreFirmaMap.bytes, cierreFirmaMap.width, cierreFirmaMap.height));
+    cierreFirmaRef = { ...cierreFirmaMap, name, objectId };
+  }
 
   const pageRefs = [];
   let commands = [];
@@ -857,7 +919,9 @@ async function makePdfBlob(expediente) {
   const pageHeight = 842;
   const contentWidth = pageWidth - margin * 2;
   const evById = new Map(expediente.evidencias.map((ev) => [ev.id, ev]));
-  const xObjects = [...imageRefs.values()].map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
+  const pdfXObjectImages = [...imageRefs.values()];
+  if (cierreFirmaRef) pdfXObjectImages.push(cierreFirmaRef);
+  const xObjects = pdfXObjectImages.map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
 
   const finishPage = () => {
     const content = commands.join("\n");
@@ -922,11 +986,21 @@ async function makePdfBlob(expediente) {
   metric("Cliente", expediente.header.cliente, margin + 130, 135);
   metric("Ruta", expediente.header.ruta, margin + 275, 190);
   y -= 54;
-  metric("Conductor", expediente.header.conductor, margin, 120);
-  metric("ETA", expediente.header.eta, margin + 130, 95);
-  metric("Km", expediente.header.km != null ? `${expediente.header.km}` : "—", margin + 235, 70);
-  metric("Estado", expediente.header.estado, margin + 315, 150);
+  metric("Conductor", expediente.header.conductor, margin, 175);
+  metric("Estado", expediente.header.estado, margin + 185, 175);
   y -= 54;
+  ensure(52);
+  rect(margin, y, 268, 48, "#f8fafc");
+  text("ETA", margin + 8, y - 14, 8, "#64748b");
+  text(expediente.header.etaLine1 || "—", margin + 8, y - 28, 11, "#0f172a");
+  if (expediente.header.etaLine2) {
+    text(expediente.header.etaLine2, margin + 8, y - 40, 9, "#64748b");
+  }
+  const kmVal = expediente.header.km != null ? `${expediente.header.km} km` : "—";
+  rect(margin + 278, y, 90, 48, "#f8fafc");
+  text("Km", margin + 286, y - 14, 8, "#64748b");
+  text(kmVal, margin + 286, y - 30, 12, "#0f172a");
+  y -= 58;
 
   if (expediente.header.cancellation) {
     section("Anulacion operacional");
@@ -995,6 +1069,30 @@ async function makePdfBlob(expediente) {
     expediente.integrity?.timestampsVerified ? "Timestamps verificados" : "Timestamps incompletos",
     expediente.integrity?.geoAvailable ? "Geolocalizacion operacional disponible" : "Geolocalizacion operacional no disponible",
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
+
+  if (expediente.cierreDocumental) {
+    const cd = expediente.cierreDocumental;
+    section("Cierre documental del expediente");
+    lines(`Estado: ${cd.estado || "Expediente cerrado"}`, margin, 10, "#0f766e", 90, 14);
+    lines(`Fecha y hora de cierre: ${cd.closedAtLabel || "—"}`, margin, 10, "#334155", 90, 14);
+    lines(`Conductor: ${cd.conductorNombre || "—"}`, margin, 10, "#334155", 90, 14);
+    if (cd.comentario) {
+      lines("Comentario final:", margin, 9, "#64748b", 90, 12);
+      lines(cd.comentario, margin, 10, "#334155", 88, 13);
+    } else {
+      lines("Comentario final: —", margin, 10, "#64748b", 90, 13);
+    }
+    y -= 4;
+    lines("Firma del conductor:", margin, 9, "#64748b", 90, 12);
+    y -= 2;
+    if (cierreFirmaRef) {
+      drawImage(cierreFirmaRef, margin, 220, 64);
+    } else {
+      const firmaFallback = cierreFirmaMap?.error || (cd.hasFirma ? "Firma no disponible (URL caducada o sin acceso)" : "Sin firma registrada");
+      lines(firmaFallback, margin, 9.5, "#b45309", 88, 13);
+    }
+    y -= 6;
+  }
 
   const annexDocs = expediente.evidencias.filter((ev) => expedienteEvidenceAnnexA4(ev));
   if (isOperationalDocTraceEnabled()) {
@@ -1210,6 +1308,7 @@ export function downloadServiceArchiveMetadata(expediente) {
     ref: expediente.ref,
     generatedAt: expediente.generatedAt,
     header: expediente.header,
+    cierreDocumental: expediente.cierreDocumental || null,
     metrics: expediente.metrics,
     integrity: {
       status: expediente.integrity?.status,

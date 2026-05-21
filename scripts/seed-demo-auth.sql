@@ -1,7 +1,10 @@
 -- =============================================================================
 -- Usuarios Auth para seed demo (opcional, ejecutar ANTES de seed-demo.sql)
--- Supabase SQL Editor · rol postgres
+-- Supabase SQL Editor · rol postgres · SOLO proyecto Supabase DEMO
 -- Contraseña ambos: DemoCuaderno2026!
+--
+-- Tras ejecutar: Dashboard → Auth → Disable new sign ups
+-- Deploy demo: VITE_APP_ENV=demo (ver docs/DEMO_ENVIRONMENT.md)
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

@@ -140,6 +140,45 @@ export function formatOperationalEtaSnapshotLine(servicio, now = new Date()) {
   return [etaPart, restPart, ago].filter(Boolean).join(" · ");
 }
 
+/**
+ * ETA para UI/PDF en dos líneas (sin cambiar resolución operativa).
+ * @returns {{ line1: string, line2: string|null, line3: string|null }}
+ */
+export function formatOperationalEtaDisplayLines(servicio, now = new Date()) {
+  if (!servicio || servicio.estado === "anulado") {
+    return { line1: "—", line2: null, line3: null };
+  }
+  const v = resolveEtaVisual(servicio, now);
+  if (v.tier === "none") return { line1: "—", line2: null, line3: null };
+  if (v.tier === "calculating") {
+    return { line1: OPERATIONAL_ETA_CALCULATING, line2: null, line3: null };
+  }
+  if (v.tier === "operational") {
+    const op = v.operational;
+    const rest = formatEmpresaOperationalRestLine(op.remaining_mins, op.remaining_km);
+    const ago = formatSpanishAgo(op.updated_at || op.calculated_at, now);
+    return {
+      line1: resolvePersistedEtaActualLabel(op) || "—",
+      line2: rest && rest !== "—" ? rest : null,
+      line3: ago && ago !== "—" ? `Actualizado ${ago}` : null,
+    };
+  }
+  const etaPart =
+    (v.tier === "plan" && v.plan?.planned_eta_label && !isRelativeEtaLabel(v.plan.planned_eta_label)
+      ? String(v.plan.planned_eta_label).trim()
+      : null) ||
+    formatStableEtaClockLabel(v.etaIso) ||
+    v.etaLabel ||
+    "—";
+  const rest = formatEmpresaOperationalRestLine(v.remainingMins, v.remainingKm);
+  const ago = v.updatedIso ? formatSpanishAgo(v.updatedIso, now) : null;
+  return {
+    line1: etaPart,
+    line2: rest && rest !== "—" ? rest : null,
+    line3: ago && ago !== "—" ? `Actualizado ${ago}` : null,
+  };
+}
+
 export function getOperationalEtaUiState(servicio, now = new Date()) {
   if (!servicio || servicio.estado === "anulado") return { kind: "cancelled" };
   const v = resolveEtaVisual(servicio, now);

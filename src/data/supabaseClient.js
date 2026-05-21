@@ -22,6 +22,20 @@ function requireViteEnv(name) {
 }
 
 function assertSupabaseUrlAllowed(url) {
+  const appEnv = (viteEnv("VITE_APP_ENV") || "").toLowerCase();
+  const demoRef = viteEnv("VITE_DEMO_SUPABASE_PROJECT_REF");
+
+  if (appEnv === "demo" && url.includes(SUPABASE_REAL_PROJECT_REF)) {
+    throw new Error(
+      `[Cuaderno DEMO] VITE_SUPABASE_URL apunta al proyecto REAL (${SUPABASE_REAL_PROJECT_REF}). ` +
+        "Usa credenciales del proyecto Supabase DEMO en Vercel demo.",
+    );
+  }
+  if (appEnv === "demo" && demoRef && !url.includes(demoRef)) {
+    throw new Error(
+      `[Cuaderno DEMO] VITE_SUPABASE_URL no coincide con VITE_DEMO_SUPABASE_PROJECT_REF (${demoRef}).`,
+    );
+  }
   if (!url.includes(SUPABASE_REAL_PROJECT_REF)) return;
   if (viteEnv("VITE_ALLOW_PROD_SUPABASE") === "1") return;
   throw new Error(
