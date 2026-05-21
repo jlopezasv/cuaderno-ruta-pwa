@@ -20,6 +20,7 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -1467,6 +1468,7 @@ function CmrScanner({prof,dark}){
         const bytes=Uint8Array.from(atob(foto),c=>c.charCodeAt(0));
         const session=getSession();
         const token=session?.access_token||"";
+        guardDemoCannotUseProduction(SB_URL,"storage:cmr-upload");
         const uploadRes=await fetch(`${SB_URL}/storage/v1/object/cmr/${path}`,{
           method:"POST",
           headers:{

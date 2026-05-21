@@ -1,4 +1,5 @@
 import { SB_KEY, SB_URL, getUserId } from "./supabaseClient";
+import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
 import {
   isHttpStorageUrl,
   logStorageDoc,
@@ -161,6 +162,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     return buildDataUrlStorageResult(await fileToBase64(blob));
   }
 
+  guardDemoCannotUseProduction(SB_URL, `storage:upload:${bucket}`);
   const token = getStorageToken();
   const uploadUrl = `${SB_URL}/storage/v1/object/${bucket}/${objectPath}`;
 
