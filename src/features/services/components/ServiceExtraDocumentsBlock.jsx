@@ -4,11 +4,23 @@ import {
   extraDocFileUrl,
   fetchServicioDocumentosExtra,
   isExtraDocUrlOpenable,
+  deleteServicioDocumentoExtra,
   uploadServicioDocumentoExtra,
 } from "../../../domain/service/serviceExtraDocuments.js";
 import { logExtraDoc } from "../../../domain/documents/extraDocumentUploadLog.js";
 import { sanitizeDocumentCommentText } from "../../../domain/documents/documentCommentSanitize.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../../domain/documents/universalCamera.js";
+
+/** Truncado fiable en flex/grid móvil (nombre de archivo). */
+const fileNameEllipsisStyle = {
+  display: "block",
+  width: "100%",
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  boxSizing: "border-box",
+};
 
 export function ServiceExtraDocumentsBlock({
   servicio,
@@ -25,6 +37,7 @@ export function ServiceExtraDocumentsBlock({
   const [desc, setDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [lastError, setLastError] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
   const lastOpenReq = useRef(0);
   const cameraRef = useRef(null);
   const galleryRef = useRef(null);
@@ -73,6 +86,26 @@ export function ServiceExtraDocumentsBlock({
     }
     logExtraDoc("DOCUMENT_VER_OK", { id: row?.id, urlPrefix: String(url).slice(0, 72) });
     window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleDelete(row) {
+    if (!row?.id || deletingId) return;
+    const label = row.archivo_nombre || tipoLabel(row.tipo);
+    const ok = window.confirm(`¿Eliminar este documento?\n\n${label}`);
+    if (!ok) return;
+    setDeletingId(row.id);
+    setLastError("");
+    try {
+      await deleteServicioDocumentoExtra(row.id);
+      showToast?.("Documento eliminado");
+      await reload();
+    } catch (err) {
+      const msg = err?.message || "No se pudo eliminar el documento";
+      setLastError(msg);
+      showToast?.(msg);
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   async function onPickFile(e) {
@@ -157,6 +190,9 @@ export function ServiceExtraDocumentsBlock({
         borderRadius: compact ? 14 : 16,
         padding: compact ? "10px 12px 11px" : "12px 13px 14px",
         boxShadow: isDark ? "none" : "0 8px 22px rgba(15,23,42,.05)",
+        maxWidth: "100%",
+        overflow: "hidden",
+        boxSizing: "border-box",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: compact ? 8 : 10 }}>
@@ -194,41 +230,87 @@ export function ServiceExtraDocumentsBlock({
       ) : rows.length === 0 ? (
         <div style={{ fontSize: 12, color: shell.sub, padding: compact ? "4px 0" : "6px 0", opacity: 0.9 }}>Ningun archivo</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: compact ? 6 : 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: compact ? 6 : 8, minWidth: 0, maxWidth: "100%" }}>
           {rows.map((r) => {
             const canOpen = isExtraDocUrlOpenable(extraDocFileUrl(r));
             const comentario = sanitizeDocumentCommentText(r.descripcion);
+            const rowBusy = deletingId === r.id;
             return (
               <div
                 key={r.id}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  alignItems: "center",
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr) auto",
+                  columnGap: 10,
+                  alignItems: "start",
                   border: `1px solid ${shell.rowBorder}`,
                   borderRadius: 12,
                   padding: compact ? "7px 9px" : "8px 10px",
                   background: shell.rowBg,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  overflow: "hidden",
+                  boxSizing: "border-box",
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: shell.rowTitle }}>
+                <div style={{ minWidth: 0, overflow: "hidden" }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: shell.rowTitle, lineHeight: 1.3 }}>
                     {tipoLabel(r.tipo)}
-                    {r.archivo_nombre ? <span style={{ color: shell.rowMeta, fontWeight: 600 }}> · {r.archivo_nombre}</span> : null}
                   </div>
-                  <div style={{ fontSize: 10, color: shell.rowMeta, marginTop: 2 }}>
+                  {r.archivo_nombre ? (
+                    <div
+                      title={r.archivo_nombre}
+                      style={{
+                        ...fileNameEllipsisStyle,
+                        marginTop: 4,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: shell.rowMeta,
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {r.archivo_nombre}
+                    </div>
+                  ) : null}
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: shell.rowMeta,
+                      marginTop: r.archivo_nombre ? 4 : 6,
+                      lineHeight: 1.3,
+                      ...fileNameEllipsisStyle,
+                    }}
+                  >
                     {new Date(r.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                     {uploaderName ? ` · ${uploaderName}` : ""}
                   </div>
                   {comentario ? (
-                    <div style={{ fontSize: 11, color: shell.desc, marginTop: 4, lineHeight: 1.35 }}>{comentario}</div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: shell.desc,
+                        marginTop: 4,
+                        lineHeight: 1.35,
+                        ...fileNameEllipsisStyle,
+                      }}
+                    >
+                      {comentario}
+                    </div>
                   ) : null}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    flexShrink: 0,
+                    paddingTop: 1,
+                    alignItems: "flex-end",
+                  }}
+                >
                   <button
                     type="button"
-                    disabled={!canOpen}
+                    disabled={!canOpen || rowBusy}
                     onClick={() => openDocument(r)}
                     style={{
                       fontSize: 11,
@@ -236,11 +318,27 @@ export function ServiceExtraDocumentsBlock({
                       color: canOpen ? shell.link : shell.rowMeta,
                       background: "transparent",
                       border: "none",
-                      cursor: canOpen ? "pointer" : "default",
+                      cursor: canOpen && !rowBusy ? "pointer" : "default",
                       padding: 0,
                     }}
                   >
                     Ver
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rowBusy}
+                    onClick={() => void handleDelete(r)}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      color: rowBusy ? shell.rowMeta : "#b91c1c",
+                      background: "transparent",
+                      border: "none",
+                      cursor: rowBusy ? "default" : "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    {rowBusy ? "…" : "Eliminar"}
                   </button>
                 </div>
               </div>

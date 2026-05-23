@@ -142,7 +142,7 @@ function requireStorageAuth() {
  * @param {string} mime
  * @param {string} folder
  * @param {string} [originalName]
- * @param {{ requireHttpUrl?: boolean, allowBase64Fallback?: boolean }} [options]
+ * @param {{ requireHttpUrl?: boolean, allowBase64Fallback?: boolean, originalFileSize?: number }} [options]
  * @returns {Promise<import("../domain/documents/mediaStorageV2.js").StorageUploadResult>}
  */
 export async function uploadBlobToStorage(blob, mime, folder, originalName, options = {}) {
@@ -152,6 +152,21 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
   const objectPath = `${uid}/${folder}/${Date.now()}.${ext}`;
   const bucket = USER_PHOTOS_BUCKET;
   const sizeBytes = blobByteSize(blob);
+
+  const originalBytes =
+    options.originalFileSize != null && Number.isFinite(Number(options.originalFileSize))
+      ? Number(options.originalFileSize)
+      : null;
+  if (originalBytes != null && originalBytes > 0) {
+    const reductionPercent = Math.round((1 - sizeBytes / originalBytes) * 100);
+    console.warn("[COMPRESS_UPLOAD_SIZE_DEBUG]", {
+      originalName: originalName ?? null,
+      originalBytes,
+      compressedBytes: sizeBytes,
+      reductionPercent,
+      folder,
+    });
+  }
 
   if (isOperationalDocTraceEnabled()) {
     traceOperationalDoc("uploadBlobToStorage:start", {
@@ -412,7 +427,10 @@ export async function compressImageToJpegBlob(
 /** Sube imagen comprimida a `user-photos`. Devuelve URL string (compat monolito). */
 export async function uploadUserPhoto(file, folder = "misc", options = {}) {
   const compressed = await compressImageToJpegBlob(file);
-  const result = await uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
+  const result = await uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, {
+    ...options,
+    originalFileSize: file.size,
+  });
   return storageUploadUrl(result);
 }
 

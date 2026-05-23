@@ -50,8 +50,15 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
     typeof nombreConductor === "function"
       ? nombreConductor(row?.conductor_id || servicio?.conductor_id)
       : null;
-  const sizeBytes = row?.size_bytes != null ? Number(row.size_bytes) : null;
-  const sizeLabel = sizeBytes != null && sizeBytes > 0 ? formatStorageBytes(sizeBytes) : null;
+  const docMetaSize =
+    docMeta?.size_bytes ?? docMeta?.size_preview_bytes ?? docMeta?.sizeBytes ?? null;
+  const sizeBytes =
+    row?.size_bytes != null && Number(row.size_bytes) > 0
+      ? Number(row.size_bytes)
+      : docMetaSize != null && Number(docMetaSize) > 0
+        ? Number(docMetaSize)
+        : null;
+  const sizeLabel = sizeBytes != null ? formatStorageBytes(sizeBytes) : null;
   const isPdf = mime.includes("pdf") || String(archivoNombre || "").toLowerCase().endsWith(".pdf");
   const comentario = sanitizeDocumentCommentText(row?.descripcion);
 
@@ -75,8 +82,10 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
     },
     bucket: bucketForExtraTipo(tipo),
     displayTitle: tipoLbl,
-    displaySubtitle: comentario || archivoNombre || title,
-    displayLine2: [conductorName, sizeLabel, isPdf ? "PDF" : "Archivo"].filter(Boolean).join(" · "),
+    displaySubtitle: comentario || (archivoNombre && sizeLabel ? `${archivoNombre} · ${sizeLabel}` : archivoNombre) || title,
+    displayLine2: [conductorName, comentario ? sizeLabel : null, isPdf ? "PDF" : "Archivo"]
+      .filter(Boolean)
+      .join(" · "),
     displaySizeLabel: sizeLabel,
     displayKindLabel: isPdf ? "PDF" : mime.startsWith("image/") ? "Foto" : "Archivo",
     stopId: null,
