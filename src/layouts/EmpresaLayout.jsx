@@ -101,8 +101,28 @@ export default function EmpresaLayout({
     tx = "#0f172a",
     su = "#64748B",
     border = "#dbe4ee",
-    accent = "#2563eb";
+    accent = "#2563eb",
+    accentHover = "#eff6ff",
+    tabIdle = "#475569",
+    tabActive = "#1e3a8a";
   const canUseConfig = true;
+
+  const tabBtnStyle = (active) => ({
+    background: active ? accentHover : "transparent",
+    border: "none",
+    borderBottom: `2px solid ${active ? accent : "transparent"}`,
+    borderRadius: active ? "8px 8px 0 0" : 0,
+    padding: "14px 18px 12px",
+    fontSize: 13,
+    fontWeight: active ? 700 : 550,
+    color: active ? tabActive : tabIdle,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    transition: "background .15s ease, color .15s ease, border-color .15s ease",
+    whiteSpace: "nowrap",
+  });
 
   return (
     <div style={{ minHeight: "100vh", background: bg, display: "flex", flexDirection: "column", color: tx }}>
@@ -133,21 +153,14 @@ export default function EmpresaLayout({
             {visibleTabs.map((t) => (
               <button
                 key={t.id}
+                type="button"
                 onClick={() => setTab(t.id)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: `2px solid ${tab === t.id ? accent : "transparent"}`,
-                  padding: "16px 18px 13px",
-                  fontSize: 13,
-                  fontWeight: tab === t.id ? 650 : 500,
-                  color: tab === t.id ? "#1e3a8a" : "#475569",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  transition: "all .15s",
-                  whiteSpace: "nowrap",
+                style={tabBtnStyle(tab === t.id)}
+                onMouseEnter={(e) => {
+                  if (tab !== t.id) e.currentTarget.style.background = "#f8fafc";
+                }}
+                onMouseLeave={(e) => {
+                  if (tab !== t.id) e.currentTarget.style.background = "transparent";
                 }}
               >
                 <span style={{ fontSize: 14, color: tab === t.id ? accent : "#94a3b8" }}>{t.icon}</span>
@@ -251,30 +264,35 @@ export default function EmpresaLayout({
       {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)" }}>
-          {visibleTabs.filter((t) => t.id !== "config").map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              style={{
-                flex: 1,
-                background: "transparent",
-                border: "none",
-                borderTop: `2px solid ${tab === t.id ? accent : "transparent"}`,
-                padding: "8px 4px 6px",
-                fontSize: 10,
-                fontWeight: tab === t.id ? 650 : 500,
-                color: tab === t.id ? "#1e3a8a" : "#475569",
-                cursor: "pointer",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 2,
-              }}
-            >
-              <span style={{ fontSize: 17, color: tab === t.id ? accent : "#94a3b8" }}>{t.icon}</span>
-              {t.label}
-            </button>
-          ))}
+          {visibleTabs.filter((t) => t.id !== "config").map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                style={{
+                  flex: 1,
+                  background: active ? accentHover : "transparent",
+                  border: "none",
+                  borderTop: `2px solid ${active ? accent : "transparent"}`,
+                  padding: "8px 4px 6px",
+                  fontSize: 10,
+                  fontWeight: active ? 700 : 550,
+                  color: active ? tabActive : tabIdle,
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 2,
+                  transition: "background .15s ease, color .15s ease",
+                }}
+              >
+                <span style={{ fontSize: 17, color: active ? accent : "#94a3b8" }}>{t.icon}</span>
+                {t.label}
+              </button>
+            );
+          })}
         </div>
       )}
 

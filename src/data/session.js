@@ -1,77 +1,289 @@
 import { SB_URL, SB_KEY, sbFetch } from "./supabaseClient";
+
 import { clearAuthContext } from "./authContext";
+
+import { isPublicRegistrationAllowed } from "../config/appEnvironment.js";
+
+import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
+
+import { demoDevError, demoDevLog, demoDevWarn, isDemoDevUnlocked } from "../lib/demoDevUnlock.js";
+
+
 
 export { getSession, getUserId } from "./supabaseClient";
 
-export async function signUp(email, password) {
-  const res = await fetch(`${SB_URL}/auth/v1/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "apikey": SB_KEY },
-    body: JSON.stringify({ email, password }),
-  });
-  const d = await res.json();
-  if (d.error) throw new Error(d.error.message || d.msg || "Error al registrarse");
-  if (d.access_token) localStorage.setItem("sb_session", JSON.stringify(d));
-  return d;
+
+
+function assertAuthTargetSafe(context) {
+
+  guardDemoCannotUseProduction(SB_URL, context);
+
 }
+
+
+
+function authErrorMessage(d, fallback) {
+
+  return (
+
+    d?.error_description ||
+
+    d?.error?.message ||
+
+    d?.msg ||
+
+    (typeof d?.error === "string" ? d.error : null) ||
+
+    fallback
+
+  );
+
+}
+
+
+
+export async function signUp(email, password) {
+
+  assertAuthTargetSafe("auth:signup");
+
+  if (!isPublicRegistrationAllowed()) {
+
+    throw new Error(
+
+      "El registro libre está desactivado en este entorno. Usa las cuentas demo o contacta con soporte.",
+
+    );
+
+  }
+
+
+
+  const signupUrl = `${SB_URL}/auth/v1/signup`;
+
+  if (isDemoDevUnlocked()) {
+
+    demoDevLog("signUp →", signupUrl, "email:", email);
+
+    demoDevLog("VITE_SUPABASE_URL:", (import.meta.env.VITE_SUPABASE_URL || "").trim() || "(vacío)");
+
+  }
+
+
+
+  const res = await fetch(signupUrl, {
+
+    method: "POST",
+
+    headers: { "Content-Type": "application/json", apikey: SB_KEY },
+
+    body: JSON.stringify({ email, password }),
+
+  });
+
+
+
+  let d;
+
+  try {
+
+    d = await res.json();
+
+  } catch (parseErr) {
+
+    demoDevError("signUp JSON parse:", parseErr);
+
+    throw parseErr;
+
+  }
+
+
+
+  if (isDemoDevUnlocked()) {
+
+    demoDevLog("signUp HTTP", res.status, "ok:", res.ok, "body:", d);
+
+  }
+
+
+
+  if (!res.ok) {
+
+    const msg = authErrorMessage(d, `Error al registrarse (HTTP ${res.status})`);
+
+    demoDevError("signUp falló:", { status: res.status, body: d });
+
+    throw new Error(msg);
+
+  }
+
+  if (d.error) {
+
+    throw new Error(authErrorMessage(d, "Error al registrarse"));
+
+  }
+
+
+
+  if (d.access_token) {
+
+    localStorage.setItem("sb_session", JSON.stringify(d));
+
+  } else if (isDemoDevUnlocked()) {
+
+    demoDevWarn(
+
+      "signUp sin access_token; se intentará signIn. user:",
+
+      d.user?.id ?? d.id ?? "(ninguno)",
+
+    );
+
+  }
+
+  return d;
+
+}
+
+
 
 export async function signIn(email, password) {
+
+  assertAuthTargetSafe("auth:signIn");
+
   clearAuthContext();
+
   localStorage.removeItem("sb_session");
+
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+
     method: "POST",
-    headers: { "Content-Type": "application/json", "apikey": SB_KEY },
+
+    headers: { "Content-Type": "application/json", apikey: SB_KEY },
+
     body: JSON.stringify({ email, password }),
+
   });
+
   const d = await res.json();
-  if (d.error) throw new Error(d.error.message || d.msg || "Email o contraseña incorrectos");
-  clearAuthContext();
-  // Limpiar datos del usuario anterior antes de cargar los nuevos
-  const dark=localStorage.getItem("dark");
-  const keysToRemove=[];
-  for(let i=0;i<localStorage.length;i++){
-    const k=localStorage.key(i);
-    if(k&&k!=="dark")keysToRemove.push(k);
+
+  if (isDemoDevUnlocked()) {
+
+    demoDevLog("signIn HTTP", res.status, "ok:", res.ok, "user:", d.user?.id);
+
   }
-  keysToRemove.forEach(k=>localStorage.removeItem(k));
-  if(dark)localStorage.setItem("dark",dark);
+
+  if (!res.ok || d.error) {
+
+    const msg = authErrorMessage(d, "Email o contraseña incorrectos");
+
+    demoDevError("signIn falló:", { status: res.status, body: d });
+
+    throw new Error(msg);
+
+  }
+
+  clearAuthContext();
+
+  const dark = localStorage.getItem("dark");
+
+  const keysToRemove = [];
+
+  for (let i = 0; i < localStorage.length; i++) {
+
+    const k = localStorage.key(i);
+
+    if (k && k !== "dark") keysToRemove.push(k);
+
+  }
+
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+
+  if (dark) localStorage.setItem("dark", dark);
+
   localStorage.setItem("sb_session", JSON.stringify(d));
+
   return d;
+
 }
+
+
 
 export async function resetPassword(email) {
-  const res = await fetch('/api/admin', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'reset_password', admin_uid: 'public', email }),
+
+  const res = await fetch("/api/admin", {
+
+    method: "POST",
+
+    headers: { "Content-Type": "application/json" },
+
+    body: JSON.stringify({ action: "reset_password", admin_uid: "public", email }),
+
   });
+
   const d = await res.json();
-  if (!res.ok) throw new Error(d.error || 'Error al enviar email');
+
+  if (!res.ok) throw new Error(d.error || "Error al enviar email");
+
   return d;
+
 }
+
+
 
 export async function signOut() {
+
   await sbFetch("/auth/v1/logout", { method: "POST" }).catch(() => {});
+
   clearAuthContext();
-  // Limpiar TODOS los datos del usuario del localStorage
+
   const keysToRemove = [];
-  for(let i=0;i<localStorage.length;i++){
-    const k=localStorage.key(i);
-    if(k&&!["dark","sb_session"].includes(k))keysToRemove.push(k);
+
+  for (let i = 0; i < localStorage.length; i++) {
+
+    const k = localStorage.key(i);
+
+    if (k && !["dark", "sb_session"].includes(k)) keysToRemove.push(k);
+
   }
-  keysToRemove.forEach(k=>localStorage.removeItem(k));
+
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+
   localStorage.removeItem("sb_session");
+
 }
 
+
+
 export async function refreshSession() {
+
+  assertAuthTargetSafe("auth:refresh");
+
   const session = JSON.parse(localStorage.getItem("sb_session") || "null");
+
   if (!session?.refresh_token) return null;
+
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+
     method: "POST",
-    headers: { "Content-Type": "application/json", "apikey": SB_KEY },
+
+    headers: { "Content-Type": "application/json", apikey: SB_KEY },
+
     body: JSON.stringify({ refresh_token: session.refresh_token }),
+
   });
+
   const d = await res.json();
-  if (d.access_token) { localStorage.setItem("sb_session", JSON.stringify(d)); return d; }
+
+  if (d.access_token) {
+
+    localStorage.setItem("sb_session", JSON.stringify(d));
+
+    return d;
+
+  }
+
   return null;
+
 }
+
+

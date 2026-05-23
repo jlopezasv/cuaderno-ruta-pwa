@@ -1,4 +1,6 @@
 import { formatStorageBytes } from "../documents/operationalDocumentPipeline.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
+import { stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
 import { EXTRA_DOC_TIPOS, extraDocFileUrl } from "./serviceExtraDocuments.js";
 
 function parseTs(value) {
@@ -37,8 +39,9 @@ function tipoLabel(tipo) {
 /** Fila servicio_documentos_extra → evidencia unificada para expediente empresa. */
 export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } = {}) {
   const url = extraDocFileUrl(row);
+  const docMeta = row?.datos?.doc_meta && typeof row.datos.doc_meta === "object" ? row.datos.doc_meta : null;
   const tipo = String(row?.tipo || "otro").toLowerCase();
-  const mime = row?.mime_type || "";
+  const mime = row?.mime_type || docMeta?.mime_type || "";
   const archivoNombre = row?.archivo_nombre || null;
   const tipoLbl = tipoLabel(tipo);
   const title = archivoNombre || tipoLbl;
@@ -47,35 +50,47 @@ export function extraDocToExpedienteEvidence(row, { nombreConductor, servicio } 
     typeof nombreConductor === "function"
       ? nombreConductor(row?.conductor_id || servicio?.conductor_id)
       : null;
-  const sizeBytes = row?.size_bytes != null ? Number(row.size_bytes) : null;
-  const sizeLabel = sizeBytes != null && sizeBytes > 0 ? formatStorageBytes(sizeBytes) : null;
+  const docMetaSize =
+    docMeta?.size_bytes ?? docMeta?.size_preview_bytes ?? docMeta?.sizeBytes ?? null;
+  const sizeBytes =
+    row?.size_bytes != null && Number(row.size_bytes) > 0
+      ? Number(row.size_bytes)
+      : docMetaSize != null && Number(docMetaSize) > 0
+        ? Number(docMetaSize)
+        : null;
+  const sizeLabel = sizeBytes != null ? formatStorageBytes(sizeBytes) : null;
   const isPdf = mime.includes("pdf") || String(archivoNombre || "").toLowerCase().endsWith(".pdf");
+  const comentario = sanitizeDocumentCommentText(row?.descripcion);
 
   return {
     id: `extra:${row.id}`,
     tipo,
     titulo: `${tipoLbl} · ${title}`,
-    detalle: row?.descripcion?.trim() || "",
+    detalle: comentario,
     created_at: row?.created_at,
     hora: fmtClock(ms),
-    url,
-    previewUrl: url,
-    nota: row?.descripcion || null,
+    url: docMeta?.preview_url || url,
+    previewUrl: docMeta?.preview_url || url,
+    originalUrl: docMeta?.original_url || null,
+    nota: comentario || null,
     datos: {
       ...(row?.datos && typeof row.datos === "object" ? row.datos : {}),
       source: "servicio_documentos_extra",
       mime_type: mime || null,
       archivo_nombre: archivoNombre,
+      doc_meta: docMeta,
     },
     bucket: bucketForExtraTipo(tipo),
     displayTitle: tipoLbl,
-    displaySubtitle: row?.descripcion?.trim() || archivoNombre || title,
-    displayLine2: [conductorName, sizeLabel, isPdf ? "PDF" : "Archivo"].filter(Boolean).join(" · "),
+    displaySubtitle: comentario || (archivoNombre && sizeLabel ? `${archivoNombre} · ${sizeLabel}` : archivoNombre) || title,
+    displayLine2: [conductorName, comentario ? sizeLabel : null, isPdf ? "PDF" : "Archivo"]
+      .filter(Boolean)
+      .join(" · "),
     displaySizeLabel: sizeLabel,
     displayKindLabel: isPdf ? "PDF" : mime.startsWith("image/") ? "Foto" : "Archivo",
     stopId: null,
     stopLabel: "Documento extra",
-    stopName: servicio?.cliente || servicio?.referencia || "Servicio",
+    stopName: servicio?.cliente || stripServicioOperacionDisplay(servicio?.referencia) || "Servicio",
     source: "servicio_documentos_extra",
     extraDocId: row.id,
     conductor_id: row?.conductor_id ?? null,

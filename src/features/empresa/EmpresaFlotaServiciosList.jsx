@@ -1,10 +1,15 @@
 import { memo, useCallback, useMemo } from "react";
 import { EmpresaFlotaServicioCard } from "./EmpresaFlotaServicioCard.jsx";
+import {
+  flotaEvsSigForStops,
+  stopsOperativaSig,
+} from "./empresaFlotaRefresh.js";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../domain/service/serviceOperationalStatus.js";
 import { getLastServiceActivity } from "../../domain/service/serviceActivity.js";
 import { getAttentionReason, needsAttention } from "../../domain/service/serviceAttention.js";
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
 import { conductorUidOperativoServicio } from "../../domain/fleet/operationalPlaceholderConductor.js";
+import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 
 function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
   const stops = flotaStops[servicioId] || [];
@@ -52,7 +57,6 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
     [onAsignarConductorServicioId, servicioId],
   );
   const pendienteAsignacion = servicioPendienteAsignacion(servicio);
-
   return (
     <EmpresaFlotaServicioCard
       servicio={servicio}
@@ -85,13 +89,17 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
 function rowPropsEqual(prev, next) {
   if (prev.expanded !== next.expanded) return false;
   if (prev.expanded && prev.nowMs !== next.nowMs) return false;
-  if (prev.servicio !== next.servicio) {
-    if (prev.servicio?.id !== next.servicio?.id) return false;
-    if (prev.servicio?.estado !== next.servicio?.estado) return false;
-    if (prev.servicio?.referencia !== next.servicio?.referencia) return false;
-    if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (prev.servicio?.id !== next.servicio?.id) return false;
+  if (prev.servicio?.estado !== next.servicio?.estado) return false;
+  if (
+    stripServicioOperacionDisplay(prev.servicio?.referencia) !==
+    stripServicioOperacionDisplay(next.servicio?.referencia)
+  ) {
+    return false;
   }
-  if (prev.stops !== next.stops) return false;
+  if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
+  if (flotaEvsSigForStops(prev.stops, prev.flotaEvs) !== flotaEvsSigForStops(next.stops, next.flotaEvs)) return false;
   if (prev.ubicRefresh !== next.ubicRefresh) return false;
   if (prev.rowMeta !== next.rowMeta) return false;
   const la = prev.ubicInfo;

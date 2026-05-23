@@ -4,6 +4,11 @@ import { uploadOperationalDocument } from "../../data/uploadOperationalDocument.
 import { DOCUMENT_TYPES } from "../../domain/service/serviceDocuments.js";
 import { enrichEvidenciaDisplay, mergeDocMetaIntoDatos } from "../../domain/documents/operationalDocumentRecord.js";
 import { processOperationalDocumentImage, formatStorageBytes } from "../../domain/documents/operationalDocumentPipeline.js";
+import {
+  diagnoseEvidencia,
+  isOperationalDocTraceEnabled,
+  traceOperationalDoc,
+} from "../../domain/documents/operationalDocumentTrace.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documents/universalCamera.js";
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
@@ -53,6 +58,8 @@ export function OperationalEvidenciasStop({
   const fileRef = useRef(null);
   const fotoRef = useRef(null);
   const previewBlobRef = useRef(null);
+  /** Archivo CMR original de cámara/galería; el PDF y storage deben usar este, no solo previewBlob. */
+  const cmrSourceFileRef = useRef(null);
 
   const allowedTipos = useMemo(() => {
     if (!Array.isArray(tiposPermitidos) || !tiposPermitidos.length) return null;
@@ -134,6 +141,25 @@ export function OperationalEvidenciasStop({
     }
     const saved = Array.isArray(payload) ? payload[0] : payload;
     if (!saved?.id) throw new Error("No se guardó la evidencia");
+    if (isOperationalDocTraceEnabled()) {
+      const meta = saved?.datos?.doc_meta;
+      traceOperationalDoc("persistEvidencia:supabase_row", {
+        fn: "persistEvidencia",
+        tipo,
+        evId: saved.id,
+        evidencias_url_column: saved.url ?? url,
+        preview_url_meta: meta?.preview_url ?? null,
+        original_url_meta: meta?.original_url ?? null,
+        upload_pipeline: meta?.upload_pipeline ?? null,
+        mime: meta?.mime_type ?? null,
+        sizePreviewBytes: meta?.size_preview_bytes ?? null,
+      });
+      if (tipo === "foto") {
+        void diagnoseEvidencia(saved).then((r) => {
+          traceOperationalDoc("persistEvidencia:auto_diagnose", { verdict: r.verdict });
+        });
+      }
+    }
     setEvidencias((prev) => [...prev, saved]);
     notifyEvidenciaSaved({
       ev: saved,
@@ -159,8 +185,24 @@ export function OperationalEvidenciasStop({
     }
   }
 
-  async function preparePreview(file) {
-    const processed = await processOperationalDocumentImage(file);
+  async function preparePreview(file, { forFoto = false } = {}) {
+    if (forFoto) {
+      previewBlobRef.current = file;
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      setPreviewMeta({
+        bytes: file.size || 0,
+        label: formatStorageBytes(file.size || 0),
+      });
+      return { previewBlob: file, previewBytes: file.size || 0 };
+    }
+    if (isOperationalDocTraceEnabled()) {
+      traceOperationalDoc("OperationalEvidenciasStop:preparePreview", {
+        documentMode: true,
+        note: "CMR/escaneo — canvas con recorte documental",
+      });
+    }
+    const processed = await processOperationalDocumentImage(file, { documentMode: true });
     previewBlobRef.current = processed.previewBlob;
     const url = URL.createObjectURL(processed.previewBlob);
     setPreviewUrl(url);
@@ -178,13 +220,22 @@ export function OperationalEvidenciasStop({
     setSaving(true);
     setError("");
     try {
-      await preparePreview(file);
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("OperationalEvidenciasStop:onFotoSelected", {
+          route: "uploadOperationalDocument",
+          tipo: "foto",
+          processImage: true,
+          pipeline: "foto_file_reader_jpeg",
+        });
+      }
+      await preparePreview(file, { forFoto: true });
       const geo = await captureUploadGeo();
-      const { previewUrl: url, docMeta } = await uploadOperationalDocument(file, {
+      const { previewUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
         context: { ...uploadContext, eventoOperacional: "Foto operativa", geo },
       });
+      const url = previewUrl;
       const datos = mergeDocMetaIntoDatos({}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
@@ -203,12 +254,14 @@ export function OperationalEvidenciasStop({
     setPreviewUrl(null);
     setPreviewMeta(null);
     previewBlobRef.current = null;
+    cmrSourceFileRef.current = null;
   }
 
   async function escanearCmr(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    cmrSourceFileRef.current = file;
     setError("");
     setCmrFase("procesando");
     try {
@@ -219,6 +272,12 @@ export function OperationalEvidenciasStop({
         r.onerror = rej;
         r.readAsDataURL(previewBlobRef.current || file);
       });
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("OperationalEvidenciasStop:escanearCmr_ocr", {
+          ocrBranch: true,
+          api: "/api/cmr",
+        });
+      }
       const resp = await fetch("/api/cmr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -244,14 +303,20 @@ export function OperationalEvidenciasStop({
     try {
       let url = null;
       let datos = { ...cmrCampos };
-      if (previewBlobRef.current) {
-        const file = new File([previewBlobRef.current], "cmr.jpg", { type: "image/jpeg" });
+      const sourceFile = cmrSourceFileRef.current;
+      if (sourceFile) {
+        if (isOperationalDocTraceEnabled()) {
+          traceOperationalDoc("OperationalEvidenciasStop:guardarCmr_upload", {
+            route: "uploadOperationalDocument",
+            tipo: "cmr",
+            documentModeExpected: true,
+          });
+        }
         const geo = await captureUploadGeo();
-        const up = await uploadOperationalDocument(file, {
+        const up = await uploadOperationalDocument(sourceFile, {
           folder: "cmr",
           tipo: "cmr",
           context: { ...uploadContext, eventoOperacional: "CMR escaneado", geo },
-          processImage: false,
         });
         url = up.previewUrl;
         datos = mergeDocMetaIntoDatos(cmrCampos, up.docMeta);

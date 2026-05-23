@@ -15,7 +15,7 @@ const RETENTION_LS = "cuaderno_service_local_retention_v1";
 /** 5 días en ms */
 export const DRIVER_LOCAL_DOC_RETENTION_MS = 5 * 24 * 60 * 60 * 1000;
 
-const ARCHIVED_ESTADOS = new Set(["completado", "cancelado", "anulado"]);
+const ARCHIVED_ESTADOS = new Set(["completado", "cerrado", "cancelado", "anulado"]);
 
 /** @type {Promise<IDBDatabase>|null} */
 let dbPromise = null;

@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { getCurrentStop, countCompletedStops } from "../../domain/service/serviceStops.js";
 import {
@@ -9,11 +9,15 @@ import {
 import { getServicioOperativaTimelineForCard } from "../../domain/service/serviceExpediente.js";
 import {
   getServiceClientReference,
-  getServiceNumber,
+  getServiceNumberForDisplay,
 } from "../../domain/service/serviceIdentity.js";
 import { buildEmpresaFlotaCardSummary } from "./empresaFlotaServicioCardPresenter.js";
+import { OperationalEtaSnapshotBlock } from "../services/components/OperationalEtaSnapshotBlock.jsx";
+import { VisualEtaFence } from "../../ui/VisualEtaFence.jsx";
+import { flotaEvsSigForStops, stopsOperativaSig } from "./empresaFlotaRefresh.js";
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
+import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -119,37 +123,63 @@ function EmpresaFlotaServicioCardImpl({
         servicio,
         stops,
         nowMs,
-        latestLocation,
         tacografoEstado,
-        activeStop: stopActual,
         nextStop,
-        useLiveEta: expanded && !sinOp,
+        useLiveEta: false,
       }),
-    [servicio, stops, nowMs, latestLocation, tacografoEstado, stopActual, nextStop, expanded, sinOp],
+    [servicio, stops, nowMs, tacografoEstado, nextStop],
   );
 
-  const dossierMetrics = useMemo(
-    () => (expanded ? computeTripOperationalMetrics(servicio, stops) : null),
-    [expanded, servicio, stops],
-  );
+  const servicioReferencia = servicio?.referencia ?? "";
+
+  const dossierMetrics = useMemo(() => {
+    if (!expanded) return null;
+    try {
+      return computeTripOperationalMetrics(servicio, stops);
+    } catch (err) {
+      console.warn("[EmpresaFlotaServicioCard] dossierMetrics", err);
+      return null;
+    }
+  }, [expanded, servicio, servicioReferencia, stops]);
 
   const operativaTimeline = useMemo(() => {
     if (!expanded) return [];
-    return getServicioOperativaTimelineForCard({
-      servicio,
-      stops,
-      evidenciasByStop: flotaEvs,
-      metrics: dossierMetrics,
-      nombreConductor,
-      fmtDur,
-      entries: conductor?.entries || [],
-    });
-  }, [expanded, servicio, stops, flotaEvs, dossierMetrics, nombreConductor, fmtDur, conductor?.entries]);
+    try {
+      console.log("[TL3] timeline build input",{
+        servicioId:servicio?.id||null,
+        expanded,
+        stopsCount:Array.isArray(stops)?stops.length:0,
+        evidenciasStops:Object.keys(flotaEvs||{}).length,
+      });
+      return getServicioOperativaTimelineForCard({
+        servicio,
+        stops,
+        evidenciasByStop: flotaEvs,
+        metrics: dossierMetrics,
+        nombreConductor,
+        fmtDur,
+        entries: conductor?.entries || [],
+      });
+    } catch (err) {
+      console.warn("[EmpresaFlotaServicioCard] operativaTimeline", err);
+      return [];
+    }
+  }, [
+    expanded,
+    servicio,
+    servicioReferencia,
+    stops,
+    flotaEvs,
+    dossierMetrics,
+    nombreConductor,
+    fmtDur,
+    conductor?.entries,
+  ]);
 
   const completados = countCompletedStops(stops);
   const progressLabel = stops.length ? `${completados}/${stops.length}` : "0/0";
   const incNCompact = expanded ? incidenciasCountServicio(servicio.id, flotaStopsMap, flotaEvs) : 0;
-  const serviceNumber = getServiceNumber(servicio);
+  const serviceNumber = getServiceNumberForDisplay(servicio) || "—";
   const refClienteCompact = getServiceClientReference(servicio);
   const stateColor = ESTADO_COLOR[servicio.estado] || su;
   const conductorLine = sinOp
@@ -160,6 +190,16 @@ function EmpresaFlotaServicioCardImpl({
         ? "Sin asignar"
         : null;
   const timelineSoloTexto = operativaTimeline;
+  useEffect(() => {
+    if (!expanded) return;
+    console.log("[TL3] timeline render",{
+      servicioId:servicio?.id||null,
+      expanded,
+      timelineCount:Array.isArray(timelineSoloTexto)?timelineSoloTexto.length:0,
+      stopsCount:Array.isArray(stops)?stops.length:0,
+      sinOp,
+    });
+  }, [expanded, servicio?.id, timelineSoloTexto, stops, sinOp]);
   const ubicLine = ubicInfo?.label || (ubicInfo?.missing ? "Sin ubicación registrada" : "—");
   const ubicUpdated =
     ubicInfo?.recent === false ? "Sin actualización reciente" : ubicInfo ? "Ubicación reciente" : null;
@@ -201,29 +241,13 @@ function EmpresaFlotaServicioCardImpl({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 15,
-              fontWeight: 800,
-              color: tx,
-              lineHeight: 1.25,
-              letterSpacing: 0.02,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {summary.routeLabel}
-          </div>
-
           {summary.clienteLine ? (
             <div
               style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: UI.subtle,
-                marginTop: 5,
-                lineHeight: 1.3,
+                fontSize: 14,
+                fontWeight: 750,
+                color: tx,
+                lineHeight: 1.25,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -232,6 +256,21 @@ function EmpresaFlotaServicioCardImpl({
               {summary.clienteLine}
             </div>
           ) : null}
+
+          <div
+            style={{
+              fontSize: summary.clienteLine ? 13 : 15,
+              fontWeight: summary.clienteLine ? 700 : 800,
+              color: summary.clienteLine ? UI.subtle : tx,
+              marginTop: summary.clienteLine ? 4 : 0,
+              lineHeight: 1.3,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {summary.routeLabel}
+          </div>
 
           {conductorLine ? (
             <div
@@ -308,7 +347,7 @@ function EmpresaFlotaServicioCardImpl({
                   letterSpacing: 0.35,
                 }}
               >
-                Llegada prevista
+                {summary.etaCaption || "ETA inicial"}
               </div>
               <div
                 style={{
@@ -459,7 +498,7 @@ function EmpresaFlotaServicioCardImpl({
               Operativa del servicio
             </div>
 
-            {timelineSoloTexto.length > 0 ? (
+            {!sinOp ? (
               <>
                 <div
                   style={{
@@ -473,6 +512,7 @@ function EmpresaFlotaServicioCardImpl({
                 >
                   Línea de tiempo
                 </div>
+                {timelineSoloTexto.length > 0 ? (
                 <div style={{ maxHeight: 220, overflowY: "auto", marginBottom: 12 }}>
                   {timelineSoloTexto.map((ev, i) => (
                     <div
@@ -510,6 +550,11 @@ function EmpresaFlotaServicioCardImpl({
                     </div>
                   ))}
                 </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: su, marginBottom: 12, lineHeight: 1.4 }}>
+                    Sin eventos en la línea de tiempo todavía.
+                  </div>
+                )}
               </>
             ) : null}
 
@@ -543,6 +588,12 @@ function EmpresaFlotaServicioCardImpl({
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.entradaMuelleMs)}</span>
                       </div>
                       <div>
+                        <span style={{ color: "#94A3B8" }}>Tiempo espera · </span>
+                        <span style={{ color: "#F59E0B", fontWeight: 700 }}>
+                          {row.esperaAntesOperacionMin != null ? fmtDur(row.esperaAntesOperacionMin) : "—"}
+                        </span>
+                      </div>
+                      <div>
                         <span style={{ color: "#94A3B8" }}>Inicio operación · </span>
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.inicioOperacionMs)}</span>
                       </div>
@@ -573,6 +624,36 @@ function EmpresaFlotaServicioCardImpl({
                 );
               })
             )}
+
+            {!sinOp && servicio.estado !== "anulado" ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  paddingTop: 12,
+                  borderTop: `1px solid ${UI.border}`,
+                }}
+              >
+                <VisualEtaFence resetKey={servicio?.id} su={su}>
+                  <OperationalEtaSnapshotBlock
+                    servicio={servicio}
+                    nowMs={nowMs}
+                    tx={tx}
+                    su={su}
+                    subtle={UI.subtle}
+                    layout="empresa"
+                  />
+                </VisualEtaFence>
+                {nextStop ? (
+                  <div style={{ marginTop: 8, fontSize: 12, color: su, lineHeight: 1.35 }}>
+                    ETA / siguiente punto ·{" "}
+                    <strong style={{ color: tx }}>{nextStop.nombre || "—"}</strong>
+                    {nextStop.tipo ? (
+                      <span style={{ fontWeight: 600 }}> · {stopTipoCompacto(nextStop)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div
@@ -879,12 +960,17 @@ function EmpresaFlotaServicioCardImpl({
 function propsEqual(prev, next) {
   if (prev.expanded !== next.expanded) return false;
   if (prev.nowMs !== next.nowMs) return false;
-  if (prev.servicio !== next.servicio) {
-    if (prev.servicio?.id !== next.servicio?.id) return false;
-    if (prev.servicio?.estado !== next.servicio?.estado) return false;
-    if (prev.servicio?.referencia !== next.servicio?.referencia) return false;
+  if (prev.servicio?.id !== next.servicio?.id) return false;
+  if (prev.servicio?.estado !== next.servicio?.estado) return false;
+  if (
+    stripServicioOperacionDisplay(prev.servicio?.referencia) !==
+    stripServicioOperacionDisplay(next.servicio?.referencia)
+  ) {
+    return false;
   }
-  if (prev.stops !== next.stops) return false;
+  if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
+  if (flotaEvsSigForStops(prev.stops, prev.flotaEvs) !== flotaEvsSigForStops(next.stops, next.flotaEvs)) return false;
   if (prev.attention !== next.attention) return false;
   if (prev.ubicRefresh !== next.ubicRefresh) return false;
   const la = prev.ubicInfo;

@@ -1,10 +1,34 @@
-import { getOperationalPlanSnapshot, getServicioOperacionMeta } from "./serviceOperacionMeta.js";
+import {
+  getOperationalPlanSnapshot,
+  getOperationalTripStartedAt,
+  getServicioOperacionMeta,
+} from "./serviceOperacionMeta.js";
 import { OPERATIONAL_GROUP_LABEL, operationalGroupFromStopTipo, sortStopsByOrden } from "./tripOperationalDossier.js";
 import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getServiceNumber } from "./serviceIdentity.js";
-import { formatOperationalEtaSnapshotLine } from "./operationalEtaPresentation.js";
-import { enrichEvidenciaDisplay, expedienteSizeLabel, getDocMeta, sumExpedienteBytes } from "../documents/operationalDocumentRecord.js";
+import {
+  formatOperationalEtaDisplayLines,
+  formatOperationalEtaSnapshotLine,
+} from "./operationalEtaPresentation.js";
+import { getServiceNumberForDisplay } from "./serviceIdentity.js";
+import {
+  enrichEvidenciaDisplay,
+  expedienteSizeLabel,
+  getDocMeta,
+  resolveEvidenciaDisplayImageUrl,
+  resolveEvidenciaPdfEmbedUrl,
+  sumExpedienteBytes,
+} from "../documents/operationalDocumentRecord.js";
+import {
+  isOperationalDocTraceEnabled,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "../documents/operationalDocumentTrace.js";
+import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
+import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
+import { getExpedienteCierre } from "./expedienteCierre.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 
 const enc = new TextEncoder();
@@ -13,6 +37,65 @@ function parseTs(value) {
   if (!value) return null;
   const ms = new Date(value).getTime();
   return Number.isFinite(ms) ? ms : null;
+}
+
+/** Prioridad operacional cuando varios eventos comparten el mismo reloj (informe / PDF). */
+const EXPEDIENTE_TIMELINE_TYPE_ORDER = Object.freeze({
+  conductor_asignado: 10,
+  servicio: 20,
+  servicio_iniciado: 20,
+  entrada_muelle: 30,
+  foto: 45,
+  cmr: 46,
+  incidencia: 47,
+  nota: 48,
+  salida_muelle: 50,
+  carga_finalizada: 50,
+  descarga_finalizada: 50,
+  servicio_anulado: 90,
+});
+
+function operationalTimelineTypeRank(type) {
+  const t = String(type || "").toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(EXPEDIENTE_TIMELINE_TYPE_ORDER, t)) {
+    return EXPEDIENTE_TIMELINE_TYPE_ORDER[t];
+  }
+  if (t.startsWith("tacografo_")) return 80;
+  return 55;
+}
+
+function tieBreakOperationalTimeline(a, b) {
+  const ra = operationalTimelineTypeRank(a.type);
+  const rb = operationalTimelineTypeRank(b.type);
+  if (ra !== rb) return ra - rb;
+  const sa = a.stopId ?? a.stop_id ?? "";
+  const sb = b.stopId ?? b.stop_id ?? "";
+  if (sa !== sb) return String(sa).localeCompare(String(sb));
+  const ea = a.evidenceId ?? a.metadata?.evidencia_id ?? "";
+  const eb = b.evidenceId ?? b.metadata?.evidencia_id ?? "";
+  if (ea !== eb) return String(ea).localeCompare(String(eb));
+  return String(a.title || "").localeCompare(String(b.title || ""));
+}
+
+/** Orden cronológico + secuencia operacional (mismo timestamp → prioridad de tipo). */
+function compareOperationalTimelineEvents(a, b, tsKey = "ts") {
+  const ta = parseTs(a[tsKey]);
+  const tb = parseTs(b[tsKey]);
+  if (ta == null && tb == null) return tieBreakOperationalTimeline(a, b);
+  if (ta == null) return 1;
+  if (tb == null) return -1;
+  if (ta !== tb) return ta - tb;
+  return tieBreakOperationalTimeline(a, b);
+}
+
+function sortOperationalTimeline(items) {
+  items.sort((a, b) => compareOperationalTimelineEvents(a, b, "ts"));
+  return items;
+}
+
+function sortOperationalIntegrityRecords(records) {
+  records.sort((a, b) => compareOperationalTimelineEvents(a, b, "timestamp_utc"));
+  return records;
 }
 
 function fmtClock(ms) {
@@ -42,6 +125,30 @@ function plain(value) {
     .trim();
 }
 
+/** Bloque de cierre documental (`referencia` → `__SRV_OP__.expediente_cierre`). */
+function buildCierreDocumentalForExpediente(servicio, nombreConductor) {
+  const cierre = getExpedienteCierre(servicio);
+  const estadoRaw = String(servicio?.estado || "").toLowerCase();
+  const isCerrado = estadoRaw === SERVICIO_ESTADO_CERRADO || !!cierre?.closed_at;
+  if (!isCerrado && !cierre) return null;
+  const closedMs = parseTs(cierre?.closed_at);
+  const conductorNombre =
+    cierre?.conductor_nombre ||
+    (typeof nombreConductor === "function" && servicio?.conductor_id
+      ? nombreConductor(servicio.conductor_id)
+      : null) ||
+    "—";
+  return {
+    estado: ESTADO_LABEL[SERVICIO_ESTADO_CERRADO] || "Expediente cerrado",
+    closedAt: cierre?.closed_at || null,
+    closedAtLabel: closedMs != null ? fmtDateTime(closedMs) : "—",
+    comentario: sanitizeDocumentCommentText(cierre?.comentario || "") || null,
+    firmaUrl: cierre?.firma_url || null,
+    conductorNombre,
+    hasFirma: !!(cierre?.firma_url && String(cierre.firma_url).trim()),
+  };
+}
+
 function evidenceTitle(ev) {
   const meta = getDocMeta(ev);
   if (meta?.display_name) {
@@ -61,7 +168,7 @@ function evidenceDetail(ev) {
     const d = ev.datos || {};
     base = [d.remitente && `Remitente: ${d.remitente}`, d.destinatario && `Destinatario: ${d.destinatario}`, d.mercancia && `Mercancía: ${d.mercancia}`].filter(Boolean).join(" · ");
   } else base = ev?.nota || "";
-  return appendGeoToDetail(base, getGeoFromDocMeta(ev));
+  return appendGeoToDetail(sanitizeDocumentCommentText(base), getGeoFromDocMeta(ev));
 }
 
 function stopLabel(stop, counters) {
@@ -107,6 +214,52 @@ function entryTitle(type) {
 }
 
 /**
+ * Timestamp real de cierre: salida del último muelle de descarga (destino final operativo).
+ * @returns {{ ts: string, stopId: string, stopLabel: string, detail: string|null }|null}
+ */
+function resolveEntregaCompletadaFromStops(stopRows, servicio = null) {
+  if (!Array.isArray(stopRows) || !stopRows.length) return null;
+  let finalDescarga = null;
+  for (const stop of stopRows) {
+    if ((stop.tipo === "descarga" || stop.tipo === "carga_descarga") && stop.salida) {
+      finalDescarga = stop;
+    }
+  }
+  const chosen = finalDescarga || [...stopRows].reverse().find((st) => st.salida) || null;
+  if (!chosen?.salida) return null;
+  return {
+    ts: chosen.salida,
+    stopId: chosen.id,
+    stopLabel: chosen.nombre || chosen.label || "",
+    detail:
+      String(servicio?.destino || "").trim() ||
+      chosen.nombre ||
+      chosen.direccion ||
+      null,
+  };
+}
+
+function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
+  if (servicio?.estado !== "completado") return false;
+  if ((timeline || []).some((ev) => ev.type === "entrega_completada")) return false;
+  const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
+  if (!entrega) return false;
+  const ms = parseTs(entrega.ts);
+  timeline.push({
+    ts: entrega.ts,
+    time: fmtClock(ms),
+    type: "entrega_completada",
+    title: "Entrega completada",
+    detail: entrega.detail,
+    stopId: entrega.stopId,
+    evidenceId: null,
+    integrityHash: null,
+    origin: "stop",
+  });
+  return true;
+}
+
+/**
  * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
  * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
  */
@@ -114,11 +267,12 @@ function filterExpedienteTimelineOperacional(items, servicio) {
   const out = [];
   for (const ev of items || []) {
     const ty = String(ev.type || "");
-    if (ty.startsWith("tacografo_")) continue;
+    if (ty.startsWith("tacografo_") || ty === "entrega_completada" || ty === "entrega_servicio") continue;
     let title = ev.title;
     if (ty === "entrada_muelle" && typeof title === "string" && title.startsWith("Entrada muelle")) {
       title = title.replace(/^Entrada muelle/, "Llegada muelle");
     }
+    if (ty === "conductor_asignado") title = "Conductor asignado";
     if (ty === "servicio_iniciado" || ty === "servicio") title = "Servicio iniciado";
     if (ty === "carga_finalizada" || ty === "descarga_finalizada") {
       title = "Salida muelle";
@@ -126,23 +280,7 @@ function filterExpedienteTimelineOperacional(items, servicio) {
     if (ty === "salida_muelle") title = "Salida muelle";
     out.push({ ...ev, title });
   }
-  out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
-  if (servicio?.estado === "completado") {
-    const ts = servicio.updated_at || servicio.fecha_inicio || new Date().toISOString();
-    const ms = parseTs(ts);
-    out.push({
-      ts,
-      time: fmtClock(ms),
-      type: "entrega_completada",
-      title: "Entrega completada",
-      detail: String(servicio.destino || "").trim() || null,
-      stopId: null,
-      evidenceId: null,
-      integrityHash: null,
-      origin: "servicio",
-    });
-    out.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
-  }
+  sortOperationalTimeline(out);
   return out;
 }
 
@@ -206,7 +344,8 @@ export function buildServiceExpediente({
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
   const plan = getOperationalPlanSnapshot(servicio);
-  const ref = getServiceNumber(servicio);
+  const ref = getServiceNumberForDisplay(servicio) || getServiceNumber(servicio);
+  const etaDisplay = formatOperationalEtaDisplayLines(servicio);
   const counters = {};
   const stopRows = sortedStops.map((stop) => {
     const label = stopLabel(stop, counters);
@@ -242,7 +381,7 @@ export function buildServiceExpediente({
           detalle: evidenceDetail(ev) || enriched.displaySubtitle,
           created_at: ev.created_at,
           hora: fmtClock(parseTs(ev.created_at)),
-          url: enriched.previewUrl || ev.url || null,
+          url: enriched.displayImageUrl || enriched.previewUrl || ev.url || null,
           nota: ev.nota || null,
           datos: ev.datos || null,
           bucket: bucketForEvidence(ev),
@@ -251,6 +390,8 @@ export function buildServiceExpediente({
           displayLine2: enriched.displayLine2,
           displaySizeLabel: enriched.displaySizeLabel,
           displayKindLabel: enriched.displayKindLabel,
+          displayImageUrl: enriched.displayImageUrl,
+          previewUrl: enriched.previewUrl,
           originalUrl: enriched.originalUrl,
         };
       }),
@@ -258,8 +399,30 @@ export function buildServiceExpediente({
   });
 
   const timeline = [];
-  if (servicio?.fecha_inicio) {
-    timeline.push({ ts: servicio.fecha_inicio, time: fmtClock(parseTs(servicio.fecha_inicio)), type: "servicio", title: "Servicio iniciado", detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}` });
+  const conductorAssignedAt = serviceMeta?.conductor_assigned_at || null;
+  const conductorAssignedLabel =
+    serviceMeta?.conductor_assigned_label ||
+    (typeof nombreConductor === "function" && servicio?.conductor_id
+      ? nombreConductor(servicio.conductor_id)
+      : null);
+  if (conductorAssignedAt) {
+    timeline.push({
+      ts: conductorAssignedAt,
+      time: fmtClock(parseTs(conductorAssignedAt)),
+      type: "conductor_asignado",
+      title: "Conductor asignado",
+      detail: conductorAssignedLabel || "—",
+    });
+  }
+  const tripStartedAt = getOperationalTripStartedAt(servicio) || servicio?.fecha_inicio || null;
+  if (tripStartedAt) {
+    timeline.push({
+      ts: tripStartedAt,
+      time: fmtClock(parseTs(tripStartedAt)),
+      type: "servicio",
+      title: "Servicio iniciado",
+      detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
+    });
   }
   const cancellation = serviceMeta?.cancellation || null;
   const cancelledAt = cancellation?.at || serviceMeta?.service_cancelled_at || servicio?.fecha_anulacion || servicio?.anulado_at || null;
@@ -302,7 +465,9 @@ export function buildServiceExpediente({
       });
     }
   }
-  timeline.sort((a, b) => parseTs(a.ts) - parseTs(b.ts));
+  appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows);
+  sortOperationalTimeline(timeline);
+  const timelineOperacional = filterExpedienteTimelineOperacional(timeline, servicio);
 
   let evidencias = stopRows.flatMap((stop) =>
     stop.evidencias.map((ev) => ({ ...ev, stopId: stop.id, stopLabel: stop.label, stopName: stop.nombre })),
@@ -311,6 +476,28 @@ export function buildServiceExpediente({
     nombreConductor,
     servicio,
   });
+  evidencias = evidencias.map((ev) => {
+    const stopRow = stopRows.find((s) => s.id === ev.stopId);
+    const enriched = enrichEvidenciaDisplay(ev, {
+      stop: stopRow || (ev.stopName ? { nombre: ev.stopName, tipo: null } : null),
+      conductorName:
+        typeof nombreConductor === "function"
+          ? nombreConductor(ev.conductor_id || servicio?.conductor_id)
+          : null,
+    });
+    return {
+      ...ev,
+      displayTitle: enriched.displayTitle,
+      displaySubtitle: enriched.displaySubtitle,
+      displayLine2: enriched.displayLine2,
+      displaySizeLabel: enriched.displaySizeLabel,
+      displayKindLabel: enriched.displayKindLabel,
+      displayImageUrl: enriched.displayImageUrl,
+      previewUrl: enriched.previewUrl,
+      originalUrl: enriched.originalUrl,
+      mime_type: ev.mime_type || enriched.docMeta?.mime_type || null,
+    };
+  });
   const incidencias = evidencias.filter((ev) => ev.tipo === "incidencia");
   const cmr = evidencias.filter((ev) => ev.tipo === "cmr");
   const fotos = evidencias.filter((ev) => ev.tipo === "foto");
@@ -318,16 +505,35 @@ export function buildServiceExpediente({
   const window = serviceWindow(servicio, stopRows, evidencias);
   const integrityRecords = [];
 
-  if (servicio?.fecha_inicio) {
+  if (conductorAssignedAt) {
     integrityRecords.push(eventRecord({
-      ts: servicio.fecha_inicio,
+      ts: conductorAssignedAt,
+      type: "conductor_asignado",
+      title: "Conductor asignado",
+      detail: conductorAssignedLabel || "—",
+      servicio,
+      userId: serviceMeta?.conductor_assigned_id || servicio?.conductor_id || null,
+      origin: "servicio",
+      location: servicio?.origen || "",
+      metadata: {
+        conductor_id: serviceMeta?.conductor_assigned_id || servicio?.conductor_id || null,
+      },
+    }));
+  }
+
+  if (tripStartedAt) {
+    integrityRecords.push(eventRecord({
+      ts: tripStartedAt,
       type: "servicio_iniciado",
       title: "Servicio iniciado",
       detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
       servicio,
       origin: "servicio",
       location: servicio.origen || "",
-      metadata: { estado: servicio.estado || null },
+      metadata: {
+        estado: servicio.estado || null,
+        source: getOperationalTripStartedAt(servicio) ? "operational_trip_started_at" : "fecha_inicio",
+      },
     }));
   }
 
@@ -392,6 +598,26 @@ export function buildServiceExpediente({
     }
   }
 
+  if (servicio?.estado === "completado") {
+    const entrega = resolveEntregaCompletadaFromStops(stopRows, servicio);
+    if (entrega) {
+      const stopMeta = getStopOperacionMeta(
+        sortedStops.find((st) => st.id === entrega.stopId)?.notas,
+      );
+      integrityRecords.push(eventRecord({
+        ts: entrega.ts,
+        type: "entrega_completada",
+        title: "Entrega completada",
+        detail: appendGeoToDetail(entrega.detail || entrega.stopLabel, stopMeta?.salida_geo),
+        servicio,
+        stopId: entrega.stopId,
+        origin: "stop",
+        location: formatOperationalGeoLine(stopMeta?.salida_geo) || entrega.stopLabel || "",
+        metadata: { salida_muelle: entrega.ts, geo: stopMeta?.salida_geo || null },
+      }));
+    }
+  }
+
   for (const entry of entries || []) {
     const ms = parseTs(entry.ts);
     if (ms == null || !importantEntry(entry.type)) continue;
@@ -409,7 +635,7 @@ export function buildServiceExpediente({
     }));
   }
 
-  integrityRecords.sort((a, b) => parseTs(a.timestamp_utc) - parseTs(b.timestamp_utc));
+  sortOperationalIntegrityRecords(integrityRecords);
   const chronologyConsistent = integrityRecords.every((row, idx, arr) => idx === 0 || parseTs(row.timestamp_utc) >= parseTs(arr[idx - 1].timestamp_utc));
   const geoAvailable = integrityRecords.some((row) => !!row.location_label);
   const integrity = {
@@ -422,25 +648,11 @@ export function buildServiceExpediente({
     records: integrityRecords,
   };
 
-  const timelineFromIntegrity = integrityRecords.map((row) => ({
-    ts: row.timestamp_utc,
-    time: fmtClock(parseTs(row.timestamp_utc)),
-    type: row.type,
-    title: row.title,
-    detail: row.detail,
-    stopId: row.stop_id,
-    evidenceId: row.metadata?.evidencia_id || null,
-    integrityHash: row.hash,
-    origin: row.origin,
-  }));
-
   const fechaDocumento = servicio?.fecha_inicio || servicio?.created_at || new Date().toISOString();
   const fechaArchivo = new Date(fechaDocumento).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
   const cliente = getServiceClient(servicio);
   const referenciaCliente = getServiceClientReference(servicio);
 
-  const rawTimeline = timelineFromIntegrity.length ? timelineFromIntegrity : timeline;
-  const timelineOperacional = filterExpedienteTimelineOperacional(rawTimeline, servicio);
   const rawEvidenciasFlat = [
     ...sortedStops.flatMap((st) => evidenciasByStop?.[st.id] || []),
     ...(extraDocumentos || []),
@@ -455,16 +667,27 @@ export function buildServiceExpediente({
       totalBytes: sumExpedienteBytes(rawEvidenciasFlat),
       totalLabel: expedienteSizeLabel(rawEvidenciasFlat),
     },
+    cierreDocumental: buildCierreDocumentalForExpediente(servicio, nombreConductor),
     header: {
       referencia: ref,
       ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
-      estado: servicio?.estado === "anulado" ? "ANULADO" : (servicio?.estado || "—"),
+      estado:
+        servicio?.estado === "anulado"
+          ? "ANULADO"
+          : servicio?.estado === SERVICIO_ESTADO_CERRADO
+            ? String(ESTADO_LABEL[SERVICIO_ESTADO_CERRADO] || "Expediente cerrado").toUpperCase()
+            : servicio?.estado
+              ? String(servicio.estado).replace(/_/g, " ").toUpperCase()
+              : "—",
       conductor: servicio?.conductor_id
         ? (nombreConductor?.(servicio.conductor_id) || "—")
         : "Sin asignar",
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
       eta: formatOperationalEtaSnapshotLine(servicio),
+      etaLine1: etaDisplay.line1,
+      etaLine2: etaDisplay.line2,
+      etaLine3: etaDisplay.line3,
       km: Number.isFinite(Number(plan?.planned_km)) ? Math.round(Number(plan.planned_km)) : null,
       fechaInicio: servicio?.fecha_inicio || null,
       fecha: fechaDocumento,
@@ -497,6 +720,12 @@ export function buildServiceExpediente({
     documentosExtra,
   };
 }
+
+export {
+  sortOperationalTimeline,
+  compareOperationalTimelineEvents,
+  operationalTimelineTypeRank,
+};
 
 /** Timeline operacional filtrado (misma lógica que expediente) para tarjetas empresa. */
 export function getServicioOperativaTimelineForCard(args) {
@@ -557,11 +786,43 @@ async function blobToJpeg(blob, { maxSide = 900, quality = 0.7 } = {}) {
   return { bytes: new Uint8Array(await jpg.arrayBuffer()), width, height, outputBytes: jpg.size, inputBytes: blob.size };
 }
 
+function evidenceMimeForPdf(ev) {
+  return ev.mime_type || getDocMeta(ev)?.mime_type || ev?.datos?.mime_type || "";
+}
+
 function expedienteEvidenceIsImageLike(ev) {
   if (!ev?.url) return false;
   if (ev.tipo === "foto" || ev.tipo === "cmr" || ev.tipo === "incidencia") return true;
-  const mime = ev.mime_type || getDocMeta(ev)?.mime_type || "";
-  return mime.startsWith("image/");
+  return evidenceMimeForPdf(ev).startsWith("image/");
+}
+
+/** Foto/CMR parada + cualquier imagen en documentos extra → hoja A4 en anexo PDF. */
+function expedienteEvidenceAnnexA4(ev) {
+  const url = ev?.url || ev?.previewUrl || ev?.displayImageUrl || null;
+  if (!url) return false;
+  if (ev.tipo === "foto" || ev.tipo === "cmr") return true;
+  if (ev.source === "servicio_documentos_extra") {
+    if (expedienteEvidenceIsImageLike({ ...ev, url })) return true;
+    const name = String(ev.archivo_nombre || url).toLowerCase();
+    return /\.(jpe?g|png|webp|gif|heic|heif|bmp)(\?|$)/i.test(name);
+  }
+  return false;
+}
+
+/** URL para incrustar en PDF (preview JPEG primero). */
+function evidenceUrlForPdfEmbed(ev) {
+  return resolveEvidenciaPdfEmbedUrl(ev) || ev?.url || null;
+}
+
+async function fetchCierreFirmaForPdf(cierreDocumental) {
+  const url = cierreDocumental?.firmaUrl;
+  if (!url) return { error: "Sin firma registrada" };
+  try {
+    const blob = await loadRemoteImageBlob(url);
+    return await blobToJpeg(blob, { maxSide: 480, quality: 0.86 });
+  } catch (error) {
+    return { error: error?.message || "Firma no disponible" };
+  }
 }
 
 async function fetchEvidenceImages(expediente) {
@@ -569,11 +830,25 @@ async function fetchEvidenceImages(expediente) {
   const many = imageEvs.length > 10;
   const images = new Map();
   for (const ev of imageEvs) {
+    const srcUrl = evidenceUrlForPdfEmbed(ev);
+    if (!srcUrl) {
+      images.set(ev.id, { error: "Sin URL de imagen" });
+      continue;
+    }
     try {
-      const res = await fetch(ev.url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const isAnnexDoc = ev.tipo === "foto" || ev.tipo === "cmr";
+      if (isOperationalDocTraceEnabled()) {
+        traceOperationalDoc("fetchEvidenceImages:fetch", {
+          evId: ev.id,
+          evTipo: ev.tipo,
+          srcUrl,
+          sourceFn: "evidenceUrlForPdfEmbed→resolveEvidenciaDisplayImageUrl",
+        });
+      }
+      const blob = await loadRemoteImageBlob(srcUrl);
+      if (isOperationalDocTraceEnabled()) {
+        await traceBlobColor("fetchEvidenceImages:fetched_blob", blob, { evId: ev.id, evTipo: ev.tipo });
+      }
+      const isAnnexDoc = expedienteEvidenceAnnexA4(ev);
       const maxSide = isAnnexDoc
         ? ev.tipo === "cmr"
           ? 1400
@@ -604,6 +879,9 @@ function imageObject(bytesData, width, height) {
 
 async function makePdfBlob(expediente) {
   const imageMap = await fetchEvidenceImages(expediente);
+  const cierreFirmaMap = expediente.cierreDocumental
+    ? await fetchCierreFirmaForPdf(expediente.cierreDocumental)
+    : { error: "Sin cierre documental" };
   const objects = [];
   const add = (data) => {
     objects.push(bytes(data));
@@ -626,6 +904,12 @@ async function makePdfBlob(expediente) {
     const objectId = addRaw(imageObject(img.bytes, img.width, img.height));
     imageRefs.set(evId, { ...img, name, objectId });
   }
+  let cierreFirmaRef = null;
+  if (cierreFirmaMap?.bytes) {
+    const name = `Im${imageIndex++}`;
+    const objectId = addRaw(imageObject(cierreFirmaMap.bytes, cierreFirmaMap.width, cierreFirmaMap.height));
+    cierreFirmaRef = { ...cierreFirmaMap, name, objectId };
+  }
 
   const pageRefs = [];
   let commands = [];
@@ -635,7 +919,9 @@ async function makePdfBlob(expediente) {
   const pageHeight = 842;
   const contentWidth = pageWidth - margin * 2;
   const evById = new Map(expediente.evidencias.map((ev) => [ev.id, ev]));
-  const xObjects = [...imageRefs.values()].map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
+  const pdfXObjectImages = [...imageRefs.values()];
+  if (cierreFirmaRef) pdfXObjectImages.push(cierreFirmaRef);
+  const xObjects = pdfXObjectImages.map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
 
   const finishPage = () => {
     const content = commands.join("\n");
@@ -700,11 +986,21 @@ async function makePdfBlob(expediente) {
   metric("Cliente", expediente.header.cliente, margin + 130, 135);
   metric("Ruta", expediente.header.ruta, margin + 275, 190);
   y -= 54;
-  metric("Conductor", expediente.header.conductor, margin, 120);
-  metric("ETA", expediente.header.eta, margin + 130, 95);
-  metric("Km", expediente.header.km != null ? `${expediente.header.km}` : "—", margin + 235, 70);
-  metric("Estado", expediente.header.estado, margin + 315, 150);
+  metric("Conductor", expediente.header.conductor, margin, 175);
+  metric("Estado", expediente.header.estado, margin + 185, 175);
   y -= 54;
+  ensure(52);
+  rect(margin, y, 268, 48, "#f8fafc");
+  text("ETA", margin + 8, y - 14, 8, "#64748b");
+  text(expediente.header.etaLine1 || "—", margin + 8, y - 28, 11, "#0f172a");
+  if (expediente.header.etaLine2) {
+    text(expediente.header.etaLine2, margin + 8, y - 40, 9, "#64748b");
+  }
+  const kmVal = expediente.header.km != null ? `${expediente.header.km} km` : "—";
+  rect(margin + 278, y, 90, 48, "#f8fafc");
+  text("Km", margin + 286, y - 14, 8, "#64748b");
+  text(kmVal, margin + 286, y - 30, 12, "#0f172a");
+  y -= 58;
 
   if (expediente.header.cancellation) {
     section("Anulacion operacional");
@@ -717,7 +1013,7 @@ async function makePdfBlob(expediente) {
   section("Timeline operacional");
   for (const ev of expediente.timeline) {
     const evidence = ev.evidenceId ? evById.get(ev.evidenceId) : null;
-    const isAnnexDoc = evidence && (evidence.tipo === "foto" || evidence.tipo === "cmr");
+    const isAnnexDoc = evidence && expedienteEvidenceAnnexA4(evidence);
     const img = !isAnnexDoc && evidence?.id ? imageRefs.get(evidence.id) : null;
     const failedImage = !isAnnexDoc && evidence?.id ? imageMap.get(evidence.id)?.error : null;
     ensure(img ? 205 : 52);
@@ -754,7 +1050,7 @@ async function makePdfBlob(expediente) {
     ["Conduccion", expediente.metrics.conduccion],
     ["Espera carga", expediente.metrics.esperaCarga],
     ["Espera descarga", expediente.metrics.esperaDescarga],
-    ["ETA prevista vs real", expediente.header.eta],
+    ["ETA inicial vs actual", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
     ["Incidencias", String(expediente.metrics.incidencias)],
     ["Docs. extra", String(expediente.metrics.documentosExtra ?? 0)],
@@ -774,10 +1070,41 @@ async function makePdfBlob(expediente) {
     expediente.integrity?.geoAvailable ? "Geolocalizacion operacional disponible" : "Geolocalizacion operacional no disponible",
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
 
-  const annexDocs = expediente.evidencias.filter((ev) => ev.url && (ev.tipo === "foto" || ev.tipo === "cmr"));
+  if (expediente.cierreDocumental) {
+    const cd = expediente.cierreDocumental;
+    section("Cierre documental del expediente");
+    lines(`Estado: ${cd.estado || "Expediente cerrado"}`, margin, 10, "#0f766e", 90, 14);
+    lines(`Fecha y hora de cierre: ${cd.closedAtLabel || "—"}`, margin, 10, "#334155", 90, 14);
+    lines(`Conductor: ${cd.conductorNombre || "—"}`, margin, 10, "#334155", 90, 14);
+    if (cd.comentario) {
+      lines("Comentario final:", margin, 9, "#64748b", 90, 12);
+      lines(cd.comentario, margin, 10, "#334155", 88, 13);
+    } else {
+      lines("Comentario final: —", margin, 10, "#64748b", 90, 13);
+    }
+    y -= 4;
+    lines("Firma del conductor:", margin, 9, "#64748b", 90, 12);
+    y -= 2;
+    if (cierreFirmaRef) {
+      drawImage(cierreFirmaRef, margin, 220, 64);
+    } else {
+      const firmaFallback = cierreFirmaMap?.error || (cd.hasFirma ? "Firma no disponible (URL caducada o sin acceso)" : "Sin firma registrada");
+      lines(firmaFallback, margin, 9.5, "#b45309", 88, 13);
+    }
+    y -= 6;
+  }
+
+  const annexDocs = expediente.evidencias.filter((ev) => expedienteEvidenceAnnexA4(ev));
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("makePdfBlob:annexDocs", {
+      count: annexDocs.length,
+      ids: annexDocs.map((d) => ({ id: d.id, tipo: d.tipo, source: d.source, url: !!(d.url || d.previewUrl) })),
+    });
+  }
   const extraPdfDocs = expediente.evidencias.filter((ev) => {
     if (!ev.url || ev.source !== "servicio_documentos_extra") return false;
-    const mime = ev.mime_type || "";
+    if (expedienteEvidenceAnnexA4(ev)) return false;
+    const mime = evidenceMimeForPdf(ev);
     return mime.includes("pdf") || String(ev.archivo_nombre || ev.url).toLowerCase().includes(".pdf");
   });
   if (extraPdfDocs.length) {
@@ -796,7 +1123,11 @@ async function makePdfBlob(expediente) {
       y = 812;
       rect(0, pageHeight, pageWidth, 36, "#f1f5f9");
       text("ANEXO DOCUMENTAL · A4", margin, 818, 10, "#64748b");
-      text(doc.titulo || doc.displayTitle || "Documento", margin, 798, 13, "#0f172a");
+      const annexTitle =
+        doc.source === "servicio_documentos_extra"
+          ? doc.titulo || doc.displayTitle || "Documento extra"
+          : doc.titulo || doc.displayTitle || "Documento";
+      text(annexTitle, margin, 798, 13, "#0f172a");
       y = 778;
       const metaLine = [doc.stopLabel, doc.stopName, doc.hora].filter(Boolean).join(" · ");
       if (metaLine) lines(metaLine, margin, 9, "#475569", 92, 12);
@@ -977,6 +1308,7 @@ export function downloadServiceArchiveMetadata(expediente) {
     ref: expediente.ref,
     generatedAt: expediente.generatedAt,
     header: expediente.header,
+    cierreDocumental: expediente.cierreDocumental || null,
     metrics: expediente.metrics,
     integrity: {
       status: expediente.integrity?.status,

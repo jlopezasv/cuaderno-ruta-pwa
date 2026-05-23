@@ -1,11 +1,14 @@
 import { getUserId, sbFetch } from "../../data/supabaseClient.js";
 import { uploadUserFile } from "../../data/uploadUserPhoto.js";
+import { buildDocMetaPayload } from "../documents/operationalDocumentRecord.js";
+import { storageUploadUrl, traceMediaV2DocMeta } from "../documents/mediaStorageV2.js";
 import {
   logExtraDoc,
   logExtraDocFail,
   parseSupabaseErrorBody,
 } from "../documents/extraDocumentUploadLog.js";
 import { isHttpStorageUrl } from "../documents/storageDocumentUploadLog.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 
 const STORAGE_URL_ERROR = "Error generando URL del documento";
 
@@ -44,6 +47,30 @@ function normalizeExtraDocRow(row) {
   };
 }
 
+function buildExtraDocDatos(storageResult, { tipo, mimeType, sizeBytes, archivoNombre, servicioId, conductorId }) {
+  const url = storageUploadUrl(storageResult);
+  const doc_meta = buildDocMetaPayload({
+    displayName: archivoNombre || "documento_extra",
+    archivoNombre: archivoNombre || null,
+    mimeType: mimeType || null,
+    sizeBytes: sizeBytes ?? null,
+    sizePreviewBytes: sizeBytes ?? null,
+    previewUrl: url,
+    storagePreview: storageResult,
+    servicioId: servicioId || null,
+    conductorId: conductorId || null,
+    tipoDocumento: tipo,
+    uploadPipeline: "extra_jpeg_v1",
+  });
+  traceMediaV2DocMeta(doc_meta, { fn: "servicio_documentos_extra", tipo });
+  return {
+    schema_version: 1,
+    uploaded_at: new Date().toISOString(),
+    storage_ok: !!(url && String(url).startsWith("http")),
+    doc_meta,
+  };
+}
+
 function buildInsertPayloadModern({
   servicioId,
   servicio,
@@ -54,6 +81,7 @@ function buildInsertPayloadModern({
   mimeType,
   sizeBytes,
   conductorId,
+  datos = null,
 }) {
   return {
     servicio_id: servicioId,
@@ -61,16 +89,18 @@ function buildInsertPayloadModern({
     empresa_id: servicio?.empresa_id ?? null,
     conductor_id: conductorId || null,
     tipo: String(tipo || "otro"),
-    descripcion: descripcion?.trim() || null,
+    descripcion: sanitizeDocumentCommentText(descripcion) || null,
     archivo_url: archivoUrl || null,
     mime_type: mimeType || null,
     size_bytes: sizeBytes != null ? Number(sizeBytes) : null,
     archivo_nombre: archivoNombre || null,
-    datos: {
-      schema_version: 1,
-      uploaded_at: new Date().toISOString(),
-      storage_ok: !!(archivoUrl && String(archivoUrl).startsWith("http")),
-    },
+    datos:
+      datos ??
+      {
+        schema_version: 1,
+        uploaded_at: new Date().toISOString(),
+        storage_ok: !!(archivoUrl && String(archivoUrl).startsWith("http")),
+      },
   };
 }
 
@@ -79,7 +109,7 @@ function buildInsertPayloadLegacy({ servicioId, tipo, descripcion, archivoUrl, a
   return {
     servicio_id: servicioId,
     tipo: String(tipo || "otro"),
-    descripcion: descripcion?.trim() || null,
+    descripcion: sanitizeDocumentCommentText(descripcion) || null,
     url: archivoUrl || null,
     archivo_nombre: archivoNombre || null,
     creado_por: conductorId || null,
@@ -290,9 +320,10 @@ export async function uploadServicioDocumentoExtra({
     conductor_id: conductorId,
   });
 
-  let archivoUrl;
+  let storageResult;
   try {
-    archivoUrl = await uploadUserFile(file, folder, { requireHttpUrl: true });
+    storageResult = await uploadUserFile(file, folder, { requireHttpUrl: true });
+    const archivoUrl = storageUploadUrl(storageResult);
     if (isHttpStorageUrl(archivoUrl)) {
       logExtraDoc("DOCUMENT_STORAGE_OK", {
         urlPrefix: String(archivoUrl).slice(0, 80),
@@ -309,13 +340,24 @@ export async function uploadServicioDocumentoExtra({
     }
   } catch (e) {
     logExtraDocFail("DOCUMENT_STORAGE_FAIL", e, { servicioId });
+    const archivoUrl = storageUploadUrl(storageResult);
     if (e?.message === STORAGE_URL_ERROR || !isHttpStorageUrl(archivoUrl)) {
       throw new Error(STORAGE_URL_ERROR);
     }
     throw e;
   }
 
+  const archivoUrl = storageUploadUrl(storageResult);
   assertArchivoUrlBeforeInsert(archivoUrl, "pre_insert");
+
+  const datos = buildExtraDocDatos(storageResult, {
+    tipo,
+    mimeType: file.type || null,
+    sizeBytes: file.size ?? null,
+    archivoNombre: file.name,
+    servicioId,
+    conductorId,
+  });
 
   const row = await insertServicioDocumentoExtraRow({
     servicioId,
@@ -327,6 +369,7 @@ export async function uploadServicioDocumentoExtra({
     mimeType: file.type || null,
     sizeBytes: file.size ?? null,
     conductorId,
+    datos,
   });
 
   if (!row?.id) {

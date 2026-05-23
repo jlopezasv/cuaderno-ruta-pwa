@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
@@ -6,14 +6,17 @@ import { getLastServiceActivity } from "../../../domain/service/serviceActivity"
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
-import { OperationalEtaSnapshotBlock } from "./OperationalEtaSnapshotBlock.jsx";
+import { EtaPrevistaBlock } from "./EtaPrevistaBlock.jsx";
 import {
   getFixedServiceRoute,
   getServiceClient,
   getServiceClientReference,
   getServiceNumberForDisplay,
 } from "../../../domain/service/serviceIdentity.js";
+import { getServiceOperationalPresentation } from "../../../domain/service/serviceOperationalPlaces.js";
 import { stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
+import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
+import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -270,7 +273,8 @@ function openOperationalRouteModal(servicio, onOpenViajeModal) {
 }
 
 function ServiceHero({
-  routeTitle,
+  clienteNombre,
+  routeLine,
   operationalLabel,
   scheduleLabel,
   serviceNumber,
@@ -280,16 +284,30 @@ function ServiceHero({
 }) {
   return (
     <header style={{ marginBottom: 2 }}>
+      {clienteNombre ? (
+        <div
+          style={{
+            fontSize: 22,
+            fontWeight: 850,
+            letterSpacing: -0.45,
+            lineHeight: 1.22,
+            color: DRIVER_UI.tx,
+          }}
+        >
+          {clienteNombre}
+        </div>
+      ) : null}
       <div
         style={{
-          fontSize: 22,
-          fontWeight: 850,
-          letterSpacing: -0.45,
-          lineHeight: 1.22,
-          color: DRIVER_UI.tx,
+          fontSize: clienteNombre ? 16 : 22,
+          fontWeight: clienteNombre ? 700 : 850,
+          letterSpacing: clienteNombre ? -0.2 : -0.45,
+          lineHeight: 1.28,
+          color: clienteNombre ? DRIVER_UI.su : DRIVER_UI.tx,
+          marginTop: clienteNombre ? 6 : 0,
         }}
       >
-        {routeTitle}
+        {routeLine}
       </div>
       <div
         style={{
@@ -438,7 +456,7 @@ function OperationalStopCard({
   const docs = stopDocumentSummary(evidencias);
   const operationName = operationNameForStop(stop);
   const inOperation = entrada && !salida;
-  const stateText = salida ? "Hecho" : inOperation ? "En planta" : "Pendiente";
+  const stateText = salida ? "Salida muelle" : inOperation ? "En planta" : "Pendiente";
   const stateTone = salida
     ? { bg: DRIVER_UI.greenSoft, fg: DRIVER_UI.green }
     : inOperation
@@ -446,6 +464,7 @@ function OperationalStopCard({
       : { bg: DRIVER_UI.surfaceHi, fg: DRIVER_UI.su };
   const Ev = EvidenciasStopComponent;
   const icon = stopTimelineIcon(group);
+  const stopId = stop?.id;
 
   return (
     <article
@@ -493,7 +512,9 @@ function OperationalStopCard({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                {salida ? `${operationName} · completada` : inOperation ? `${label}` : `${label}`}
+                {salida
+                  ? `${operationName} finalizada · ${stopTime(stop.hora_salida_real)}`
+                  : label}
               </div>
               <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 3, fontWeight: 650, lineHeight: 1.35 }}>
                 {stopPlace(stop)}
@@ -521,7 +542,21 @@ function OperationalStopCard({
           {!entrada ? (
             <div style={{ marginTop: 12 }}>
               {canOperate ? (
-                <button type="button" onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })} style={actionButtonStyle("green")}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.log("[OP2] click entrada_muelle", {
+                      stopId,
+                      canOperate,
+                      isCurrent,
+                      estadoStop: stop?.estado || null,
+                      entrada: !!stop?.hora_llegada_real,
+                      salida: !!stop?.hora_salida_real,
+                    });
+                    onConfirmMuelle?.({ kind: "entrada", stopId: stop.id });
+                  }}
+                  style={actionButtonStyle("green")}
+                >
                   Entrada en muelle
                 </button>
               ) : (
@@ -559,7 +594,17 @@ function OperationalStopCard({
               ) : null}
               <button
                 type="button"
-                onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
+                onClick={() => {
+                  console.log("[OP2] click salida_muelle", {
+                    stopId,
+                    canOperate,
+                    isCurrent,
+                    estadoStop: stop?.estado || null,
+                    entrada: !!stop?.hora_llegada_real,
+                    salida: !!stop?.hora_salida_real,
+                  });
+                  onConfirmMuelle?.({ kind: "salida", stopId: stop.id });
+                }}
                 disabled={!canOperate}
                 style={{
                   ...actionButtonStyle("amber"),
@@ -577,12 +622,12 @@ function OperationalStopCard({
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${DRIVER_UI.line}` }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
                 <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Entrada</div>
-                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida muelle</div>
+                  <div style={{ color: DRIVER_UI.amber, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
                 </div>
                 <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida</div>
-                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
+                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Llegada muelle</div>
+                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
                 </div>
               </div>
               {docs.total > 0 ? (
@@ -669,12 +714,36 @@ export function ActiveServicePanel({
   EvidenciasStopComponent,
   onOpenViajeModal,
   onEvidenciaSaved,
+  onCerrarExpediente,
   conductorNombre = "Conductor",
   norma = null,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
+  const [cierreSaving, setCierreSaving] = useState(false);
+  const showCierreDocumental = useMemo(
+    () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
+    [servicio, stops, onCerrarExpediente],
+  );
+  useEffect(() => {
+    if (showCierreDocumental) {
+      console.log("[CLOSE1] render cierre", {
+        servicioId: servicio?.id ?? null,
+        estado: servicio?.estado ?? null,
+        mode,
+      });
+      console.log("[CLOSE2] open=true");
+    } else {
+      console.log("[CLOSE4] condición ocultación", {
+        servicioId: servicio?.id ?? null,
+        estado: servicio?.estado ?? null,
+        needsClosure: needsExpedienteClosure(servicio, stops),
+        hasCerrarHandler: typeof onCerrarExpediente === "function",
+        mode,
+      });
+    }
+  }, [showCierreDocumental, servicio?.id, servicio?.estado, mode, stops, onCerrarExpediente]);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
@@ -686,19 +755,46 @@ export function ActiveServicePanel({
       crDur: Number(norma.crDur),
     };
   }, [norma]);
-  const routeTitle = getFixedServiceRoute(servicio, "Origen", "Destino", sortedStops);
+  const operationalPres = useMemo(
+    () => getServiceOperationalPresentation(servicio, sortedStops),
+    [servicio, sortedStops],
+  );
+  const routeLine =
+    operationalPres.routeLine !== "— → —"
+      ? operationalPres.routeLine
+      : getFixedServiceRoute(servicio, "Origen", "Destino", sortedStops);
+  const heroCliente = operationalPres.clienteNombre || getServiceClient(servicio) || "";
   const serviceNumber = getServiceNumberForDisplay(servicio);
-  const cliente = getServiceClient(servicio) || "—";
+  const cliente = heroCliente || "—";
   const referenciaCliente = getServiceClientReference(servicio) || "—";
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
-  const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso";
+  const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso" && !showCierreDocumental;
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
+
+  useEffect(() => {
+    console.log("[OP1] panel state", {
+      servicioId: servicio?.id || null,
+      mode,
+      estadoServicio: servicio?.estado || null,
+      canOperateStops,
+      currentStopId: stopMostrar?.id || null,
+      timelineItems: timelineItems.length,
+    });
+  }, [servicio?.id, mode, servicio?.estado, canOperateStops, stopMostrar?.id, timelineItems.length]);
 
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
+    console.log("[OP2] confirm callback start", {
+      servicioId: servicio?.id || null,
+      kind,
+      stopId,
+      canOperateStops,
+      mode,
+      estadoServicio: servicio?.estado || null,
+    });
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
@@ -709,7 +805,14 @@ export function ActiveServicePanel({
         await recargar?.();
       }
       setConfirmMuelle(null);
+      console.log("[OP2] confirm callback success", { kind, stopId, servicioId: servicio?.id || null });
     } catch (error) {
+      console.warn("[OP2] confirm callback error", {
+        kind,
+        stopId,
+        servicioId: servicio?.id || null,
+        error: error?.message || String(error),
+      });
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
@@ -759,7 +862,7 @@ export function ActiveServicePanel({
         <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
           {confirmMuelle.kind === "entrada"
             ? "Se registra la hora de entrada y esta parada pasa a estar en operación."
-            : `Se registra la hora de salida y ${confirmOperationName.toLowerCase()} queda completada.`}
+            : `Se registra la hora de salida del muelle (fin de la operación en planta).`}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button
@@ -807,7 +910,8 @@ export function ActiveServicePanel({
     <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
       <CockpitShell>
         <ServiceHero
-          routeTitle={routeTitle}
+          clienteNombre={heroCliente}
+          routeLine={routeLine}
           operationalLabel={sig.operationalMeta.label}
           scheduleLabel={scheduleLabel}
           serviceNumber={serviceNumber}
@@ -815,30 +919,6 @@ export function ActiveServicePanel({
           attentionReason={sig.attentionReason}
           serviceAction={serviceAction}
         />
-
-        <div
-          style={{
-            marginTop: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            padding: "12px 14px",
-            borderRadius: 12,
-            border: `1px solid ${DRIVER_UI.line}`,
-            background: DRIVER_UI.surface,
-          }}
-        >
-          <OperationalEtaSnapshotBlock
-            servicio={servicio}
-            nowMs={Date.now()}
-            tx={DRIVER_UI.tx}
-            su={DRIVER_UI.su}
-            subtle={DRIVER_UI.muted}
-            latestLocation={null}
-            tacografoEstado={tacografoEstado}
-            activeStop={stopMostrar}
-          />
-        </div>
 
         <ServiceDetailsCollapsible
           cliente={cliente}
@@ -872,10 +952,25 @@ export function ActiveServicePanel({
           />
         </div>
 
+        <div
+          style={{
+            marginTop: 14,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            padding: "12px 14px",
+            borderRadius: 12,
+            border: `1px solid ${DRIVER_UI.line}`,
+            background: DRIVER_UI.surface,
+          }}
+        >
+          <EtaPrevistaBlock servicio={servicio} tx={DRIVER_UI.tx} su={DRIVER_UI.su} subtle={DRIVER_UI.muted} />
+        </div>
+
         <div style={{ marginTop: 20 }}>
           <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
         </div>
-        {servicio && typeof onOpenViajeModal === "function" ? (
+        {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
           <button
             type="button"
             title="Ruta, destino y ETA"
@@ -897,6 +992,24 @@ export function ActiveServicePanel({
           >
             🗺 Ajustar ruta o destino
           </button>
+        ) : null}
+
+        {showCierreDocumental ? (
+          <ExpedienteClosureBlock
+            saving={cierreSaving}
+            onConfirm={async ({ comentario, firmaCanvas }) => {
+              if (cierreSaving) return;
+              setCierreSaving(true);
+              try {
+                await onCerrarExpediente?.({ comentario, firmaCanvas });
+                showToast?.("Expediente cerrado");
+              } catch (e) {
+                showToast?.(e?.message || "No se pudo cerrar el expediente");
+              } finally {
+                setCierreSaving(false);
+              }
+            }}
+          />
         ) : null}
       </CockpitShell>
       {confirmMuelleDialog}

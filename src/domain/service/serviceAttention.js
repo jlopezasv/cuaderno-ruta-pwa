@@ -25,7 +25,7 @@ function hasIncidencia(evidencias, stops) {
 function isStale(service, lastActivity) {
   const ts = lastActivity?.ts;
   if (ts == null || !Number.isFinite(ts)) return false;
-  if (service?.estado === "completado") return false;
+  if (service?.estado === "completado" || service?.estado === "cerrado") return false;
   return Date.now() - ts > ATTENTION_IDLE_MS;
 }
 

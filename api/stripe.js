@@ -1,18 +1,22 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { getSupabaseServerEnv } from './lib/supabaseEnv.js';
+import { guardDemoCannotUseProduction } from './lib/demoSafety.js';
 
 const PRICE_MONTHLY = 'price_1TNpMxC03Kg4wBdS3eqhhVsg';
 const PRICE_ANNUAL  = 'price_1TNpNyC03Kg4wBdSHfAUkSeB';
-const SB_URL        = process.env.SUPABASE_URL || 'https://glyexutcypmhkndvmcxd.supabase.co';
 const APP_URL       = 'https://tacografo-pro.vercel.app';
 
-/** Anon key: validar JWT de usuario (getUser). No usar service_role para eso. */
-function resolveAnonKey() {
-  return process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+function sbServer() {
+  return getSupabaseServerEnv();
 }
 
 function resolveServiceKey() {
-  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '';
+  const key = sbServer().serviceRoleKey;
+  if (!key) {
+    throw new Error('[Cuaderno API] SUPABASE_SERVICE_ROLE_KEY no definida (Stripe requiere service role).');
+  }
+  return key;
 }
 
 /**
@@ -24,9 +28,17 @@ async function getUserIdFromAuthorizationHeader(req) {
   const m = String(raw).match(/^Bearer\s+(.+)$/i);
   if (!m) return { userId: null, error: 'missing_authorization_bearer' };
   const jwt = m[1].trim();
-  const anon = resolveAnonKey();
-  if (!anon) return { userId: null, error: 'supabase_anon_not_configured' };
-  const sb = createClient(SB_URL, anon);
+  let anon;
+  let url;
+  try {
+    const env = sbServer();
+    anon = env.anonKey;
+    url = env.url;
+  } catch (e) {
+    return { userId: null, error: 'supabase_not_configured' };
+  }
+  guardDemoCannotUseProduction(url, 'stripe:getUserFromBearer');
+  const sb = createClient(url, anon);
   const { data, error } = await sb.auth.getUser(jwt);
   if (error || !data?.user?.id) return { userId: null, error: error?.message || 'invalid_bearer' };
   return { userId: data.user.id, error: null };
@@ -136,14 +148,14 @@ export default async function handler(req, res) {
       });
     }
     try {
-      const r = await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${uid}`, {
+      const r = await fetch(`${sbServer().url}/rest/v1/subscriptions?user_id=eq.${uid}`, {
         headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }
       });
       const rows = await r.json();
       if (!rows.length) {
         // Primera vez — crear trial de 14 días
         const trialEnd = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString();
-        await fetch(`${SB_URL}/rest/v1/subscriptions`, {
+        await fetch(`${sbServer().url}/rest/v1/subscriptions`, {
           method: 'POST',
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
           body: JSON.stringify({ user_id: uid, plan: 'trial', status: 'trial', trial_ends_at: trialEnd })
@@ -201,7 +213,7 @@ export default async function handler(req, res) {
       if (userId && subId) {
         const stripeSub = await stripe.subscriptions.retrieve(subId);
         const periodEnd = new Date(stripeSub.current_period_end * 1000).toISOString();
-        await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${userId}`, {
+        await fetch(`${sbServer().url}/rest/v1/subscriptions?user_id=eq.${userId}`, {
           method: 'PATCH',
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'active', plan, stripe_subscription_id: subId, current_period_end: periodEnd })
@@ -213,7 +225,7 @@ export default async function handler(req, res) {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       if (userId) {
-        await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${userId}`, {
+        await fetch(`${sbServer().url}/rest/v1/subscriptions?user_id=eq.${userId}`, {
           method: 'PATCH',
           headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'cancelled' })
@@ -228,7 +240,7 @@ export default async function handler(req, res) {
         const stripeSub = await stripe.subscriptions.retrieve(subId);
         const userId = stripeSub.metadata?.user_id;
         if (userId) {
-          await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${userId}`, {
+          await fetch(`${sbServer().url}/rest/v1/subscriptions?user_id=eq.${userId}`, {
             method: 'PATCH',
             headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: 'payment_failed' })

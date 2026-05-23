@@ -17,5 +17,6 @@ export function getOperationalStatus({ service, stops, evidencias }) {
   if (service?.estado === "asignado") return "esperando";
   if (service?.estado === "en_curso") return "operativo";
   if (service?.estado === "completado") return "operativo";
+  if (service?.estado === "cerrado") return "operativo";
   return "esperando";
 }

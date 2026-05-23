@@ -1,4 +1,13 @@
+import { resolveEvidenciaDisplayImageUrl } from "../../domain/documents/operationalDocumentRecord.js";
+import { sanitizeDocumentCommentText } from "../../domain/documents/documentCommentSanitize.js";
 import { LazyDocumentThumb } from "./LazyDocumentThumb.jsx";
+
+const singleLineEllipsis = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  minWidth: 0,
+};
 
 const TIPO_COLOR = {
   cmr: "#0EA5E9",
@@ -12,10 +21,13 @@ const TIPO_COLOR = {
 
 export function OperationalDocumentRow({ ev, panel, onOpen, compact = false }) {
   const title = ev.displayTitle || ev.titulo || ev.tipo;
-  const subtitle = ev.displaySubtitle || ev.detalle || "";
+  const subtitle = sanitizeDocumentCommentText(ev.displaySubtitle || ev.detalle || "");
   const line2 = ev.displayLine2 || "";
+  const fileName = ev.archivo_nombre || ev.datos?.archivo_nombre || null;
+  const subtitleTitle =
+    fileName && subtitle && String(subtitle).includes(fileName) ? fileName : undefined;
   const color = TIPO_COLOR[ev.tipo] || panel?.tx || "#334155";
-  const thumbSrc = ev.previewUrl || ev.url;
+  const thumbSrc = ev.displayImageUrl || resolveEvidenciaDisplayImageUrl(ev) || ev.previewUrl || ev.url;
 
   return (
     <button
@@ -47,10 +59,31 @@ export function OperationalDocumentRow({ ev, panel, onOpen, compact = false }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: compact ? 12 : 13, fontWeight: 700, color, lineHeight: 1.3 }}>{title}</div>
         {subtitle ? (
-          <div style={{ fontSize: 11, color: panel?.su || "#64748b", marginTop: 2, lineHeight: 1.35 }}>{subtitle}</div>
+          <div
+            title={subtitleTitle}
+            style={{
+              fontSize: 11,
+              color: panel?.su || "#64748b",
+              marginTop: 2,
+              lineHeight: 1.35,
+              ...(subtitleTitle ? singleLineEllipsis : {}),
+            }}
+          >
+            {subtitle}
+          </div>
         ) : null}
         {line2 ? (
-          <div style={{ fontSize: 10, color: panel?.time || "#94a3b8", marginTop: 2, fontWeight: 600 }}>{line2}</div>
+          <div
+            style={{
+              fontSize: 10,
+              color: panel?.time || "#94a3b8",
+              marginTop: 2,
+              fontWeight: 600,
+              ...singleLineEllipsis,
+            }}
+          >
+            {line2}
+          </div>
         ) : null}
       </div>
     </button>

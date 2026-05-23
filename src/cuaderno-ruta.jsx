@@ -19,6 +19,9 @@ import {
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
 } from "./data/session";
+import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
+import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -91,6 +94,8 @@ import {
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
+import { getExpedienteCierre } from "./domain/service/expedienteCierre.js";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -100,6 +105,7 @@ import {
   mergeEvidenciaIntoByStop,
 } from "./domain/documents/operationalEvidenciaSync.js";
 import { ExpedienteDocumentsPanel } from "./features/documents/ExpedienteDocumentsPanel.jsx";
+import { resolveEvidenciaDisplayImageUrl } from "./domain/documents/operationalDocumentRecord.js";
 import {
   EMPRESA_ETA_VISUAL_TICK_MS,
   EMPRESA_FLOTA_DATA_POLL_MS,
@@ -112,24 +118,35 @@ import {
   servicioIdsForLightStopsRefresh,
   servicioIdsForInitialStopsLoad,
   formatFlotaManualRefreshLabel,
+  patchFlotaServicioTrasAsignar,
+  filterServiciosForEmpresaVistaTab,
+  resolveEmpresaVistaTabKeepingExpandedServicio,
+  stopsOperativaSig,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
   getOperationalEtaUiState,
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaSnapshotLine,
 } from "./domain/service/operationalEtaPresentation.js";
+import { useEtaVisualClockMs } from "./domain/service/useEtaVisualClock.js";
 import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
 import {
   fetchEmpresaDocumentosExtra,
   fetchServicioDocumentosExtra,
 } from "./domain/service/serviceExtraDocuments.js";
 import { groupExtraDocsByServicioId } from "./domain/service/extraDocumentExpediente.js";
+import { sanitizeDocumentCommentText } from "./domain/documents/documentCommentSanitize.js";
 import {
-  assignConductorPrincipalToServicio,
   fetchFlotaServiciosForEmpresa,
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
   servicioPendienteAsignacion,
 } from "./domain/fleet/servicioAssignment.js";
+import {
+  asignarConductorEnServicioCreado,
+  mergeServicioTrasAsignacion,
+} from "./domain/fleet/servicioCreateFlow.js";
+import { insertStopsForServicio } from "./domain/fleet/servicioStopsInsert.js";
+import { ensureServicioHasStops } from "./domain/fleet/servicioAssignment.js";
 import { conductorUidOperativoServicio } from "./domain/fleet/operationalPlaceholderConductor.js";
 import { readViajeActivoFromStorage, getUnifiedTripPresentation } from "./domain/service/activeTripState.js";
 import { getServiceEta } from "./domain/service/serviceEta.js";
@@ -146,6 +163,7 @@ import {
   getOperationalEtaSnapshot,
   getOperationalPlanConfirmedAt,
 } from "./domain/service/serviceOperacionMeta.js";
+import { buildEtaPrevistaFromRoutePlan } from "./domain/service/etaPrevista.js";
 import {
   buildServiceIdentityMeta,
   getFixedServiceRoute,
@@ -154,6 +172,11 @@ import {
   getServiceNumber,
   resolveServiceRouteEndpoints,
 } from "./domain/service/serviceIdentity.js";
+import {
+  buildOperationalPlacesMetaPatch,
+  routeTextFromOperationalPlaces,
+  servicioMatchesSearchQuery,
+} from "./domain/service/serviceOperationalPlaces.js";
 import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
@@ -303,6 +326,8 @@ async function resolveAuthContextForUid(uid) {
 }
 
 function AuthScreen({ onAuth }) {
+  const demoMode = isDemoApp();
+  const allowRegister = isPublicRegistrationAllowed();
   const [mode, setMode] = useState("login");
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
@@ -340,6 +365,7 @@ function AuthScreen({ onAuth }) {
     }
     if (!password) { setError("Introduce tu contraseña"); return; }
     if (mode === "register") {
+      if (!allowRegister) { setError("Registro desactivado en este entorno"); return; }
       if (!nombre.trim()) { setError("El nombre es obligatorio"); return; }
       if (!tipo) { setError("Indica si eres conductor/autónomo o empresa"); return; }
       if (!pwdOk) { setError("La contraseña no cumple los requisitos"); return; }
@@ -351,28 +377,41 @@ function AuthScreen({ onAuth }) {
         await sbSignUp(email.trim(), password);
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
-        const authContext = contextKindFromProfileTipo(tipo);
-        if (uid) {
-          persistAuthContext(authContext, uid);
-          await sbFetch("/rest/v1/profiles", {
-            method:"POST",
-            headers:{"Prefer":"resolution=merge-duplicates"},
-            body: JSON.stringify({ id:uid, nombre:nombre.trim(), tipo_cuenta:tipo })
-          }).catch(()=>{});
-          // Email bienvenida
-          await fetch("/api/admin", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({
-              action:"bienvenida",
-              email: email.trim(),
-              nombre: nombre.trim(),
-              tipo,
-            })
-          }).catch(()=>{});
+        if (!uid) {
+          throw new Error(
+            "Registro sin sesión. En Supabase demo: activa sign-ups, desactiva confirmación por email y revisa rate limits.",
+          );
         }
+        const authContext = contextKindFromProfileTipo(tipo);
+        persistAuthContext(authContext, uid);
+        const profRes = await sbFetch("/rest/v1/profiles", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify({ id: uid, nombre: nombre.trim(), tipo_cuenta: tipo }),
+        });
+        if (!profRes.ok) {
+          const profErr = await profRes.text().catch(() => "");
+          if (isDemoDevUnlocked()) {
+            demoDevError("profiles POST", profRes.status, profErr);
+          }
+          throw new Error(
+            `No se pudo crear el perfil (HTTP ${profRes.status}). ${isDemoDevUnlocked() ? profErr.slice(0, 120) : ""}`.trim(),
+          );
+        }
+        await fetch("/api/admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "bienvenida",
+            email: email.trim(),
+            nombre: nombre.trim(),
+            tipo,
+          }),
+        }).catch((e) => {
+          if (isDemoDevUnlocked()) demoDevWarn("bienvenida email omitido:", e?.message);
+        });
         onAuth(authContext);
-        setTimeout(()=>window.location.reload(), 500);
+        setTimeout(() => window.location.reload(), 500);
       } else {
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
@@ -390,6 +429,9 @@ function AuthScreen({ onAuth }) {
         setTimeout(()=>window.location.reload(), 100);
       }
     } catch(e) {
+      if (isDemoDevUnlocked()) {
+        demoDevError("AuthScreen catch", { mode, message: e?.message, error: e });
+      }
       setError(mode === "login" ? "Email o contraseña incorrectos" : e.message);
     } finally { setLoading(false); }
   }
@@ -404,12 +446,23 @@ function AuthScreen({ onAuth }) {
         <circle cx="10" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
         <circle cx="26" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
       </svg>
-      <div style={{ fontSize:24, fontWeight:800, color:"#F59E0B", marginBottom:4, fontFamily:"sans-serif" }}>CUADERNO DE RUTA</div>
-      <div style={{ fontSize:13, color:"#475569", marginBottom:32, fontFamily:"sans-serif" }}>El copiloto del transportista · EU 561/2006</div>
+      <div style={{ fontSize:24, fontWeight:800, color:"#F59E0B", marginBottom:4, fontFamily:"sans-serif" }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
+      <div style={{ fontSize:13, color:"#475569", marginBottom:demoMode?12:32, fontFamily:"sans-serif" }}>El copiloto del transportista · EU 561/2006</div>
+
+      {demoMode?(
+        <div style={{ width:"100%", maxWidth:380, background:"#172554", border:"1.5px solid #3b82f6", borderRadius:12, padding:"12px 14px", marginBottom:16, fontFamily:"sans-serif" }}>
+          <div style={{ fontSize:12, fontWeight:800, color:"#93c5fd", marginBottom:6 }}>Entorno demo aislado</div>
+          <div style={{ fontSize:11, color:"#cbd5e1", lineHeight:1.5 }}>
+            Empresa: <strong>{DEMO_LOGIN_HINT.empresa}</strong><br/>
+            Conductor: <strong>{DEMO_LOGIN_HINT.conductor}</strong><br/>
+            Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong>
+          </div>
+        </div>
+      ):null}
 
       <div style={{ width:"100%", maxWidth:380, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 8px 32px rgba(0,0,0,.4)" }}>
 
-        {mode !== "forgot" && (
+        {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
               <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");setLoginContext("conductor");}}
@@ -1378,7 +1431,6 @@ function CmrScanner({prof,dark}){
   const fileRef=useRef(null);
 
   const uid=getUserId();
-  const SB_URL=window.__SB_URL__||"https://glyexutcypmhkndvmcxd.supabase.co";
 
   // Cargar CMR guardados
   useEffect(()=>{
@@ -1433,6 +1485,7 @@ function CmrScanner({prof,dark}){
         const bytes=Uint8Array.from(atob(foto),c=>c.charCodeAt(0));
         const session=getSession();
         const token=session?.access_token||"";
+        guardDemoCannotUseProduction(SB_URL,"storage:cmr-upload");
         const uploadRes=await fetch(`${SB_URL}/storage/v1/object/cmr/${path}`,{
           method:"POST",
           headers:{
@@ -2001,9 +2054,8 @@ function AppInner(){
       params.delete("pago");
       const uidPay=getUserId();
       if(uidPay){
-        fetch(`https://glyexutcypmhkndvmcxd.supabase.co/rest/v1/subscriptions?user_id=eq.${uidPay}`,{
+        sbFetch(`/rest/v1/subscriptions?user_id=eq.${uidPay}`,{
           method:"PATCH",
-          headers:{apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdsex11dGN5cG1oa25kdm1jeGQiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc0NDIxMzM4MSwiZXhwIjoyMDU5Nzg5MzgxfQ.0q_DhkD3fFBST4G0K9UBGYIhbFVhDkEBnX-yPEByLA","Content-Type":"application/json"},
           body:JSON.stringify({status:"active",plan:"monthly"})
         }).then(()=>setSubStatus({status:"active"})).catch(()=>setSubStatus({status:"active"}));
       } else {
@@ -4080,10 +4132,12 @@ function AppInner(){
           if(v.origen?.trim()&&v.origen.trim()!==String(pref?.origenActual||"").trim())patch.origen=v.origen.trim();
           if(v.destino?.trim()&&v.destino.trim()!==String(pref?.destinoActual||"").trim())patch.destino=v.destino.trim();
           if(v.operationalPlan){
+            const etaPrevista=buildEtaPrevistaFromRoutePlan(v.operationalPlan);
             patch.referencia=mergeReferenciaOperacional(pref?.referenciaActual||null,{
               operational_plan:v.operationalPlan,
               operational_eta:null,
               operational_plan_confirmed_at:new Date().toISOString(),
+              ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
             });
           }
           if(Object.keys(patch).length){
@@ -4859,7 +4913,7 @@ async function persistServiceOperationalEta({
     let errTxt="";
     try{errTxt=await res.text();}catch(_){}
     trackingLog("operativa persist_eta_failed",{servicio_id:servicio.id,status:res.status,detail:String(errTxt).slice(0,400)});
-    throw new Error(`No se pudo guardar la ETA operacional`);
+    throw new Error(`No se pudo guardar la ETA actual`);
   }
   trackingLog("operativa persist_eta_ok",{servicio_id:servicio.id,refresh_reason:decision.reason});
   try{window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));}catch(_){/* SSR */}
@@ -4868,6 +4922,14 @@ async function persistServiceOperationalEta({
 
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
   const depStopsIn=Array.isArray(stops)?stops:[];
+  console.log("[OP3] register start",{
+    uid:uid||null,
+    eventType:eventType||null,
+    servicioId:servicio?.id||null,
+    stopId:stopId||null,
+    estadoServicio:servicio?.estado||null,
+    stopsCount:depStopsIn.length,
+  });
   const successMsgs={
     entrada_muelle:"Entrada en muelle registrada",
     salida_muelle:"Muelle finalizado",
@@ -4881,11 +4943,25 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   const gps=await getDriverActionGps({fresh:true,timeoutMs:15000});
   if(!gps.ok){
+    console.warn("[OP3] gps fail",{
+      eventType:eventType||null,
+      servicioId:servicio?.id||null,
+      stopId:stopId||null,
+      error:gps.error,
+    });
     showToast?.(`${gps.error}. Sin ubicación operativa.`,"#F97316",4200);
     trackingLog("operativa flow_gps_fail",{uid,error:gps.error});
     return{gpsOk:false,error:gps.error};
   }
   const point=gps.point;
+  console.log("[OP3] gps ok",{
+    eventType:eventType||null,
+    servicioId:servicio?.id||null,
+    stopId:stopId||null,
+    lat:point?.lat,
+    lon:point?.lon,
+    accuracy:point?.accuracy,
+  });
   trackingLog("operativa flow_gps_ok",{uid,lat:point.lat,lon:point.lon,accuracy:point.accuracy});
 
   const snap=await resolveOperationalUbicacionSnapshot(uid,servicio,depStopsIn);
@@ -4893,6 +4969,12 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   try{
     await saveDriverActionLocation(uid,point,{preResolved:snap,eventType,stopId});
+    console.log("[OP3] saveDriverActionLocation ok",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      empresaId:snap?.empresa_id||null,
+    });
   }catch(e){
     console.warn("ubicacion evento save failed:",e);
     trackingLog("operativa ubicacion save_exception",{uid,error:String(e?.message||e)});
@@ -4926,30 +5008,105 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
       empresa_id:snap.empresa_id,
       has_eta:!!etaLabel,
     });
+    console.log("[OP3] register success",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      gpsOk:true,
+    });
     return{gpsOk:true,point,...(etaRes||{})};
   }catch(e){
     console.warn("eta operacional failed:",e);
     showToast?.("Ubicación guardada. ETA no recalculada","#F97316",3200);
     showToast?.(successBase,"#166534",2400);
     trackingLog("operativa flow_eta_fail",{uid,error:String(e?.message||e)});
+    console.warn("[OP3] register eta branch fail",{
+      eventType:eventType||null,
+      servicioId:snap?.servicio_id||null,
+      stopId:stopId||null,
+      error:String(e?.message||e),
+    });
     return{gpsOk:true,point};
   }
 }
 
-async function readActiveServiceForDriver(uid){
+async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
-  async function fetchOne(estadoEq){
-    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=eq.${estadoEq}&order=created_at.desc&limit=1`);
-    if(!r.ok)return null;
-    const data=await r.json();
-    return Array.isArray(data)?data[0]:null;
+  /** Incluye `completado` para cierre documental (firma); excluye `cerrado`. */
+  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado";
+  const estadoRank=(estado)=>{
+    if(estado==="en_curso")return 0;
+    if(estado==="asignado")return 1;
+    if(estado==="completado")return 2;
+    return 9;
+  };
+  async function fetchServiciosByConductorId(){
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=20`);
+    if(!r.ok)return[];
+    const rows=await r.json();
+    return Array.isArray(rows)?rows:[];
   }
-  let servicio=await fetchOne("en_curso");
-  if(!servicio?.id)servicio=await fetchOne("asignado");
-  if(!servicio?.id)return{servicio:null,stops:[]};
-  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicio.id}&order=orden.asc`);
+  async function fetchServiciosByAsignacionesFallback(){
+    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.desc&limit=40&select=servicio_id`);
+    if(!ar.ok)return[];
+    const arows=await ar.json();
+    const ids=[...new Set((Array.isArray(arows)?arows:[]).map(r=>r?.servicio_id).filter(Boolean))];
+    if(!ids.length)return[];
+    const sr=await sbFetch(`/rest/v1/servicios?id=in.(${ids.join(",")})&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=40`);
+    if(!sr.ok)return[];
+    const srows=await sr.json();
+    return Array.isArray(srows)?srows:[];
+  }
+  const primaryCandidates=await fetchServiciosByConductorId();
+  const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
+  const byId=new Map();
+  [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
+  const candidates=[...byId.values()].sort((a,b)=>{
+    const ra=estadoRank(a?.estado);
+    const rb=estadoRank(b?.estado);
+    if(ra!==rb)return ra-rb;
+    return new Date(b?.created_at||0)-new Date(a?.created_at||0);
+  });
+  console.log("[OP2] active service candidates",{
+    uid,
+    rows:candidates.length,
+    ids:candidates.map(s=>s?.id),
+    estados:candidates.map(s=>s?.estado),
+    sourceByConductorId:primaryCandidates.length,
+    sourceByAsignaciones:fallbackCandidates.length,
+  });
+  if(!candidates.length)return{servicio:null,stops:[]};
+  for(const sv of candidates){
+    if(!sv?.id)continue;
+    const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${sv.id}&order=orden.asc`);
+    const stops=sr.ok?await sr.json():[];
+    const arr=Array.isArray(stops)?stops:[];
+    console.log("[OP2] candidate stops",{
+      servicioId:sv.id,
+      estado:sv?.estado||null,
+      status:sr?.status,
+      rows:arr.length,
+      stopIds:arr.map(s=>s?.id),
+    });
+    if(arr.length>0)return{servicio:sv,stops:arr};
+  }
+  const fallback=candidates[0];
+  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${fallback.id}&order=orden.asc`);
   const stops=sr.ok?await sr.json():[];
-  return{servicio,stops:Array.isArray(stops)?stops:[]};
+  const arr=Array.isArray(stops)?stops:[];
+  return{servicio:fallback,stops:arr};
+}
+
+async function readActiveServiceForDriver(uid){
+  const out=await resolveDriverActiveServiceAndStops(uid);
+  console.log("[OP2] readActiveServiceForDriver resolved",{
+    uid,
+    servicioId:out?.servicio?.id||null,
+    estado:out?.servicio?.estado||null,
+    conductor_id:out?.servicio?.conductor_id||null,
+    stopsRows:Array.isArray(out?.stops)?out.stops.length:0,
+  });
+  return out;
 }
 
 async function registerDriverEventOperationalPoint({uid,norma,eventType,showToast}){
@@ -5344,12 +5501,12 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
               <div style={{fontSize:9,color:"#64748B",marginTop:2}}>km/h</div>
             </div>
           </div>
-          <div style={{fontSize:10,color:"#475569",marginTop:8,textAlign:"center"}}>Por defecto 80 km/h · ajuste fino de 1 en 1 para el snapshot del servicio</div>
+          <div style={{fontSize:10,color:"#475569",marginTop:8,textAlign:"center"}}>Por defecto 80 km/h · ajuste fino de 1 en 1</div>
         </div>
 
         {loading&&(
           <div style={{background:"#0F2A1A",border:"1px solid #22C55E40",borderRadius:10,padding:"9px 11px",fontSize:12,color:"#86EFAC",fontWeight:700,marginBottom:10}}>
-            Calculando ruta operacional completa y guardando snapshot estable...
+            Calculando planificación del servicio…
           </div>
         )}
 
@@ -7218,6 +7375,7 @@ function CambiarPassword(){
     try{
       // Actualizar contraseña via Supabase auth
       const session=getSession();
+      guardDemoCannotUseProduction(SB_URL,"auth:change-password");
       const res=await fetch(`${SB_URL}/auth/v1/user`,{
         method:"PUT",
         headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":`Bearer ${session?.access_token}`},
@@ -7575,6 +7733,7 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
         body:JSON.stringify({owner_id:uid,nombre:nombre.trim(),cif:cif.trim()||null,codigo_corto:codigo,activa:true}),
       });
       const text=await res.text();
+      if(isDemoDevUnlocked()&&!res.ok)demoDevError("empresas POST (perfil)",res.status,text);
       if(res.ok){
         const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
         if(emps.length){setEmpresa(emps[0]);setMsg("Listo. Ya puedes invitar a tu equipo.");}
@@ -10001,7 +10160,11 @@ function MapTab({norma,prof,dark,viajeActivo}){
       try{
         const snap=operationalPlanSnapshotFromMapTabPlan(planPayload,velArg,spl,mod,sdt);
         if(!snap)return;
-        const referencia=mergeReferenciaOperacional(sv.referencia||null,{operational_plan:snap});
+        const etaPrevista=buildEtaPrevistaFromRoutePlan(snap);
+        const referencia=mergeReferenciaOperacional(sv.referencia||null,{
+          operational_plan:snap,
+          ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
+        });
         const res=await sbFetch(`/rest/v1/servicios?id=eq.${sv.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
         if(res.ok){
           window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
@@ -11440,10 +11603,42 @@ async function resolveEmpresaIdForServicioInsert(empresaIdProp){
   if(!uid)return null;
   try{
     const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-    return normalizeServicioEmpresaId(emps?.[0]?.id);
+    const ownerEmp=normalizeServicioEmpresaId(emps?.[0]?.id);
+    if(ownerEmp)return ownerEmp;
+    const links=await sbSelect("conductor_empresa",`user_id=eq.${uid}`);
+    const link=Array.isArray(links)?links.find(r=>r?.activo!==false):links;
+    return normalizeServicioEmpresaId(link?.empresa_id);
   }catch(_){
     return null;
   }
+}
+
+async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,logTag}){
+  const result=await insertStopsForServicio(servicioId,stops);
+  if(result.ok){
+    if(result.partial){
+      console.warn(`[OP3] create stops partial (${logTag})`,{servicioId,error:result.error});
+    }else{
+      console.log(`[OP3] create stops ok (${logTag})`,{servicioId,rows:result.rows?.length||stops?.length});
+    }
+    return;
+  }
+  console.warn(`[OP3] create stops failed (${logTag})`,{
+    servicioId,
+    status:result.status,
+    detail:String(result.detail||"").slice(0,400),
+  });
+  try{
+    await ensureServicioHasStops({servicioId,origen,destino});
+    console.log(`[OP3] create stops fallback ok (${logTag})`,{servicioId});
+    return;
+  }catch(fallbackErr){
+    console.warn(`[OP3] create stops fallback failed (${logTag})`,{
+      servicioId,
+      error:fallbackErr?.message||fallbackErr,
+    });
+  }
+  throw new Error(result.error||"No se pudieron crear las paradas del servicio");
 }
 
 function buildServicioInsertCorePayload({empresaId,conductorId,estado,origen,destino,referencia,fecha_inicio}){
@@ -11487,7 +11682,7 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
 }
 
 /** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
-const SERVICE_CREATE_DEBUG=true;
+const SERVICE_CREATE_DEBUG=false;
 function logServiceCreate(tag,payload){
   if(!SERVICE_CREATE_DEBUG)return;
   const line=`[${tag}]`;
@@ -11495,10 +11690,27 @@ function logServiceCreate(tag,payload){
   if(tag.includes("FAIL"))console.warn(line,payload);
 }
 
-async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCliente, _debugSource, ...basePayload }) {
+async function crearServicioConIdentidad({
+  serviceNumber,
+  cliente,
+  referenciaCliente,
+  operationalPlaces = null,
+  _debugSource,
+  ...basePayload
+}) {
   const referenciaBase = serviceNumber?.trim() || null;
-  const identityMeta = buildServiceIdentityMeta({ cliente, referenciaCliente });
-  const referencia = Object.keys(identityMeta).length ? mergeReferenciaOperacional(referenciaBase, identityMeta) : referenciaBase;
+  const placesPatch = operationalPlaces
+    ? buildOperationalPlacesMetaPatch(operationalPlaces)
+    : {};
+  const identityMeta = buildServiceIdentityMeta({
+    cliente,
+    referenciaCliente,
+    lugaresOperativos: placesPatch.lugares_operativos,
+  });
+  const referencia =
+    Object.keys(identityMeta).length || Object.keys(placesPatch).length
+      ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch })
+      : referenciaBase;
   const empresaIdRaw=basePayload.empresa_id;
   const empresaId=await resolveEmpresaIdForServicioInsert(empresaIdRaw);
   const conductorId=normalizeServicioConductorIdForInsert(basePayload.conductor_id);
@@ -11550,18 +11762,6 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
     throw new Error(msg);
   }
 
-  const session = getSession();
-  const authUser = session?.user?.id || getUserId?.() || null;
-  console.log("SERVICE_CREATE_START");
-  console.log("AUTH_USER_ID", authUser);
-  console.log("SERVICE_CREATE_PAYLOAD",{
-    payload,
-    empresa_id:payload?.empresa_id,
-    conductor_id:payload?.conductor_id,
-    estado:payload?.estado,
-    authUser,
-  });
-
   let res;
   try{
     res=await sbFetch("/rest/v1/servicios", {
@@ -11570,18 +11770,12 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
       body: JSON.stringify(corePayload),
     });
   }catch(error){
-    console.log("SERVICE_CREATE_RESPONSE_FAIL",{
-      error,
-      payload,
-      empresa_id:payload?.empresa_id,
-      conductor_id:payload?.conductor_id,
-    });
+    logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{error:String(error?.message||error)});
     throw error;
   }
 
   if (res.ok) {
     const result=await res.json();
-    console.log("SERVICE_CREATE_RESPONSE_OK",result);
     const row=Array.isArray(result)?result[0]:result;
     logServiceCreate("SERVICE_CREATE_RESPONSE_OK",{
       status:res.status,
@@ -11601,13 +11795,6 @@ async function crearServicioConIdentidad({ serviceNumber, cliente, referenciaCli
   try {
     errJson = JSON.parse(errText);
   } catch (_) {}
-  console.log("SERVICE_RAW_RESPONSE", {
-    status: res.status,
-    ok: res.ok,
-    errText,
-    errJson,
-  });
-  console.log("SERVICE_RAW_PAYLOAD", corePayload);
   throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
 }
 
@@ -11632,17 +11819,33 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
+function findStopIndexByTipo(stops,kind){
+  if(kind==="carga"){
+    const i=stops.findIndex(s=>/carga/.test(String(s.tipo||""))&&!/solo_descarga/.test(String(s.tipo||"")));
+    return i>=0?i:0;
+  }
+  let i=-1;
+  for(let j=stops.length-1;j>=0;j--){
+    if(/descarga/.test(String(stops[j]?.tipo||""))){i=j;break;}
+  }
+  return i>=0?i:Math.max(0,stops.length-1);
+}
+
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
   const sinConductor=!conductorId;
-  const[origen,setOrigen]=useState("");
-  const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
+  const[cargaNombre,setCargaNombre]=useState("");
+  const[cargaEmpresa,setCargaEmpresa]=useState("");
+  const[cargaDir,setCargaDir]=useState("");
+  const[descargaNombre,setDescargaNombre]=useState("");
+  const[descargaEmpresa,setDescargaEmpresa]=useState("");
+  const[descargaDir,setDescargaDir]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
-    {orden:1,tipo:"carga",nombre:"",direccion:"",notas:""},
-    {orden:2,tipo:"descarga",nombre:"",direccion:"",notas:""},
+    {orden:1,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""},
+    {orden:2,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""},
   ]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
@@ -11650,7 +11853,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const card=EMPRESA_UI.surface,bg=EMPRESA_UI.surfaceSoft,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
 
-  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:""}]);}
+  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""}]);}
   function addStopAfter(i){
     // Insertar después del índice i con orden intermedio
     setStops(prev=>{
@@ -11658,7 +11861,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       const ordenAntes=arr[i].orden;
       const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
       const nuevoOrden=(ordenAntes+ordenDespues)/2;
-      const newStop={orden:nuevoOrden,tipo:"carga",nombre:"",direccion:"",notas:""};
+      const newStop={orden:nuevoOrden,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""};
       arr.splice(i+1,0,newStop);
       return arr;
     });
@@ -11676,11 +11879,52 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       return [...arr].sort((a,b)=>a.orden-b.orden);
     });
   }
-  function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
+  function changeStop(i,field,val){
+    setStops(prev=>{
+      const next=prev.map((s,idx)=>idx===i?{...s,[field]:val}:s);
+      const ci=findStopIndexByTipo(next,"carga");
+      const di=findStopIndexByTipo(next,"descarga");
+      if(i===ci){
+        if(field==="nombre")setCargaNombre(val);
+        else if(field==="empresa")setCargaEmpresa(val);
+        else if(field==="direccion")setCargaDir(val);
+      }
+      if(i===di){
+        if(field==="nombre")setDescargaNombre(val);
+        else if(field==="empresa")setDescargaEmpresa(val);
+        else if(field==="direccion")setDescargaDir(val);
+      }
+      return next;
+    });
+  }
+
+  function setCargaFields(lugar,empresa,dir){
+    setCargaNombre(lugar);
+    setCargaEmpresa(empresa);
+    setCargaDir(dir);
+    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"carga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
+  }
+
+  function setDescargaFields(lugar,empresa,dir){
+    setDescargaNombre(lugar);
+    setDescargaEmpresa(empresa);
+    setDescargaDir(dir);
+    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"descarga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
+  }
 
   async function guardar(){
-    if(!origen.trim()||!destino.trim()){setError("Origen y destino son obligatorios");return;}
-    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
+    const operationalPlaces={
+      cliente_nombre:cliente.trim(),
+      carga_nombre:cargaNombre.trim(),
+      carga_empresa:cargaEmpresa.trim(),
+      carga_direccion:cargaDir.trim(),
+      descarga_nombre:descargaNombre.trim(),
+      descarga_empresa:descargaEmpresa.trim(),
+      descarga_direccion:descargaDir.trim(),
+    };
+    const {origen:origenRuta,destino:destinoRuta}=routeTextFromOperationalPlaces(operationalPlaces);
+    if(!origenRuta||!destinoRuta){setError("Indica el lugar de origen y destino (localidad o dirección)");return;}
+    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre de lugar");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     setSaving(true);setError("");
     try{
@@ -11695,25 +11939,47 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       const srData=await crearServicioConIdentidad({
         _debugSource:"AsignarServicioModal",
         empresa_id:empresaId||null,
-        conductor_id:sinConductor?null:conductorId,
-        estado:sinConductor?SERVICIO_ESTADO_PENDIENTE_ASIGNACION:"asignado",
-        origen:origen.trim(),
-        destino:destino.trim(),
+        conductor_id:null,
+        estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
+        origen:origenRuta,
+        destino:destinoRuta,
         serviceNumber:ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
+        operationalPlaces,
         fecha_inicio:new Date(fechaInicio).toISOString(),
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      await sbFetch("/rest/v1/stops",{
-        method:"POST",
-        body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,estado:"pendiente"}))),
+      let assignResult=null;
+      if(!sinConductor){
+        assignResult=await asignarConductorEnServicioCreado({
+          servicioId:sv.id,
+          servicio:sv,
+          conductorId,
+          conductorNombre:conductorNombre||"Conductor",
+          origen:origenRuta,
+          destino:destinoRuta,
+          fechaInicio:new Date(fechaInicio).toISOString(),
+          skipEnsureStops:true,
+        });
+      }
+      const stopsPrepared=stops.map(s=>{
+        const emp=String(s.empresa||"").trim();
+        if(!emp)return s;
+        return{...s,notas:mergeStopOperacionMeta(s.notas,{empresa_logistica:emp})};
+      });
+      await persistServicioStopsTrasCrear({
+        servicioId:sv.id,
+        stops:stopsPrepared,
+        origen:origenRuta,
+        destino:destinoRuta,
+        logTag:"AsignarServicioModal",
       });
       if(!sinConductor){
-        sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo:"principal",estado:"activa"})}).catch(()=>{});
-        sbFetch("/rest/v1/servicio_asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:conductorId,tipo_asignacion:"principal"})}).catch(()=>{});
-        void sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId:sv.id});
+        void sendAssignmentPush({conductorId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
+        onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorId));
+        return;
       }
       onCreado(sv);
     }catch(e){
@@ -11770,40 +12036,51 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         {/* BODY — scrollable */}
         <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"12px 16px"}}>
 
-          {/* Origen / Destino */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Origen</div>
-              <input value={origen} onChange={e=>setOrigen(e.target.value)} placeholder="Almería"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Destino</div>
-              <input value={destino} onChange={e=>setDestino(e.target.value)} placeholder="Bilbao"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
+          {/* Cliente (comercial) — separado de lugares operativos */}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:3,letterSpacing:.3}}>CLIENTE</div>
+            <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
+              style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
           </div>
 
-          {/* Identidad documental */}
+          <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:6,letterSpacing:.3}}>LUGARES OPERATIVOS</div>
+          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:8}}>
+            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Origen (carga)</div>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
+            <input value={cargaNombre} onChange={e=>setCargaFields(e.target.value,cargaEmpresa,cargaDir)} placeholder="Antequera"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+            <input value={cargaEmpresa} onChange={e=>setCargaFields(cargaNombre,e.target.value,cargaDir)} placeholder="Planta, operador logístico…"
+              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
+            <input value={cargaDir} onChange={e=>setCargaFields(cargaNombre,cargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+          </div>
+          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:12}}>
+            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Destino (descarga)</div>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
+            <input value={descargaNombre} onChange={e=>setDescargaFields(e.target.value,descargaEmpresa,descargaDir)} placeholder="Pamplona"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+            <input value={descargaEmpresa} onChange={e=>setDescargaFields(descargaNombre,e.target.value,descargaDir)} placeholder="Centro de distribución…"
+              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
+            <input value={descargaDir} onChange={e=>setDescargaFields(descargaNombre,descargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
+              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+          </div>
+
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Servicio</div>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Ref. servicio</div>
               <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
-            <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Cliente</div>
-              <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
-            </div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Ref cliente</div>
               <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821"
                 style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
             </div>
-            <div>
+            <div style={{gridColumn:"1 / -1"}}>
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}
                 style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"light",marginBottom:0}}/>
@@ -11830,12 +12107,18 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
                     {stops.length>1&&<button onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
                   </div>
                 </div>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
                 <input value={stop.nombre} onChange={e=>changeStop(i,"nombre",e.target.value)}
-                  placeholder="Lugar / empresa" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                  placeholder="Ciudad, muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
+                <input value={stop.empresa||""} onChange={e=>changeStop(i,"empresa",e.target.value)}
+                  placeholder="Planta, operador…" style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
                 <input value={stop.direccion} onChange={e=>changeStop(i,"direccion",e.target.value)}
-                  placeholder="Dirección (opcional)" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                  placeholder="Calle, polígono…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
+                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Detalles de carga/descarga</div>
                 <input value={stop.notas||""} onChange={e=>changeStop(i,"notas",e.target.value)}
-                  placeholder="Notas" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
+                  placeholder="Puerta, horario, referencia muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
               </div>
               {i<stops.length-1&&(
                 <button onClick={()=>addStopAfter(i)}
@@ -11878,9 +12161,11 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
     if(!servicio?.id||!c?.user_id||saving)return;
     setSaving(true);setError("");
     try{
-      await assignConductorPrincipalToServicio({
+      const assignResult=await asignarConductorEnServicioCreado({
         servicioId:servicio.id,
+        servicio,
         conductorId:c.user_id,
+        conductorNombre:c.nombre||"Conductor",
         origen:servicio.origen,
         destino:servicio.destino,
         fechaInicio:servicio.fecha_inicio,
@@ -11892,7 +12177,12 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
         fechaInicio:servicio.fecha_inicio,
         servicioId:servicio.id,
       });
-      onAsignado?.({servicioId:servicio.id,conductorId:c.user_id,conductorNombre:c.nombre||"Conductor"});
+      onAsignado?.({
+        servicioId:servicio.id,
+        conductorId:c.user_id,
+        conductorNombre:c.nombre||"Conductor",
+        referencia:assignResult.referencia,
+      });
     }catch(e){setError(e?.message||"No se pudo asignar");}
     finally{setSaving(false);}
   }
@@ -12080,6 +12370,9 @@ const EMPRESA_UI=Object.freeze({
   accentSoft:"#eff6ff",
   green:"#15803d",
   greenSoft:"#dcfce7",
+  btnPrimary:"#16a34a",
+  btnPrimaryHover:"#15803d",
+  btnPrimaryBorder:"#86efac",
   amber:"#b45309",
   amberSoft:"#ffedd5",
   red:"#b91c1c",
@@ -12110,8 +12403,8 @@ function empresaListaEtaChip(servicio, nowMs){
   const st=getOperationalEtaUiState(servicio,new Date(nowMs??Date.now()));
   if(st.kind==="cancelled")return{label:"—",color:"#64748B"};
   if(st.kind==="calculating")return{label:OPERATIONAL_ETA_CALCULATING,color:"#64748B"};
-  if(st.kind==="plan_fallback")return{label:"Previa · plan",color:EMPRESA_UI.accent};
-  return{label:"ETA operacional",color:EMPRESA_UI.green};
+  if(st.kind==="plan_fallback")return{label:"Planificado",color:EMPRESA_UI.accent};
+  return{label:"ETA actual",color:EMPRESA_UI.green};
 }
 
 function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
@@ -12178,9 +12471,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[expedientePreview,setExpedientePreview]=useState(null);
   const[mailExpediente,setMailExpediente]=useState(null);
   const[svCardExpand,setSvCardExpand]=useState(null);
+  const svCardExpandRef=useRef(null);
+  svCardExpandRef.current=svCardExpand;
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[anularModal,setAnularModal]=useState(null);
   const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
+  const[serviciosBusqueda,setServiciosBusqueda]=useState("");
   const[serviciosPage,setServiciosPage]=useState(1);
   const[etaOperativaById,setEtaOperativaById]=useState({});
   const[ubicacionConductorByUid,setUbicacionConductorByUid]=useState({});
@@ -12439,6 +12735,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   async function fetchFlotaStopsMapForServicioIds(ids){
     if(!ids?.length)return{};
     const stps=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids.join(",")})&order=servicio_id.asc,orden.asc`).then(r=>r.json());
+    console.log("[OP3] fetchFlotaStopsMapForServicioIds",{
+      requestedIds:ids,
+      rows:Array.isArray(stps)?stps.length:null,
+      servicioIdsInRows:Array.isArray(stps)?[...new Set(stps.map(s=>s?.servicio_id).filter(Boolean))]:[],
+      sample:Array.isArray(stps)?stps.slice(0,8).map(s=>({
+        id:s?.id,
+        servicio_id:s?.servicio_id,
+        estado:s?.estado,
+        orden:s?.orden,
+      })) : [],
+    });
     return stopsRowsToMap(stps);
   }
 
@@ -12447,10 +12754,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const missing=ids.filter((id)=>!flotaStopsFetchedIdsRef.current.has(id));
     if(!missing.length)return;
     try{
+      console.log("[TL2] ensure stops request",{ids,missing});
       const map=await fetchFlotaStopsMapForServicioIds(missing);
+      console.log("[TL2] ensure stops response",{
+        servicios:Object.keys(map||{}),
+        counts:Object.fromEntries(Object.entries(map||{}).map(([k,v])=>[k,Array.isArray(v)?v.length:0])),
+      });
       missing.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
       setFlotaStops((prev)=>{
         const next=mergeFlotaStopsMap(prev,map);
+        console.log("[TL2] ensure stops merged",{
+          servicios:Object.keys(next||{}).length,
+          changed:next!==prev,
+          targetIds:missing,
+        });
         flotaStopsRef.current=next;
         return next;
       });
@@ -12739,30 +13056,33 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return m;
   },[flotaServicios,flotaStops,flotaEvs]);
 
-  const serviciosListaOperativa=useMemo(()=>{
-    let list=[...flotaServicios];
-    if(serviciosVistaTab==="activos") list=list.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)&&!archivedExpedienteIds.has(s.id));
-    else if(serviciosVistaTab==="en_curso") list=list.filter(s=>s.estado==="en_curso");
-    else if(serviciosVistaTab==="asignados") list=list.filter(s=>s.estado==="asignado");
-    else if(serviciosVistaTab==="sin_asignar") list=list.filter(s=>servicioPendienteAsignacion(s));
-    else if(serviciosVistaTab==="completados") list=list.filter(s=>s.estado==="completado");
-    else if(serviciosVistaTab==="archivados") list=list.filter(s=>archivedExpedienteIds.has(s.id));
-    else if(serviciosVistaTab==="anulados") list=list.filter(s=>s.estado==="anulado");
-    else if(serviciosVistaTab==="incidencias"){
-      list=list.filter(sv=>{
-        const svStops=flotaStops[sv.id]||[];
-        const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
-        const lastActivity=getLastServiceActivity({service:sv,stops:svStops,evidencias:evs});
-        const attention=needsAttention({service:sv,stops:svStops,evidencias:evs,lastActivity});
-        const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
-        return attention||incN>0;
-      });
-    }
-    list.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
-    return list;
-  },[flotaServicios,flotaStops,flotaEvs,serviciosVistaTab,archivedExpedienteIds,flotaActivityTsById]);
+  const empresaVistaTabCtx=useMemo(
+    ()=>({
+      archivedExpedienteIds,
+      flotaStops,
+      flotaEvs,
+      countIncidencias: incidenciasCountServicio,
+    }),
+    [archivedExpedienteIds,flotaStops,flotaEvs],
+  );
 
-  useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length]);
+  const serviciosListaOperativa=useMemo(()=>{
+    const list=filterServiciosForEmpresaVistaTab(flotaServicios,serviciosVistaTab,empresaVistaTabCtx);
+    const q=String(serviciosBusqueda||"").trim();
+    const filtered=q
+      ?list.filter((sv)=>{
+          const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+          return servicioMatchesSearchQuery(sv,q,{
+            stops:flotaStops[sv.id]||[],
+            conductor,
+          });
+        })
+      :list;
+    filtered.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
+    return filtered;
+  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores]);
+
+  useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length,serviciosBusqueda]);
 
   const serviciosPageSize=15;
   const serviciosTotal=serviciosListaOperativa.length;
@@ -13040,8 +13360,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const handleToggleExpandId=useCallback((id)=>{
     setSvCardExpand(prev=>{
       const opening=prev!==id;
-      if(opening)void ensureFlotaEvidenciasRef.current?.(id);
-      return opening?id:null;
+      const next=opening?id:null;
+      if(opening){
+        void (async()=>{
+          await ensureFlotaStopsForServicioIds([id]);
+          await ensureFlotaEvidenciasRef.current?.(id);
+        })();
+      }
+      return next;
     });
   },[]);
 
@@ -13116,6 +13442,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const uid=getUserId();if(!uid)return;
     try{
       const res=await sbFetch("/rest/v1/empresas",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({nombre,cif:cif||null,owner_id:uid})});
+      if(!res.ok){
+        const errText=await res.text().catch(()=>"");
+        if(isDemoDevUnlocked())demoDevError("empresas POST (panel)",res.status,errText);
+        showToast(`Error al crear empresa (${res.status})`);
+        return;
+      }
       const data=await res.json();
       let emp=Array.isArray(data)?data[0]:data;
       if(emp?.id){
@@ -13124,7 +13456,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }
       setEmpresa(emp);setModo("jefe");setConductores([]);
       showToast("Empresa creada ✓");
-    }catch(_){showToast("Error al crear empresa");}
+    }catch(e){
+      if(isDemoDevUnlocked())demoDevError("crearEmpresa",e);
+      showToast("Error al crear empresa");
+    }
   }
 
   async function añadirConductor(){
@@ -13215,7 +13550,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const TIPO_EV_COL={cmr:EMPRESA_UI.accent,foto:EMPRESA_UI.green,incidencia:EMPRESA_UI.red,ticket:"#0EA5E9",factura:"#6366F1",otro:"#64748B"};
 
   function openExpedienteDocument(ev){
-    const url=ev?.url||ev?.previewUrl;
+    const url=ev?.displayImageUrl||resolveEvidenciaDisplayImageUrl(ev)||ev?.previewUrl||ev?.url;
     if(!url)return;
     const mime=ev?.mime_type||"";
     const isPdf=mime.includes("pdf")||String(url).toLowerCase().includes(".pdf");
@@ -13525,17 +13860,18 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               <button type="button" onClick={openNuevoViaje}
                 style={{
                   width:"100%",
-                  background:EMPRESA_UI.tx,
+                  background:EMPRESA_UI.btnPrimary,
                   color:"white",
-                  border:"none",
+                  border:`1px solid ${EMPRESA_UI.btnPrimaryBorder}`,
                   borderRadius:10,
-                  padding:"11px 14px",
+                  padding:"12px 14px",
                   fontSize:14,
-                  fontWeight:600,
+                  fontWeight:700,
                   cursor:"pointer",
                   marginBottom:12,
+                  boxShadow:"0 1px 3px rgba(22,163,74,.22)",
                 }}>
-                Nuevo servicio
+                + Nuevo servicio
               </button>
               <div style={{fontSize:15,fontWeight:650,color:tx,marginBottom:6}}>Sin servicios todavía</div>
               <div style={{fontSize:13,color:su,lineHeight:1.45}}>Crea un servicio nuevo o asígnalo desde Conductores.</div>
@@ -13550,33 +13886,53 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   </div>
                   <button type="button" onClick={openNuevoViaje}
                     style={{
-                      background:EMPRESA_UI.tx,
+                      background:EMPRESA_UI.btnPrimary,
                       color:"white",
-                      border:"none",
+                      border:`1px solid ${EMPRESA_UI.btnPrimaryBorder}`,
                       borderRadius:10,
-                      padding:"9px 13px",
+                      padding:"10px 14px",
                       fontSize:13,
-                      fontWeight:600,
+                      fontWeight:700,
                       cursor:"pointer",
                       flexShrink:0,
+                      boxShadow:"0 1px 3px rgba(22,163,74,.2)",
                     }}>
-                    Nuevo servicio
+                    + Nuevo servicio
                   </button>
                 </div>
                 <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
+                <input
+                  type="search"
+                  value={serviciosBusqueda}
+                  onChange={e=>setServiciosBusqueda(e.target.value)}
+                  placeholder="Buscar: cliente, conductor, matrícula, ref., ruta, lugares…"
+                  style={{
+                    width:"100%",
+                    boxSizing:"border-box",
+                    marginBottom:10,
+                    background:EMPRESA_UI.surfaceSoft,
+                    border:`1px solid ${EMPRESA_UI.border}`,
+                    borderRadius:10,
+                    padding:"9px 12px",
+                    fontSize:13,
+                    color:EMPRESA_UI.tx,
+                    outline:"none",
+                  }}
+                />
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
                   {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
-                        background:serviciosVistaTab===tab.id?EMPRESA_UI.accentSoft:EMPRESA_UI.surface,
-                        border:`1px solid ${serviciosVistaTab===tab.id?"#bfdbfe":EMPRESA_UI.border}`,
+                        background:serviciosVistaTab===tab.id?EMPRESA_UI.accentSoft:"#f8fafc",
+                        border:`1px solid ${serviciosVistaTab===tab.id?"#93c5fd":EMPRESA_UI.border}`,
                         borderRadius:20,
-                        padding:"5px 11px",
+                        padding:"6px 12px",
                         fontSize:11,
-                        fontWeight:serviciosVistaTab===tab.id?650:500,
+                        fontWeight:serviciosVistaTab===tab.id?700:550,
                         color:serviciosVistaTab===tab.id?"#1d4ed8":EMPRESA_UI.subtle,
                         cursor:"pointer",
+                        transition:"background .12s ease, border-color .12s ease",
                       }}>
                       {tab.label}
                     </button>
@@ -13678,7 +14034,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
                   )}
                   {visorEv.tipo==="incidencia"&&visorEv.datos?.texto&&(<div style={{background:"#450a0a",border:"1px solid #EF444440",borderRadius:10,padding:"12px 14px",fontSize:14,color:"#FCA5A5",lineHeight:1.6}}>{visorEv.datos.texto}</div>)}
-                  {visorEv.nota&&<div style={{marginTop:12,fontSize:13,color:su,background:bg,borderRadius:8,padding:"9px 11px"}}>📝 {visorEv.nota}</div>}
+                  {sanitizeDocumentCommentText(visorEv.nota)&&<div style={{marginTop:12,fontSize:13,color:su,background:bg,borderRadius:8,padding:"9px 11px"}}>📝 {sanitizeDocumentCommentText(visorEv.nota)}</div>}
                 </div>
               </div>
             </div>
@@ -13701,16 +14057,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ["Cliente",expedientePreview.header.cliente],
                       ["Ref cliente",expedientePreview.header.referenciaCliente],
                       ["Estado",ESTADO_LABEL[expedientePreview.header.estado]||expedientePreview.header.estado],
-                      ["ETA",expedientePreview.header.eta],
-                      ["Km",expedientePreview.header.km!=null?`${expedientePreview.header.km}`:"—"],
                       ["Documentos",String(expedientePreview.evidencias.length)],
                       ["Peso expediente",expedientePreview.storage?.totalLabel||"—"],
                     ].map(([l,v])=>(
-                      <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px"}}>
+                      <div key={l} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0}}>
                         <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>{l}</div>
                         <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v}</div>
                       </div>
                     ))}
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0,gridColumn:"span 1"}}>
+                      <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>ETA</div>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",lineHeight:1.3,overflowWrap:"anywhere",wordBreak:"break-word"}}>
+                        {expedientePreview.header.etaLine1||expedientePreview.header.eta||"—"}
+                      </div>
+                      {expedientePreview.header.etaLine2?(
+                        <div style={{fontSize:12,fontWeight:600,color:"#64748b",marginTop:4,lineHeight:1.35,overflowWrap:"anywhere"}}>
+                          {expedientePreview.header.etaLine2}
+                        </div>
+                      ):null}
+                    </div>
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:10,padding:"9px 10px",minWidth:0}}>
+                      <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>Km</div>
+                      <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>
+                        {expedientePreview.header.km!=null?`${expedientePreview.header.km} km`:"—"}
+                      </div>
+                    </div>
                   </div>
                   {expedientePreview.header.cancellation&&(
                     <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px 13px",marginBottom:12}}>
@@ -13723,6 +14094,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
                   )}
                   <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"14px 14px 12px",marginBottom:12}}>
+                    {console.log("CARD_RENDER_REAL", {
+                      source: "EmpresaPanel.expedientePreviewModal",
+                      servicioId: expedientePreview?.id,
+                      timelineLength: expedientePreview?.timeline?.length ?? 0,
+                      flotaTab: "documentos",
+                    })}
                     <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>Timeline operacional</div>
                       <div style={{fontSize:11,color:"#64748b",fontWeight:700}}>{expedientePreview.timeline.length} eventos</div>
@@ -13757,7 +14134,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         ["Conducción",expedientePreview.metrics.conduccion],
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
-                        ["ETA prevista vs real",expedientePreview.header.eta],
+                        ["ETA inicial vs actual",expedientePreview.header.eta],
                       ].map(([l,v])=>(
                         <div key={l} style={{display:"flex",justifyContent:"space-between",gap:10,borderBottom:"1px solid #e2e8f0",padding:"7px 0",fontSize:12}}>
                           <span style={{color:"#64748b"}}>{l}</span>
@@ -13916,14 +14293,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   if(filtRef&&(!refSearch||!refSearch.includes(filtRef.toLowerCase())))return false;
                   if(filtCliente){
                     const q=filtCliente.toLowerCase();
-                    const clienteSearch=[getServiceClient(sv),sv.destino,sv.origen].filter(Boolean).join(" ").toLowerCase();
-                    if(!clienteSearch.includes(q))return false;
+                    if(!getServiceClient(sv).toLowerCase().includes(q))return false;
                   }
                   if(docsSearch){
-                    const q=lower(docsSearch);
-                    const hay=[refVisible,refClienteVisible,getServiceClient(sv),sv.origen,sv.destino,conductor?.nombre,matricula,...svStops.map(st=>st.nombre),...svStops.map(st=>st.direccion)]
-                      .filter(Boolean).join(" ").toLowerCase();
-                    if(!hay.includes(q))return false;
+                    if(!servicioMatchesSearchQuery(sv,docsSearch,{stops:svStops,conductor}))return false;
                   }
                   return true;
                 }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
@@ -14000,12 +14373,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               </div>
                               <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
                                 {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
-                                {servicioPendienteAsignacion(sv)&&(
-                                  <button type="button" onClick={()=>setAsignarConductorServicio(sv)}
-                                    style={{background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
-                                    Asignar conductor
-                                  </button>
-                                )}
                                 <button type="button" onClick={()=>void abrirExpedientePreview(sv)}
                                   style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Ver
@@ -14059,10 +14426,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           conductorNombre={asignarModal.nombre}
           empresaId={empresa?.id||null}
           onClose={()=>setAsignarModal(null)}
-          onCreado={()=>{
-            const sinCond=asignarModal?.id==null;
+          onCreado={(merged)=>{
+            const sinCond=!merged?.conductor_id;
             setAsignarModal(null);
-            showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal.nombre||"conductor"));
+            if(merged?.id&&merged.conductor_id){
+              setFlotaServicios((prev)=>
+                patchFlotaServicioTrasAsignar(prev,merged.id,{
+                  conductorId:merged.conductor_id,
+                  referencia:merged.referencia,
+                  estado:"asignado",
+                }),
+              );
+            }
+            showToast(sinCond?"✅ Servicio planificado (pendiente asignación)":"✅ Servicio asignado a "+(asignarModal?.nombre||"conductor"));
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
         />
@@ -14092,9 +14468,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           servicio={asignarConductorServicio}
           conductores={conductores}
           onClose={()=>setAsignarConductorServicio(null)}
-          onAsignado={({conductorNombre,conductorId,servicioId})=>{
+          onAsignado={({conductorNombre,conductorId,servicioId,referencia})=>{
+            const expandedServicioId=svCardExpandRef.current;
+            const prevRow=
+              flotaServiciosRef.current.find((s)=>s.id===servicioId)||asignarConductorServicio;
+            const patchedPreview={
+              ...prevRow,
+              id:servicioId,
+              conductor_id:conductorId,
+              estado:"asignado",
+              referencia:referencia??prevRow?.referencia,
+            };
+
+            if(expandedServicioId===servicioId){
+              const nextTab=resolveEmpresaVistaTabKeepingExpandedServicio(
+                serviciosVistaTab,
+                patchedPreview,
+                empresaVistaTabCtx,
+              );
+              if(nextTab!==serviciosVistaTab)setServiciosVistaTab(nextTab);
+            }
+
             setAsignarConductorServicio(null);
-            setFlotaServicios(prev=>prev.map(s=>s.id===servicioId?{...s,conductor_id:conductorId,estado:"asignado"}:s));
+            setFlotaServicios((prev)=>
+              patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}),
+            );
             showToast("✅ Conductor asignado: "+conductorNombre);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
@@ -15558,19 +15956,77 @@ function ServiciosTimelineView({uid}){
 // ─────────────────────────────────────────────────────────────
 //  HOOK — SERVICIO ACTIVO
 // ─────────────────────────────────────────────────────────────
-function useServicioActivo(uid,norma=null,showToast=null){
+function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   const[servicio,setServicio]=useState(null);
   const[stops,setStops]=useState([]);
   const[loading,setLoading]=useState(true);
+  const emptyStopsRetryRef=useRef(0);
+  const emptyStopsRetryTimerRef=useRef(null);
   const cargar=useCallback(async()=>{
     if(!uid){setLoading(false);return;}
     try{
-      const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
-      const data=await r.json();
+      const resolved=await resolveDriverActiveServiceAndStops(uid);
+      const data=resolved?.servicio?[resolved.servicio]:[];
+      console.log("[OP1] useServicioActivo servicio query",{
+        uid,
+        status:resolved?.servicio?200:204,
+        rows:Array.isArray(data)?data.length:null,
+        servicioIds:Array.isArray(data)?data.map(s=>s?.id):[],
+        estados:Array.isArray(data)?data.map(s=>s?.estado):[],
+      });
       if(data.length){
-        setServicio(data[0]);
-        const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${data[0].id}&order=orden.asc`);
-        setStops(await sr.json());
+        setServicio((prev)=>{
+          const next=data[0];
+          if(
+            prev?.id===next?.id&&
+            String(prev?.estado||"")==="completado"&&
+            String(next?.estado||"")!=="completado"&&
+            String(next?.estado||"")!=="cerrado"
+          ){
+            console.log("[CLOSE4] condición ocultación — preservar completado local tras recarga",{
+              prevEstado:prev.estado,
+              nextEstado:next.estado,
+              servicioId:prev.id,
+            });
+            return{...next,estado:"completado"};
+          }
+          return next;
+        });
+        const stopsRows=Array.isArray(resolved?.stops)?resolved.stops:[];
+        console.log("[OP1] useServicioActivo stops query",{
+          servicioId:data[0]?.id||null,
+          status:200,
+          rows:Array.isArray(stopsRows)?stopsRows.length:null,
+          stopIds:Array.isArray(stopsRows)?stopsRows.map(s=>s?.id):[],
+          payload:Array.isArray(stopsRows)?stopsRows.map(s=>({
+            id:s?.id,
+            servicio_id:s?.servicio_id,
+            estado:s?.estado,
+            orden:s?.orden,
+            hora_llegada_real:s?.hora_llegada_real||null,
+            hora_salida_real:s?.hora_salida_real||null,
+          })) : [],
+        });
+        setStops(stopsRows);
+        if(stopsRows.length>0){
+          emptyStopsRetryRef.current=0;
+          if(emptyStopsRetryTimerRef.current){
+            clearTimeout(emptyStopsRetryTimerRef.current);
+            emptyStopsRetryTimerRef.current=null;
+          }
+        }else{
+          const retryN=emptyStopsRetryRef.current+1;
+          emptyStopsRetryRef.current=retryN;
+          if(retryN<=6){
+            if(emptyStopsRetryTimerRef.current)clearTimeout(emptyStopsRetryTimerRef.current);
+            emptyStopsRetryTimerRef.current=setTimeout(()=>{cargar();},3000);
+            console.warn("[OP1] servicio sin paradas, reintento",{
+              servicioId:data[0]?.id||null,
+              estado:data[0]?.estado||null,
+              retry:retryN,
+            });
+          }
+        }
       }else{setServicio(null);setStops([]);}
     }catch(e){console.warn("useServicioActivo:",e);}
     finally{setLoading(false);}
@@ -15578,14 +16034,61 @@ function useServicioActivo(uid,norma=null,showToast=null){
   useEffect(()=>{cargar();},[cargar]);
   useEffect(()=>{
     function onRecarga(){cargar();}
+    const onVisible=()=>{if(document.visibilityState==="visible")cargar();};
+    const pollId=setInterval(()=>{cargar();},30000);
     window.addEventListener("cuaderno-recargar-servicio",onRecarga);
-    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
+    window.addEventListener("focus",onRecarga);
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{
+      if(emptyStopsRetryTimerRef.current){
+        clearTimeout(emptyStopsRetryTimerRef.current);
+        emptyStopsRetryTimerRef.current=null;
+      }
+      clearInterval(pollId);
+      window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
+      window.removeEventListener("focus",onRecarga);
+      document.removeEventListener("visibilitychange",onVisible);
+    };
   },[cargar]);
   const completados=countCompletedStops(stops);
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
+    console.log("[TL1] click entrada_muelle",{
+      servicioId:servicio?.id||null,
+      stopId,
+      now,
+      estadoServicio:servicio?.estado||null,
+    });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
-    if(!res.ok)throw new Error("No se pudo guardar la entrada en muelle");
+    console.log("[TL1] patch entrada_muelle",{
+      ok:res.ok,
+      status:res.status,
+      servicioId:servicio?.id||null,
+      stopId,
+      payload:{estado:"llegado",hora_llegada_real:now},
+    });
+    if(!res.ok){
+      let detail="";
+      try{detail=await res.text();}catch(_){}
+      console.warn("[OP3] patch entrada_muelle failed",{
+        status:res.status,
+        detail:String(detail||"").slice(0,300),
+        servicioId:servicio?.id||null,
+        stopId,
+      });
+      throw new Error("No se pudo guardar la entrada en muelle");
+    }
+    try{
+      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
+      const verifyRows=verify.ok?await verify.json():null;
+      console.log("[TL1] verify entrada_muelle",{
+        ok:verify.ok,
+        status:verify.status,
+        row:verifyRows?.[0]||null,
+      });
+    }catch(e){
+      console.warn("[TL1] verify entrada_muelle failed",e?.message||e);
+    }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
     setStops(updated);
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
@@ -15602,8 +16105,42 @@ function useServicioActivo(uid,norma=null,showToast=null){
   }
   async function marcarCompletado(stopId){
     const now=new Date().toISOString();
+    console.log("[TL1] click salida_muelle",{
+      servicioId:servicio?.id||null,
+      stopId,
+      now,
+      estadoServicio:servicio?.estado||null,
+    });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
-    if(!res.ok)throw new Error("No se pudo guardar la salida de muelle");
+    console.log("[TL1] patch salida_muelle",{
+      ok:res.ok,
+      status:res.status,
+      servicioId:servicio?.id||null,
+      stopId,
+      payload:{estado:"completado",hora_salida_real:now},
+    });
+    if(!res.ok){
+      let detail="";
+      try{detail=await res.text();}catch(_){}
+      console.warn("[OP3] patch salida_muelle failed",{
+        status:res.status,
+        detail:String(detail||"").slice(0,300),
+        servicioId:servicio?.id||null,
+        stopId,
+      });
+      throw new Error("No se pudo guardar la salida de muelle");
+    }
+    try{
+      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
+      const verifyRows=verify.ok?await verify.json():null;
+      console.log("[TL1] verify salida_muelle",{
+        ok:verify.ok,
+        status:verify.status,
+        row:verifyRows?.[0]||null,
+      });
+    }catch(e){
+      console.warn("[TL1] verify salida_muelle failed",e?.message||e);
+    }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
     setStops(updated);
 
@@ -15672,7 +16209,36 @@ function useServicioActivo(uid,norma=null,showToast=null){
     if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  return{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,marcarInicioOperacionStop,recargar:cargar};
+  async function cerrarExpediente({ comentario, firmaCanvas }) {
+    if (!servicio?.id) throw new Error("Sin servicio activo");
+    const { servicio: updated, referencia } = await cerrarExpedienteServicio({
+      servicio,
+      comentario,
+      firmaCanvas,
+      conductorId: uid,
+      conductorNombre: conductorNombre || null,
+    });
+    setServicio((prev) => ({
+      ...prev,
+      ...updated,
+      estado: "cerrado",
+      referencia: referencia ?? updated?.referencia ?? prev?.referencia,
+    }));
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
+  return{
+    servicio,
+    stops,
+    completados,
+    loading,
+    marcarLlegado,
+    marcarCompletado,
+    iniciarServicio,
+    iniciarViajeOperacional,
+    marcarInicioOperacionStop,
+    cerrarExpediente,
+    recargar:cargar,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -15797,8 +16363,8 @@ function CrearServicioModal({uid,onClose,onCreado}){
     setSaving(true);setError("");
     try{
       const srData=await crearServicioConIdentidad({
-        conductor_id:uid,
-        estado:"asignado",
+        conductor_id:null,
+        estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
@@ -15808,11 +16374,25 @@ function CrearServicioModal({uid,onClose,onCreado}){
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-      // Registrar asignación
-      sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
+      const assignResult=await asignarConductorEnServicioCreado({
+        servicioId:sv.id,
+        servicio:sv,
+        conductorId:uid,
+        conductorNombre:"Conductor",
+        origen:origen.trim(),
+        destino:destino.trim(),
+        fechaInicio:new Date(fechaInicio).toISOString(),
+        skipEnsureStops:true,
+      });
+      await persistServicioStopsTrasCrear({
+        servicioId:sv.id,
+        stops,
+        origen:origen.trim(),
+        destino:destino.trim(),
+        logTag:"CrearServicioModal",
+      });
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-      onCreado(sv);
+      onCreado(mergeServicioTrasAsignacion(sv,assignResult,uid));
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
@@ -15933,29 +16513,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
           {paso===3&&(
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <button onClick={()=>{setError("");setPaso(2);}} style={{background:"#1E293B",color:su,border:"1px solid #334155",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Editar</button>
-              <button onClick={async()=>{
-                if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}
-                setSaving(true);setError("");
-                try{
-                  const srData=await crearServicioConIdentidad({
-                    conductor_id:uid,
-                    estado:"asignado",
-                    origen:origen.trim(),
-                    destino:destino.trim(),
-                    serviceNumber:ref.trim(),
-                    cliente:cliente.trim(),
-                    referenciaCliente:refCliente.trim(),
-                    fecha_inicio:new Date(fechaInicio).toISOString(),
-                  });
-                  const sv=Array.isArray(srData)?srData[0]:srData;
-                  if(!sv?.id)throw new Error("No se pudo crear el servicio");
-                  await sbFetch("/rest/v1/stops",{method:"POST",body:JSON.stringify(stops.map(s=>({servicio_id:sv.id,orden:s.orden,tipo:s.tipo,nombre:s.nombre.trim(),direccion:s.direccion.trim()||null,notas:s.notas?.trim()||null,lat:s.lat||null,lon:s.lon||null,estado:"pendiente"})))});
-                  sbFetch("/rest/v1/asignaciones",{method:"POST",body:JSON.stringify({servicio_id:sv.id,conductor_id:uid,tipo:"principal",estado:"activa"})}).catch(()=>{});
-                  void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-                  onCreado(sv);
-                }catch(e){setError("Error: "+e.message);}
-                finally{setSaving(false);}
-              }} disabled={saving}
+              <button onClick={()=>void guardar()} disabled={saving}
                 style={{background:saving?"#334155":"#22C55E",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:800,cursor:saving?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"✅ CREAR"}
               </button>
@@ -16480,18 +17038,18 @@ function ServicioDocsView({ uid, showToast, onBack }) {
             </div>
             <div style={{ padding: "14px 14px 32px" }}>
               <div style={{ fontSize: 10, color: su, marginBottom: 12 }}>{new Date(visorCtx.ev.created_at).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
-              {visorCtx.ev.url && (
+              {resolveEvidenciaDisplayImageUrl(visorCtx.ev) && (
                 <DriverCachedMediaImg
                   servicioId={visorCtx.servicioId}
                   evidenciaId={visorCtx.ev.id}
-                  src={visorCtx.ev.url}
+                  src={resolveEvidenciaDisplayImageUrl(visorCtx.ev)}
                   alt="evidencia"
                   style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 12, marginBottom: 12 }}
                 />
               )}
-              {visorCtx.ev.url && (
+              {resolveEvidenciaDisplayImageUrl(visorCtx.ev) && (
                 <a
-                  href={visorCtx.ev.url}
+                  href={resolveEvidenciaDisplayImageUrl(visorCtx.ev)}
                   download
                   target="_blank"
                   rel="noopener noreferrer"
@@ -16541,7 +17099,11 @@ function ServicioDocsView({ uid, showToast, onBack }) {
                   {visorCtx.ev.datos.texto}
                 </div>
               )}
-              {visorCtx.ev.nota && <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>📝 {visorCtx.ev.nota}</div>}
+              {sanitizeDocumentCommentText(visorCtx.ev.nota) && (
+                <div style={{ marginTop: 12, fontSize: 12, color: su, background: "rgba(15,23,42,.5)", borderRadius: 8, padding: "8px 10px", border: `1px solid ${cardBorder}` }}>
+                  📝 {sanitizeDocumentCommentText(visorCtx.ev.nota)}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -16646,7 +17208,7 @@ function PushDebugTraceView({pre,result,caught,tx,su}){
 }
 
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,recargar}=useServicioActivo(uid,norma,showToast);
+  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const[pushDebugSession,setPushDebugSession]=useState(()=>isPushDebugSessionEnabled());
@@ -16678,8 +17240,10 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     }
   }
 
+  const stopsOperativaSigKey=useMemo(()=>stopsOperativaSig(stops),[stops]);
+
   useEffect(()=>{
-    if(!servicio?.id||!stops.length){
+    if(!servicio?.id||!stopsOperativaSigKey){
       setEvidenciasByStop({});
       return;
     }
@@ -16698,16 +17262,23 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       }
     })();
     return()=>{cancelled=true;};
-  },[servicio?.id,stops]);
+  },[servicio?.id,stopsOperativaSigKey,stops]);
 
   const handleEvidenciaSaved=useCallback((ev)=>{
     const stopId=ev?.stop_id;
     if(!ev?.id||!stopId)return;
+    console.log("[TL1] evidencia saved callback",{
+      evidenciaId:ev.id,
+      servicioId:servicio?.id||null,
+      stopId,
+      tipo:ev?.tipo||null,
+      created_at:ev?.created_at||null,
+    });
     setEvidenciasByStop((prev)=>mergeEvidenciaIntoByStop(prev,stopId,ev));
   },[]);
 
   useEffect(()=>{
-    if(servicio?.id&&["completado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
+    if(servicio?.id&&["completado","cerrado","cancelado","anulado"].includes(String(servicio.estado||"").toLowerCase())){
       markServiceArchived(servicio.id);
       void runRetentionSweep();
     }
@@ -16779,73 +17350,58 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     </div>
   );
 
-  if(servicio.estado==="completado")return(
-    <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
-      {pushActivator}
-      {pushDebugBar}
-      <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
-        <div style={{fontSize:12,fontWeight:800,color:"#16A34A",letterSpacing:.8,marginBottom:10}}>COMPLETADO</div>
-        <div style={{fontSize:18,fontWeight:750,color:"#16A34A",marginBottom:6}}>Servicio completado</div>
-        <div style={{fontSize:14,color:su,marginBottom:20}}>{servicio.origen} → {servicio.destino}</div>
-        <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Nuevo servicio</button>
+  if(servicio.estado==="cerrado"){
+    const cierre=getExpedienteCierre(servicio);
+    const cerradoLabel=cierre?.closed_at
+      ?new Date(cierre.closed_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})
+      :null;
+    return(
+      <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
+        {pushActivator}
+        {pushDebugBar}
+        <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#0F766E",letterSpacing:.8,marginBottom:10}}>EXPEDIENTE CERRADO</div>
+          <div style={{fontSize:18,fontWeight:750,color:"#0F766E",marginBottom:6}}>Viaje cerrado</div>
+          <div style={{fontSize:14,color:su,marginBottom:8}}>{servicio.origen} → {servicio.destino}</div>
+          {cerradoLabel?<div style={{fontSize:12,color:su,marginBottom:20}}>Cerrado {cerradoLabel}</div>:null}
+          {cierre?.comentario?<div style={{fontSize:13,color:tx,textAlign:"left",background:"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:16,lineHeight:1.45}}>{cierre.comentario}</div>:null}
+          <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
+        </div>
+        {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
       </div>
+    );
+  }
+
+  if(servicio.estado==="asignado"||servicio.estado==="en_curso"||servicio.estado==="completado"){
+    const panelMode=
+      servicio.estado==="asignado"?"asignado":servicio.estado==="completado"?"cierre_documental":"en_curso";
+    return(
+    <>
+      {pushActivator}
+      {pushDebugBar}
+      <ActiveServicePanel
+        mode={panelMode}
+        servicio={servicio}
+        stops={stops}
+        evidenciasByStop={evidenciasByStop}
+        showToast={showToast}
+        onIniciarServicio={iniciarServicio}
+        marcarLlegado={marcarLlegado}
+        marcarCompletado={marcarCompletado}
+        recargar={recargar}
+        EvidenciasStopComponent={EvidenciasStop}
+        onOpenViajeModal={onOpenViajeModal}
+        onEvidenciaSaved={handleEvidenciaSaved}
+        onCerrarExpediente={cerrarExpediente}
+        conductorNombre={conductorNombre}
+        norma={norma}
+      />
       {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
-    </div>
-  );
-
-  if(servicio.estado==="asignado")return(
-    <>
-      {pushActivator}
-      {pushDebugBar}
-      <ActiveServicePanel
-      mode="asignado"
-      servicio={servicio}
-      stops={stops}
-      completados={completados}
-      evidenciasByStop={evidenciasByStop}
-      showToast={showToast}
-      onIniciarServicio={iniciarServicio}
-      marcarLlegado={marcarLlegado}
-      marcarCompletado={marcarCompletado}
-      recargar={recargar}
-      EvidenciasStopComponent={EvidenciasStop}
-      card={card}
-      tx={tx}
-      su={su}
-      onOpenViajeModal={onOpenViajeModal}
-      onEvidenciaSaved={handleEvidenciaSaved}
-      conductorNombre={conductorNombre}
-      norma={norma}
-    />
     </>
-  );
+    );
+  }
 
-  return(
-    <>
-      {pushActivator}
-      {pushDebugBar}
-      <ActiveServicePanel
-      mode="en_curso"
-      servicio={servicio}
-      stops={stops}
-      completados={completados}
-      evidenciasByStop={evidenciasByStop}
-      showToast={showToast}
-      onIniciarServicio={iniciarServicio}
-      marcarLlegado={marcarLlegado}
-      marcarCompletado={marcarCompletado}
-      recargar={recargar}
-      EvidenciasStopComponent={EvidenciasStop}
-      card={card}
-      tx={tx}
-      su={su}
-      onOpenViajeModal={onOpenViajeModal}
-      onEvidenciaSaved={handleEvidenciaSaved}
-      conductorNombre={conductorNombre}
-      norma={norma}
-    />
-    </>
-  );
+  return null;
 });
 
 
@@ -16860,6 +17416,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
   const[viajeLocal,setViajeLocal]=useState(()=>readViajeActivoFromStorage());
+  const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
 
@@ -16985,7 +17542,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                 <div style={{marginTop:6}}>
                   <OperationalEtaSnapshotBlock
                     servicio={primerCurso}
-                    nowMs={Date.now()}
+                    nowMs={etaVisualClockMs}
                     tx={tx}
                     su={su}
                     subtle={EMPRESA_UI.subtle}
@@ -17081,7 +17638,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
                 <div style={{marginTop:4}}>
                   <OperationalEtaSnapshotBlock
                     servicio={sv}
-                    nowMs={Date.now()}
+                    nowMs={etaVisualClockMs}
                     tx={tx}
                     su={su}
                     subtle={EMPRESA_UI.subtle}

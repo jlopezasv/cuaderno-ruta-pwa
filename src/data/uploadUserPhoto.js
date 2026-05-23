@@ -1,14 +1,32 @@
-import { SB_KEY, SB_URL, getUserId } from "./supabaseClient";
+import { SB_KEY, SB_URL, getAccessToken, getUserId } from "./supabaseClient";
+import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
 import {
   isHttpStorageUrl,
   logStorageDoc,
   logStorageDocFail,
 } from "../domain/documents/storageDocumentUploadLog.js";
+import {
+  buildDataUrlStorageResult,
+  buildStorageUploadResult,
+  DEFAULT_OPERATIVE_BUCKET,
+  storageUploadUrl,
+  traceMediaV2,
+} from "../domain/documents/mediaStorageV2.js";
+import {
+  compressOperationalImageFile,
+  OPERATIONAL_UPLOAD_JPEG_QUALITY,
+  OPERATIONAL_UPLOAD_MAX_EDGE,
+} from "../domain/documents/operationalDocumentPipeline.js";
+import {
+  isOperationalDocTraceEnabled,
+  traceBlobColor,
+  traceOperationalDoc,
+} from "../domain/documents/operationalDocumentTrace.js";
 
 /** Firmas cortas; evitar URLs públicas permanentes para CMR/fotos/PDF. */
 const SIGNED_URL_TTL_SEC = 60 * 60 * 24 * 7; // 7 días
 const SIGNED_URL_FALLBACK_SEC = 60 * 60 * 24; // 1 día (reintento)
-export const USER_PHOTOS_BUCKET = "user-photos";
+export const USER_PHOTOS_BUCKET = DEFAULT_OPERATIVE_BUCKET;
 
 const STORAGE_URL_ERROR = "Error generando URL del documento";
 
@@ -48,7 +66,14 @@ function extFromMime(mime, originalName) {
   const m = String(mime || "").toLowerCase();
   if (m.includes("pdf")) return "pdf";
   if (m.includes("png")) return "png";
-  if (originalName && String(originalName).toLowerCase().endsWith(".pdf")) return "pdf";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("heic") || m.includes("heif")) return "heic";
+  if (originalName) {
+    const lower = String(originalName).toLowerCase();
+    if (lower.endsWith(".pdf")) return "pdf";
+    const match = lower.match(/\.([a-z0-9]{2,5})$/);
+    if (match) return match[1];
+  }
   return "jpg";
 }
 
@@ -74,13 +99,14 @@ async function readResponseBody(res) {
   return { text, json: parseStorageJson(text), status: res.status, ok: res.ok };
 }
 
-function getStorageToken() {
-  try {
-    const session = JSON.parse(localStorage.getItem("sb_session") || "null");
-    return session?.access_token || SB_KEY;
-  } catch {
-    return SB_KEY;
+/** JWT de usuario (rol authenticated). La anon key no cumple stor_uph_ins. */
+function requireStorageAuth() {
+  const uid = getUserId();
+  const token = getAccessToken();
+  if (!uid || !token) {
+    throw new Error("Sesión no válida — inicia sesión de nuevo para subir documentos");
   }
+  return { uid, token };
 }
 
 /**
@@ -89,15 +115,28 @@ function getStorageToken() {
  * @param {string} folder
  * @param {string} [originalName]
  * @param {{ requireHttpUrl?: boolean, allowBase64Fallback?: boolean }} [options]
- * @returns {Promise<string>}
+ * @returns {Promise<import("../domain/documents/mediaStorageV2.js").StorageUploadResult>}
  */
 export async function uploadBlobToStorage(blob, mime, folder, originalName, options = {}) {
   const { requireHttpUrl = false, allowBase64Fallback = !requireHttpUrl } = options;
-  const uid = getUserId() || "anon";
+  const { uid, token } = requireStorageAuth();
   const ext = extFromMime(mime, originalName);
   const objectPath = `${uid}/${folder}/${Date.now()}.${ext}`;
   const bucket = USER_PHOTOS_BUCKET;
   const sizeBytes = blobByteSize(blob);
+
+  if (isOperationalDocTraceEnabled()) {
+    traceOperationalDoc("uploadBlobToStorage:start", {
+      bucket,
+      path: objectPath,
+      mime: mime || null,
+      sizeBytes,
+      folder,
+    });
+    if (blob && String(mime || "").startsWith("image/")) {
+      await traceBlobColor("uploadBlobToStorage:input", blob, { path: objectPath, folder });
+    }
+  }
 
   logStorageDoc("DOCUMENT_STORAGE_START", {
     bucket,
@@ -121,10 +160,10 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     });
     if (requireHttpUrl) throw new Error(STORAGE_URL_ERROR);
     if (!allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
-    return fileToBase64(blob);
+    return buildDataUrlStorageResult(await fileToBase64(blob));
   }
 
-  const token = getStorageToken();
+  guardDemoCannotUseProduction(SB_URL, `storage:upload:${bucket}`);
   const uploadUrl = `${SB_URL}/storage/v1/object/${bucket}/${objectPath}`;
 
   try {
@@ -149,7 +188,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       });
       if (requireHttpUrl || !allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
       logStorageDoc("DOCUMENT_STORAGE_FINAL_URL", { kind: "base64_fallback_after_upload_fail" });
-      return fileToBase64(blob);
+      return buildDataUrlStorageResult(await fileToBase64(blob));
     }
 
     logStorageDoc("DOCUMENT_STORAGE_UPLOAD_OK", {
@@ -173,6 +212,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       return { signRes, signBody };
     };
 
+    let signExpiresIn = SIGNED_URL_TTL_SEC;
     let { signRes, signBody } = await signOnce(SIGNED_URL_TTL_SEC);
     if (!signRes.ok) {
       logStorageDocFail("DOCUMENT_STORAGE_SIGNED_URL_FAIL", new Error(`HTTP ${signRes.status}`), {
@@ -181,23 +221,48 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
         expiresIn: SIGNED_URL_TTL_SEC,
         supabaseResponse: signBody.json ?? signBody.text,
       });
+      signExpiresIn = SIGNED_URL_FALLBACK_SEC;
       ({ signRes, signBody } = await signOnce(SIGNED_URL_FALLBACK_SEC));
     }
 
     if (signRes.ok) {
       const finalUrl = signedUrlFromSignBody(signBody.json);
+      const expiresInUsed = Number(signBody.json?.expiresIn) || signExpiresIn;
       if (isHttpStorageUrl(finalUrl)) {
+        const result = buildStorageUploadResult({
+          url: finalUrl,
+          bucket,
+          path: objectPath,
+          signedExpiresInSec: expiresInUsed,
+        });
         logStorageDoc("DOCUMENT_STORAGE_SIGNED_URL_OK", {
           bucket,
           path: objectPath,
           signedUrl: finalUrl,
-          expiresIn: signBody.json?.expiresIn ?? null,
+          expiresIn: expiresInUsed,
         });
         logStorageDoc("DOCUMENT_STORAGE_FINAL_URL", {
           url: finalUrl,
           urlLength: finalUrl.length,
         });
-        return finalUrl;
+        traceMediaV2("upload_complete", {
+          bucket: result.bucket,
+          path_preview: result.path,
+          path_original: null,
+          signed_expires_at: result.signedExpiresAt,
+          folder,
+        });
+        if (isOperationalDocTraceEnabled()) {
+          traceOperationalDoc("uploadBlobToStorage:final_url", {
+            path: objectPath,
+            folder,
+            mime,
+            sizeBytes,
+            signedUrl: finalUrl,
+            signed_expires_at: result.signedExpiresAt,
+          });
+        }
+        return result;
       }
       logStorageDocFail("DOCUMENT_STORAGE_SIGNED_URL_FAIL", new Error("Respuesta sign sin URL"), {
         bucket,
@@ -237,49 +302,54 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     urlLength: dataUrl ? String(dataUrl).length : 0,
     startsWithData: String(dataUrl || "").startsWith("data:"),
   });
-  return dataUrl;
-}
-
-function compressImage(file, maxWidth = 800, quality = 0.72) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Imagen no válida"));
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width;
-        let h = img.height;
-        if (w > maxWidth) {
-          h = Math.round((h * maxWidth) / w);
-          w = maxWidth;
-        }
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        canvas.toBlob(
-          (blob) => {
-            if (!blob || blob.size <= 0) {
-              reject(new Error("Compresión devolvió blob vacío"));
-              return;
-            }
-            resolve(blob);
-          },
-          "image/jpeg",
-          quality,
-        );
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
+  traceMediaV2("upload_data_url_fallback", {
+    bucket: null,
+    path_preview: objectPath,
+    path_original: null,
+    signed_expires_at: null,
+    folder,
   });
+  return buildDataUrlStorageResult(dataUrl);
 }
 
-/** Sube imagen comprimida a `user-photos` en Supabase Storage. */
+/**
+ * JPEG operativo (~500 KB, 1600 px, EXIF/iOS). Usado por tacógrafo, gastos y extras.
+ */
+export async function compressImageToJpegBlob(
+  file,
+  maxWidth = OPERATIONAL_UPLOAD_MAX_EDGE,
+  quality = OPERATIONAL_UPLOAD_JPEG_QUALITY,
+) {
+  const traceOn = isOperationalDocTraceEnabled();
+  if (traceOn) {
+    traceOperationalDoc("compressImage:enter", {
+      fn: "compressImageToJpegBlob",
+      pipeline: "compressOperationalImageFile",
+      maxWidth,
+      quality,
+      fileName: file?.name,
+      fileMime: file?.type,
+      fileSize: file?.size,
+    });
+  }
+
+  const { blob } = await compressOperationalImageFile(file, {
+    maxEdge: maxWidth,
+    initialQuality: quality,
+  });
+  if (!blob?.size) throw new Error("Compresión devolvió blob vacío");
+
+  if (traceOn) {
+    await traceBlobColor("compressImage:output", blob, { pipeline: "compressOperationalImageFile" });
+  }
+  return blob;
+}
+
+/** Sube imagen comprimida a `user-photos`. Devuelve URL string (compat monolito). */
 export async function uploadUserPhoto(file, folder = "misc", options = {}) {
-  const compressed = await compressImage(file, 800, 0.72);
-  return uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
+  const compressed = await compressImageToJpegBlob(file);
+  const result = await uploadBlobToStorage(compressed, file.type || "image/jpeg", folder, file.name, options);
+  return storageUploadUrl(result);
 }
 
 /**
