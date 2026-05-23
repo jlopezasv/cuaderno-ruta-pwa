@@ -1,4 +1,4 @@
-import { SB_KEY, SB_URL, getUserId } from "./supabaseClient";
+import { SB_KEY, SB_URL, getAccessToken, getUserId } from "./supabaseClient";
 import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
 import {
   isHttpStorageUrl,
@@ -99,13 +99,42 @@ async function readResponseBody(res) {
   return { text, json: parseStorageJson(text), status: res.status, ok: res.ok };
 }
 
-function getStorageToken() {
+/** Ref. proyecto desde host `xxxx.supabase.co` (solo logs). */
+function projectRefFromSupabaseUrl(url) {
+  if (!url || typeof url !== "string") return null;
   try {
-    const session = JSON.parse(localStorage.getItem("sb_session") || "null");
-    return session?.access_token || SB_KEY;
+    const m = new URL(url.trim()).hostname.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    return m?.[1] ?? null;
   } catch {
-    return SB_KEY;
+    return null;
   }
+}
+
+/** Temporal — quitar tras depurar 400 Storage */
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+    return JSON.parse(atob(b64 + pad));
+  } catch {
+    return null;
+  }
+}
+
+function jwtSubFromToken(token) {
+  return decodeJwtPayload(token)?.sub ?? null;
+}
+
+/** JWT de usuario (rol authenticated). La anon key no cumple stor_uph_ins. */
+function requireStorageAuth() {
+  const uid = getUserId();
+  const token = getAccessToken();
+  if (!uid || !token) {
+    throw new Error("Sesión no válida — inicia sesión de nuevo para subir documentos");
+  }
+  return { uid, token };
 }
 
 /**
@@ -118,7 +147,7 @@ function getStorageToken() {
  */
 export async function uploadBlobToStorage(blob, mime, folder, originalName, options = {}) {
   const { requireHttpUrl = false, allowBase64Fallback = !requireHttpUrl } = options;
-  const uid = getUserId() || "anon";
+  const { uid, token } = requireStorageAuth();
   const ext = extFromMime(mime, originalName);
   const objectPath = `${uid}/${folder}/${Date.now()}.${ext}`;
   const bucket = USER_PHOTOS_BUCKET;
@@ -163,23 +192,58 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
   }
 
   guardDemoCannotUseProduction(SB_URL, `storage:upload:${bucket}`);
-  const token = getStorageToken();
   const uploadUrl = `${SB_URL}/storage/v1/object/${bucket}/${objectPath}`;
+
+  const pathFirstSegment = objectPath.split("/")[0] ?? "";
+  const jwtSub = jwtSubFromToken(token);
+  const viteSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim();
+  console.warn("[STORAGE_UPLOAD_PRE_POST]", {
+    VITE_SUPABASE_URL: viteSupabaseUrl || "(unset)",
+    projectRef: projectRefFromSupabaseUrl(viteSupabaseUrl),
+    uploadUrl,
+    getUserId: getUserId(),
+    objectPath,
+    pathFirstSegment,
+    jwtSub,
+    pathMatchesJwtSub: pathFirstSegment === jwtSub,
+  });
+
+  const accessToken = getAccessToken();
+  const jwtPayload = decodeJwtPayload(accessToken || token);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    apikey: SB_KEY,
+    "Content-Type": mime || "application/octet-stream",
+    "x-upsert": "true",
+  };
+  console.warn("[STORAGE_UPLOAD_HEADERS]", {
+    authorizationHeaderPresent: !!headers.Authorization,
+    authorizationPrefix: headers.Authorization?.slice(0, 20),
+    apikeyPresent: !!headers.apikey,
+    contentType: headers["Content-Type"],
+  });
+  console.warn("[STORAGE_UPLOAD_JWT]", {
+    accessTokenPrefix: accessToken?.slice(0, 20) ?? null,
+    jwt: {
+      sub: jwtPayload?.sub ?? null,
+      role: jwtPayload?.role ?? null,
+      exp: jwtPayload?.exp ?? null,
+    },
+  });
 
   try {
     const res = await fetch(uploadUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SB_KEY,
-        "Content-Type": mime || "application/octet-stream",
-        "x-upsert": "true",
-      },
+      headers,
       body: blob,
     });
     const uploadBody = await readResponseBody(res);
 
     if (!res.ok) {
+      console.error(
+        "DOCUMENT_STORAGE_UPLOAD_FAIL_RAW",
+        JSON.stringify(uploadBody, null, 2),
+      );
       logStorageDocFail("DOCUMENT_STORAGE_UPLOAD_FAIL", new Error(`HTTP ${res.status}`), {
         bucket,
         path: objectPath,

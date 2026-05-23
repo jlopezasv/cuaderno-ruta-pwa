@@ -20,6 +20,7 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
   loadLocalDb as loadDB,
@@ -376,28 +377,41 @@ function AuthScreen({ onAuth }) {
         await sbSignUp(email.trim(), password);
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
-        const authContext = contextKindFromProfileTipo(tipo);
-        if (uid) {
-          persistAuthContext(authContext, uid);
-          await sbFetch("/rest/v1/profiles", {
-            method:"POST",
-            headers:{"Prefer":"resolution=merge-duplicates"},
-            body: JSON.stringify({ id:uid, nombre:nombre.trim(), tipo_cuenta:tipo })
-          }).catch(()=>{});
-          // Email bienvenida
-          await fetch("/api/admin", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({
-              action:"bienvenida",
-              email: email.trim(),
-              nombre: nombre.trim(),
-              tipo,
-            })
-          }).catch(()=>{});
+        if (!uid) {
+          throw new Error(
+            "Registro sin sesión. En Supabase demo: activa sign-ups, desactiva confirmación por email y revisa rate limits.",
+          );
         }
+        const authContext = contextKindFromProfileTipo(tipo);
+        persistAuthContext(authContext, uid);
+        const profRes = await sbFetch("/rest/v1/profiles", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify({ id: uid, nombre: nombre.trim(), tipo_cuenta: tipo }),
+        });
+        if (!profRes.ok) {
+          const profErr = await profRes.text().catch(() => "");
+          if (isDemoDevUnlocked()) {
+            demoDevError("profiles POST", profRes.status, profErr);
+          }
+          throw new Error(
+            `No se pudo crear el perfil (HTTP ${profRes.status}). ${isDemoDevUnlocked() ? profErr.slice(0, 120) : ""}`.trim(),
+          );
+        }
+        await fetch("/api/admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "bienvenida",
+            email: email.trim(),
+            nombre: nombre.trim(),
+            tipo,
+          }),
+        }).catch((e) => {
+          if (isDemoDevUnlocked()) demoDevWarn("bienvenida email omitido:", e?.message);
+        });
         onAuth(authContext);
-        setTimeout(()=>window.location.reload(), 500);
+        setTimeout(() => window.location.reload(), 500);
       } else {
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
@@ -415,6 +429,9 @@ function AuthScreen({ onAuth }) {
         setTimeout(()=>window.location.reload(), 100);
       }
     } catch(e) {
+      if (isDemoDevUnlocked()) {
+        demoDevError("AuthScreen catch", { mode, message: e?.message, error: e });
+      }
       setError(mode === "login" ? "Email o contraseña incorrectos" : e.message);
     } finally { setLoading(false); }
   }
@@ -7716,6 +7733,7 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
         body:JSON.stringify({owner_id:uid,nombre:nombre.trim(),cif:cif.trim()||null,codigo_corto:codigo,activa:true}),
       });
       const text=await res.text();
+      if(isDemoDevUnlocked()&&!res.ok)demoDevError("empresas POST (perfil)",res.status,text);
       if(res.ok){
         const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
         if(emps.length){setEmpresa(emps[0]);setMsg("Listo. Ya puedes invitar a tu equipo.");}
@@ -13424,6 +13442,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const uid=getUserId();if(!uid)return;
     try{
       const res=await sbFetch("/rest/v1/empresas",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({nombre,cif:cif||null,owner_id:uid})});
+      if(!res.ok){
+        const errText=await res.text().catch(()=>"");
+        if(isDemoDevUnlocked())demoDevError("empresas POST (panel)",res.status,errText);
+        showToast(`Error al crear empresa (${res.status})`);
+        return;
+      }
       const data=await res.json();
       let emp=Array.isArray(data)?data[0]:data;
       if(emp?.id){
@@ -13432,7 +13456,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }
       setEmpresa(emp);setModo("jefe");setConductores([]);
       showToast("Empresa creada ✓");
-    }catch(_){showToast("Error al crear empresa");}
+    }catch(e){
+      if(isDemoDevUnlocked())demoDevError("crearEmpresa",e);
+      showToast("Error al crear empresa");
+    }
   }
 
   async function añadirConductor(){

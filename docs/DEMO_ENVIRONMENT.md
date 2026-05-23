@@ -51,7 +51,8 @@ Objetivo: **cero contaminación** entre datos, auth, storage y despliegues reale
 - [ ] Opcional: desactivar “Confirm email” para QA (`demo-*.test`).
 - [ ] Ejecutar [scripts/seed-demo-auth.sql](../scripts/seed-demo-auth.sql) (usuarios fijos).
 - [ ] Ejecutar [scripts/seed-demo.sql](../scripts/seed-demo.sql) (datos operativos fake).
-- [ ] App: pestaña “Crear cuenta” oculta si `VITE_APP_ENV=demo` (código).
+- [ ] App (develop/demo): pestaña “Crear cuenta” **habilitada** si `VITE_APP_ENV=demo` (`isDemoPublicRegistrationAllowed()`). Revertir con `false` en `appEnvironment.js`.
+- [ ] Supabase demo → Authentication: **Enable sign ups** (si no, `signUp` falla aunque la UI esté abierta).
 
 ### E. Storage demo
 
@@ -72,7 +73,7 @@ UUIDs fijos: ver cabecera de `scripts/seed-demo.sql`.
 
 - [ ] Cliente: si `VITE_APP_ENV=demo` y URL contiene ref REAL → **error al arrancar**.
 - [ ] API: si `APP_ENV=demo` y `SUPABASE_URL` es REAL → **error**.
-- [ ] `signUp()` rechazado en demo (`session.js`).
+- [ ] `signUp()` en demo: permitido mientras `isDemoPublicRegistrationAllowed()` sea `true` (`session.js` + `isPublicRegistrationAllowed()`).
 - [ ] Login demo muestra credenciales seed (banner azul).
 - [ ] `ALLOW_PURGE_TEST_COMPANY` solo en no-production (ya existente).
 
@@ -119,7 +120,7 @@ Plantilla completa: [`.env.demo.example`](../.env.demo.example).
 1. Proyecto Supabase demo → Authentication.
 2. **Disable sign ups** (canal principal de bloqueo).
 3. `seed-demo-auth.sql` crea dos usuarios con password `DemoCuaderno2026!`.
-4. La app oculta “Crear cuenta” y `signUp()` lanza error si `VITE_APP_ENV=demo`.
+4. En demo/develop la app puede mostrar “Crear cuenta” (incl. empresa) si `isDemoPublicRegistrationAllowed()` es `true`; en producción el comportamiento no cambia.
 
 Recuperación de contraseña: en demo dejar desactivada o usar solo cuentas seed (evitar emails a dominios reales vía Brevo prod).
 
@@ -155,8 +156,9 @@ Reset solo demo: `scripts/seed-demo-reset.sql` → auth → seed.
 | Capa | Acción |
 |------|--------|
 | Supabase Dashboard | Disable new sign ups |
-| Frontend | Sin tab “Crear cuenta” si `VITE_APP_ENV=demo` |
-| `signUp()` | Error explícito en demo |
+| Frontend (demo) | Tab “Crear cuenta” visible si `isDemoPublicRegistrationAllowed()` |
+| `signUp()` (demo) | Permitido si `isPublicRegistrationAllowed()` → demo branch |
+| Frontend (prod) | Sin cambio: no es `VITE_APP_ENV=demo` |
 | Opcional prod | No definir `VITE_ALLOW_PUBLIC_SIGNUP` (default permitido en prod) |
 
 ---
