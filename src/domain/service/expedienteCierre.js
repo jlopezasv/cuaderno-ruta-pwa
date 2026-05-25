@@ -12,6 +12,7 @@ export function getExpedienteCierre(servicio) {
   return cierre && typeof cierre === "object" ? cierre : null;
 }
 
+/** Cierre documental: meta `expediente_cierre` o estado legacy `cerrado` (fase 1 compat). */
 export function isServicioExpedienteCerrado(servicio) {
   if (!servicio) return false;
   if (String(servicio.estado || "").toLowerCase() === SERVICIO_ESTADO_CERRADO) return true;

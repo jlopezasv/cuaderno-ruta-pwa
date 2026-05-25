@@ -3,7 +3,7 @@ import { uploadBlobToStorage } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../documents/mediaStorageV2.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
 import { geoFromGpsPoint } from "./operationalGeo.js";
-import { SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
+import { SERVICIO_ESTADO_COMPLETADO } from "../fleet/serviceStatus.js";
 import {
   buildExpedienteCierreMetaPatch,
   mergeReferenciaConCierre,
@@ -27,7 +27,7 @@ function canvasToPngBlob(canvas) {
 }
 
 /**
- * Sube firma, persiste cierre en referencia y pasa el servicio a `cerrado`.
+ * Sube firma, persiste cierre en referencia y deja el servicio en `completado` (fase 1: ya no escribe `cerrado`).
  * @param {{ servicio: object, comentario?: string, firmaCanvas: HTMLCanvasElement, conductorId?: string, conductorNombre?: string }} p
  */
 export async function cerrarExpedienteServicio({
@@ -80,7 +80,7 @@ export async function cerrarExpedienteServicio({
   const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ estado: SERVICIO_ESTADO_CERRADO, referencia }),
+    body: JSON.stringify({ estado: SERVICIO_ESTADO_COMPLETADO, referencia }),
   });
 
   let payload = null;
@@ -103,7 +103,7 @@ export async function cerrarExpedienteServicio({
 
   const row = Array.isArray(payload) ? payload[0] : payload;
   return {
-    servicio: row || { ...servicio, estado: SERVICIO_ESTADO_CERRADO, referencia },
+    servicio: row || { ...servicio, estado: SERVICIO_ESTADO_COMPLETADO, referencia },
     referencia: row?.referencia ?? referencia,
     closedAt,
     firmaUrl,

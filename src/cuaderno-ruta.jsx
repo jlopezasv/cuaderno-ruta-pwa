@@ -16221,7 +16221,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     setServicio((prev) => ({
       ...prev,
       ...updated,
-      estado: "cerrado",
+      estado: "completado",
       referencia: referencia ?? updated?.referencia ?? prev?.referencia,
     }));
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
