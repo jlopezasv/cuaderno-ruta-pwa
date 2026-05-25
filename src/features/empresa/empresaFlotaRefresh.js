@@ -4,7 +4,6 @@ import { needsAttention } from "../../domain/service/serviceAttention.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import { ETA_UI_VISUAL_TICK_MS } from "../../domain/service/operationalEtaPresentation.js";
 
-const EMPRESA_VISTA_ESTADOS_ACTIVOS = Object.freeze(["asignado", "en_curso"]);
 const EMPRESA_VISTA_ESTADOS_COMPLETADOS = Object.freeze(["completado", "cerrado"]);
 
 function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
@@ -27,9 +26,7 @@ export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
   const archSet =
     archived instanceof Set ? archived : new Set(Array.isArray(archived) ? archived : []);
 
-  if (tab === "activos") {
-    return EMPRESA_VISTA_ESTADOS_ACTIVOS.includes(servicio.estado) && !archSet.has(servicio.id);
-  }
+  if (tab === "activos") return false;
   if (tab === "en_curso") return servicio.estado === "en_curso";
   if (tab === "asignados") return servicio.estado === "asignado";
   if (tab === "sin_asignar") return servicioPendienteAsignacion(servicio);

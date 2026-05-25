@@ -12475,7 +12475,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   svCardExpandRef.current=svCardExpand;
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[anularModal,setAnularModal]=useState(null);
-  const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias
+  const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias | …
+  useEffect(()=>{
+    if(serviciosVistaTab==="activos")setServiciosVistaTab("todos");
+  },[serviciosVistaTab]);
   const[serviciosBusqueda,setServiciosBusqueda]=useState("");
   const[serviciosPage,setServiciosPage]=useState(1);
   const[etaOperativaById,setEtaOperativaById]=useState({});
@@ -13920,7 +13923,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   }}
                 />
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
-                  {[{id:"todos",label:"Todos"},{id:"activos",label:"Activos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
+                  {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
@@ -17386,7 +17389,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     console.log("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
   }
 
-  const activos=servicios.filter(s=>s.estado==="en_curso").length;
+  const enCurso=servicios.filter(s=>s.estado==="en_curso").length;
   const asignados=servicios.filter(s=>s.estado==="asignado").length;
 
   return(
@@ -17395,7 +17398,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       <div style={{background:card,borderRadius:14,padding:"16px 18px",marginBottom:16,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
         <div style={{fontSize:11,fontWeight:600,color:su,letterSpacing:.4,marginBottom:10}}>Resumen operacional</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:12,alignItems:"center",fontSize:13,color:tx,lineHeight:1.5}}>
-          <span><strong style={{color:EMPRESA_UI.accent,fontSize:17,fontWeight:650}}>{activos}</strong> <span style={{color:su}}>activos</span></span>
+          <span><strong style={{color:EMPRESA_UI.accent,fontSize:17,fontWeight:650}}>{enCurso}</strong> <span style={{color:su}}>en curso</span></span>
           <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
           <span><strong style={{color:EMPRESA_UI.subtle,fontSize:17,fontWeight:650}}>{asignados}</strong> <span style={{color:su}}>pendientes</span></span>
           <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
@@ -17462,7 +17465,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
         {[
-          {l:"Servicios activos",  v:activos,     c:EMPRESA_UI.accent, icon:"▱", action:()=>onTabChange("servicios")},
+          {l:"En curso",  v:enCurso,     c:EMPRESA_UI.accent, icon:"▱", action:()=>onTabChange("servicios")},
           {l:"Pendientes salida",  v:asignados,   c:EMPRESA_UI.subtle, icon:"○", action:()=>onTabChange("servicios")},
           {l:"Conductores activos",v:conductores.filter(c=>c.user_id).length, c:EMPRESA_UI.green, icon:"◇", action:()=>onTabChange("conductores")},
           {l:"Total servicios hoy",v:servicios.length, c:"#475569", icon:"▤", action:null},
@@ -17483,7 +17486,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
         <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:650,color:tx}}>Servicios activos</div>
+            <div style={{fontSize:14,fontWeight:650,color:tx}}>En curso</div>
             <button onClick={()=>onTabChange("servicios")} style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>Ver todos →</button>
           </div>
           {servicios.filter(s=>s.estado==="en_curso").length===0?(
