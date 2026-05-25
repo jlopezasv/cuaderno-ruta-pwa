@@ -198,7 +198,7 @@ export function ServiceExtraDocumentsBlock({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: compact ? 8 : 10 }}>
         <div>
           <div style={{ fontSize: compact ? 11 : 10, color: shell.title, fontWeight: 800, letterSpacing: compact ? 0.2 : 0.6 }}>
-            {compact ? "Archivos adicionales" : "DOCUMENTOS EXTRA"}
+            {compact ? "Archivos adicionales TEST GIT" : "DOCUMENTOS EXTRA"}
           </div>
           {!compact ? (
             <div style={{ fontSize: 11, color: shell.sub, marginTop: 3, lineHeight: 1.35 }}>No ligados a una parada concreta</div>
