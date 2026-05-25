@@ -24,45 +24,6 @@ const firebaseConfig = {
 const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
 const TOKEN_CACHE_KEY = "cuaderno_fcm_token_v1";
 
-/** localStorage: cuaderno_push_debug = "1" */
-export const PUSH_DEBUG_LS_KEY = "cuaderno_push_debug";
-/** sessionStorage: activa panel sin recargar (temporal) */
-export const PUSH_DEBUG_SESSION_KEY = "cuaderno_push_debug_ui";
-
-/**
- * Panel de diagnóstico push visible en producción si:
- * - URL contiene ?pushdebug=1
- * - localStorage[PUSH_DEBUG_LS_KEY] === "1"
- * - VITE_SHOW_PUSH_DEBUG === "true" (Vercel)
- * - import.meta.env.DEV
- */
-export function isPushDebugEnvironmentEnabled() {
-  if (import.meta.env.DEV) return true;
-  if (import.meta.env.VITE_SHOW_PUSH_DEBUG === "true") return true;
-  if (typeof window === "undefined") return false;
-  try {
-    if (new URLSearchParams(window.location.search).get("pushdebug") === "1") return true;
-    if (localStorage.getItem(PUSH_DEBUG_LS_KEY) === "1") return true;
-  } catch (_) {}
-  return false;
-}
-
-export function isPushDebugSessionEnabled() {
-  if (typeof window === "undefined") return false;
-  try {
-    return sessionStorage.getItem(PUSH_DEBUG_SESSION_KEY) === "1";
-  } catch (_) {
-    return false;
-  }
-}
-
-export function enablePushDebugSession() {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(PUSH_DEBUG_SESSION_KEY, "1");
-  } catch (_) {}
-}
-
 function pushLog(...args) {
   console.log("[push]", ...args);
 }

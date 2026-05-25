@@ -34,7 +34,7 @@ import {
   getStoredAuthContext,
   persistAuthContext,
 } from "./data/authContext";
-import { getPushClientContext, initFcmPush, isPushDebugEnvironmentEnabled, isPushDebugSessionEnabled, enablePushDebugSession, PUSH_DEBUG_LS_KEY } from "./data/fcmPush";
+import { getPushClientContext, initFcmPush } from "./data/fcmPush";
 import {
   ESTADO_COLOR,
   ESTADO_LABEL,
@@ -17147,98 +17147,11 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-function PushDebugRow({label,value,tx,su}){
-  const v=value===undefined||value===null?"—":typeof value==="object"?JSON.stringify(value,null,0):String(value);
-  return(
-    <div style={{display:"grid",gridTemplateColumns:"minmax(0,44%) minmax(0,56%)",gap:6,alignItems:"start",marginBottom:7,fontSize:11}}>
-      <span style={{color:su,fontWeight:700,lineHeight:1.35}}>{label}</span>
-      <span style={{color:tx,fontWeight:600,lineHeight:1.35,wordBreak:"break-word",whiteSpace:"pre-wrap",fontFamily:"ui-monospace,Consolas,monospace",fontSize:10}}>{v}</span>
-    </div>
-  );
-}
-
-function PushDebugTraceView({pre,result,caught,tx,su}){
-  const t=result?.trace||{};
-  const reg=t.registerResponse;
-  const regDisplay=reg===undefined||reg===null?"—":JSON.stringify(reg,null,2);
-  return(
-    <div style={{marginTop:10}}>
-      {caught&&(
-        <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:10,marginBottom:10}}>
-          <div style={{fontSize:11,fontWeight:800,color:"#B91C1C"}}>Excepción</div>
-          <PushDebugRow label="message" value={caught.message} tx={tx} su={su}/>
-          <PushDebugRow label="stack" value={caught.stack} tx={tx} su={su}/>
-        </div>
-      )}
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",marginBottom:8}}>Resumen initFcmPush</div>
-      <PushDebugRow label="ok" value={result?.ok} tx={tx} su={su}/>
-      <PushDebugRow label="reason" value={result?.reason} tx={tx} su={su}/>
-      <PushDebugRow label="error" value={result?.error} tx={tx} su={su}/>
-      <PushDebugRow label="code (Firebase)" value={result?.code} tx={tx} su={su}/>
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",margin:"14px 0 8px"}}>Contexto previo</div>
-      <PushDebugRow label="uid parcial" value={pre?.uid} tx={tx} su={su}/>
-      <PushDebugRow label="Notification.permission" value={pre?.permission} tx={tx} su={su}/>
-      <PushDebugRow label="serviceWorker (API)" value={pre?.browser?.serviceWorker} tx={tx} su={su}/>
-      <PushDebugRow label="Notification (API)" value={pre?.browser?.Notification} tx={tx} su={su}/>
-      <PushDebugRow label="PushManager (API)" value={pre?.browser?.PushManager} tx={tx} su={su}/>
-      <PushDebugRow label="PWA display-mode standalone" value={pre?.pwa?.displayModeStandalone} tx={tx} su={su}/>
-      <PushDebugRow label="navigator.standalone" value={pre?.pwa?.navigatorStandalone} tx={tx} su={su}/>
-      <PushDebugRow label="iOS family" value={pre?.pwa?.iosFamily} tx={tx} su={su}/>
-      <PushDebugRow label="iOS PWA instalada" value={pre?.pwa?.iosPwaInstalled} tx={tx} su={su}/>
-      <PushDebugRow label="Safari-like UA" value={pre?.pwa?.safariLike} tx={tx} su={su}/>
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",margin:"14px 0 8px"}}>Traza initFcmPush</div>
-      <PushDebugRow label="permission (inicial)" value={t.permissionInitial} tx={tx} su={su}/>
-      <PushDebugRow label="permission (tras request)" value={t.permissionAfterRequest} tx={tx} su={su}/>
-      <PushDebugRow label="Firebase.messaging supported" value={t.messagingSupported} tx={tx} su={su}/>
-      <PushDebugRow label="missingConfig" value={t.missingConfig} tx={tx} su={su}/>
-      <PushDebugRow label="SW register" value={t.swRegister} tx={tx} su={su}/>
-      <PushDebugRow label="Firebase init" value={t.firebase} tx={tx} su={su}/>
-      <PushDebugRow label="getMessaging" value={t.getMessaging} tx={tx} su={su}/>
-      <PushDebugRow label="getToken (start)" value={t.getTokenStart} tx={tx} su={su}/>
-      <PushDebugRow label="getToken (resultado)" value={t.getToken} tx={tx} su={su}/>
-      <PushDebugRow label="Token parcial (éxito)" value={t.getToken?.tokenPartial} tx={tx} su={su}/>
-      <PushDebugRow label="register_fcm_token payload (sin token completo)" value={t.registerPayload} tx={tx} su={su}/>
-      <div style={{marginTop:8}}>
-        <div style={{fontSize:10,fontWeight:800,color:su,marginBottom:4}}>register_fcm_token response</div>
-        <pre style={{margin:0,maxHeight:160,overflow:"auto",fontSize:9,lineHeight:1.4,whiteSpace:"pre-wrap",wordBreak:"break-word",background:"#0F172A",color:"#E2E8F0",padding:8,borderRadius:6}}>{regDisplay}</pre>
-      </div>
-      <PushDebugRow label="registerBackendOk" value={t.registerBackendOk} tx={tx} su={su}/>
-    </div>
-  );
-}
-
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
   const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
-  const[pushDebugSession,setPushDebugSession]=useState(()=>isPushDebugSessionEnabled());
-  const showPushDebugPanel=isPushDebugEnvironmentEnabled()||pushDebugSession;
-  const[pushDiagOpen,setPushDiagOpen]=useState(false);
-  const[pushDiagLoading,setPushDiagLoading]=useState(false);
-  const[pushDiagText,setPushDiagText]=useState("");
-  const[pushDiagResult,setPushDiagResult]=useState(null);
   const card="#FFFFFF",tx="#0F172A",su="#64748B";
-
-  async function runTestPushInit(){
-    setPushDiagLoading(true);
-    setPushDiagOpen(true);
-    setPushDiagText("Ejecutando initFcmPush…");
-    setPushDiagResult(null);
-    let pre=null;
-    try{
-      pre={...getPushClientContext(),uid:uid?String(uid).slice(0,8)+"…":null};
-      const res=await initFcmPush({showToast});
-      setPushDiagResult({pre,result:res,caught:null});
-      const safe={...res,token:res.token?`${String(res.token).slice(0,12)}…${String(res.token).slice(-8)} (${res.token.length})`:null};
-      setPushDiagText(JSON.stringify({preInitContext:pre,result:safe},null,2));
-    }catch(e){
-      const preFail=pre||{...getPushClientContext(),uid:uid?String(uid).slice(0,8)+"…":null};
-      setPushDiagResult({pre:preFail,result:null,caught:{message:e?.message||String(e),stack:e?.stack}});
-      setPushDiagText(JSON.stringify({preInitContext:preFail,error:e?.message||String(e),stack:e?.stack},null,2));
-    }finally{
-      setPushDiagLoading(false);
-    }
-  }
 
   const stopsOperativaSigKey=useMemo(()=>stopsOperativaSig(stops),[stops]);
 
@@ -17293,53 +17206,12 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     });
   }
 
-  const pushActivator=!showPushDebugPanel?(
-    <div style={{marginBottom:12,padding:12,background:"#F8FAFC",border:"1px solid #CBD5E1",borderRadius:12,fontSize:11,color:su,lineHeight:1.45}}>
-      <div style={{fontWeight:800,color:tx,marginBottom:6}}>Diagnóstico push (temporal)</div>
-      <div style={{marginBottom:10}}>Si no ves el panel amarillo de prueba, actívalo aquí o con URL / almacenamiento local.</div>
-      <button type="button" onClick={()=>{enablePushDebugSession();setPushDebugSession(true);setPushDiagOpen(true);setPushDiagText("Pulsa «Test Push Init» para ejecutar y ver la traza aquí.");setPushDiagResult(null);}} style={{background:"#2563EB",color:"#fff",border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-        Activar panel diagnóstico push
-      </button>
-      <div style={{marginTop:10,fontSize:10,color:"#64748B"}}>
-        Alternativas: añade <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>?pushdebug=1</code> a la URL y recarga · variable Vercel{" "}
-        <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>VITE_SHOW_PUSH_DEBUG=true</code>
-        · consola:{" "}
-        <code style={{background:"#E2E8F0",padding:"1px 4px",borderRadius:4}}>{`localStorage.setItem("${PUSH_DEBUG_LS_KEY}","1")`}</code>{" "}y recarga
-      </div>
-    </div>
-  ):null;
-
-  const pushDebugBar=showPushDebugPanel?(
-    <div style={{marginBottom:12,padding:12,background:"#FFFBEB",border:"1px solid #F59E0B",borderRadius:12}}>
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",letterSpacing:.4,marginBottom:8}}>DEBUG · Push FCM (visible en prod con ?pushdebug=1, localStorage o sesión)</div>
-      <button type="button" onClick={runTestPushInit} disabled={pushDiagLoading} style={{background:"#0F172A",color:"#fff",border:"none",borderRadius:8,padding:"10px 14px",fontSize:13,fontWeight:700,cursor:pushDiagLoading?"wait":"pointer",opacity:pushDiagLoading?0.65:1}}>
-        Test Push Init
-      </button>
-      <div style={{fontSize:10,color:"#78350F",marginTop:6}}>Consola: prefijo [push]. Abajo: estados y errores en pantalla.</div>
-      {pushDiagOpen&&(
-        <div style={{marginTop:12,background:"#fff",border:"1px solid #E2E8F0",borderRadius:8,padding:10,maxHeight:"70vh",overflow:"auto"}}>
-          {pushDiagLoading&&<div style={{fontSize:12,color:su,marginBottom:8}}>Ejecutando initFcmPush…</div>}
-          {pushDiagResult&&<PushDebugTraceView pre={pushDiagResult.pre} result={pushDiagResult.result} caught={pushDiagResult.caught} tx={tx} su={su}/>}
-          <div style={{fontSize:10,fontWeight:800,color:su,margin:"12px 0 4px"}}>JSON completo</div>
-          <pre style={{margin:0,fontSize:9,lineHeight:1.45,whiteSpace:"pre-wrap",wordBreak:"break-word",color:tx,maxHeight:220,overflow:"auto",background:"#F1F5F9",padding:8,borderRadius:6}}>{pushDiagText||"—"}</pre>
-          <button type="button" onClick={()=>{setPushDiagOpen(false);setPushDiagText("");setPushDiagResult(null);}} style={{marginTop:10,background:"#E2E8F0",color:"#0F172A",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,cursor:"pointer"}}>Cerrar panel</button>
-        </div>
-      )}
-    </div>
-  ):null;
-
   if(loading)return(
-    <>
-      {pushActivator}
-      {pushDebugBar}
-      <div style={{padding:40,textAlign:"center",color:su,fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando...</div>
-    </>
+    <div style={{padding:40,textAlign:"center",color:su,fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando...</div>
   );
 
   if(!servicio)return(
     <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
-      {pushActivator}
-      {pushDebugBar}
       <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",marginBottom:16,boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
         <div style={{fontSize:12,fontWeight:800,color:"#64748B",letterSpacing:.8,marginBottom:10}}>SERVICIO</div>
         <div style={{fontSize:18,fontWeight:750,color:tx,marginBottom:6}}>Sin servicio activo</div>
@@ -17357,8 +17229,6 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       :null;
     return(
       <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
-        {pushActivator}
-        {pushDebugBar}
         <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
           <div style={{fontSize:12,fontWeight:800,color:"#0F766E",letterSpacing:.8,marginBottom:10}}>EXPEDIENTE CERRADO</div>
           <div style={{fontSize:18,fontWeight:750,color:"#0F766E",marginBottom:6}}>Viaje cerrado</div>
@@ -17377,8 +17247,6 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       servicio.estado==="asignado"?"asignado":servicio.estado==="completado"?"cierre_documental":"en_curso";
     return(
     <>
-      {pushActivator}
-      {pushDebugBar}
       <ActiveServicePanel
         mode={panelMode}
         servicio={servicio}
