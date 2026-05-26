@@ -95,7 +95,7 @@ import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForS
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
-import { getExpedienteCierre } from "./domain/service/expedienteCierre.js";
+import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -129,6 +129,7 @@ import {
   stopsOperativaSig,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
+  ETA_LABEL_INICIAL,
   getOperationalEtaUiState,
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaSnapshotLine,
@@ -182,7 +183,7 @@ import {
   routeTextFromOperationalPlaces,
   servicioMatchesSearchQuery,
 } from "./domain/service/serviceOperationalPlaces.js";
-import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
+import { formatStopNotesForDisplay, getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
@@ -5037,8 +5038,8 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
 async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
-  /** Incluye `completado` para cierre documental (firma); excluye `cerrado`. */
-  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado";
+  /** Incluye `completado` (firma) y `pendiente_asignacion` con conductor ya fijado; excluye `cerrado`. */
+  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado,pendiente_asignacion";
   const estadoRank=(estado)=>{
     if(estado==="en_curso")return 0;
     if(estado==="asignado")return 1;
@@ -5046,7 +5047,7 @@ async function resolveDriverActiveServiceAndStops(uid){
     return 9;
   };
   async function fetchServiciosByConductorId(){
-    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=20`);
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=40`);
     if(!r.ok)return[];
     const rows=await r.json();
     return Array.isArray(rows)?rows:[];
@@ -5066,7 +5067,9 @@ async function resolveDriverActiveServiceAndStops(uid){
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
-  const candidates=[...byId.values()].sort((a,b)=>{
+  const candidates=[...byId.values()]
+    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid))
+    .sort((a,b)=>{
     const ra=estadoRank(a?.estado);
     const rb=estadoRank(b?.estado);
     if(ra!==rb)return ra-rb;
@@ -5081,6 +5084,8 @@ async function resolveDriverActiveServiceAndStops(uid){
     sourceByAsignaciones:fallbackCandidates.length,
   });
   if(!candidates.length)return{servicio:null,stops:[]};
+  let fallbackServicio=null;
+  let fallbackStops=[];
   for(const sv of candidates){
     if(!sv?.id)continue;
     const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${sv.id}&order=orden.asc`);
@@ -5093,13 +5098,13 @@ async function resolveDriverActiveServiceAndStops(uid){
       rows:arr.length,
       stopIds:arr.map(s=>s?.id),
     });
+    if(!fallbackServicio){
+      fallbackServicio=sv;
+      fallbackStops=arr;
+    }
     if(arr.length>0)return{servicio:sv,stops:arr};
   }
-  const fallback=candidates[0];
-  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${fallback.id}&order=orden.asc`);
-  const stops=sr.ok?await sr.json():[];
-  const arr=Array.isArray(stops)?stops:[];
-  return{servicio:fallback,stops:arr};
+  return{servicio:fallbackServicio,stops:fallbackStops};
 }
 
 async function readActiveServiceForDriver(uid){
@@ -6039,13 +6044,11 @@ function useCopilotServicio(uid){
   const cargar=useCallback(async()=>{
     if(!uid){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
     try{
-      const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
-      const data=await r.json();
-      if(!data.length){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
-      setServicio(data[0]);
-      const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${data[0].id}&order=orden.asc`);
-      const st=await sr.json();
-      const list=Array.isArray(st)?st:[];
+      const resolved=await resolveDriverActiveServiceAndStops(uid);
+      const sv=resolved?.servicio||null;
+      const list=Array.isArray(resolved?.stops)?resolved.stops:[];
+      if(!sv?.id){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
+      setServicio(sv);
       setStops(list);
       const ids=list.map(s=>s.id).filter(Boolean).join(",");
       if(!ids){setEvidenciasByStop({});return;}
@@ -10120,14 +10123,16 @@ function MapTab({norma,prof,dark,viajeActivo}){
   const[servicioActivo,setServicioActivo]=useState(null);
   useEffect(()=>{
     if(!uid)return;
-    sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`)
-      .then(r=>r.json()).then(async svs=>{
-        if(!svs.length)return;
-        setServicioActivo(svs[0]);
-        const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${svs[0].id}&estado=in.(pendiente,en_camino)&order=orden.asc&limit=1`);
-        const stps=await sr.json();
-        if(stps.length)setStopActivo(stps[0]);
-      }).catch(()=>{});
+    resolveDriverActiveServiceAndStops(uid)
+      .then(async (resolved)=>{
+        const sv=resolved?.servicio;
+        if(!sv?.id)return;
+        setServicioActivo(sv);
+        const list=Array.isArray(resolved?.stops)?resolved.stops:[];
+        const pend=list.find(s=>s?.estado==="pendiente"||s?.estado==="en_camino")||list[0]||null;
+        if(pend)setStopActivo(pend);
+      })
+      .catch(()=>{});
   },[uid]);
 
   const[dest,setDest]=useState(()=>{try{return localStorage.getItem(RUTA_KEY+"_dest")||"";}catch(_){return "";}});
@@ -12401,6 +12406,7 @@ function statusPill(label,color){
 function empresaListaEtaChip(servicio, nowMs){
   const st=getOperationalEtaUiState(servicio,new Date(nowMs??Date.now()));
   if(st.kind==="cancelled")return{label:"—",color:"#64748B"};
+  if(st.kind==="inicial_only")return{label:ETA_LABEL_INICIAL,color:EMPRESA_UI.accent};
   if(st.kind==="calculating")return{label:OPERATIONAL_ETA_CALCULATING,color:"#64748B"};
   if(st.kind==="plan_fallback")return{label:"Planificado",color:EMPRESA_UI.accent};
   return{label:"ETA actual",color:EMPRESA_UI.green};
@@ -14194,7 +14200,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         ["Conducción",expedientePreview.metrics.conduccion],
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
-                        ["ETA inicial vs actual",expedientePreview.header.eta],
+                        [expedientePreview.header.etaResumenTitulo || "ETA inicial", expedientePreview.header.eta],
                         ["Incidencias",String(expedientePreview.metrics.incidencias??0)],
                         ["Fotos incidencias",String(expedientePreview.metrics.fotosIncidencia??0)],
                       ].map(([l,v])=>(
@@ -16005,7 +16011,12 @@ function ServiciosTimelineView({uid}){
                                     {STOP_ICON[stop.tipo]||"📍"} {stop.nombre}
                                   </div>
                                   <div style={{fontSize:10,color:colorStop,fontWeight:600,marginTop:1}}>{stop.tipo.replace("_"," ").toUpperCase()}</div>
-                                  {stop.notas&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>📝 {stop.notas}</div>}
+                                  {(() => {
+                                    const notaTxt = formatStopNotesForDisplay(stop.notas);
+                                    return notaTxt ? (
+                                      <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>📝 {notaTxt}</div>
+                                    ) : null;
+                                  })()}
                                 </div>
                                 <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                                   {stop.hora_llegada_real&&<div style={{fontSize:11,color:su,fontFamily:"monospace"}}>{new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
@@ -16296,19 +16307,15 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function cerrarExpediente({ comentario, firmaCanvas }) {
     if (!servicio?.id) throw new Error("Sin servicio activo");
-    const { servicio: updated, referencia } = await cerrarExpedienteServicio({
+    await cerrarExpedienteServicio({
       servicio,
       comentario,
       firmaCanvas,
       conductorId: uid,
       conductorNombre: conductorNombre || null,
     });
-    setServicio((prev) => ({
-      ...prev,
-      ...updated,
-      estado: "completado",
-      referencia: referencia ?? updated?.referencia ?? prev?.referencia,
-    }));
+    setServicio(null);
+    setStops([]);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   return{
@@ -16566,7 +16573,12 @@ function CrearServicioModal({uid,onClose,onCreado}){
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
                   {stop.direccion&&<div style={{fontSize:12,color:su,marginTop:2}}>{stop.direccion}</div>}
-                  {stop.notas&&<div style={{fontSize:11,color:"#475569",marginTop:2}}>📝 {stop.notas}</div>}
+                  {(() => {
+                    const notaTxt = formatStopNotesForDisplay(stop.notas);
+                    return notaTxt ? (
+                      <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>📝 {notaTxt}</div>
+                    ) : null;
+                  })()}
                   <div style={{display:"flex",gap:6,marginTop:4,alignItems:"center"}}>
                     <span style={{fontSize:11,color,fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
                     {stop.lat?<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 6px"}}>🗺 GPS listo</span>:<span style={{fontSize:10,color:su,background:"#33415515",borderRadius:4,padding:"1px 6px"}}>Sin GPS</span>}
@@ -17307,7 +17319,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     </div>
   );
 
-  if(servicio.estado==="cerrado"){
+  if(servicio.estado==="cerrado"||isServicioExpedienteCerrado(servicio)){
     const cierre=getExpedienteCierre(servicio);
     const cerradoLabel=cierre?.closed_at
       ?new Date(cierre.closed_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})

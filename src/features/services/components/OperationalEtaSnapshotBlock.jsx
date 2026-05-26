@@ -5,6 +5,7 @@ import {
   ETA_LABEL_INICIAL,
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaDisplayLines,
+  hasActiveRouteDestination,
   resolveEtaInicialDisplayLabel,
   resolveEtaVisual,
   resolvePersistedEtaActualLabel,
@@ -72,6 +73,7 @@ function OperationalEtaSnapshotBlockImpl({
   const v = resolveEtaVisual(servicio, auxNowRef);
 
   const inicialHead = useMemo(() => resolveEtaInicialDisplayLabel(servicio), [servicio?.id, servicio?.referencia]);
+  const routeDestActive = hasActiveRouteDestination(servicio);
 
   const kmProgressRef = useRef({ lastKm: null, stableSinceMs: null });
   useEffect(() => {
@@ -112,11 +114,20 @@ function OperationalEtaSnapshotBlockImpl({
     }
   }, [servicio, v, auxNowRef, latestLocation, tacografoEstado, activeStop, kmStableMs]);
 
+  if (!routeDestActive) {
+    return (
+      <>
+        <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>
+        <EtaTime tx={txU}>{inicialHead || "—"}</EtaTime>
+      </>
+    );
+  }
+
   if (!servicio || servicio.estado === "anulado" || v.tier === "none") {
     return (
       <>
-        <EtaTime tx={txU}>—</EtaTime>
         <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>
+        <EtaTime tx={txU}>{inicialHead || "—"}</EtaTime>
       </>
     );
   }

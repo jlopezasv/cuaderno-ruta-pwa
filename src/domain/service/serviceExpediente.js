@@ -8,7 +8,10 @@ import { getFixedServiceRoute, getServiceClient, getServiceClientReference, getS
 import {
   formatOperationalEtaDisplayLines,
   formatOperationalEtaSnapshotLine,
+  hasActiveRouteDestination,
+  resolveEtaInicialDisplayLabel,
 } from "./operationalEtaPresentation.js";
+import { formatStopNotesForDisplay } from "./stopOperacionMeta.js";
 import { getServiceNumberForDisplay } from "./serviceIdentity.js";
 import {
   enrichEvidenciaDisplay,
@@ -389,6 +392,9 @@ export function buildServiceExpediente({
   const plan = getOperationalPlanSnapshot(servicio);
   const ref = getServiceNumberForDisplay(servicio) || getServiceNumber(servicio);
   const etaDisplay = formatOperationalEtaDisplayLines(servicio);
+  const etaResumenLabel = hasActiveRouteDestination(servicio)
+    ? formatOperationalEtaSnapshotLine(servicio)
+    : resolveEtaInicialDisplayLabel(servicio) || "—";
   const counters = {};
   const stopRows = sortedStops.map((stop) => {
     const label = stopLabel(stop, counters);
@@ -407,7 +413,7 @@ export function buildServiceExpediente({
       tipoLabel: OPERATIONAL_GROUP_LABEL[group] || stop.tipo || "PARADA",
       nombre: stop.nombre || label,
       direccion: stop.direccion || "",
-      notas: stop.notas || "",
+      notas: formatStopNotesForDisplay(stop.notas) || "",
       entrada: stop.hora_llegada_real || null,
       salida: stop.hora_salida_real || null,
       entradaHora: fmtClock(llegadaMs),
@@ -735,7 +741,8 @@ export function buildServiceExpediente({
         : "Sin asignar",
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
-      eta: formatOperationalEtaSnapshotLine(servicio),
+      eta: etaResumenLabel,
+      etaResumenTitulo: hasActiveRouteDestination(servicio) ? "ETA inicial vs actual" : "ETA inicial",
       etaLine1: etaDisplay.line1,
       etaLine2: etaDisplay.line2,
       etaLine3: etaDisplay.line3,
@@ -1108,7 +1115,7 @@ async function makePdfBlob(expediente) {
     ["Conduccion", expediente.metrics.conduccion],
     ["Espera carga", expediente.metrics.esperaCarga],
     ["Espera descarga", expediente.metrics.esperaDescarga],
-    ["ETA inicial vs actual", expediente.header.eta],
+    [expediente.header.etaResumenTitulo || "ETA inicial", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
     ["Incidencias", String(expediente.metrics.incidencias ?? 0)],
     ["Fotos incidencias", String(expediente.metrics.fotosIncidencia ?? 0)],

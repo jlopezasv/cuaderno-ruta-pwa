@@ -1,5 +1,6 @@
 import {
   getOperationalEtaSnapshot,
+  getOperationalPlanConfirmedAt,
   getOperationalPlanSnapshot,
   getOperationalTripStartedAt,
 } from "./serviceOperacionMeta.js";
@@ -18,6 +19,11 @@ export const ETA_UI_VISUAL_TICK_MS = 5 * 60 * 1000;
 
 export const ETA_LABEL_INICIAL = "ETA inicial";
 export const ETA_LABEL_ACTUAL = "ETA actual";
+
+/** Destino/ruta confirmados con «Añadir destino a la ruta» (`operational_plan_confirmed_at`). */
+export function hasActiveRouteDestination(servicio) {
+  return !!getOperationalPlanConfirmedAt(servicio);
+}
 
 /** Etiqueta de hora estable (no depende del reloj de la UI). */
 export function formatStableEtaClockLabel(value) {
@@ -101,7 +107,7 @@ export function resolveEtaVisual(servicio, now = new Date()) {
   const destOk = String(servicio?.destino || "").trim().length > 0;
   const enCurso = servicio.estado === "en_curso";
 
-  if (enCurso && tripStarted && destOk) {
+  if (enCurso && tripStarted && destOk && hasActiveRouteDestination(servicio)) {
     if (!plan || planLooksCalculating(plan)) return { tier: "calculating" };
     if (plan.route_plan_status === "failed" || plan.status === "failed") return { tier: "none" };
   }
@@ -114,8 +120,12 @@ export function resolveEtaVisual(servicio, now = new Date()) {
  */
 export function formatOperationalEtaSnapshotLine(servicio, now = new Date()) {
   if (servicio?.estado === "anulado") return "—";
+  const inicialOnly = resolveEtaInicialDisplayLabel(servicio);
+  if (!hasActiveRouteDestination(servicio)) {
+    return inicialOnly || "—";
+  }
   const v = resolveEtaVisual(servicio, now);
-  if (v.tier === "none") return "—";
+  if (v.tier === "none") return inicialOnly || "—";
   if (v.tier === "calculating") return OPERATIONAL_ETA_CALCULATING;
 
   if (v.tier === "operational") {
@@ -148,8 +158,12 @@ export function formatOperationalEtaDisplayLines(servicio, now = new Date()) {
   if (!servicio || servicio.estado === "anulado") {
     return { line1: "—", line2: null, line3: null };
   }
+  const inicialOnly = resolveEtaInicialDisplayLabel(servicio);
+  if (!hasActiveRouteDestination(servicio)) {
+    return { line1: inicialOnly || "—", line2: null, line3: null };
+  }
   const v = resolveEtaVisual(servicio, now);
-  if (v.tier === "none") return { line1: "—", line2: null, line3: null };
+  if (v.tier === "none") return { line1: inicialOnly || "—", line2: null, line3: null };
   if (v.tier === "calculating") {
     return { line1: OPERATIONAL_ETA_CALCULATING, line2: null, line3: null };
   }
@@ -181,6 +195,7 @@ export function formatOperationalEtaDisplayLines(servicio, now = new Date()) {
 
 export function getOperationalEtaUiState(servicio, now = new Date()) {
   if (!servicio || servicio.estado === "anulado") return { kind: "cancelled" };
+  if (!hasActiveRouteDestination(servicio)) return { kind: "inicial_only" };
   const v = resolveEtaVisual(servicio, now);
   if (v.tier === "operational") return { kind: "ready", snapshot: v.operational };
   if (v.tier === "plan") return { kind: "plan_fallback", plan: v.plan };

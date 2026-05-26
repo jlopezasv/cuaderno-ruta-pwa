@@ -14,7 +14,7 @@ import {
   getServiceNumberForDisplay,
 } from "../../../domain/service/serviceIdentity.js";
 import { getServiceOperationalPresentation } from "../../../domain/service/serviceOperationalPlaces.js";
-import { stripOperacionMetaDisplay } from "../../../domain/service/stopOperacionMeta.js";
+import { formatStopNotesForDisplay } from "../../../domain/service/stopOperacionMeta.js";
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 
@@ -178,8 +178,16 @@ function extractGoodsSummary(stops, evidenciasByStop) {
 }
 
 function extractObservations(stops) {
-  const notes = sortStops(stops).map((stop) => stripOperacionMetaDisplay(stop.notas)).filter(Boolean);
-  return notes.length ? notes.slice(0, 2).join(" / ") : "Sin observaciones";
+  const notes = sortStops(stops).map((stop) => formatStopNotesForDisplay(stop.notas)).filter(Boolean);
+  return notes.length ? notes.slice(0, 2).join(" / ") : "";
+}
+
+function hasServiceDetailsContent({ cliente, referenciaCliente, goods, observations }) {
+  if (cliente && cliente !== "—") return true;
+  if (referenciaCliente && referenciaCliente !== "—") return true;
+  if (goods && goods !== "No indicado") return true;
+  if (observations) return true;
+  return false;
 }
 
 function isStopCompleted(stop) {
@@ -425,10 +433,12 @@ function ServiceDetailsCollapsible({ cliente, referenciaCliente, conductorNombre
           <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Mercancía / bultos</div>
           <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{goods}</div>
         </div>
-        <div>
-          <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Observaciones</div>
-          <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{observations}</div>
-        </div>
+        {observations ? (
+          <div>
+            <div style={{ fontSize: 10, color: DRIVER_UI.muted, fontWeight: 800, marginBottom: 3 }}>Observaciones</div>
+            <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{observations}</div>
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -917,13 +927,15 @@ export function ActiveServicePanel({
           serviceAction={serviceAction}
         />
 
-        <ServiceDetailsCollapsible
-          cliente={cliente}
-          referenciaCliente={referenciaCliente}
-          conductorNombre={conductorNombre}
-          goods={goods}
-          observations={observations}
-        />
+        {hasServiceDetailsContent({ cliente, referenciaCliente, goods, observations }) ? (
+          <ServiceDetailsCollapsible
+            cliente={cliente}
+            referenciaCliente={referenciaCliente}
+            conductorNombre={conductorNombre}
+            goods={goods}
+            observations={observations}
+          />
+        ) : null}
 
         <div style={{ marginTop: 22 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>

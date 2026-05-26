@@ -1,7 +1,9 @@
 import {
+  SERVICIO_ESTADO_ASIGNADO,
   SERVICIO_ESTADO_CERRADO,
   SERVICIO_ESTADO_COMPLETADO,
   SERVICIO_ESTADO_EN_CURSO,
+  SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
 } from "../fleet/serviceStatus.js";
 import { countCompletedStops } from "./serviceStops.js";
 import { getServicioOperacionMeta, mergeReferenciaOperacional } from "./serviceOperacionMeta.js";
@@ -34,6 +36,25 @@ export function needsExpedienteClosure(servicio, stops) {
   if (!isOperativaMuellesCompletada(stops)) return false;
   const st = String(servicio.estado || "").toLowerCase();
   return st === SERVICIO_ESTADO_COMPLETADO || st === SERVICIO_ESTADO_EN_CURSO;
+}
+
+/**
+ * Servicio que el conductor debe ver en tab Servicio / copiloto.
+ * Incluye `completado` pendiente de firma; excluye expediente ya cerrado por conductor.
+ * Incluye `pendiente_asignacion` solo si ya tiene `conductor_id` (asignación en curso en servidor).
+ */
+export function isConductorServicioOperativoActivo(servicio, conductorUid = null) {
+  if (!servicio?.id || isServicioExpedienteCerrado(servicio)) return false;
+  const st = String(servicio.estado || "").toLowerCase();
+  if (st === SERVICIO_ESTADO_CERRADO || st === "anulado" || st === "cancelado") return false;
+  if (st === SERVICIO_ESTADO_PENDIENTE_ASIGNACION) {
+    return !!(conductorUid && servicio.conductor_id === conductorUid);
+  }
+  return (
+    st === SERVICIO_ESTADO_EN_CURSO ||
+    st === SERVICIO_ESTADO_ASIGNADO ||
+    st === SERVICIO_ESTADO_COMPLETADO
+  );
 }
 
 export function operativaProgressLabel(stops) {
