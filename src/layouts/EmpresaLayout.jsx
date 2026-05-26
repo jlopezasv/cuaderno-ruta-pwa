@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { EMPRESA_TABS } from "../navigation/empresaTabs";
 import { BrandHeader } from "../ui/BrandHeader";
+import { UI_TOKENS } from "../ui/visualTokens";
 
 export default function EmpresaLayout({
   PROF0,
@@ -97,15 +98,15 @@ export default function EmpresaLayout({
       </div>
     );
 
-  const bg = "#f1f5f9",
-    card = "#ffffff",
-    tx = "#0f172a",
-    su = "#64748B",
-    border = "#dbe4ee",
-    accent = "#2563eb",
-    accentHover = "#eff6ff",
+  const bg = UI_TOKENS.surfaceApp,
+    card = UI_TOKENS.surface,
+    tx = UI_TOKENS.ink,
+    su = UI_TOKENS.muted,
+    border = UI_TOKENS.border,
+    accent = UI_TOKENS.brand,
+    accentHover = UI_TOKENS.brandSoft,
     tabIdle = "#475569",
-    tabActive = "#1e3a8a";
+    tabActive = UI_TOKENS.brandDeep;
   const canUseConfig = true;
 
   const tabBtnStyle = (active) => ({
@@ -154,7 +155,7 @@ export default function EmpresaLayout({
                 onClick={() => setTab(t.id)}
                 style={tabBtnStyle(tab === t.id)}
                 onMouseEnter={(e) => {
-                  if (tab !== t.id) e.currentTarget.style.background = "#f8fafc";
+                  if (tab !== t.id) e.currentTarget.style.background = UI_TOKENS.surfaceSoft;
                 }}
                 onMouseLeave={(e) => {
                   if (tab !== t.id) e.currentTarget.style.background = "transparent";
@@ -188,7 +189,7 @@ export default function EmpresaLayout({
               {String(prof.nombre || "E").charAt(0).toUpperCase()}
             </div>
             {canUseConfig && (
-              <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+              <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
                 Ajustes
               </button>
             )}
@@ -197,7 +198,7 @@ export default function EmpresaLayout({
                 await sbSignOut();
                 window.location.reload();
               }}
-              style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#9a3412", cursor: "pointer" }}
+              style={{ background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.22)", borderRadius: 10, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#B91C1C", cursor: "pointer" }}
             >
               Salir
             </button>
@@ -211,7 +212,7 @@ export default function EmpresaLayout({
           <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
           <div style={{ display: "flex", gap: 8 }}>
             {canUseConfig && (
-              <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, color: "#475569", cursor: "pointer" }}>
+              <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "5px 8px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
                 Ajustes
               </button>
             )}
@@ -220,7 +221,7 @@ export default function EmpresaLayout({
                 await sbSignOut();
                 window.location.reload();
               }}
-              style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: "#9a3412", cursor: "pointer" }}
+              style={{ background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.22)", borderRadius: 10, padding: "5px 10px", fontSize: 12, fontWeight: 700, color: "#B91C1C", cursor: "pointer" }}
             >
               Salir
             </button>
@@ -292,7 +293,7 @@ export default function EmpresaLayout({
 
       {/* Toast */}
       {toast && (
-        <div style={{ position: "fixed", bottom: isMobile ? 72 : 24, left: "50%", transform: "translateX(-50%)", background: "#0f172a", color: "white", padding: "12px 20px", borderRadius: 11, fontSize: 14, fontWeight: 600, zIndex: 500, boxShadow: "0 10px 24px rgba(15,23,42,.18)", whiteSpace: "nowrap" }}>
+        <div style={{ position: "fixed", bottom: isMobile ? 72 : 24, left: "50%", transform: "translateX(-50%)", background: "#0f172a", color: "white", padding: "12px 20px", borderRadius: 12, fontSize: 14, fontWeight: 650, zIndex: 500, boxShadow: "0 10px 24px rgba(15,23,42,.18)", whiteSpace: "nowrap" }}>
           {toast}
         </div>
       )}

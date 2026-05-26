@@ -193,6 +193,7 @@ import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
 import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
+import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
 import {
   LIM,
   geocode,
@@ -448,9 +449,9 @@ function AuthScreen({ onAuth }) {
       <div style={{ fontSize:13, color:"#94A3B8", marginBottom:demoMode?12:32 }}>El copiloto del transportista · EU 561/2006</div>
 
       {demoMode?(
-        <div style={{ width:"100%", maxWidth:380, background:"#172554", border:"1.5px solid #3b82f6", borderRadius:12, padding:"12px 14px", marginBottom:16, fontFamily:"sans-serif" }}>
-          <div style={{ fontSize:12, fontWeight:800, color:"#93c5fd", marginBottom:6 }}>Entorno demo aislado</div>
-          <div style={{ fontSize:11, color:"#cbd5e1", lineHeight:1.5 }}>
+        <div style={{ width:"100%", maxWidth:390, background:STATE_TONES.info.bg, border:`1.5px solid ${STATE_TONES.info.border}`, borderRadius:12, padding:"12px 14px", marginBottom:16 }}>
+          <div style={{ fontSize:12, fontWeight:800, color:STATE_TONES.info.fg, marginBottom:6 }}>Entorno demo aislado</div>
+          <div style={{ fontSize:11, color:"#334155", lineHeight:1.5 }}>
             Empresa: <strong>{DEMO_LOGIN_HINT.empresa}</strong><br/>
             Conductor: <strong>{DEMO_LOGIN_HINT.conductor}</strong><br/>
             Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong>
@@ -458,13 +459,13 @@ function AuthScreen({ onAuth }) {
         </div>
       ):null}
 
-      <div style={{ width:"100%", maxWidth:390, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 8px 32px rgba(0,0,0,.4)", border:"1px solid #334155" }}>
+      <div style={{ width:"100%", maxWidth:390, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 10px 36px rgba(2,6,23,.45)", border:"1px solid #334155" }}>
 
         {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
               <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");setLoginContext("conductor");}}
-                style={{ flex:1, background:mode===m?"#F59E0B":"transparent", color:mode===m?"#0F172A":"#64748B", border:"none", borderRadius:7, padding:"9px", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"sans-serif" }}>
+                style={{ flex:1, background:mode===m?UI_TOKENS.brand:"transparent", color:mode===m?"#0F172A":"#94A3B8", border:"none", borderRadius:8, padding:"9px", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"Outfit, sans-serif" }}>
                 {l}
               </button>
             ))}
@@ -473,9 +474,9 @@ function AuthScreen({ onAuth }) {
 
         {mode === "forgot" && (
           <div style={{ marginBottom:20 }}>
-            <button onClick={()=>{setMode("login");setError("");setOk("");}} style={{ background:"transparent", border:"none", color:"#64748B", fontSize:13, cursor:"pointer", fontFamily:"sans-serif", marginBottom:12 }}>← Volver</button>
-            <div style={{ fontSize:16, fontWeight:800, color:"#F1F5F9", fontFamily:"sans-serif" }}>Recuperar contraseña</div>
-            <div style={{ fontSize:12, color:"#64748B", marginTop:4, fontFamily:"sans-serif" }}>Te enviaremos un email de recuperación</div>
+            <button onClick={()=>{setMode("login");setError("");setOk("");}} style={{ background:"transparent", border:"none", color:"#94A3B8", fontSize:13, cursor:"pointer", fontFamily:"Outfit, sans-serif", marginBottom:12 }}>← Volver</button>
+            <div style={{ fontSize:16, fontWeight:800, color:"#F1F5F9", fontFamily:"Outfit, sans-serif" }}>Recuperar contraseña</div>
+            <div style={{ fontSize:12, color:"#94A3B8", marginTop:4, fontFamily:"Outfit, sans-serif" }}>Te enviaremos un email de recuperación</div>
           </div>
         )}
 
@@ -598,11 +599,11 @@ function AuthScreen({ onAuth }) {
           </button>
         )}
 
-        {error && <div style={{ background:"#FEF2F2", border:"1.5px solid #FECACA", borderRadius:9, padding:"10px 14px", fontSize:14, color:"#DC2626", marginBottom:14, fontFamily:"sans-serif" }}>⚠️ {error}</div>}
-        {ok    && <div style={{ background:"#F0FDF4", border:"1.5px solid #BBF7D0", borderRadius:9, padding:"10px 14px", fontSize:14, color:"#166534", marginBottom:14, fontFamily:"sans-serif" }}>✅ {ok}</div>}
+        {error && <div style={{ background:STATE_TONES.danger.bg, border:`1.5px solid ${STATE_TONES.danger.border}`, borderRadius:9, padding:"10px 14px", fontSize:14, color:STATE_TONES.danger.fg, marginBottom:14, fontFamily:"Outfit, sans-serif" }}>⚠️ {error}</div>}
+        {ok    && <div style={{ background:STATE_TONES.success.bg, border:`1.5px solid ${STATE_TONES.success.border}`, borderRadius:9, padding:"10px 14px", fontSize:14, color:STATE_TONES.success.fg, marginBottom:14, fontFamily:"Outfit, sans-serif" }}>✅ {ok}</div>}
 
         <button onClick={handleSubmit} disabled={loading}
-          style={{ width:"100%", background:loading?"#475569":"#F59E0B", color:"#0F172A", border:"none", borderRadius:12, padding:"15px", fontSize:17, fontWeight:800, cursor:loading?"default":"pointer", fontFamily:"sans-serif", marginTop:4 }}>
+          style={{ width:"100%", background:loading?"#475569":UI_TOKENS.brand, color:"#0F172A", border:"none", borderRadius:12, padding:"15px", fontSize:17, fontWeight:800, cursor:loading?"default":"pointer", fontFamily:"Outfit, sans-serif", marginTop:4, boxShadow:loading?"none":"0 8px 18px rgba(245,158,11,.25)" }}>
           {loading ? "⏳ Espera..." : mode==="login" ? "▶ ENTRAR" : mode==="register" ? "✓ CREAR CUENTA" : "📧 ENVIAR EMAIL"}
         </button>
 
@@ -3138,8 +3139,9 @@ function AppInner(){
         {getConductorTabs({prof,rolEmpresa,uid:getUserId(),T}).map(t=>(
           <button key={t.id} onClick={()=>{setTab(t.id);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
-              background:tab===t.id?"rgba(245,158,11,.08)":"transparent",
-              borderRadius:10,transition:"all .15s"}}>
+              background:tab===t.id?"rgba(245,158,11,.10)":"transparent",
+              borderRadius:10,transition:"all .15s",
+              border:tab===t.id?"1px solid rgba(245,158,11,.25)":"1px solid transparent"}}>
             <span style={{fontSize:22,fontWeight:tab===t.id?"900":"400",lineHeight:1,fontFamily:"system-ui"}}>{t.icon}</span>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:.3,marginTop:1}}>{t.label}</span>
             {tab===t.id&&<div style={s.navLine}/>}
@@ -15793,36 +15795,36 @@ function LibroKm({dark,prof}){
 const s={
   app:{minHeight:"100vh",background:"#F0F4F8",fontFamily:"'Outfit',sans-serif",maxWidth:1400,margin:"0 auto"},
   splash:{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"#0F172A"},
-  hdr:{background:"#0F172A",padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,boxShadow:"0 4px 18px rgba(0,0,0,.4)",overflow:"hidden",minWidth:0},
+  hdr:{background:"#0F172A",padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,boxShadow:"0 6px 18px rgba(2,6,23,.35)",overflow:"hidden",minWidth:0},
   hT:{fontSize:17,fontWeight:800,color:"#F8FAFC",letterSpacing:1.5},hS:{fontSize:12,color:"#475569",marginTop:2},
   hTm:{fontSize:22,fontWeight:700,color:"#F59E0B",fontFamily:"'JetBrains Mono',monospace",lineHeight:1},hD:{fontSize:12,color:"#64748B",marginTop:2},
-  nav:{background:"#1E293B",display:"flex",borderBottom:"1px solid #334155",position:"sticky",top:56,zIndex:99,paddingBottom:2},
+  nav:{background:"#111B2D",display:"flex",borderBottom:"1px solid #334155",position:"sticky",top:56,zIndex:99,paddingBottom:2},
   navBtn:{flex:1,background:"transparent",border:"none",padding:"11px 3px 9px",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"color .15s",position:"relative",cursor:"pointer"},
   navLine:{position:"absolute",bottom:0,left:"15%",right:"15%",height:3,background:"#F59E0B",borderRadius:"2px 2px 0 0"},
   main:{minHeight:"calc(100vh - 108px)"},page:{padding:"16px 16px 90px"},
-  live:{background:"#1E293B",borderRadius:16,padding:"18px",marginBottom:12,boxShadow:"0 4px 18px rgba(0,0,0,.2)"},
+  live:{background:"#1E293B",borderRadius:16,padding:"18px",marginBottom:12,boxShadow:"0 8px 24px rgba(2,6,23,.18)",border:"1px solid rgba(148,163,184,.15)"},
   finBtn:{width:"100%",border:"none",borderRadius:13,padding:"16px",fontSize:17,fontWeight:800,color:"white",letterSpacing:.3},
-  evBtn:{borderRadius:13,padding:"14px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:5,boxShadow:"0 2px 8px rgba(0,0,0,.06)",minHeight:80,transition:"all .12s"},
+  evBtn:{borderRadius:13,padding:"14px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:5,boxShadow:"0 3px 10px rgba(15,23,42,.08)",minHeight:80,transition:"all .12s"},
   secLbl:{fontSize:13,fontWeight:800,color:"#334155",letterSpacing:.5,display:"block"},
-  shareBtn:{background:"#F1F5F9",border:"1.5px solid #E2E8F0",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:700,color:"#475569",cursor:"pointer"},
-  logCard:{background:"white",borderRadius:13,padding:"14px 15px",boxShadow:"0 2px 6px rgba(0,0,0,.05)"},
-  icnBtn:{background:"#F8FAFC",border:"1.5px solid #E2E8F0",borderRadius:7,padding:"6px 10px",fontSize:15,color:"#64748B",lineHeight:1,cursor:"pointer"},
+  shareBtn:{background:"#F8FAFC",border:"1.5px solid #DBE4EE",borderRadius:10,padding:"7px 14px",fontSize:13,fontWeight:700,color:"#334155",cursor:"pointer"},
+  logCard:{background:"white",borderRadius:13,padding:"14px 15px",boxShadow:"0 4px 14px rgba(15,23,42,.06)",border:"1px solid #E2E8F0"},
+  icnBtn:{background:"#F8FAFC",border:"1.5px solid #DBE4EE",borderRadius:8,padding:"6px 10px",fontSize:15,color:"#64748B",lineHeight:1,cursor:"pointer"},
   searchIn:{width:"100%",background:"white",border:"2px solid #E2E8F0",borderRadius:12,padding:"14px 44px 14px 16px",fontSize:16,outline:"none"},
   clrBtn:{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#94A3B8",fontSize:20,cursor:"pointer"},
   backBtn:{background:"none",border:"none",color:"#64748B",fontSize:15,fontWeight:700,padding:"0 0 14px 0",cursor:"pointer"},
-  dayCard:{width:"100%",background:"white",border:"none",borderRadius:14,padding:"16px 16px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:"0 2px 6px rgba(0,0,0,.05)",textAlign:"left",cursor:"pointer"},
+  dayCard:{width:"100%",background:"white",border:"1px solid #E2E8F0",borderRadius:14,padding:"16px 16px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:"0 3px 10px rgba(15,23,42,.06)",textAlign:"left",cursor:"pointer"},
   overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)",padding:"16px"},
   sheet:{background:"white",borderRadius:"16px",width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto"},
   shHd:{padding:"16px 18px 13px",display:"flex",alignItems:"center",gap:12,position:"relative"},
   shT:{fontSize:16,fontWeight:800,letterSpacing:.5},shS:{fontSize:12,color:"#94A3B8",marginTop:2,fontFamily:"'JetBrains Mono',monospace"},
   shBody:{padding:"14px 18px 36px"},
-  xBtn:{position:"absolute",right:14,top:13,background:"#F1F5F9",border:"none",borderRadius:8,width:32,height:32,fontSize:14,color:"#64748B",cursor:"pointer"},
+  xBtn:{position:"absolute",right:14,top:13,background:"#F1F5F9",border:"1px solid #E2E8F0",borderRadius:8,width:32,height:32,fontSize:14,color:"#64748B",cursor:"pointer"},
   fLbl:{fontSize:13,fontWeight:700,color:"#64748B",letterSpacing:.5,marginBottom:7,display:"block"},
   tArea:{width:"100%",background:"#F8FAFC",border:"2px solid #E2E8F0",borderRadius:10,padding:"12px 13px",fontSize:16,lineHeight:1.5},
   tIn:{width:"100%",background:"#F8FAFC",border:"2px solid #E2E8F0",borderRadius:10,padding:"12px 13px",fontSize:16},
   photoBtn:{width:"100%",border:"2px solid",borderRadius:10,padding:"13px 12px",fontSize:15,fontWeight:700,marginTop:10,textAlign:"center",cursor:"pointer"},
   confBtn:{width:"100%",color:"white",border:"none",borderRadius:13,padding:"16px",fontSize:17,fontWeight:800,marginTop:12,letterSpacing:.3},
-  toast:{position:"fixed",top:72,left:"50%",transform:"translateX(-50%)",background:"#1E293B",color:"white",padding:"13px 24px",borderRadius:13,fontSize:14,fontWeight:700,zIndex:999,boxShadow:"0 4px 20px rgba(0,0,0,.3)"},
+  toast:{position:"fixed",top:72,left:"50%",transform:"translateX(-50%)",background:"#1E293B",color:"white",padding:"13px 24px",borderRadius:13,fontSize:14,fontWeight:700,zIndex:999,boxShadow:"0 8px 24px rgba(2,6,23,.35)"},
 };
 
 // ─────────────────────────────────────────────────────────────
