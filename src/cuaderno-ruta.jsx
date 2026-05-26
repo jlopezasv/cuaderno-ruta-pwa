@@ -31,9 +31,12 @@ import {
 } from "./data/sync";
 import {
   contextKindFromProfileTipo,
-  getStoredAuthContext,
-  persistAuthContext,
+  getStoredAuthSession,
+  isHybridSession,
 } from "./data/authContext";
+import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
+import { isPlatformAdminUid } from "./config/adminUsers.js";
+import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
 import { getPushClientContext, initFcmPush } from "./data/fcmPush";
 import {
   ESTADO_COLOR,
@@ -322,15 +325,6 @@ function PaywallScreen({status,user,email}){
   );
 }
 
-async function resolveAuthContextForUid(uid) {
-  if (!uid) return "conductor";
-  const ownerEmpresas = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
-  if (ownerEmpresas.length) return "empresa";
-  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
-  if (profiles[0]?.tipo_cuenta === "empresa") return "empresa";
-  return "conductor";
-}
-
 function AuthScreen({ onAuth }) {
   const demoMode = isDemoApp();
   const allowRegister = isPublicRegistrationAllowed();
@@ -340,7 +334,6 @@ function AuthScreen({ onAuth }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
-  const [loginContext, setLoginContext] = useState("conductor");
   const [showPwd, setShowPwd] = useState(false);
   const [showPwd2, setShowPwd2] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -388,8 +381,6 @@ function AuthScreen({ onAuth }) {
             "Registro sin sesión. En Supabase demo: activa sign-ups, desactiva confirmación por email y revisa rate limits.",
           );
         }
-        const authContext = contextKindFromProfileTipo(tipo);
-        persistAuthContext(authContext, uid);
         const profRes = await sbFetch("/rest/v1/profiles", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates" },
@@ -416,7 +407,10 @@ function AuthScreen({ onAuth }) {
         }).catch((e) => {
           if (isDemoDevUnlocked()) demoDevWarn("bienvenida email omitido:", e?.message);
         });
-        onAuth(authContext);
+        await bootstrapAuthSession(uid, sbSelect, {
+          preferMode: contextKindFromProfileTipo(tipo),
+        });
+        onAuth();
         setTimeout(() => window.location.reload(), 500);
       } else {
         await sbSignIn(email.trim(), password);
@@ -426,12 +420,8 @@ function AuthScreen({ onAuth }) {
           await sbSignOut();
           throw new Error("Esta cuenta está archivada. Contacta con administración.");
         }
-        const authContext = loginContext === "empresa" ? await resolveAuthContextForUid(uid) : "conductor";
-        if (loginContext === "empresa" && authContext !== "empresa") {
-          throw new Error("Esta cuenta no es de empresa");
-        }
-        if (uid) persistAuthContext(authContext, uid);
-        onAuth(authContext);
+        await bootstrapAuthSession(uid, sbSelect);
+        onAuth();
         setTimeout(()=>window.location.reload(), 100);
       }
     } catch(e) {
@@ -464,7 +454,7 @@ function AuthScreen({ onAuth }) {
         {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
-              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");setLoginContext("conductor");}}
+              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");}}
                 style={{ flex:1, background:mode===m?UI_TOKENS.brand:"transparent", color:mode===m?"#0F172A":"#94A3B8", border:"none", borderRadius:8, padding:"9px", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"Outfit, sans-serif" }}>
                 {l}
               </button>
@@ -477,24 +467,6 @@ function AuthScreen({ onAuth }) {
             <button onClick={()=>{setMode("login");setError("");setOk("");}} style={{ background:"transparent", border:"none", color:"#94A3B8", fontSize:13, cursor:"pointer", fontFamily:"Outfit, sans-serif", marginBottom:12 }}>← Volver</button>
             <div style={{ fontSize:16, fontWeight:800, color:"#F1F5F9", fontFamily:"Outfit, sans-serif" }}>Recuperar contraseña</div>
             <div style={{ fontSize:12, color:"#94A3B8", marginTop:4, fontFamily:"Outfit, sans-serif" }}>Te enviaremos un email de recuperación</div>
-          </div>
-        )}
-
-        {mode === "login" && (
-          <div style={{ marginBottom:16 }}>
-            <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:8, fontFamily:"sans-serif" }}>ENTRAR COMO</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-              {[
-                {id:"conductor", icon:"◉", title:"Conductor"},
-                {id:"empresa", icon:"◇", title:"Empresa"},
-              ].map(({id,icon,title})=>(
-                <button key={id} type="button" onClick={()=>setLoginContext(id)}
-                  style={{ background:loginContext===id?"#F59E0B15":"#0F172A", border:`2px solid ${loginContext===id?"#F59E0B":"#334155"}`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"center" }}>
-                  <div style={{ fontSize:20, marginBottom:3, color:loginContext===id?"#F59E0B":"#64748B" }}>{icon}</div>
-                  <div style={{ fontSize:12, fontWeight:800, color:loginContext===id?"#F59E0B":"#F1F5F9", fontFamily:"sans-serif" }}>{title}</div>
-                </button>
-              ))}
-            </div>
           </div>
         )}
 
@@ -2176,24 +2148,14 @@ function AppInner(){
         setProf({...PROF0,...p});
       }
       setLoaded(true);
-      // Detectar contexto empresa — con reintento
+      // Detectar vínculo conductor ↔ flota (no define el shell activo)
       const uidRol=getUserId();
       if(uidRol){
-        const authContext = getStoredAuthContext(uidRol)?.kind || "conductor";
         const detectarRol=async(intento=0)=>{
           try{
             const rels=await sbSelect("conductor_empresa",`user_id=eq.${uidRol}&activo=eq.true`);
-            if(authContext==="conductor"){
-              if(rels.length){setRolEmpresa("conductor");return;}
-              setRolEmpresa(null);
-              return;
-            }
-            const emps2=await sbSelect("empresas",`owner_id=eq.${uidRol}`);
-            if(emps2.length){setRolEmpresa("jefe");return;}
-            const prof2=await sbSelect("profiles",`id=eq.${uidRol}`);
-            if(prof2[0]?.tipo_cuenta==="empresa"){
-              setRolEmpresa("jefe");
-            }
+            if(rels.length){setRolEmpresa("conductor");return;}
+            setRolEmpresa(null);
           }catch(e){
             if(intento<2)setTimeout(()=>detectarRol(intento+1),2000);
           }
@@ -3080,6 +3042,9 @@ function AppInner(){
   // Activo — continúa a la app
 
   const selTmpl=TMPLS.find(t=>t.id===tmplId);
+  const authSession=getStoredAuthSession(getUserId());
+  const showModeSwitch=isHybridSession(authSession);
+  const isAdmin=!!authSession?.capabilities?.admin;
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3121,6 +3086,7 @@ function AppInner(){
           <button onClick={()=>{const nd=!dark;setDark(nd);localStorage.setItem("dark",nd?"1":"0");}} style={{background:"transparent",border:"1.5px solid #334155",borderRadius:8,padding:"5px 8px",fontSize:15,cursor:"pointer",color:"#F59E0B"}}>
             {dark?"☀️":"🌙"}
           </button>
+          {showModeSwitch&&<ModeSwitchButton uid={getUserId()} targetMode="empresa" compact dark />}
           {getSession()&&<button onClick={async()=>{await sbSignOut();setUser(null);}} style={{background:"#EF444420",border:"1.5px solid #EF444440",borderRadius:8,padding:"5px 8px",fontSize:12,cursor:"pointer",color:"#EF4444",fontWeight:700}}>
             {T("salir")}
           </button>}
@@ -3144,7 +3110,7 @@ function AppInner(){
       )}
 
       <nav style={s.nav}>
-        {getConductorTabs({prof,rolEmpresa,uid:getUserId(),T}).map(t=>(
+        {getConductorTabs({isAdmin,T}).map(t=>(
           <button key={t.id} onClick={()=>{setTab(t.id);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
               background:tab===t.id?"rgba(245,158,11,.10)":"transparent",
@@ -3328,8 +3294,7 @@ function AppInner(){
             {resumenTab==="historial"&&<HistorialView db={db} norma={norma} prof={prof} allSorted={allSorted} dayMap={dayMap} days={days} srch={srch} searchQ={searchQ} setSearchQ={setSearchQ} openEdit={openEdit} deleteEntry={deleteEntry}/>}
           </div>
         )}
-        {tab==="empresa"&&<EmpresaPanel prof={prof} dark={dark} onRoleChange={setRolEmpresa}/>}
-        {tab==="admin"&&getUserId()==="ca5dd314-2e37-4f08-86d7-09103cb8e510"&&<AdminPanel dark={dark}/>}
+        {tab==="admin"&&isAdmin&&<AdminPanel dark={dark}/>}
         {tab==="perfil"&&<ProfView prof={prof} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast}/>}
         {tab==="ruta"&&<MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>}
         {tab==="docs"&&(
@@ -11482,7 +11447,7 @@ function AdminPanel({dark}){
                   <div style={{fontSize:10,color:"#475569",marginTop:2,fontFamily:"monospace"}}>{u.id?.slice(0,8)}...</div>
                 </div>
               </div>
-              {u.id!=="ca5dd314-2e37-4f08-86d7-09103cb8e510"&&(
+              {!isPlatformAdminUid(u.id)&&(
                 <button onClick={async()=>{
                   if(!confirm(`¿Archivar usuario "${u.nombre||u.id}"? No podrá iniciar sesión; expedientes y relaciones se conservan.`))return;
                   const tok=getAccessToken();
@@ -17733,29 +17698,20 @@ export default function App(){
     return()=>document.removeEventListener("pointerdown",handleClick);
   },[]);
 
-  // Detectar tipo de cuenta para elegir shell
-  const[tipoCuenta,setTipoCuenta]=useState(null);
+  // Elegir shell según modo activo (revalidado contra backend)
+  const[activeMode,setActiveMode]=useState(null);
   const[checking,setChecking]=useState(true);
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setChecking(false);return;}
-    const localContext=getStoredAuthContext(uid);
-    if(localContext?.kind==="conductor"){
-      setTipoCuenta(localContext.kind);
-      setChecking(false);
-      return;
-    }
-    // Sin contexto local conductor, verificar contra relaciones reales.
-    resolveAuthContextForUid(uid)
-      .then((resolved)=>{
-        persistAuthContext(resolved,uid);
-        setTipoCuenta(resolved);
+    bootstrapAuthSession(uid,sbSelect)
+      .then(({activeMode:mode})=>{
+        setActiveMode(mode);
         setChecking(false);
       })
       .catch(()=>{
-        persistAuthContext("conductor",uid);
-        setTipoCuenta("conductor");
+        setActiveMode("conductor");
         setChecking(false);
       });
   },[]);
@@ -17767,13 +17723,14 @@ export default function App(){
   );
 
   if(import.meta.env.DEV){
-    console.log("[AUDIT PR-22B] App shell",{
-      tipoCuenta,
-      renderiza:tipoCuenta==="empresa"?"EmpresaLayout (dashboard=EmpresaDashboard)":"AppInner (tab servicio=TabServicio→ActiveServicePanel; tab empresa=EmpresaPanel incrustado)",
-      authContext:getStoredAuthContext(getUserId())?.kind||null,
+    const session=getStoredAuthSession(getUserId());
+    console.log("[AUTH-1] App shell",{
+      activeMode,
+      capabilities:session?.capabilities||null,
+      renderiza:activeMode==="empresa"?"EmpresaLayout":"AppInner",
     });
   }
 
-  if(tipoCuenta==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView}/></ErrorBoundary>;
+  if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView}/></ErrorBoundary>;
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }

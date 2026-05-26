@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { EMPRESA_TABS } from "../navigation/empresaTabs";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
+import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
+import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 
 export default function EmpresaLayout({
   PROF0,
@@ -30,11 +32,17 @@ export default function EmpresaLayout({
     setTimeout(() => setToast(""), 3000);
   };
 
-  // Cargar perfil
+  // Cargar perfil + gate de acceso empresa
   useEffect(() => {
     const uid = getUserId();
     if (!uid) {
       setLoaded(true);
+      return;
+    }
+    const session = getStoredAuthSession(uid);
+    if (session && !session.capabilities?.empresa) {
+      switchActiveMode(uid, "conductor");
+      window.location.reload();
       return;
     }
     sbSelect("profiles", `id=eq.${uid}`)
@@ -90,6 +98,9 @@ export default function EmpresaLayout({
       },
     ]).catch(() => {});
   }
+
+  const authSession = getStoredAuthSession(getUserId());
+  const showModeSwitch = isHybridSession(authSession);
 
   if (!loaded)
     return (
@@ -188,6 +199,9 @@ export default function EmpresaLayout({
             >
               {String(prof.nombre || "E").charAt(0).toUpperCase()}
             </div>
+            {showModeSwitch && (
+              <ModeSwitchButton uid={getUserId()} targetMode="conductor" />
+            )}
             {canUseConfig && (
               <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
                 Ajustes
@@ -211,6 +225,9 @@ export default function EmpresaLayout({
         <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
           <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
           <div style={{ display: "flex", gap: 8 }}>
+            {showModeSwitch && (
+              <ModeSwitchButton uid={getUserId()} targetMode="conductor" compact />
+            )}
             {canUseConfig && (
               <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "5px 8px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
                 Ajustes
