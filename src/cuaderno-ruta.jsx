@@ -97,6 +97,7 @@ import { ActiveServicePanel } from "./features/services/components/ActiveService
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
 import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
 import {
+  mergeDriverActiveViewFromResolution,
   pickNextAssignedService,
   sortDriverOperationalCandidates,
 } from "./domain/service/driverServiceQueue.js";
@@ -16070,62 +16071,46 @@ function ServiciosTimelineView({uid}){
 // ─────────────────────────────────────────────────────────────
 //  HOOK — SERVICIO ACTIVO
 // ─────────────────────────────────────────────────────────────
+const EMPTY_DRIVER_VIEW={servicio:null,stops:[],siguienteServicio:null,siguientesStops:[]};
+
 function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
-  const[servicio,setServicio]=useState(null);
-  const[stops,setStops]=useState([]);
-  const[siguienteServicio,setSiguienteServicio]=useState(null);
-  const[siguientesStops,setSiguientesStops]=useState([]);
+  const[driverView,setDriverView]=useState(EMPTY_DRIVER_VIEW);
+  const{servicio,stops,siguienteServicio,siguientesStops}=driverView;
   const[loading,setLoading]=useState(true);
   const emptyStopsRetryRef=useRef(0);
   const emptyStopsRetryTimerRef=useRef(null);
+  const loadGenRef=useRef(0);
+  const driverViewRef=useRef(EMPTY_DRIVER_VIEW);
+  useEffect(()=>{driverViewRef.current=driverView;},[driverView]);
+  const patchDriverView=useCallback((patch)=>{
+    setDriverView((prev)=>{
+      const next=typeof patch==="function"?patch(prev):{...prev,...patch};
+      driverViewRef.current=next;
+      return next;
+    });
+  },[]);
   const cargar=useCallback(async()=>{
     if(!uid){setLoading(false);return;}
+    const gen=++loadGenRef.current;
     try{
       const resolved=await resolveDriverActiveServiceAndStops(uid);
-      const data=resolved?.servicio?[resolved.servicio]:[];
+      if(gen!==loadGenRef.current)return;
+      const prevView=driverViewRef.current;
+      const merged=mergeDriverActiveViewFromResolution(prevView,resolved);
       console.log("[OP1] useServicioActivo servicio query",{
         uid,
-        status:resolved?.servicio?200:204,
-        rows:Array.isArray(data)?data.length:null,
-        servicioIds:Array.isArray(data)?data.map(s=>s?.id):[],
-        estados:Array.isArray(data)?data.map(s=>s?.estado):[],
+        status:merged?.servicio?200:204,
+        servicioId:merged?.servicio?.id||null,
+        estado:merged?.servicio?.estado||null,
+        resolvedId:resolved?.servicio?.id||null,
+        resolvedEstado:resolved?.servicio?.estado||null,
+        pinned:!!(prevView?.servicio?.id&&resolved?.servicio?.id&&prevView.servicio.id!==resolved.servicio.id),
+        stopRows:Array.isArray(merged?.stops)?merged.stops.length:0,
       });
-      if(data.length){
-        setServicio((prev)=>{
-          const next=data[0];
-          if(
-            prev?.id===next?.id&&
-            String(prev?.estado||"")==="completado"&&
-            String(next?.estado||"")!=="completado"&&
-            String(next?.estado||"")!=="cerrado"
-          ){
-            console.log("[CLOSE4] condición ocultación — preservar completado local tras recarga",{
-              prevEstado:prev.estado,
-              nextEstado:next.estado,
-              servicioId:prev.id,
-            });
-            return{...next,estado:"completado"};
-          }
-          return next;
-        });
-        const stopsRows=Array.isArray(resolved?.stops)?resolved.stops:[];
-        console.log("[OP1] useServicioActivo stops query",{
-          servicioId:data[0]?.id||null,
-          status:200,
-          rows:Array.isArray(stopsRows)?stopsRows.length:null,
-          stopIds:Array.isArray(stopsRows)?stopsRows.map(s=>s?.id):[],
-          payload:Array.isArray(stopsRows)?stopsRows.map(s=>({
-            id:s?.id,
-            servicio_id:s?.servicio_id,
-            estado:s?.estado,
-            orden:s?.orden,
-            hora_llegada_real:s?.hora_llegada_real||null,
-            hora_salida_real:s?.hora_salida_real||null,
-          })) : [],
-        });
-        setStops(stopsRows);
-        setSiguienteServicio(resolved?.siguienteServicio||null);
-        setSiguientesStops(Array.isArray(resolved?.siguientesStops)?resolved.siguientesStops:[]);
+      if(merged?.servicio?.id){
+        driverViewRef.current=merged;
+        setDriverView(merged);
+        const stopsRows=Array.isArray(merged.stops)?merged.stops:[];
         if(stopsRows.length>0){
           emptyStopsRetryRef.current=0;
           if(emptyStopsRetryTimerRef.current){
@@ -16139,20 +16124,20 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
             if(emptyStopsRetryTimerRef.current)clearTimeout(emptyStopsRetryTimerRef.current);
             emptyStopsRetryTimerRef.current=setTimeout(()=>{cargar();},3000);
             console.warn("[OP1] servicio sin paradas, reintento",{
-              servicioId:data[0]?.id||null,
-              estado:data[0]?.estado||null,
+              servicioId:merged?.servicio?.id||null,
+              estado:merged?.servicio?.estado||null,
               retry:retryN,
             });
           }
         }
       }else{
-        setServicio(null);
-        setStops([]);
-        setSiguienteServicio(null);
-        setSiguientesStops([]);
+        driverViewRef.current=EMPTY_DRIVER_VIEW;
+        setDriverView(EMPTY_DRIVER_VIEW);
       }
     }catch(e){console.warn("useServicioActivo:",e);}
-    finally{setLoading(false);}
+    finally{
+      if(gen===loadGenRef.current)setLoading(false);
+    }
   },[uid]);
   useEffect(()=>{cargar();},[cargar]);
   useEffect(()=>{
@@ -16213,17 +16198,17 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       console.warn("[TL1] verify entrada_muelle failed",e?.message||e);
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
-    setStops(updated);
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
-    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    let nextServicio=servicio;
+    if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     const geo=geoFromGpsPoint(op?.point);
     if(geo){
       const stop=updated.find(s=>s.id===stopId);
       const notas=mergeStopOperacionMeta(stop?.notas,{entrada_geo:geo});
       await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
       updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
-      setStops(updated);
     }
+    patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId){
@@ -16265,7 +16250,6 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       console.warn("[TL1] verify salida_muelle failed",e?.message||e);
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
-    setStops(updated);
 
     // ── Registrar automáticamente en tacógrafo ──
     const stop=stops.find(s=>s.id===stopId);
@@ -16282,30 +16266,36 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     }
 
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast});
-    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    let nextServicio=servicio;
+    if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     const geoSalida=geoFromGpsPoint(op?.point);
     if(geoSalida){
       const stop=updated.find(s=>s.id===stopId);
       const notas=mergeStopOperacionMeta(stop?.notas,{salida_geo:geoSalida});
       await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
       updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
-      setStops(updated);
     }
 
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
       if(!doneRes.ok)throw new Error("No se pudo completar el servicio");
-      setServicio(prev=>({...prev,estado:"completado"}));
+      nextServicio={...nextServicio,estado:"completado"};
     }
+    patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function iniciarServicio(servicioId){
+    if(servicio?.id&&servicioId!==servicio.id){
+      console.warn("[OP1] iniciarServicio id mismatch",{uiId:servicio.id,requestedId:servicioId});
+      throw new Error("El servicio en pantalla no coincide. Espera a cerrar el expediente o recarga.");
+    }
     const fecha_inicio=new Date().toISOString();
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio})});
     const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
-    setServicio(prev=>({...prev,estado:"en_curso",fecha_inicio}));
+    let nextServicio={...started};
     const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast});
-    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    if(op?.referencia)nextServicio={...nextServicio,referencia:op.referencia};
+    patchDriverView({servicio:nextServicio});
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   async function iniciarViajeOperacional(servicioId){
@@ -16313,7 +16303,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(getOperationalTripStartedAt(servicio))return;
     const referencia=mergeReferenciaOperacional(servicio.referencia||null,{operational_trip_started_at:new Date().toISOString()});
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
-    setServicio(prev=>prev?{...prev,referencia}:prev);
+    patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia}:prev.servicio}));
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   async function marcarInicioOperacionStop(stopId){
@@ -16323,13 +16313,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const notas=mergeStopOperacionMeta(stop.notas||"",{inicio_operacion_at:now});
     await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
     const updated=stops.map(s=>s.id===stopId?{...s,notas}:s);
-    setStops(updated);
     if(uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
       const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
       sbUpsert("entries",[{id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:now,note:`Manual: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false}]).catch(()=>{});
     }
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"inicio_operacion_stop",stopId,showToast});
-    if(op?.referencia)setServicio(prev=>prev?{...prev,referencia:op.referencia}:prev);
+    let nextServicio=servicio;
+    if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
+    patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   async function cerrarExpediente({ comentario, firmaCanvas }) {
@@ -16341,10 +16332,9 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       conductorId: uid,
       conductorNombre: conductorNombre || null,
     });
-    setServicio(null);
-    setStops([]);
-    setSiguienteServicio(null);
-    setSiguientesStops([]);
+    setDriverView(EMPTY_DRIVER_VIEW);
+    driverViewRef.current=EMPTY_DRIVER_VIEW;
+    await cargar();
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   return{
@@ -17376,6 +17366,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     return(
     <>
       <ActiveServicePanel
+        key={servicio.id}
         mode={panelMode}
         servicio={servicio}
         stops={stops}

@@ -812,7 +812,7 @@ export function ActiveServicePanel({
         await recargar?.();
       } else {
         await marcarCompletado(stopId);
-        await recargar?.();
+        // marcarCompletado dispara cuaderno-recargar-servicio; evitar segundo fetch que mezcle estados
       }
       setConfirmMuelle(null);
       console.log("[OP2] confirm callback success", { kind, stopId, servicioId: servicio?.id || null });
