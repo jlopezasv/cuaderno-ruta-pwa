@@ -21,12 +21,21 @@ export default async function handler(req, res) {
     });
   }
 
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !String(apiKey).trim()) {
+    return res.status(503).json({
+      ok: false,
+      error: "OCR no disponible: configure ANTHROPIC_API_KEY en el proyecto Vercel (entorno demo).",
+      code: "CMR_OCR_NOT_CONFIGURED",
+    });
+  }
+
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -66,9 +75,14 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
 
     const data = await response.json();
     if (!response.ok) {
+      const upstreamMsg = data?.error?.message || data?.error || "CMR upstream error";
+      const friendly =
+        /x-api-key|authentication|invalid.*key/i.test(String(upstreamMsg))
+          ? "Clave Anthropic inválida o ausente (ANTHROPIC_API_KEY en Vercel demo)."
+          : upstreamMsg;
       return res.status(502).json({
         ok: false,
-        error: data?.error?.message || data?.error || "CMR upstream error",
+        error: friendly,
         code: "CMR_UPSTREAM",
       });
     }

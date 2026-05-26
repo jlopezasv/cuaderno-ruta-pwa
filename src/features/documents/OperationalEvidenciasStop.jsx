@@ -63,6 +63,7 @@ export function OperationalEvidenciasStop({
   const [error, setError] = useState("");
   const fileRef = useRef(null);
   const fotoRef = useRef(null);
+  const incFotoRef = useRef(null);
   const previewBlobRef = useRef(null);
   /** Archivo CMR original de cámara/galería; el PDF y storage deben usar este, no solo previewBlob. */
   const cmrSourceFileRef = useRef(null);
@@ -305,7 +306,12 @@ export function OperationalEvidenciasStop({
         setCmrCampos(data.campos);
         setCmrFase("revisar");
       } else {
-        setError(data.error || "No se pudo leer el CMR");
+        const errMsg = String(data.error || "");
+        if (/x-api-key|api.key|anthropic/i.test(errMsg)) {
+          setError("OCR no configurado en Demo: falta ANTHROPIC_API_KEY en Vercel (proyecto demo). Puedes guardar el documento sin OCR.");
+        } else {
+          setError(data.error || "No se pudo leer el documento");
+        }
         setCmrFase("revisar");
       }
     } catch (err) {
@@ -378,7 +384,7 @@ export function OperationalEvidenciasStop({
         stop,
         titulo,
         descripcion: incDescripcion,
-        conductorNombre,
+        conductorNombre: conductorName,
       });
       const fotos = incFotos.slice(0, 6);
       for (const file of fotos) {
@@ -566,10 +572,40 @@ export function OperationalEvidenciasStop({
             <div style={{ fontSize: 16, fontWeight: 800, color: "#EF4444", marginBottom: 8 }}>⚠️ Nueva incidencia</div>
             <input value={incTitulo} onChange={(e) => setIncTitulo(e.target.value)} placeholder="Titulo (obligatorio)" style={iStyle} />
             <textarea value={incDescripcion} onChange={(e) => setIncDescripcion(e.target.value)} placeholder="Descripcion (opcional)" rows={3} style={{ ...iStyle, resize: "vertical" }} />
-            <label style={{ fontSize: 12, color: LIGHT.su, fontWeight: 700, display: "block", marginBottom: 6 }}>
+            <div style={{ fontSize: 12, color: LIGHT.su, fontWeight: 700, marginBottom: 6 }}>
               Fotos (0-6) · {incFotos.length}/6
-            </label>
-            <input type="file" accept="image/*" multiple onChange={addIncFotos} />
+            </div>
+            <input
+              ref={incFotoRef}
+              {...cameraProps}
+              multiple
+              onChange={addIncFotos}
+              style={{ display: "none" }}
+            />
+            <button
+              type="button"
+              onClick={() => incFotoRef.current?.click()}
+              disabled={saving || incFotos.length >= 6}
+              style={{
+                width: "100%",
+                background: incFotos.length >= 6 ? "#CBD5E1" : "#F87171",
+                color: "white",
+                border: "none",
+                borderRadius: 10,
+                padding: "12px",
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: incFotos.length >= 6 ? "default" : "pointer",
+                marginBottom: 8,
+              }}
+            >
+              {isMobileCaptureDevice() ? "📷 Hacer foto o elegir de galería" : "📷 Añadir foto (cámara o archivo)"}
+            </button>
+            {!isMobileCaptureDevice() && (
+              <div style={{ fontSize: 11, color: LIGHT.su, marginBottom: 8 }}>
+                En PC puedes elegir cámara web o imagen guardada. Pulsa de nuevo para añadir otra (máx. 6).
+              </div>
+            )}
             {incFotos.length > 0 && (
               <div style={{ marginTop: 8, marginBottom: 10, display: "grid", gap: 6 }}>
                 {incFotos.map((f, i) => (
