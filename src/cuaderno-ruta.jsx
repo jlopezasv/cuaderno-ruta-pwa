@@ -2103,6 +2103,14 @@ function AppInner(){
   const jStateRef=useRef("none");
   const width=useWidth(),isWide=width>=768;
   const showToast=useCallback((m,color="#1E293B",ms=2500)=>{setToast(m);setToastColor(color);setTimeout(()=>setToast(""),ms);},[]);
+  const docsUi={
+    page:"#F0F4F8",
+    card:"#FFFFFF",
+    border:"#DBE4EE",
+    text:"#0F172A",
+    muted:"#64748B",
+    heading:"#334155",
+  };
 
   // Cargar datos — Supabase si hay sesión, local si no
   const syncingRef=useRef(false); // evita que el save se dispare durante un sync
@@ -3327,65 +3335,65 @@ function AppInner(){
         {tab==="docs"&&(
           <div>
             {docsTab==="home"&&(
-              <div style={{padding:"20px 14px max(80px, calc(72px + env(safe-area-inset-bottom)))",background:"#0F172A",minHeight:"calc(100vh - 120px)"}}>
-                <div style={{fontSize:11,color:"#475569",fontWeight:700,letterSpacing:1.5,marginBottom:20}}>DOCUMENTOS</div>
-                <div style={{fontSize:14,color:"#94a3b8",lineHeight:1.55,marginBottom:22,maxWidth:480}}>
-                  Aquí solo consultas y abres archivos ya guardados. La subida en parada (foto, CMR, etc.) va en la pestaña <strong style={{color:"#e2e8f0"}}>Servicio</strong>, dentro del flujo de cada carga o descarga.
+              <div style={{padding:"20px 14px max(80px, calc(72px + env(safe-area-inset-bottom)))",background:docsUi.page,minHeight:"calc(100vh - 120px)"}}>
+                <div style={{fontSize:11,color:docsUi.muted,fontWeight:700,letterSpacing:1.5,marginBottom:20}}>DOCUMENTOS</div>
+                <div style={{fontSize:14,color:docsUi.muted,lineHeight:1.55,marginBottom:22,maxWidth:480}}>
+                  Aquí solo consultas y abres archivos ya guardados. La subida en parada (foto, CMR, etc.) va en la pestaña <strong style={{color:docsUi.text}}>Servicio</strong>, dentro del flujo de cada carga o descarga.
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-                  <button onClick={()=>setDocsTab("servicio_docs")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
+                  <button onClick={()=>setDocsTab("servicio_docs")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:32,marginBottom:8}}>📦</div>
                     <div style={{fontSize:16,fontWeight:800,color:"#22C55E",letterSpacing:.3}}>Por servicio</div>
-                    <div style={{fontSize:12,color:"#64748b",marginTop:6,lineHeight:1.4}}>Ver documentos del servicio en curso o recientes</div>
+                    <div style={{fontSize:12,color:docsUi.muted,marginTop:6,lineHeight:1.4}}>Ver documentos del servicio en curso o recientes</div>
                   </button>
-                  <button onClick={()=>setDocsTab("gastos")} style={{background:"#1E293B",border:"1px solid #22C55E30",borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1"}}>
+                  <button onClick={()=>setDocsTab("gastos")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"22px 14px",cursor:"pointer",textAlign:"center",gridColumn:"1/-1",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:32,marginBottom:8}}>💰</div>
                     <div style={{fontSize:16,fontWeight:800,color:"#22C55E",letterSpacing:.3}}>Gastos</div>
-                    <div style={{fontSize:12,color:"#64748b",marginTop:6,lineHeight:1.4}}>Consultar combustible, peajes y dietas</div>
+                    <div style={{fontSize:12,color:docsUi.muted,marginTop:6,lineHeight:1.4}}>Consultar combustible, peajes y dietas</div>
                   </button>
-                  <button onClick={()=>setDocsTab("documentos")} style={{background:"#1E293B",border:"1px solid #3B82F630",borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center"}}>
+                  <button onClick={()=>setDocsTab("documentos")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:28,marginBottom:6}}>📄</div>
                     <div style={{fontSize:14,fontWeight:800,color:"#3B82F6"}}>Plantillas</div>
-                    <div style={{fontSize:11,color:"#64748b",marginTop:4,lineHeight:1.35}}>Partes e informes guardados</div>
+                    <div style={{fontSize:11,color:docsUi.muted,marginTop:4,lineHeight:1.35}}>Partes e informes guardados</div>
                   </button>
-                  <button onClick={()=>setDocsTab("empresa_home")} style={{background:"#1E293B",border:"1px solid #F59E0B30",borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center"}}>
+                  <button onClick={()=>setDocsTab("empresa_home")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:28,marginBottom:6}}>🏢</div>
                     <div style={{fontSize:14,fontWeight:800,color:"#F59E0B"}}>Empresa</div>
-                    <div style={{fontSize:11,color:"#64748b",marginTop:4,lineHeight:1.35}}>Cargas e informes de empresa</div>
+                    <div style={{fontSize:11,color:docsUi.muted,marginTop:4,lineHeight:1.35}}>Cargas e informes de empresa</div>
                   </button>
                 </div>
-                <button onClick={()=>setDocsTab("km")} style={{width:"100%",background:"#1E293B",border:"1px solid #7C3AED30",borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14,marginBottom:8}}>
+                <button onClick={()=>setDocsTab("km")} style={{width:"100%",background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14,marginBottom:8,boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                   <span style={{fontSize:28}}>🛣️</span>
                   <div style={{textAlign:"left"}}>
                     <div style={{fontSize:14,fontWeight:800,color:"#A78BFA"}}>LIBRO DE KM</div>
-                    <div style={{fontSize:11,color:"#475569",marginTop:2}}>Registro de kilómetros diarios</div>
+                    <div style={{fontSize:11,color:docsUi.muted,marginTop:2}}>Registro de kilómetros diarios</div>
                   </div>
-                  <span style={{marginLeft:"auto",color:"#334155",fontSize:18}}>›</span>
+                  <span style={{marginLeft:"auto",color:docsUi.heading,fontSize:18}}>›</span>
                 </button>
-                <button onClick={()=>setDocsTab("info")} style={{width:"100%",background:"#1E293B",border:"1px solid #3B82F630",borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
+                <button onClick={()=>setDocsTab("info")} style={{width:"100%",background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14,boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                   <span style={{fontSize:28}}>ℹ️</span>
                   <div style={{textAlign:"left"}}>
                     <div style={{fontSize:14,fontWeight:800,color:"#3B82F6"}}>EMERGENCIAS</div>
-                    <div style={{fontSize:11,color:"#475569",marginTop:2}}>Teléfonos · Protocolos · Por país</div>
+                    <div style={{fontSize:11,color:docsUi.muted,marginTop:2}}>Teléfonos · Protocolos · Por país</div>
                   </div>
-                  <span style={{marginLeft:"auto",color:"#334155",fontSize:18}}>›</span>
+                  <span style={{marginLeft:"auto",color:docsUi.heading,fontSize:18}}>›</span>
                 </button>
               </div>
             )}
             {docsTab==="gastos"&&(
               <div>
-                <div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}>
+                <div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}>
                   <button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button>
-                  <span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>💰 GASTOS</span>
+                  <span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>💰 GASTOS</span>
                 </div>
                 <GastosView db={db} setDb={setDb} prof={prof} norma={norma}/>
               </div>
             )}
             {docsTab==="documentos"&&(
               <div>
-                <div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}>
+                <div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}>
                   <button onClick={()=>{if(tmplId){setTmplId(null);}else{setDocsTab("home");}}} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button>
-                  <span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>
+                  <span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>
                     {tmplId?`${TMPLS.find(x=>x.id===tmplId)?.icon||"📄"} ${TMPLS.find(x=>x.id===tmplId)?.label||"Documento"}`:"📄 DOCUMENTOS"}
                   </span>
                 </div>
@@ -3471,29 +3479,29 @@ function AppInner(){
             )}
             {docsTab==="empresa_home"&&(
               <div>
-                <div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}>
+                <div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}>
                   <button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button>
-                  <span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>🏢 EMPRESA</span>
+                  <span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>🏢 EMPRESA</span>
                 </div>
-                <div style={{padding:"20px 14px 80px",background:"#0F172A",minHeight:"calc(100vh - 160px)"}}>
+                <div style={{padding:"20px 14px 80px",background:docsUi.page,minHeight:"calc(100vh - 160px)"}}>
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
                     {[{id:"cargas",icon:"📦",label:"CARGAS",sub:"Registro de cargas y descargas",color:"#14B8A6"},{id:"empresa",icon:"📊",label:"INFORME SEMANAL",sub:"Genera el informe para la empresa",color:"#F59E0B"},{id:"auditoria",icon:"🔍",label:"AUDITORÍA",sub:"Trazabilidad y correcciones",color:"#6366F1"}].map(item=>(
-                      <button key={item.id} onClick={()=>setDocsTab(item.id)} style={{background:"#1E293B",border:`1px solid ${item.color}30`,borderRadius:16,padding:"20px 18px",cursor:"pointer",display:"flex",alignItems:"center",gap:16,textAlign:"left"}}>
+                      <button key={item.id} onClick={()=>setDocsTab(item.id)} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:16,padding:"20px 18px",cursor:"pointer",display:"flex",alignItems:"center",gap:16,textAlign:"left",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                         <span style={{fontSize:32}}>{item.icon}</span>
-                        <div style={{flex:1}}><div style={{fontSize:16,fontWeight:800,color:item.color}}>{item.label}</div><div style={{fontSize:12,color:"#475569",marginTop:3}}>{item.sub}</div></div>
-                        <span style={{color:"#334155",fontSize:20}}>›</span>
+                        <div style={{flex:1}}><div style={{fontSize:16,fontWeight:800,color:item.color}}>{item.label}</div><div style={{fontSize:12,color:docsUi.muted,marginTop:3}}>{item.sub}</div></div>
+                        <span style={{color:docsUi.heading,fontSize:20}}>›</span>
                       </button>
                     ))}
                   </div>
                 </div>
               </div>
             )}
-            {docsTab==="cargas"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>📦 CARGAS</span></div><CargasView db={db} prof={prof} dark={dark}/></div>}
-            {docsTab==="empresa"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>📊 INFORME</span></div><EmpresaReport db={db} prof={prof} dark={dark} norma={norma}/></div>}
-            {docsTab==="auditoria"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>🔍 AUDITORÍA</span></div><AuditoriaView db={db} prof={prof} dark={dark}/></div>}
-            {docsTab==="info"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>ℹ️ EMERGENCIAS</span></div><InfoEmergencias dark={dark}/></div>}
+            {docsTab==="cargas"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>📦 CARGAS</span></div><CargasView db={db} prof={prof} dark={dark}/></div>}
+            {docsTab==="empresa"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>📊 INFORME</span></div><EmpresaReport db={db} prof={prof} dark={dark} norma={norma}/></div>}
+            {docsTab==="auditoria"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>🔍 AUDITORÍA</span></div><AuditoriaView db={db} prof={prof} dark={dark}/></div>}
+            {docsTab==="info"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>ℹ️ EMERGENCIAS</span></div><InfoEmergencias dark={dark}/></div>}
             {docsTab==="servicio_docs"&&<ServicioDocsView uid={getUserId()} showToast={showToast} onBack={()=>setDocsTab("home")}/>}
-            {docsTab==="km"&&<div><div style={{background:"#0F172A",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1E293B"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#F1F5F9"}}>🛣️ LIBRO KM</span></div><LibroKm dark={dark} prof={prof}/></div>}
+            {docsTab==="km"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>🛣️ LIBRO KM</span></div><LibroKm dark={dark} prof={prof}/></div>}
           </div>
         )}
       </main>
