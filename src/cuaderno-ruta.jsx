@@ -100,7 +100,10 @@ import { OperationalEtaSnapshotBlock } from "./features/services/components/Oper
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
-import { fetchIncidenciasResumenByEmpresa } from "./domain/incidencias/incidenciasApi.js";
+import {
+  fetchIncidenciasExpedientePayload,
+  fetchIncidenciasResumenByEmpresa,
+} from "./domain/incidencias/incidenciasApi.js";
 import {
   EVIDENCIA_SAVED_EVENT,
   INCIDENCIA_SAVED_EVENT,
@@ -12220,16 +12223,8 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
   );
 }
 
-function incidenciasCountServicio(servicioId,flotaStops,flotaEvs,incResumenMap={}){
-  const resumenN=Number(incResumenMap?.[servicioId]?.total_incidencias||0);
-  if(resumenN>0)return resumenN;
-  const stops=flotaStops[servicioId]||[];
-  let n=0;
-  for(const st of stops){
-    const arr=flotaEvs[st.id];
-    if(Array.isArray(arr)) n+=arr.filter(e=>e?.tipo==="incidencia").length;
-  }
-  return n;
+function incidenciasCountServicio(servicioId,_flotaStops,_flotaEvs,incResumenMap={}){
+  return Number(incResumenMap?.[servicioId]?.total_incidencias||0);
 }
 
 function evidenciasForServicioStops(servicioId,flotaStops,flotaEvs){
@@ -12476,7 +12471,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }
       setFlotaIncidenciasResumen(next);
       if(servicioId){
-        setFlotaServicios(prev=>prev.map((sv)=>sv.id===servicioId?{...sv,incidencias_total:Number(next?.[servicioId]?.total_incidencias||0)}:sv));
+        setFlotaServicios(prev=>prev.map((sv)=>sv.id===servicioId?{
+          ...sv,
+          incidencias_total:Number(next?.[servicioId]?.total_incidencias||0),
+          incidencias_fotos_total:Number(next?.[servicioId]?.total_fotos||0),
+        }:sv));
       }
     }
     window.addEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
@@ -12497,9 +12496,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   svCardExpandRef.current=svCardExpand;
   const[pickConductorViaje,setPickConductorViaje]=useState(false);
   const[anularModal,setAnularModal]=useState(null);
-  const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | incidencias | …
+  const[serviciosVistaTab,setServiciosVistaTab]=useState("todos"); // todos | en_curso | asignados | completados | …
   useEffect(()=>{
-    if(serviciosVistaTab==="activos")setServiciosVistaTab("todos");
+    if(serviciosVistaTab==="activos"||serviciosVistaTab==="incidencias")setServiciosVistaTab("todos");
   },[serviciosVistaTab]);
   const[serviciosBusqueda,setServiciosBusqueda]=useState("");
   const[serviciosPage,setServiciosPage]=useState(1);
@@ -12882,7 +12881,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       await ensureFlotaStopsForServicioIds([sv.id]);
       await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
       await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
-      const preview=buildExpedienteCompleto(sv);
+      const preview=await buildExpedienteCompleto(sv);
       if(!preview)throw new Error("sin_datos");
       const extraMerged=(preview.evidencias||[]).filter(e=>e.source==="servicio_documentos_extra");
       console.log("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_OK",{
@@ -13051,7 +13050,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     if(!empresa?.id||modo!=="jefe"||!flotaServicios.length)return;
     const needsAllStops=
       flotaTab==="documentos"||
-      (flotaTab==="servicios"&&["todos","completados","asignados","sin_asignar","anulados","archivados","incidencias"].includes(serviciosVistaTab));
+      (flotaTab==="servicios"&&["todos","completados","asignados","sin_asignar","anulados","archivados"].includes(serviciosVistaTab));
     if(!needsAllStops)return;
     const missing=flotaServicios.map((s)=>s.id).filter((id)=>id&&!flotaStopsFetchedIdsRef.current.has(id));
     if(missing.length)void ensureFlotaStopsForServicioIds(missing);
@@ -13111,6 +13110,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       flotaServicios.map((sv)=>({
         ...sv,
         incidencias_total:Number(flotaIncidenciasResumen?.[sv.id]?.total_incidencias||0),
+        incidencias_fotos_total:Number(flotaIncidenciasResumen?.[sv.id]?.total_fotos||0),
       })),
       serviciosVistaTab,
       empresaVistaTabCtx,
@@ -13378,13 +13378,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return c?.nombre||"Conductor";
   },[conductores]);
 
-  const buildExpedienteCompleto=useCallback((sv)=>{
+  const buildExpedienteCompleto=useCallback(async(sv)=>{
     const conductor=conductores.find((c)=>c.user_id===sv.conductor_id);
+    const incidenciasExpediente=sv?.id?await fetchIncidenciasExpedientePayload(sv.id):null;
     return buildExpedienteForServicio({
       servicio:sv,
       flotaStopsMap:flotaStopsRef.current,
       flotaEvsMap:flotaEvsRef.current,
       flotaExtraDocsMap:flotaExtraDocsRef.current,
+      incidenciasExpediente,
       nombreConductor,
       fmtDur,
       entries:conductor?.entries||[],
@@ -13438,13 +13440,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     ()=>formatFlotaManualRefreshLabel(flotaManualRefreshAt),
     [flotaManualRefreshAt,flotaRefreshLabelTick],
   );
-
-  useEffect(()=>{
-    if(flotaTab!=="servicios"||serviciosVistaTab!=="incidencias")return;
-    for(const sv of serviciosListaVisible){
-      void ensureFlotaEvidenciasRef.current?.(sv.id);
-    }
-  },[flotaTab,serviciosVistaTab,serviciosListaVisible]);
 
   const handleAnularServicioId=useCallback((id)=>{
     const sv=flotaServiciosRef.current.find(s=>s.id===id);
@@ -13967,7 +13962,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   }}
                 />
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2,WebkitOverflowScrolling:"touch"}}>
-                  {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"},{id:"incidencias",label:"Incidencias"}].map(tab=>(
+                  {[{id:"todos",label:"Todos"},{id:"en_curso",label:"En curso"},{id:"sin_asignar",label:"Sin asignar"},{id:"asignados",label:"Asignados"},{id:"completados",label:"Completados"},{id:"archivados",label:"Archivados"},{id:"anulados",label:"Anulados"}].map(tab=>(
                     <button key={tab.id} type="button" onClick={()=>setServiciosVistaTab(tab.id)}
                       style={{
                         flexShrink:0,
@@ -14166,6 +14161,24 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ))}
                     </div>
                   </div>
+                  {(expedientePreview.incidenciasOperativas?.length>0)&&(
+                    <div style={{background:"#fff1f2",border:"1px solid #fecdd3",borderRadius:12,padding:"13px 14px",marginBottom:12}}>
+                      <div style={{fontSize:13,fontWeight:800,color:"#9f1239",marginBottom:9}}>
+                        Incidencias ({expedientePreview.incidenciasOperativas.length})
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {expedientePreview.incidenciasOperativas.map((inc)=>(
+                          <div key={inc.id} style={{background:"white",border:"1px solid #fecdd3",borderRadius:9,padding:"9px 10px"}}>
+                            <div style={{fontSize:13,fontWeight:800,color:"#881337"}}>{inc.titulo}</div>
+                            {inc.descripcion?<div style={{fontSize:12,color:"#7f1d1d",marginTop:3,lineHeight:1.35}}>{inc.descripcion}</div>:null}
+                            <div style={{fontSize:11,color:"#9f1239",marginTop:4}}>
+                              {inc.fechaLabel||"—"} · {inc.fase_operativa||"—"} · Fotos {inc.fotos?.length||0}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:12}}>
                     <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px"}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:9}}>Expediente documental</div>
@@ -14182,6 +14195,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
                         ["ETA inicial vs actual",expedientePreview.header.eta],
+                        ["Incidencias",String(expedientePreview.metrics.incidencias??0)],
+                        ["Fotos incidencias",String(expedientePreview.metrics.fotosIncidencia??0)],
                       ].map(([l,v])=>(
                         <div key={l} style={{display:"flex",justifyContent:"space-between",gap:10,borderBottom:"1px solid #e2e8f0",padding:"7px 0",fontSize:12}}>
                           <span style={{color:"#64748b"}}>{l}</span>
@@ -14408,7 +14423,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                               </div>
                               <div style={{minWidth:0}}>
                                 <div style={{fontSize:12.5,fontWeight:700,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.ruta}</div>
-                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>Docs {totalEvs} · Incidencias {incN}</div>
+                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>
+                                  Docs {totalEvs}
+                                  {incN>0?` · ${incN===1?"⚠ 1 incidencia":`⚠ ${incN} incidencias`}`:""}
+                                </div>
                               </div>
                               <div style={{minWidth:0}}>
                                 <div style={{fontSize:12,color:"#334155",fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.conductor}</div>
@@ -14440,13 +14458,33 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                   await ensureFlotaStopsForServicioIds([sv.id]);
                                   await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
                                   await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
-                                  void descargarExpediente(buildExpedienteCompleto(sv));
+                                  void (async()=>{
+                                    try{
+                                      await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                      await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                      const exp=await buildExpedienteCompleto(sv);
+                                      await descargarExpediente(exp);
+                                    }catch(e){
+                                      console.warn("download expediente:",e);
+                                      showToast("No se pudo descargar el expediente");
+                                    }
+                                  })();
                                 }}
                                   style={{background:"#0f172a",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   PDF
                                 </button>
                                 {!isArchived&&(
-                                  <button type="button" onClick={()=>void archivarMetadataExpediente(buildExpedienteCompleto(sv))}
+                                  <button type="button" onClick={()=>void (async()=>{
+                                    try{
+                                      await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                      await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                      const exp=await buildExpedienteCompleto(sv);
+                                      await archivarMetadataExpediente(exp);
+                                    }catch(e){
+                                      console.warn("archivar expediente:",e);
+                                      showToast("No se pudo archivar el expediente");
+                                    }
+                                  })()}
                                     style={{background:"white",color:"#475569",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                     Archivar
                                   </button>

@@ -77,3 +77,29 @@ export async function fetchIncidenciasResumenByEmpresa(empresaId) {
   const data = await r.json().catch(() => []);
   return Array.isArray(data) ? data : [];
 }
+
+/** Payload para expediente/PDF: tabla incidencias + fotos (evidencias.incidencia_id). */
+export async function fetchIncidenciasExpedientePayload(servicioId) {
+  const incidencias = await listIncidenciasByServicio(servicioId);
+  if (!incidencias.length) {
+    return { incidenciasOperativas: [], totalFotos: 0 };
+  }
+  const ids = incidencias.map((it) => it.id).filter(Boolean);
+  const r = await sbFetch(
+    `/rest/v1/evidencias?incidencia_id=in.(${ids.join(",")})&order=created_at.asc`,
+  );
+  const evRows = r.ok ? await r.json().catch(() => []) : [];
+  const fotosById = {};
+  for (const ev of Array.isArray(evRows) ? evRows : []) {
+    if (!ev?.incidencia_id) continue;
+    if (!fotosById[ev.incidencia_id]) fotosById[ev.incidencia_id] = [];
+    fotosById[ev.incidencia_id].push(ev);
+  }
+  let totalFotos = 0;
+  const incidenciasOperativas = incidencias.map((inc) => {
+    const fotos = fotosById[inc.id] || [];
+    totalFotos += fotos.length;
+    return { ...inc, fotos };
+  });
+  return { incidenciasOperativas, totalFotos };
+}

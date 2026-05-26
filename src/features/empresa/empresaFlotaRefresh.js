@@ -22,15 +22,6 @@ export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
   if (tab === "completados") return EMPRESA_VISTA_ESTADOS_COMPLETADOS.includes(servicio.estado);
   if (tab === "archivados") return archSet.has(servicio.id);
   if (tab === "anulados") return servicio.estado === "anulado";
-  if (tab === "incidencias") {
-    const flotaStops = ctx.flotaStops || {};
-    const flotaEvs = ctx.flotaEvs || {};
-    const incN =
-      typeof ctx.countIncidencias === "function"
-        ? ctx.countIncidencias(servicio.id, flotaStops, flotaEvs)
-        : 0;
-    return incN > 0;
-  }
   return true;
 }
 

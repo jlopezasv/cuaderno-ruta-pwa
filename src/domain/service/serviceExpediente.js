@@ -181,10 +181,52 @@ function stopLabel(stop, counters) {
 }
 
 function bucketForEvidence(ev) {
+  if (ev?.incidencia_id) return "incidencias";
   if (ev?.tipo === "cmr") return "cmr";
-  if (ev?.tipo === "incidencia") return "incidencias";
   if (ev?.tipo === "foto") return "fotos";
   return "documentos";
+}
+
+function isIncidenciaLinkedEvidence(ev) {
+  return !!ev?.incidencia_id || ev?.tipo === "incidencia";
+}
+
+function mapIncidenciasOperativasForExpediente(incidenciasExpediente, { enrichEvidenciaDisplay, servicio, nombreConductor }) {
+  const rows = incidenciasExpediente?.incidenciasOperativas || [];
+  return rows.map((inc) => {
+    const registradoMs = parseTs(inc.registrado_en || inc.created_at);
+    const fotos = (inc.fotos || []).map((ev) => {
+      const enriched = enrichEvidenciaDisplay(ev, {
+        conductorName:
+          typeof nombreConductor === "function"
+            ? nombreConductor(servicio?.conductor_id)
+            : null,
+      });
+      return {
+        id: ev.id,
+        incidencia_id: inc.id,
+        tipo: "foto",
+        titulo: enriched.displayTitle || "Foto incidencia",
+        created_at: ev.created_at,
+        hora: fmtClock(parseTs(ev.created_at)),
+        url: enriched.displayImageUrl || enriched.previewUrl || ev.url || null,
+        previewUrl: enriched.previewUrl,
+        displayImageUrl: enriched.displayImageUrl,
+        originalUrl: enriched.originalUrl,
+        mime_type: ev.mime_type || enriched.docMeta?.mime_type || null,
+      };
+    });
+    return {
+      id: inc.id,
+      titulo: inc.titulo || "Incidencia",
+      descripcion: inc.descripcion || "",
+      registrado_en: inc.registrado_en || inc.created_at || null,
+      fechaLabel: registradoMs != null ? fmtDateTime(registradoMs) : "—",
+      fase_operativa: inc.fase_operativa || null,
+      servicio_estado: inc.servicio_estado || null,
+      fotos,
+    };
+  });
 }
 
 function extFromUrl(url, fallback = "jpg") {
@@ -336,6 +378,7 @@ export function buildServiceExpediente({
   stops,
   evidenciasByStop,
   extraDocumentos = [],
+  incidenciasExpediente = null,
   metrics,
   nombreConductor,
   fmtDur,
@@ -349,7 +392,9 @@ export function buildServiceExpediente({
   const counters = {};
   const stopRows = sortedStops.map((stop) => {
     const label = stopLabel(stop, counters);
-    const evs = [...(evidenciasByStop?.[stop.id] || [])].sort((a, b) => parseTs(a.created_at) - parseTs(b.created_at));
+    const evs = [...(evidenciasByStop?.[stop.id] || [])]
+      .filter((ev) => !isIncidenciaLinkedEvidence(ev))
+      .sort((a, b) => parseTs(a.created_at) - parseTs(b.created_at));
     const group = operationalGroupFromStopTipo(stop.tipo);
     const llegadaMs = parseTs(stop.hora_llegada_real);
     const salidaMs = parseTs(stop.hora_salida_real);
@@ -377,6 +422,7 @@ export function buildServiceExpediente({
         return {
           id: ev.id,
           tipo: ev.tipo,
+          incidencia_id: ev.incidencia_id || null,
           titulo: enriched.displayTitle || evidenceTitle(ev),
           detalle: evidenceDetail(ev) || enriched.displaySubtitle,
           created_at: ev.created_at,
@@ -495,7 +541,15 @@ export function buildServiceExpediente({
       mime_type: ev.mime_type || enriched.docMeta?.mime_type || null,
     };
   });
-  const incidencias = evidencias.filter((ev) => ev.tipo === "incidencia");
+  evidencias = evidencias.filter((ev) => !isIncidenciaLinkedEvidence(ev));
+  const incidenciasOperativas = mapIncidenciasOperativasForExpediente(incidenciasExpediente, {
+    enrichEvidenciaDisplay,
+    servicio,
+    nombreConductor,
+  });
+  const fotosIncidenciaCount =
+    Number(incidenciasExpediente?.totalFotos) ||
+    incidenciasOperativas.reduce((n, inc) => n + (inc.fotos?.length || 0), 0);
   const cmr = evidencias.filter((ev) => ev.tipo === "cmr");
   const fotos = evidencias.filter((ev) => ev.tipo === "foto");
   const documentosExtra = evidencias.filter((ev) => ev.source === "servicio_documentos_extra");
@@ -651,7 +705,7 @@ export function buildServiceExpediente({
   const referenciaCliente = getServiceClientReference(servicio);
 
   const rawEvidenciasFlat = [
-    ...sortedStops.flatMap((st) => evidenciasByStop?.[st.id] || []),
+    ...sortedStops.flatMap((st) => (evidenciasByStop?.[st.id] || []).filter((ev) => !isIncidenciaLinkedEvidence(ev))),
     ...(extraDocumentos || []),
   ];
 
@@ -702,7 +756,8 @@ export function buildServiceExpediente({
       plantaDescarga: fmtDur(metrics?.tiempoEnPlantaDescargaMin || 0),
       esperaCarga: fmtDur(metrics?.esperaMuelleCargaMin || 0),
       esperaDescarga: fmtDur(metrics?.esperaMuelleDescargaMin || 0),
-      incidencias: incidencias.length,
+      incidencias: incidenciasOperativas.length,
+      fotosIncidencia: fotosIncidenciaCount,
       cmr: cmr.length,
       fotos: fotos.length,
       documentosExtra: documentosExtra.length,
@@ -711,7 +766,7 @@ export function buildServiceExpediente({
     timeline: timelineOperacional,
     integrity,
     evidencias,
-    incidencias,
+    incidenciasOperativas,
     cmr,
     fotos,
     documentosExtra,
@@ -789,7 +844,8 @@ function evidenceMimeForPdf(ev) {
 
 function expedienteEvidenceIsImageLike(ev) {
   if (!ev?.url) return false;
-  if (ev.tipo === "foto" || ev.tipo === "cmr" || ev.tipo === "incidencia") return true;
+  if (isIncidenciaLinkedEvidence(ev)) return false;
+  if (ev.tipo === "foto" || ev.tipo === "cmr") return true;
   return evidenceMimeForPdf(ev).startsWith("image/");
 }
 
@@ -797,6 +853,7 @@ function expedienteEvidenceIsImageLike(ev) {
 function expedienteEvidenceAnnexA4(ev) {
   const url = ev?.url || ev?.previewUrl || ev?.displayImageUrl || null;
   if (!url) return false;
+  if (isIncidenciaLinkedEvidence(ev)) return false;
   if (ev.tipo === "foto" || ev.tipo === "cmr") return true;
   if (ev.source === "servicio_documentos_extra") {
     if (expedienteEvidenceIsImageLike({ ...ev, url })) return true;
@@ -823,7 +880,11 @@ async function fetchCierreFirmaForPdf(cierreDocumental) {
 }
 
 async function fetchEvidenceImages(expediente) {
-  const imageEvs = expediente.evidencias.filter((ev) => expedienteEvidenceIsImageLike(ev));
+  const incidenciaFotoEvs = (expediente.incidenciasOperativas || []).flatMap((inc) => inc.fotos || []);
+  const imageEvs = [
+    ...expediente.evidencias.filter((ev) => expedienteEvidenceIsImageLike(ev)),
+    ...incidenciaFotoEvs.filter((ev) => ev?.url || ev?.previewUrl || ev?.displayImageUrl),
+  ];
   const many = imageEvs.length > 10;
   const images = new Map();
   for (const ev of imageEvs) {
@@ -845,7 +906,7 @@ async function fetchEvidenceImages(expediente) {
       if (isOperationalDocTraceEnabled()) {
         await traceBlobColor("fetchEvidenceImages:fetched_blob", blob, { evId: ev.id, evTipo: ev.tipo });
       }
-      const isAnnexDoc = expedienteEvidenceAnnexA4(ev);
+      const isAnnexDoc = expedienteEvidenceAnnexA4(ev) || !!ev.incidencia_id;
       const maxSide = isAnnexDoc
         ? ev.tipo === "cmr"
           ? 1400
@@ -976,7 +1037,7 @@ async function makePdfBlob(expediente) {
 
   rect(0, pageHeight, pageWidth, 76, "#0f172a");
   text("EXPEDIENTE OPERACIONAL", margin, 792, 18, "#ffffff");
-  text("Informe operacional · documentos fotograficos en anexo A4 final", margin, 770, 10, "#cbd5e1");
+  text("Informe operacional · anexos documental e incidencias al final", margin, 770, 10, "#cbd5e1");
   y = 728;
 
   metric("Servicio", expediente.header.referencia, margin, 120);
@@ -1049,7 +1110,8 @@ async function makePdfBlob(expediente) {
     ["Espera descarga", expediente.metrics.esperaDescarga],
     ["ETA inicial vs actual", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
-    ["Incidencias", String(expediente.metrics.incidencias)],
+    ["Incidencias", String(expediente.metrics.incidencias ?? 0)],
+    ["Fotos incidencias", String(expediente.metrics.fotosIncidencia ?? 0)],
     ["Docs. extra", String(expediente.metrics.documentosExtra ?? 0)],
   ];
   for (let i = 0; i < resumen.length; i += 2) {
@@ -1148,7 +1210,53 @@ async function makePdfBlob(expediente) {
       }
       finishPage();
     }
-  } else {
+  }
+
+  const incidenciasAnexo = expediente.incidenciasOperativas || [];
+  if (incidenciasAnexo.length) {
+    if (!annexDocs.length) finishPage();
+    for (const inc of incidenciasAnexo) {
+      const fotos = inc.fotos || [];
+      const pages = fotos.length ? fotos : [null];
+      for (const foto of pages) {
+        y = 812;
+        rect(0, pageHeight, pageWidth, 36, "#fff1f2");
+        text("ANEXO INCIDENCIAS · A4", margin, 818, 10, "#9f1239");
+        text(inc.titulo || "Incidencia", margin, 798, 13, "#881337");
+        y = 778;
+        if (inc.descripcion) lines(inc.descripcion, margin, 10, "#7f1d1d", 92, 13);
+        const metaInc = [inc.fechaLabel, inc.fase_operativa, inc.servicio_estado].filter(Boolean).join(" · ");
+        if (metaInc) lines(metaInc, margin, 9, "#9f1239", 92, 12);
+        y -= 8;
+        if (foto) {
+          const img = imageRefs.get(foto.id);
+          const failed = imageMap.get(foto.id)?.error;
+          const maxW = contentWidth;
+          const maxH = Math.max(120, y - 72);
+          if (img) {
+            const drawW = Math.min(maxW, img.width);
+            let drawH = drawW * (img.height / img.width);
+            let finalW = drawW;
+            if (drawH > maxH) {
+              drawH = maxH;
+              finalW = drawH * (img.width / img.height);
+            }
+            const x = margin + (contentWidth - finalW) / 2;
+            ensure(drawH + 24);
+            commands.push(`q ${finalW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${(y - drawH).toFixed(2)} cm /${img.name} Do Q`);
+            y -= drawH + 16;
+          } else if (failed) {
+            lines(`Foto no disponible: ${failed}`, margin, 10, "#b45309", 88, 13);
+          }
+        } else {
+          lines("Sin fotos adjuntas a esta incidencia.", margin, 10, "#9f1239", 88, 13);
+        }
+        finishPage();
+      }
+    }
+  }
+
+  if (!annexDocs.length && !incidenciasAnexo.length) {
     finishPage();
   }
   objects[1] = bytes(`<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${pageRefs.length} >>`);

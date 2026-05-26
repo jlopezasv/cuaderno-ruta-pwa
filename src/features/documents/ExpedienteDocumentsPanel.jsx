@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
 import { OperationalDocumentRow } from "./OperationalDocumentRow.jsx";
 
-const GROUP_ORDER = ["cmr", "fotos", "incidencias", "documentos"];
+const GROUP_ORDER = ["cmr", "fotos", "documentos"];
 const GROUP_LABEL = {
   cmr: "CMR y cartas de porte",
   fotos: "Fotos operativas",
-  incidencias: "Incidencias",
   documentos: "Otros documentos y extras",
 };
 
@@ -20,12 +19,12 @@ export function ExpedienteDocumentsPanel({ expediente, onOpenDocument, tone = "l
       : { rowBg: "#f8fafc", border: "#e2e8f0", tx: "#0f172a", su: "#64748b", time: "#94a3b8" };
 
   const groups = useMemo(() => {
-    const g = { cmr: [], fotos: [], incidencias: [], documentos: [] };
+    const g = { cmr: [], fotos: [], documentos: [] };
     for (const ev of expediente?.evidencias || []) {
+      if (ev?.incidencia_id) continue;
       const b = ev.bucket || ev.tipo;
       if (b === "cmr") g.cmr.push(ev);
       else if (b === "foto" || b === "fotos") g.fotos.push(ev);
-      else if (b === "incidencia" || b === "incidencias") g.incidencias.push(ev);
       else if (b === "ticket" || b === "factura" || b === "otro") g.documentos.push(ev);
       else g.documentos.push(ev);
     }

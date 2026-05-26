@@ -6,19 +6,12 @@
 /** Inactividad relativa considerada “demasiado antigua” (conservador: 48 h). */
 export const ATTENTION_IDLE_MS = 48 * 60 * 60 * 1000;
 
-function hasIncidencia(evidencias, stops) {
-  if (Number.isFinite(Number(stops?.incidenciasTotal)) && Number(stops.incidenciasTotal) > 0) return true;
-  if (Array.isArray(evidencias)) {
-    return evidencias.some((ev) => ev?.tipo === "incidencia");
+function hasIncidencia(service, stops) {
+  if (Number.isFinite(Number(service?.incidencias_total)) && Number(service.incidencias_total) > 0) {
+    return true;
   }
-  if (evidencias && typeof evidencias === "object") {
-    for (const st of stops || []) {
-      const arr = evidencias[st.id];
-      if (Array.isArray(arr) && arr.some((ev) => ev?.tipo === "incidencia")) return true;
-    }
-    for (const arr of Object.values(evidencias)) {
-      if (Array.isArray(arr) && arr.some((ev) => ev?.tipo === "incidencia")) return true;
-    }
+  if (Number.isFinite(Number(stops?.incidenciasTotal)) && Number(stops.incidenciasTotal) > 0) {
+    return true;
   }
   return false;
 }
@@ -33,7 +26,7 @@ function isStale(service, lastActivity) {
 export function needsAttention({ service, stops, evidencias, lastActivity }) {
   const st = stops || [];
 
-  if (hasIncidencia(evidencias, st)) return true;
+  if (hasIncidencia(service, st)) return true;
   if (service?.estado === "pendiente_asignacion") return true;
   if (service?.estado === "asignado") return true;
 
@@ -45,7 +38,7 @@ export function needsAttention({ service, stops, evidencias, lastActivity }) {
 export function getAttentionReason({ service, stops, evidencias, lastActivity }) {
   const st = stops || [];
 
-  if (hasIncidencia(evidencias, st)) return "Incidencia registrada";
+  if (hasIncidencia(service, st)) return "Incidencia registrada";
   if (service?.estado === "pendiente_asignacion") return "Sin conductor asignado";
   if (service?.estado === "asignado") return "Servicio sin iniciar";
 

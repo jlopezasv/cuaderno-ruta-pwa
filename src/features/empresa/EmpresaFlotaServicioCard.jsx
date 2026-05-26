@@ -62,18 +62,6 @@ function nextPendingStop(stops) {
     .find((s) => s.estado === "pendiente") || null;
 }
 
-function incidenciasCountServicio(servicioId, flotaStops, flotaEvs) {
-  const sid = servicioId;
-  if (!sid) return 0;
-  const stops = flotaStops[servicioId] || [];
-  let n = 0;
-  for (const st of stops) {
-    const arr = flotaEvs[st.id];
-    if (Array.isArray(arr)) n += arr.filter((ev) => ev?.tipo === "incidencia").length;
-  }
-  return n;
-}
-
 function EmpresaFlotaServicioCardImpl({
   servicio,
   stops,
@@ -212,8 +200,10 @@ function EmpresaFlotaServicioCardImpl({
 
   const completados = countCompletedStops(stops);
   const progressLabel = stops.length ? `${completados}/${stops.length}` : "0/0";
-  const incResumen = Number(servicio?.incidencias_total || 0);
-  const incNCompact = expanded ? (incResumen || incidenciasCountServicio(servicio.id, flotaStopsMap, flotaEvs)) : incResumen;
+  const incN = Number(servicio?.incidencias_total || 0);
+  const incFotosN = Number(servicio?.incidencias_fotos_total || 0);
+  const incBadgeLabel =
+    incN === 1 ? "⚠ 1 incidencia" : incN > 1 ? `⚠ ${incN} incidencias` : null;
   const serviceNumber = getServiceNumberForDisplay(servicio) || "—";
   const refClienteCompact = getServiceClientReference(servicio);
   const stateColor = ESTADO_COLOR[servicio.estado] || su;
@@ -306,6 +296,26 @@ function EmpresaFlotaServicioCardImpl({
           >
             {summary.routeLabel}
           </div>
+
+          {incBadgeLabel ? (
+            <div
+              style={{
+                marginTop: 6,
+                display: "inline-flex",
+                alignItems: "center",
+                fontSize: 12,
+                fontWeight: 750,
+                color: UI.amber,
+                background: UI.amberSoft,
+                border: "1px solid #fcd34d",
+                borderRadius: 999,
+                padding: "3px 9px",
+                lineHeight: 1.25,
+              }}
+            >
+              {incBadgeLabel}
+            </div>
+          ) : null}
 
           {conductorLine ? (
             <div
@@ -525,38 +535,6 @@ function EmpresaFlotaServicioCardImpl({
               background: UI.surface,
               borderRadius: 10,
               padding: "12px 12px",
-              marginBottom: 10,
-              border: `1px solid ${UI.border}`,
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 800, color: tx, marginBottom: 8 }}>
-              Incidencias ({incidenciasServicio.length})
-            </div>
-            {!incidenciasServicio.length ? (
-              <div style={{ fontSize: 12, color: su }}>Sin incidencias registradas.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {incidenciasServicio.map((inc) => {
-                  const fotos = incFotosById[inc.id] || [];
-                  return (
-                    <div key={inc.id} style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 9, padding: "8px 9px" }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: "#9f1239" }}>{inc.titulo}</div>
-                      {inc.descripcion ? <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>{inc.descripcion}</div> : null}
-                      <div style={{ fontSize: 11, color: su, marginTop: 3 }}>
-                        {inc.fase_operativa || "—"} · {inc.servicio_estado || "—"} · Fotos {fotos.length}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              background: UI.surface,
-              borderRadius: 10,
-              padding: "12px 12px",
               marginBottom: 12,
               border: `1px solid ${UI.border}`,
             }}
@@ -719,6 +697,42 @@ function EmpresaFlotaServicioCardImpl({
               border: `1px solid ${UI.border}`,
             }}
           >
+            <div style={{ fontSize: 12, fontWeight: 800, color: tx, marginBottom: 8 }}>
+              Incidencias ({incidenciasServicio.length})
+            </div>
+            {!incidenciasServicio.length ? (
+              <div style={{ fontSize: 12, color: su }}>Sin incidencias registradas.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {incidenciasServicio.map((inc) => {
+                  const fotos = incFotosById[inc.id] || [];
+                  return (
+                    <div key={inc.id} style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 9, padding: "8px 9px" }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "#9f1239" }}>{inc.titulo}</div>
+                      {inc.descripcion ? <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>{inc.descripcion}</div> : null}
+                      <div style={{ fontSize: 11, color: su, marginTop: 3 }}>
+                        {(() => {
+                          const t = new Date(inc.registrado_en || inc.created_at).getTime();
+                          return Number.isFinite(t) ? fmtClockMs(t) : "—";
+                        })()}{" "}
+                        · {inc.fase_operativa || "—"} · Fotos {fotos.length}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              background: UI.surface,
+              borderRadius: 10,
+              padding: "12px 12px",
+              marginBottom: 10,
+              border: `1px solid ${UI.border}`,
+            }}
+          >
             <div style={{ fontSize: 12, fontWeight: 800, color: tx, marginBottom: 10 }}>
               Resumen operacional
             </div>
@@ -740,7 +754,8 @@ function EmpresaFlotaServicioCardImpl({
                 { l: "Conducción", v: fmtDur(dossierMetrics?.tiempoConduccionMin) },
                 { l: "En planta · cargas", v: fmtDur(dossierMetrics?.tiempoEnPlantaCargaMin) },
                 { l: "En planta · descargas", v: fmtDur(dossierMetrics?.tiempoEnPlantaDescargaMin) },
-                { l: "Incidencias", v: String(incNCompact), raw: true },
+                { l: "Incidencias", v: String(incN), raw: true },
+                { l: "Fotos incidencias", v: String(incFotosN || incidenciasServicio.reduce((n, inc) => n + (incFotosById[inc.id]?.length || 0), 0)), raw: true },
               ].map(({ l, v, raw }) => (
                 <div
                   key={l}
