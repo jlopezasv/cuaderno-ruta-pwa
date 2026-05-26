@@ -192,6 +192,7 @@ import { formatStopNotesForDisplay, getInicioOperacionMs, mergeStopOperacionMeta
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
+import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
 import {
   LIM,
   geocode,
@@ -255,15 +256,8 @@ function PaywallScreen({status,user,email}){
 
   return(
     <div style={{minHeight:"100vh",background:"#0F172A",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
-      <svg width="56" height="56" viewBox="0 0 36 36" fill="none" style={{marginBottom:12}}>
-        <rect width="36" height="36" rx="10" fill="#F59E0B"/>
-        <rect x="4" y="14" width="18" height="12" rx="2" fill="white"/>
-        <rect x="22" y="17" width="10" height="9" rx="2" fill="white"/>
-        <polygon points="22,17 28,11 32,11 32,17" fill="white"/>
-        <circle cx="10" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
-        <circle cx="26" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
-      </svg>
-      <div style={{fontSize:22,fontWeight:800,color:"#F59E0B",marginBottom:6}}>CUADERNO DE RUTA</div>
+      <BrandMark size={56} rounded={14}/>
+      <div style={{fontSize:22,fontWeight:800,color:"#F59E0B",marginTop:12,marginBottom:6}}>CUADERNO DE RUTA</div>
 
       <div style={{width:"100%",maxWidth:380,background:"#1E293B",borderRadius:18,padding:"28px 24px",boxShadow:"0 8px 32px rgba(0,0,0,.4)"}}>
         <div style={{textAlign:"center",marginBottom:24}}>
@@ -352,7 +346,7 @@ function AuthScreen({ onAuth }) {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
 
-  const iStyle = { width:"100%", background:"#0F172A", border:"2px solid #334155", borderRadius:10, padding:"12px 14px", fontSize:16, color:"#F1F5F9", outline:"none", fontFamily:"sans-serif", boxSizing:"border-box" };
+  const iStyle = { width:"100%", background:"#0F172A", border:"1.5px solid #334155", borderRadius:11, padding:"12px 14px", fontSize:16, color:"#F1F5F9", outline:"none", fontFamily:"Outfit, sans-serif", boxSizing:"border-box" };
 
   // Validación contraseña
   const pwdChecks = {
@@ -448,17 +442,10 @@ function AuthScreen({ onAuth }) {
   }
 
   return (
-    <div style={{ minHeight:"100vh", background:"#0F172A", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"20px" }}>
-      <svg width="64" height="64" viewBox="0 0 36 36" fill="none" style={{marginBottom:12}}>
-        <rect width="36" height="36" rx="10" fill="#F59E0B"/>
-        <rect x="4" y="14" width="18" height="12" rx="2" fill="white"/>
-        <rect x="22" y="17" width="10" height="9" rx="2" fill="white"/>
-        <polygon points="22,17 28,11 32,11 32,17" fill="white"/>
-        <circle cx="10" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
-        <circle cx="26" cy="27" r="3" fill="#F59E0B" stroke="white" strokeWidth="1.5"/>
-      </svg>
-      <div style={{ fontSize:24, fontWeight:800, color:"#F59E0B", marginBottom:4, fontFamily:"sans-serif" }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
-      <div style={{ fontSize:13, color:"#475569", marginBottom:demoMode?12:32, fontFamily:"sans-serif" }}>El copiloto del transportista · EU 561/2006</div>
+    <div style={{ minHeight:"100vh", background:"#0F172A", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"20px", fontFamily:"Outfit, sans-serif" }}>
+      <BrandMark size={64} rounded={16} />
+      <div style={{ fontSize:24, fontWeight:800, color:"#F1F5F9", marginTop:12, marginBottom:4, letterSpacing:.4 }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
+      <div style={{ fontSize:13, color:"#94A3B8", marginBottom:demoMode?12:32 }}>El copiloto del transportista · EU 561/2006</div>
 
       {demoMode?(
         <div style={{ width:"100%", maxWidth:380, background:"#172554", border:"1.5px solid #3b82f6", borderRadius:12, padding:"12px 14px", marginBottom:16, fontFamily:"sans-serif" }}>
@@ -471,7 +458,7 @@ function AuthScreen({ onAuth }) {
         </div>
       ):null}
 
-      <div style={{ width:"100%", maxWidth:380, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 8px 32px rgba(0,0,0,.4)" }}>
+      <div style={{ width:"100%", maxWidth:390, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 8px 32px rgba(0,0,0,.4)", border:"1px solid #334155" }}>
 
         {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
@@ -497,12 +484,12 @@ function AuthScreen({ onAuth }) {
             <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:8, fontFamily:"sans-serif" }}>ENTRAR COMO</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               {[
-                {id:"conductor", icon:"🚛", title:"Conductor"},
-                {id:"empresa", icon:"🏢", title:"Empresa"},
+                {id:"conductor", icon:"◉", title:"Conductor"},
+                {id:"empresa", icon:"◇", title:"Empresa"},
               ].map(({id,icon,title})=>(
                 <button key={id} type="button" onClick={()=>setLoginContext(id)}
                   style={{ background:loginContext===id?"#F59E0B15":"#0F172A", border:`2px solid ${loginContext===id?"#F59E0B":"#334155"}`, borderRadius:10, padding:"10px 8px", cursor:"pointer", textAlign:"center" }}>
-                  <div style={{ fontSize:22, marginBottom:3 }}>{icon}</div>
+                  <div style={{ fontSize:20, marginBottom:3, color:loginContext===id?"#F59E0B":"#64748B" }}>{icon}</div>
                   <div style={{ fontSize:12, fontWeight:800, color:loginContext===id?"#F59E0B":"#F1F5F9", fontFamily:"sans-serif" }}>{title}</div>
                 </button>
               ))}
@@ -516,12 +503,12 @@ function AuthScreen({ onAuth }) {
             <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:8, fontFamily:"sans-serif" }}>¿QUIÉN ERES?</div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               {[
-                {id:"autonomo", icon:"🚛", title:"Conductor / Autónomo", sub:"Un solo conductor"},
-                {id:"empresa",  icon:"🏢", title:"Empresa de transporte", sub:"Varios conductores"},
+                {id:"autonomo", icon:"◉", title:"Conductor / Autónomo", sub:"Un solo conductor"},
+                {id:"empresa",  icon:"◇", title:"Empresa de transporte", sub:"Varios conductores"},
               ].map(({id,icon,title,sub})=>(
                 <button key={id} onClick={()=>setTipo(id)}
                   style={{ background:tipo===id?"#F59E0B15":"#0F172A", border:`2px solid ${tipo===id?"#F59E0B":"#334155"}`, borderRadius:10, padding:"12px 8px", cursor:"pointer", textAlign:"center" }}>
-                  <div style={{ fontSize:24, marginBottom:4 }}>{icon}</div>
+                  <div style={{ fontSize:20, marginBottom:4, color:tipo===id?"#F59E0B":"#64748B" }}>{icon}</div>
                   <div style={{ fontSize:12, fontWeight:700, color:tipo===id?"#F59E0B":"#F1F5F9", fontFamily:"sans-serif", lineHeight:1.3 }}>{title}</div>
                   <div style={{ fontSize:10, color:"#64748B", marginTop:3, fontFamily:"sans-serif" }}>{sub}</div>
                 </button>
@@ -3071,7 +3058,7 @@ function AppInner(){
     }catch(e){setStopErr(e.message);}finally{setStopLoad(false);}
   }
 
-  if(!loaded)return <div style={s.splash}><span style={{fontSize:48}}>📋</span><p style={{color:"#F59E0B",fontFamily:"monospace",marginTop:12,letterSpacing:3,fontSize:11}}>CARGANDO...</p></div>;
+  if(!loaded)return <div style={s.splash}><BrandMark size={54} rounded={14}/><p style={{color:"#F59E0B",fontFamily:"Outfit, sans-serif",fontWeight:700,marginTop:12,letterSpacing:1,fontSize:12}}>CARGANDO...</p></div>;
 
   // Mostrar login si no hay sesión
   if(!authChecked)return <div style={{minHeight:"100vh",background:"#0F172A",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:14,color:"#475569"}}>Cargando...</div></div>;
@@ -3099,13 +3086,12 @@ function AppInner(){
         @media(min-width:1200px){.sb{width:360px}.bg{grid-template-columns:repeat(4,1fr)}}`}</style>
 
       <header style={{...s.hdr,background:dark?"#020817":"#0F172A"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <img src="/icons/icon-192.png" width="32" height="32" style={{borderRadius:8,flexShrink:0}} alt="logo"/>
-          <div>
-            <div style={{...s.hT,fontSize:12,whiteSpace:"nowrap",letterSpacing:.5}}>{T("appName")}</div>
-            <div style={{fontSize:10,color:"#64748B",marginTop:1,fontWeight:500}}>{prof.nombre||getSession()?.user?.email||"—"}</div>
-          </div>
-        </div>
+        <BrandHeader
+          panelLabel="Panel Conductor"
+          nameLabel={prof.nombre||getSession()?.user?.email||"—"}
+          titleColor="#F1F5F9"
+          subColor="#64748B"
+        />
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {/* Botón conducción en equipo — icono personas */}
           <button onClick={()=>{if(!equipoActivo){setEquipoModal(true);}else{setEquipoActivo(false);setEquipoConductor("");showToast("Conducción individual");} }}

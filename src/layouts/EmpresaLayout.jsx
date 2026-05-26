@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { EMPRESA_TABS } from "../navigation/empresaTabs";
+import { BrandHeader } from "../ui/BrandHeader";
 
 export default function EmpresaLayout({
   PROF0,
@@ -142,12 +143,8 @@ export default function EmpresaLayout({
             boxShadow: "0 1px 2px rgba(15,23,42,.05)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", marginRight: 32, flexShrink: 0 }}>
-            <span style={{ width: 34, height: 34, borderRadius: 9, background: "#e2e8f0", color: "#334155", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, letterSpacing: .4 }}>CDR</span>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 650, color: tx, lineHeight: 1 }}>Cuaderno de Ruta</div>
-              <div style={{ fontSize: 11, color: su, marginTop: 2 }}>Panel operacional</div>
-            </div>
+          <div style={{ padding: "12px 0", marginRight: 32, flexShrink: 0 }}>
+            <BrandHeader panelLabel="Panel Empresa" nameLabel={prof.nombre || "Empresa"} titleColor={tx} subColor={su} />
           </div>
           <div style={{ display: "flex", flex: 1, gap: 0 }}>
             {visibleTabs.map((t) => (
@@ -211,10 +208,7 @@ export default function EmpresaLayout({
       {/* ── MOBILE HEADER ── */}
       {isMobile && (
         <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ width: 30, height: 30, borderRadius: 8, background: "#e2e8f0", color: "#334155", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>CDR</span>
-            <div style={{ fontSize: 13, fontWeight: 650, color: tx }}>Cuaderno de Ruta</div>
-          </div>
+          <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
           <div style={{ display: "flex", gap: 8 }}>
             {canUseConfig && (
               <button onClick={() => setTab("config")} style={{ background: "#f8fafc", border: `1px solid ${border}`, borderRadius: 8, padding: "5px 8px", fontSize: 12, color: "#475569", cursor: "pointer" }}>

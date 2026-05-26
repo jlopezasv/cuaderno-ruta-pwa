@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Cuaderno de Ruta">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="roadWarm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+
+  <path d="M120 356c6-92 47-154 136-198 78 45 121 110 136 198h-73c-8-63-30-103-63-131-34 30-54 69-63 131z" fill="#ffffff"/>
+  <path d="M266 144c92 42 140 106 153 212h-54c-9-64-34-108-83-143z" fill="url(#roadWarm)"/>
+
+  <rect x="246" y="182" width="20" height="34" rx="10" fill="#f97316"/>
+  <rect x="246" y="230" width="20" height="34" rx="10" fill="#f97316"/>
+  <rect x="246" y="278" width="20" height="34" rx="10" fill="#f97316"/>
+</svg>
