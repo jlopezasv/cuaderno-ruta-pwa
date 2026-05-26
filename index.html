@@ -12,20 +12,11 @@
   <meta name="apple-mobile-web-app-title" content="Cuaderno Ruta" />
   <meta name="format-detection" content="telephone=no" />
 
-  <!--
-    Cámara (QR muelle): la app es PWA web; el permiso lo pide el navegador con getUserMedia.
-    Si en el futuro envuelves la web en un WKWebView / app nativa Expo, añade en Info.plist:
-    NSCameraUsageDescription = texto claro para el usuario (obligatorio en iOS).
-  -->
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="96x96" href="/icons/favicon-96.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
 
-  <!-- Branding unificado -->
-  <link rel="apple-touch-icon" href="/brand/road-logo.svg" />
-
-  <!-- Android / general -->
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="icon" type="image/svg+xml" sizes="any" href="/brand/road-logo.svg" />
-
-  <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -43,7 +34,7 @@
     #splash {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: #0F172A;
+      background: #FFFFFF;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -54,8 +45,8 @@
     }
     #splash.hidden { opacity: 0; pointer-events: none; }
     #splash-icon { width: 80px; height: 80px; border-radius: 18px; }
-    #splash-title { color: #F59E0B; font-size: 18px; font-weight: 800; letter-spacing: 2px; }
-    #splash-sub { color: #475569; font-size: 12px; }
+    #splash-title { color: #0F172A; font-size: 18px; font-weight: 800; letter-spacing: 1px; }
+    #splash-sub { color: #64748B; font-size: 12px; }
     #root {
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
@@ -64,7 +55,7 @@
 </head>
 <body>
   <div id="splash">
-    <img id="splash-icon" src="/brand/road-logo.svg" alt="Cuaderno de Ruta" />
+    <img id="splash-icon" src="/icons/icon-192.png" alt="Cuaderno de Ruta" />
     <div id="splash-title">CUADERNO DE RUTA</div>
     <div id="splash-sub">Cargando...</div>
   </div>

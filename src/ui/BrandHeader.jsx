@@ -3,7 +3,7 @@ import React from "react";
 export function BrandMark({ size = 36, rounded = 10 }) {
   return (
     <img
-      src="/brand/road-logo.svg"
+      src="/brand/logo-icon-master.svg"
       alt="Cuaderno de Ruta"
       width={size}
       height={size}

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Cuaderno de Ruta">
+  <defs>
+    <linearGradient id="greenMain" x1="12%" y1="6%" x2="78%" y2="88%">
+      <stop offset="0%" stop-color="#3F9B6C"/>
+      <stop offset="100%" stop-color="#1E5A3D"/>
+    </linearGradient>
+    <linearGradient id="greenAccent" x1="58%" y1="4%" x2="100%" y2="82%">
+      <stop offset="0%" stop-color="#4AAF78"/>
+      <stop offset="100%" stop-color="#2A6F4A"/>
+    </linearGradient>
+    <linearGradient id="redBase" x1="18%" y1="42%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#BE3F52"/>
+      <stop offset="100%" stop-color="#7B1F2D"/>
+    </linearGradient>
+    <clipPath id="diamond">
+      <path d="M256 90 L418 256 L256 422 L94 256 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" fill="#FFFFFF"/>
+
+  <g clip-path="url(#diamond)">
+    <path fill="url(#greenMain)" d="M94 256 L256 90 L256 252 L176 300 Z"/>
+    <path fill="url(#greenAccent)" d="M256 90 L418 256 L336 300 L256 252 Z"/>
+    <path fill="url(#redBase)" d="M176 300 L336 300 L418 256 L256 422 Z"/>
+  </g>
+
+  <!-- Eje vertical entre planos verdes (del logo original) -->
+  <path d="M256 98 L256 248" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Movimiento / ruta abstracta (sustituye la carretera literal) -->
+  <path
+    d="M332 214 C308 248 286 276 248 302 C220 322 188 330 162 318"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="34"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
