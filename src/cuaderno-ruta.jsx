@@ -53,7 +53,7 @@ import {
 import {
   jornadaState,
 } from "./domain/journey/journeyStatus";
-import { createIsAvail, DRIVER_QUICK_OPS } from "./domain/journey/availability";
+import { createIsAvail } from "./domain/journey/availability";
 import { countCompletedStops, getCurrentStop } from "./domain/service/serviceStops";
 import {
   DOCUMENT_TYPES,
@@ -2574,6 +2574,7 @@ function AppInner(){
         const lab=evLabel(pairType,prof.lang||"es")||EV[pairType]?.label||"";
         showToast(lab?`✅ ${lab}`:"✅ Registrado","#166534",2400);
         void registerDriverEventOperationalPoint({uid:getUserId(),norma,eventType:pairType,showToast});
+        promptNextActivity(pairType);
       }
       return;
     }
@@ -2581,22 +2582,6 @@ function AppInner(){
     if(type==="__otros__"){setModal("otros");return;}
     if(type==="__pausa__"){setModal("pausa_sel");return;}
     if(type==="inicio_ferry"){setModal("ferry_sel");return;}
-    if(DRIVER_QUICK_OPS.has(type)){
-      if(jState==="closed"){showToast(T("jornadaCerradaMsg"));return;}
-      if(jState==="none"){showToast(T("primeroJornada"));return;}
-      if(active?.type===type)return;
-      const openQuick=()=>registerEventInstant(type,{skipNextModal:true});
-      if(active&&EV[active.type]?.kind==="open"&&active.type!==type){
-        const pairType=EV[active.type]?.pair;
-        if(pairType){
-          registerEventInstant(pairType,{skipNextModal:true,quiet:true});
-          setTimeout(openQuick,80);
-          return;
-        }
-      }
-      openQuick();
-      return;
-    }
     if(!isAvail(type,active,jState)){
       showToast(jState==="closed"?T("jornadaCerradaMsg"):jState==="none"?T("primeroJornada"):`Finaliza primero: ${EV[active?.type]?.label}`);
       return;
@@ -2690,6 +2675,19 @@ function AppInner(){
   }
   const[nextModal,setNextModal]=useState(false);
   const[descansoModal,setDescansoModal]=useState(false);
+
+  /** Tras estos cierres no puede quedar sin actividad abierta: obliga elegir la siguiente. */
+  const MANDATORY_NEXT_AFTER=new Set(["fin_conduccion","fin_pausa","fin_disponibilidad","fin_otros"]);
+  const OPTIONAL_NEXT_TRIGGERS=[
+    "fin_descanso","fin_carga","fin_descarga","fin_carga_descarga",
+    "fin_repostaje","fin_inspeccion","fin_pasajero","fin_ferry",
+  ];
+  function promptNextActivity(finishType,delayMs=150){
+    if(!finishType)return;
+    if(MANDATORY_NEXT_AFTER.has(finishType)||OPTIONAL_NEXT_TRIGGERS.includes(finishType)){
+      setTimeout(()=>setNextModal(finishType),delayMs);
+    }
+  }
 
   // Alertas de voz — se disparan una vez por sesión
   const voiceAlerted=useRef({m20:false,m45jornada:false,superado:false});
@@ -2919,7 +2917,7 @@ function AppInner(){
 
     const interp=interpretarDescanso(evType,currentEntries);
     if(interp) setTimeout(()=>showToast(interp.msg,interp.color,5000),200);
-    // UX-7: sin asistente encadenado tras cierres; el conductor elige el siguiente estado manualmente.
+    promptNextActivity(evType,interp?1500:150);
   }
 
   /** Registro inmediato (sin modal): GPS en segundo plano, nota opcional editable después. */
@@ -3005,12 +3003,13 @@ function AppInner(){
     });
     const interp = interpretarDescanso(type, currentEntries);
     if (interp) setTimeout(() => showToast(interp.msg, interp.color, 5000), 200);
-    // UX-7: sin asistente encadenado tras cierres; el conductor elige el siguiente estado manualmente.
+    if (!opts.skipNextModal) promptNextActivity(type, interp ? 1500 : 150);
   }
 
   function quickNext(type){
+    if(type==="inicio_descanso"){setNextModal(false);setDescansoModal(true);return;}
+    if(type==="__otros__"){setNextModal(false);openAdd("__otros__");return;}
     setNextModal(false);
-    if(type==="inicio_descanso"){setDescansoModal(true);return;}
     const icon = EV[type]?.icon || "";
     const label = EV[type]?.label || type;
     registerEventInstant(type, {
@@ -3512,6 +3511,7 @@ function AppInner(){
       </main>
 
       {nextModal&&(()=>{
+        const obligatorio=MANDATORY_NEXT_AFTER.has(nextModal);
         const esFinTrabajo=["fin_carga","fin_descarga","fin_carga_descarga","fin_repostaje","fin_inspeccion","fin_otros"].includes(nextModal);
         const esFinDisponible=["fin_disponibilidad","fin_pasajero","fin_ferry"].includes(nextModal);
         const opts = nextModal==="fin_conduccion"
@@ -3543,19 +3543,23 @@ function AppInner(){
              {type:"inicio_disponibilidad",label:"Disponible",sub:"Espera, frontera", icon:"▨", color:"#06B6D4"},
              {type:"inicio_descanso", label:"Descanso",   sub:"≥9h · cierra jornada", icon:"🛌",color:"#7C3AED"}];
         return(
-          <div style={s.overlay} onClick={()=>setNextModal(false)}>
+          <div style={s.overlay} onClick={obligatorio?undefined:()=>setNextModal(false)}>
             <div style={{...s.sheet,maxWidth:700}} onClick={e=>e.stopPropagation()}>
               <div style={{background:"#0F172A",padding:"18px 20px 14px",borderRadius:"20px 20px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
-                  <div style={{fontSize:18,fontWeight:800,color:"#F59E0B"}}>¿Qué haces ahora?</div>
-                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>Toca para registrar con notas y ubicación</div>
+                  <div style={{fontSize:18,fontWeight:800,color:"#F59E0B"}}>
+                    {obligatorio?"Siguiente actividad obligatoria":"¿Qué haces ahora?"}
+                  </div>
+                  <div style={{fontSize:12,color:"#64748B",marginTop:2}}>
+                    {obligatorio?"Selecciona y se abrirá automáticamente":"Toca para registrar con notas y ubicación"}
+                  </div>
                 </div>
-                <button onClick={()=>setNextModal(false)} style={s.xBtn}>✕</button>
+                {!obligatorio?(<button onClick={()=>setNextModal(false)} style={s.xBtn}>✕</button>):null}
               </div>
               <div style={{padding:"16px 16px 32px"}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:obligatorio?0:14}}>
                   {opts.map(o=>(
-                    <button key={o.type} onClick={()=>{setNextModal(false);openAdd(o.type);}}
+                    <button key={o.type} onClick={()=>quickNext(o.type)}
                       style={{border:`2px solid ${o.color}50`,background:`${o.color}15`,borderRadius:16,padding:"20px 10px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
                       <span style={{fontSize:36,lineHeight:1}}>{o.icon}</span>
                       <span style={{fontSize:16,fontWeight:800,color:o.color}}>{o.label}</span>
@@ -3563,9 +3567,11 @@ function AppInner(){
                     </button>
                   ))}
                 </div>
-                <button onClick={()=>setNextModal(false)} style={{width:"100%",background:"#1E293B",border:"1.5px solid #334155",borderRadius:12,padding:"14px",fontSize:14,fontWeight:600,color:"#64748B",cursor:"pointer"}}>
-                  Registraré más tarde
-                </button>
+                {!obligatorio?(
+                  <button onClick={()=>setNextModal(false)} style={{width:"100%",background:"#1E293B",border:"1.5px solid #334155",borderRadius:12,padding:"14px",fontSize:14,fontWeight:600,color:"#64748B",cursor:"pointer"}}>
+                    Registraré más tarde
+                  </button>
+                ):null}
               </div>
             </div>
           </div>
@@ -6515,92 +6521,50 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
               </button>
             </div>
           )}
-          {jState === "open" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {[
-                  { type: "inicio_disponibilidad", label: "Disponible", icon: "▨", color: "#06B6D4" },
-                  { type: "inicio_pausa", label: "Pausa", icon: "⏸", color: "#6366F1" },
-                  { type: "inicio_otros", label: "Trabajo", icon: "⚒", color: "#F97316" },
-                  { type: "inicio_conduccion", label: "Conducción", icon: "⊙", color: "#22C55E" },
-                ].map(({ type, label, icon, color }) => {
-                  const isActive = active?.type === type;
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => {
-                        playClick();
-                        onAct(type);
-                      }}
-                      style={{
-                        background: isActive ? color : C.card,
-                        color: isActive ? "#fff" : C.tx,
-                        border: `2px solid ${isActive ? color : C.line}`,
-                        borderRadius: 12,
-                        padding: "14px 10px",
-                        fontSize: 13,
-                        fontWeight: 800,
-                        cursor: "pointer",
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        gap: 4,
-                        minHeight: 56,
-                      }}
-                    >
-                      <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
-                      <span>{label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {active ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      playClick();
-                      if (isDriving) onAct("__parar__");
-                      else onAct("__fin_silencioso__");
-                    }}
-                    style={{
-                      background: isDriving ? "#dc2626" : TE?.color || "#64748b",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 12,
-                      padding: "13px 10px",
-                      fontSize: 13,
-                      fontWeight: 800,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {isDriving ? "Parar conducción" : "Finalizar actividad"}
-                  </button>
-                ) : (
-                  <div />
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    playClick();
-                    onAct("__accion__");
-                  }}
-                  style={{
-                    background: C.card,
-                    color: C.tx,
-                    border: `1px solid ${C.line}`,
-                    borderRadius: 12,
-                    padding: "13px 10px",
-                    fontSize: 13,
-                    fontWeight: 750,
-                    cursor: "pointer",
-                  }}
-                >
-                  Más acciones
-                </button>
-              </div>
-            </div>
+          {jState === "open" && !active && (
+            <button
+              type="button"
+              onClick={() => {
+                playClick();
+                onAct("__accion__");
+              }}
+              style={{
+                width: "100%",
+                background: "#f59e0b",
+                color: "#0f172a",
+                border: "none",
+                borderRadius: 14,
+                padding: "16px",
+                fontSize: 16,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Siguiente paso
+            </button>
+          )}
+          {jState === "open" && active && (
+            <button
+              type="button"
+              onClick={() => {
+                playClick();
+                if (isDriving) onAct("__parar__");
+                else onAct("__fin_silencioso__");
+              }}
+              style={{
+                width: "100%",
+                background: isDriving ? "#dc2626" : TE?.color || "#64748b",
+                color: "white",
+                border: "none",
+                borderRadius: 14,
+                padding: "15px",
+                fontSize: 15,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              {isDriving ? "Parar conducción" : `Fin de ${TE?.label || "actividad"}`}
+            </button>
           )}
         </div>
 
