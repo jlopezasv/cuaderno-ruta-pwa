@@ -6,6 +6,7 @@ import {
   ETA_LABEL_INICIAL,
   OPERATIONAL_ETA_CALCULATING,
   formatStableEtaClockLabel,
+  hasActiveRouteDestination,
   resolveEtaInicialDisplayLabel,
   resolveEtaVisual,
   resolvePersistedEtaActualLabel,
@@ -196,7 +197,29 @@ function buildEmpresaFlotaCardSummaryInner({
     };
   }
 
+  const routeDestActive = hasActiveRouteDestination(servicio);
   const v = resolveEtaVisual(servicio, auxNow);
+  const inicialLabel = resolveEtaInicialDisplayLabel(servicio);
+
+  if (!routeDestActive) {
+    return {
+      ...base,
+      contextLine: resolveEmpresaFlotaContextLine({
+        servicio,
+        stops,
+        activeStop,
+        nextStop,
+        tacografoEstado,
+        situation: null,
+        nowMs: hasAuxClock ? Number(nowMs) : Date.now(),
+      }),
+      arrivalLabel: inicialLabel,
+      remainingLine: null,
+      deviation: null,
+      calculating: false,
+      etaCaption: ETA_LABEL_INICIAL,
+    };
+  }
 
   if (servicio.estado === "asignado") {
     return {

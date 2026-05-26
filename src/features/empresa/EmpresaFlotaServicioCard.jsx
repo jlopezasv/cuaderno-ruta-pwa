@@ -638,10 +638,6 @@ function EmpresaFlotaServicioCardImpl({
                         </span>
                       </div>
                       <div>
-                        <span style={{ color: "#94A3B8" }}>Inicio operación · </span>
-                        <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.inicioOperacionMs)}</span>
-                      </div>
-                      <div>
                         <span style={{ color: "#94A3B8" }}>Salida muelle · </span>
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.salidaMuelleMs)}</span>
                       </div>

@@ -129,6 +129,7 @@ import {
   stopsOperativaSig,
 } from "./features/empresa/empresaFlotaRefresh.js";
 import {
+  ETA_LABEL_INICIAL,
   getOperationalEtaUiState,
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaSnapshotLine,
@@ -182,7 +183,7 @@ import {
   routeTextFromOperationalPlaces,
   servicioMatchesSearchQuery,
 } from "./domain/service/serviceOperationalPlaces.js";
-import { getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
+import { formatStopNotesForDisplay, getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
@@ -12401,6 +12402,7 @@ function statusPill(label,color){
 function empresaListaEtaChip(servicio, nowMs){
   const st=getOperationalEtaUiState(servicio,new Date(nowMs??Date.now()));
   if(st.kind==="cancelled")return{label:"—",color:"#64748B"};
+  if(st.kind==="inicial_only")return{label:ETA_LABEL_INICIAL,color:EMPRESA_UI.accent};
   if(st.kind==="calculating")return{label:OPERATIONAL_ETA_CALCULATING,color:"#64748B"};
   if(st.kind==="plan_fallback")return{label:"Planificado",color:EMPRESA_UI.accent};
   return{label:"ETA actual",color:EMPRESA_UI.green};
@@ -14194,7 +14196,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         ["Conducción",expedientePreview.metrics.conduccion],
                         ["Espera carga",expedientePreview.metrics.esperaCarga],
                         ["Espera descarga",expedientePreview.metrics.esperaDescarga],
-                        ["ETA inicial vs actual",expedientePreview.header.eta],
+                        [expedientePreview.header.etaResumenTitulo || "ETA inicial", expedientePreview.header.eta],
                         ["Incidencias",String(expedientePreview.metrics.incidencias??0)],
                         ["Fotos incidencias",String(expedientePreview.metrics.fotosIncidencia??0)],
                       ].map(([l,v])=>(
@@ -16005,7 +16007,12 @@ function ServiciosTimelineView({uid}){
                                     {STOP_ICON[stop.tipo]||"📍"} {stop.nombre}
                                   </div>
                                   <div style={{fontSize:10,color:colorStop,fontWeight:600,marginTop:1}}>{stop.tipo.replace("_"," ").toUpperCase()}</div>
-                                  {stop.notas&&<div style={{fontSize:10,color:"#475569",marginTop:2}}>📝 {stop.notas}</div>}
+                                  {(() => {
+                                    const notaTxt = formatStopNotesForDisplay(stop.notas);
+                                    return notaTxt ? (
+                                      <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>📝 {notaTxt}</div>
+                                    ) : null;
+                                  })()}
                                 </div>
                                 <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                                   {stop.hora_llegada_real&&<div style={{fontSize:11,color:su,fontFamily:"monospace"}}>{new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>}
@@ -16566,7 +16573,12 @@ function CrearServicioModal({uid,onClose,onCreado}){
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
                   {stop.direccion&&<div style={{fontSize:12,color:su,marginTop:2}}>{stop.direccion}</div>}
-                  {stop.notas&&<div style={{fontSize:11,color:"#475569",marginTop:2}}>📝 {stop.notas}</div>}
+                  {(() => {
+                    const notaTxt = formatStopNotesForDisplay(stop.notas);
+                    return notaTxt ? (
+                      <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>📝 {notaTxt}</div>
+                    ) : null;
+                  })()}
                   <div style={{display:"flex",gap:6,marginTop:4,alignItems:"center"}}>
                     <span style={{fontSize:11,color,fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
                     {stop.lat?<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 6px"}}>🗺 GPS listo</span>:<span style={{fontSize:10,color:su,background:"#33415515",borderRadius:4,padding:"1px 6px"}}>Sin GPS</span>}

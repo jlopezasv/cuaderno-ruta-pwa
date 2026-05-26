@@ -43,3 +43,55 @@ export function getInicioOperacionMs(stop) {
   const t = new Date(iso).getTime();
   return Number.isFinite(t) ? t : null;
 }
+
+const META_SKIP_KEYS = new Set([
+  "inicio_operacion_at",
+  "entrada_geo",
+  "salida_geo",
+]);
+
+const META_LABELS = {
+  empresa_logistica: "Empresa logística",
+  empresa: "Empresa",
+  observaciones: "Observaciones",
+  nota: "Nota",
+};
+
+function tryParseJsonObject(raw) {
+  const t = String(raw || "").trim();
+  if (!t.startsWith("{")) return null;
+  try {
+    const o = JSON.parse(t);
+    return o && typeof o === "object" && !Array.isArray(o) ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+function readableFromOperacionMeta(meta) {
+  if (!meta || typeof meta !== "object") return "";
+  const parts = [];
+  for (const [key, value] of Object.entries(meta)) {
+    if (META_SKIP_KEYS.has(key) || value == null || value === "") continue;
+    if (typeof value === "object") continue;
+    const text = String(value).trim();
+    if (!text) continue;
+    const label = META_LABELS[key];
+    parts.push(label ? `${label}: ${text}` : text);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * Texto legible para UI/PDF (sin JSON crudo ni metadatos operativos).
+ */
+export function formatStopNotesForDisplay(notas) {
+  if (notas == null || String(notas) === "") return "";
+  const visible = stripOperacionMetaDisplay(notas);
+  if (visible) {
+    const asJson = tryParseJsonObject(visible);
+    if (asJson) return readableFromOperacionMeta(asJson);
+    if (!visible.startsWith("{") && !visible.includes("__CUADERNO_OP__")) return visible;
+  }
+  return readableFromOperacionMeta(getStopOperacionMeta(notas));
+}
