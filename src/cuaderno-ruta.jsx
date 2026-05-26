@@ -2919,8 +2919,7 @@ function AppInner(){
 
     const interp=interpretarDescanso(evType,currentEntries);
     if(interp) setTimeout(()=>showToast(interp.msg,interp.color,5000),200);
-    const triggers=["fin_conduccion","fin_pausa","fin_descanso","fin_disponibilidad","fin_otros","fin_carga","fin_descarga","fin_carga_descarga","fin_repostaje","fin_inspeccion","fin_pasajero","fin_ferry"];
-    if(triggers.includes(evType)) setTimeout(()=>setNextModal(evType),interp?1500:150);
+    // UX-7: sin asistente encadenado tras cierres; el conductor elige el siguiente estado manualmente.
   }
 
   /** Registro inmediato (sin modal): GPS en segundo plano, nota opcional editable después. */
@@ -3006,21 +3005,7 @@ function AppInner(){
     });
     const interp = interpretarDescanso(type, currentEntries);
     if (interp) setTimeout(() => showToast(interp.msg, interp.color, 5000), 200);
-    const triggers = [
-      "fin_conduccion",
-      "fin_pausa",
-      "fin_descanso",
-      "fin_disponibilidad",
-      "fin_otros",
-      "fin_carga",
-      "fin_descarga",
-      "fin_carga_descarga",
-      "fin_repostaje",
-      "fin_inspeccion",
-      "fin_pasajero",
-      "fin_ferry",
-    ];
-    if (!opts.skipNextModal && triggers.includes(type)) setTimeout(() => setNextModal(type), interp ? 1500 : 150);
+    // UX-7: sin asistente encadenado tras cierres; el conductor elige el siguiente estado manualmente.
   }
 
   function quickNext(type){
@@ -6531,43 +6516,90 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
             </div>
           )}
           {jState === "open" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {[
-                { type: "inicio_disponibilidad", label: "Disponible", icon: "▨", color: "#06B6D4" },
-                { type: "inicio_pausa", label: "Pausa", icon: "⏸", color: "#6366F1" },
-                { type: "inicio_otros", label: "Trabajo", icon: "⚒", color: "#F97316" },
-                { type: "inicio_conduccion", label: "Conducción", icon: "⊙", color: "#22C55E" },
-              ].map(({ type, label, icon, color }) => {
-                const isActive = active?.type === type;
-                return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  { type: "inicio_disponibilidad", label: "Disponible", icon: "▨", color: "#06B6D4" },
+                  { type: "inicio_pausa", label: "Pausa", icon: "⏸", color: "#6366F1" },
+                  { type: "inicio_otros", label: "Trabajo", icon: "⚒", color: "#F97316" },
+                  { type: "inicio_conduccion", label: "Conducción", icon: "⊙", color: "#22C55E" },
+                ].map(({ type, label, icon, color }) => {
+                  const isActive = active?.type === type;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        playClick();
+                        onAct(type);
+                      }}
+                      style={{
+                        background: isActive ? color : C.card,
+                        color: isActive ? "#fff" : C.tx,
+                        border: `2px solid ${isActive ? color : C.line}`,
+                        borderRadius: 12,
+                        padding: "14px 10px",
+                        fontSize: 13,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: 4,
+                        minHeight: 56,
+                      }}
+                    >
+                      <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {active ? (
                   <button
-                    key={type}
                     type="button"
                     onClick={() => {
                       playClick();
-                      onAct(type);
+                      if (isDriving) onAct("__parar__");
+                      else onAct("__fin_silencioso__");
                     }}
                     style={{
-                      background: isActive ? color : C.card,
-                      color: isActive ? "#fff" : C.tx,
-                      border: `2px solid ${isActive ? color : C.line}`,
+                      background: isDriving ? "#dc2626" : TE?.color || "#64748b",
+                      color: "white",
+                      border: "none",
                       borderRadius: 12,
-                      padding: "14px 10px",
+                      padding: "13px 10px",
                       fontSize: 13,
                       fontWeight: 800,
                       cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 4,
-                      minHeight: 56,
                     }}
                   >
-                    <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
-                    <span>{label}</span>
+                    {isDriving ? "Parar conducción" : "Finalizar actividad"}
                   </button>
-                );
-              })}
+                ) : (
+                  <div />
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    onAct("__accion__");
+                  }}
+                  style={{
+                    background: C.card,
+                    color: C.tx,
+                    border: `1px solid ${C.line}`,
+                    borderRadius: 12,
+                    padding: "13px 10px",
+                    fontSize: 13,
+                    fontWeight: 750,
+                    cursor: "pointer",
+                  }}
+                >
+                  Más acciones
+                </button>
+              </div>
             </div>
           )}
         </div>
