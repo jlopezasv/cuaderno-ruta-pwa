@@ -53,7 +53,7 @@ import {
 import {
   jornadaState,
 } from "./domain/journey/journeyStatus";
-import { createIsAvail } from "./domain/journey/availability";
+import { createIsAvail, DRIVER_QUICK_OPS } from "./domain/journey/availability";
 import { countCompletedStops, getCurrentStop } from "./domain/service/serviceStops";
 import {
   DOCUMENT_TYPES,
@@ -2581,6 +2581,22 @@ function AppInner(){
     if(type==="__otros__"){setModal("otros");return;}
     if(type==="__pausa__"){setModal("pausa_sel");return;}
     if(type==="inicio_ferry"){setModal("ferry_sel");return;}
+    if(DRIVER_QUICK_OPS.has(type)){
+      if(jState==="closed"){showToast(T("jornadaCerradaMsg"));return;}
+      if(jState==="none"){showToast(T("primeroJornada"));return;}
+      if(active?.type===type)return;
+      const openQuick=()=>registerEventInstant(type,{skipNextModal:true});
+      if(active&&EV[active.type]?.kind==="open"&&active.type!==type){
+        const pairType=EV[active.type]?.pair;
+        if(pairType){
+          registerEventInstant(pairType,{skipNextModal:true,quiet:true});
+          setTimeout(openQuick,80);
+          return;
+        }
+      }
+      openQuick();
+      return;
+    }
     if(!isAvail(type,active,jState)){
       showToast(jState==="closed"?T("jornadaCerradaMsg"):jState==="none"?T("primeroJornada"):`Finaliza primero: ${EV[active?.type]?.label}`);
       return;
@@ -2978,8 +2994,10 @@ function AppInner(){
         { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
       );
     }
-    const lab = evLabel(type, prof.lang || "es") || EV[type]?.label || type;
-    showToast(opts.toastText || `✅ ${lab}`, "#166534", 2600);
+    if (!opts.quiet) {
+      const lab = evLabel(type, prof.lang || "es") || EV[type]?.label || type;
+      showToast(opts.toastText || `✅ ${lab}`, "#166534", 2600);
+    }
     void registerDriverEventOperationalPoint({
       uid: getUserId(),
       norma,
@@ -3002,7 +3020,7 @@ function AppInner(){
       "fin_pasajero",
       "fin_ferry",
     ];
-    if (triggers.includes(type)) setTimeout(() => setNextModal(type), interp ? 1500 : 150);
+    if (!opts.skipNextModal && triggers.includes(type)) setTimeout(() => setNextModal(type), interp ? 1500 : 150);
   }
 
   function quickNext(type){
@@ -6512,49 +6530,45 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
               </button>
             </div>
           )}
-          {jState === "open" && !active && (
-            <button
-              type="button"
-              onClick={() => {
-                playClick();
-                onAct("__accion__");
-              }}
-              style={{
-                width: "100%",
-                background: "#f59e0b",
-                color: "#0f172a",
-                border: "none",
-                borderRadius: 14,
-                padding: "16px",
-                fontSize: 16,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              Siguiente paso
-            </button>
-          )}
-          {jState === "open" && active && (
-            <button
-              type="button"
-              onClick={() => {
-                if (isDriving) onAct("__parar__");
-                else onAct("__fin_silencioso__");
-              }}
-              style={{
-                width: "100%",
-                background: isDriving ? "#dc2626" : TE?.color || "#64748b",
-                color: "white",
-                border: "none",
-                borderRadius: 14,
-                padding: "15px",
-                fontSize: 15,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              {isDriving ? "Parar conducción" : `Fin de ${TE?.label || "actividad"}`}
-            </button>
+          {jState === "open" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                { type: "inicio_disponibilidad", label: "Disponible", icon: "▨", color: "#06B6D4" },
+                { type: "inicio_pausa", label: "Pausa", icon: "⏸", color: "#6366F1" },
+                { type: "inicio_otros", label: "Trabajo", icon: "⚒", color: "#F97316" },
+                { type: "inicio_conduccion", label: "Conducción", icon: "⊙", color: "#22C55E" },
+              ].map(({ type, label, icon, color }) => {
+                const isActive = active?.type === type;
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => {
+                      playClick();
+                      onAct(type);
+                    }}
+                    style={{
+                      background: isActive ? color : C.card,
+                      color: isActive ? "#fff" : C.tx,
+                      border: `2px solid ${isActive ? color : C.line}`,
+                      borderRadius: 12,
+                      padding: "14px 10px",
+                      fontSize: 13,
+                      fontWeight: 800,
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 4,
+                      minHeight: 56,
+                    }}
+                  >
+                    <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -12438,6 +12452,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[loading,setLoading]=useState(true);
   const[toast,setToast]=useState("");
   const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
+  useEffect(()=>{if(initialTab)setFlotaTab(initialTab);},[initialTab]);
   const[asignarModal,setAsignarModal]=useState(null);
   const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
   const[editarServicioModal,setEditarServicioModal]=useState(null);
@@ -13786,17 +13801,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             </button>
           </div>
         </div>
-      </div>
-
-      {/* Tabs flota — navegación secundaria */}
-      <div style={{display:"flex",background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,position:"sticky",top:0,zIndex:90}}>
-        {[{id:"conductores",icon:"◇",label:"Conductores"},{id:"servicios",icon:"▱",label:"Servicios"},{id:"documentos",icon:"▤",label:"Documentos"}].map(t=>(
-          <button key={t.id} onClick={()=>setFlotaTab(t.id)}
-            style={{flex:1,background:"transparent",border:"none",borderBottom:`2px solid ${flotaTab===t.id?EMPRESA_UI.accent:"transparent"}`,padding:"8px 4px 7px",fontSize:11,fontWeight:flotaTab===t.id?650:500,color:flotaTab===t.id?"#1e3a8a":EMPRESA_UI.subtle,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
-            <span style={{fontSize:14,color:flotaTab===t.id?EMPRESA_UI.accent:"#94a3b8"}}>{t.icon}</span>
-            <span>{t.label}</span>
-          </button>
-        ))}
       </div>
 
       {/* ── CONDUCTORES ── */}

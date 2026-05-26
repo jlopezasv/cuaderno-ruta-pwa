@@ -10,6 +10,7 @@ import {
   resolveEtaVisual,
   resolvePersistedEtaActualLabel,
 } from "../../../domain/service/operationalEtaPresentation.js";
+import { getOperationalTripStartedAt } from "../../../domain/service/serviceOperacionMeta.js";
 import { buildOperationalEtaVisual } from "../../../domain/service/operationalDeviationEngine.js";
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 
@@ -74,6 +75,7 @@ function OperationalEtaSnapshotBlockImpl({
 
   const inicialHead = useMemo(() => resolveEtaInicialDisplayLabel(servicio), [servicio?.id, servicio?.referencia]);
   const routeDestActive = hasActiveRouteDestination(servicio);
+  const tripStarted = !!getOperationalTripStartedAt(servicio);
 
   const kmProgressRef = useRef({ lastKm: null, stableSinceMs: null });
   useEffect(() => {
@@ -124,6 +126,15 @@ function OperationalEtaSnapshotBlockImpl({
   }
 
   if (!servicio || servicio.estado === "anulado" || v.tier === "none") {
+    return (
+      <>
+        <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>
+        <EtaTime tx={txU}>{inicialHead || "—"}</EtaTime>
+      </>
+    );
+  }
+
+  if (!tripStarted && v.tier !== "operational") {
     return (
       <>
         <EtaLabel su={suU}>{ETA_LABEL_INICIAL}</EtaLabel>

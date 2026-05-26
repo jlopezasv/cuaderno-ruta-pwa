@@ -11,6 +11,7 @@ import {
   resolveEtaVisual,
   resolvePersistedEtaActualLabel,
 } from "../../domain/service/operationalEtaPresentation.js";
+import { getOperationalTripStartedAt } from "../../domain/service/serviceOperacionMeta.js";
 import {
   buildOperationalEtaVisual,
   classifyOperationalSituation,
@@ -227,6 +228,30 @@ function buildEmpresaFlotaCardSummaryInner({
       contextLine: "Pendiente de salida",
       arrivalLabel: resolveEtaInicialDisplayLabel(servicio),
       remainingLine: formatEmpresaFlotaRemainingLine(v.remainingKm, v.remainingMins),
+      etaCaption: ETA_LABEL_INICIAL,
+    };
+  }
+
+  const tripStarted = !!getOperationalTripStartedAt(servicio);
+  const showActualEta = tripStarted && v.tier === "operational";
+
+  if (!showActualEta) {
+    return {
+      ...base,
+      contextLine: resolveEmpresaFlotaContextLine({
+        servicio,
+        stops,
+        activeStop,
+        nextStop,
+        tacografoEstado,
+        situation: null,
+        nowMs: hasAuxClock ? Number(nowMs) : Date.now(),
+      }),
+      arrivalLabel: inicialLabel,
+      remainingLine: null,
+      deviation: null,
+      calculating: false,
+      etaCaption: ETA_LABEL_INICIAL,
     };
   }
 

@@ -1,9 +1,24 @@
 import { JOURNEY_STATUS_CLOSED, JOURNEY_STATUS_NONE } from "./journeyStatus";
 
+/** Transición directa conductor: Disponible / Pausa / Trabajo / Conducción. */
+export const DRIVER_QUICK_OPS = new Set([
+  "inicio_disponibilidad",
+  "inicio_pausa",
+  "inicio_otros",
+  "inicio_conduccion",
+]);
+
 export function createIsAvail(EV) {
   return function isAvail(type, active, jState) {
     const T = EV[type];
     if (!T) return false;
+    if (
+      DRIVER_QUICK_OPS.has(type) &&
+      jState !== JOURNEY_STATUS_CLOSED &&
+      jState !== JOURNEY_STATUS_NONE
+    ) {
+      return true;
+    }
     if (type === "art12") return true;
     if (type === "continuar_jornada") return jState === JOURNEY_STATUS_CLOSED;
     if (jState === JOURNEY_STATUS_CLOSED || jState === JOURNEY_STATUS_NONE) return type === "inicio_jornada";
