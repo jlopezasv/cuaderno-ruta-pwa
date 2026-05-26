@@ -75,6 +75,13 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
 
     const data = await response.json();
     if (!response.ok) {
+      // TEMP diagnóstico OCR — quitar tras UAT (no registrar API key)
+      console.error("[cmr] anthropic_error", {
+        httpStatus: response.status,
+        errorType: data?.error?.type ?? data?.type ?? null,
+        errorMessage: data?.error?.message ?? (typeof data?.error === "string" ? data.error : null),
+      });
+
       const upstreamMsg = data?.error?.message || data?.error || "CMR upstream error";
       const friendly =
         /x-api-key|authentication|invalid.*key/i.test(String(upstreamMsg))
@@ -84,6 +91,12 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
         ok: false,
         error: friendly,
         code: "CMR_UPSTREAM",
+        // TEMP diagnóstico — expone tipo/mensaje upstream al cliente para UAT
+        debug: {
+          anthropicHttpStatus: response.status,
+          anthropicErrorType: data?.error?.type ?? data?.type ?? null,
+          anthropicErrorMessage: data?.error?.message ?? null,
+        },
       });
     }
     const text = data.content?.[0]?.text || "";
