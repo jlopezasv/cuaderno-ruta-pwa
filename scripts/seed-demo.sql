@@ -148,17 +148,18 @@ BEGIN
     codigo_equipo = EXCLUDED.codigo_equipo;
 
   -- ─── 2 Perfiles ──────────────────────────────────────────────────────────
-  INSERT INTO public.profiles (id, nombre, tipo_cuenta, empresa, matricula, updated_at, is_archived)
+  INSERT INTO public.profiles (id, nombre, tipo_cuenta, empresa, matricula, updated_at, is_archived, can_drive)
   VALUES
-    (v_owner, 'Ana Demo Empresa', 'empresa', 'Cuaderno Demo QA', NULL, v_now, false),
-    (v_conductor, 'Carlos Demo Conductor', 'conductor', 'Cuaderno Demo QA', '1234-DEMO', v_now, false)
+    (v_owner, 'Ana Demo Empresa', 'empresa', 'Cuaderno Demo QA', NULL, v_now, false, true),
+    (v_conductor, 'Carlos Demo Conductor', 'conductor', 'Cuaderno Demo QA', '1234-DEMO', v_now, false, true)
   ON CONFLICT (id) DO UPDATE SET
     nombre = EXCLUDED.nombre,
     tipo_cuenta = EXCLUDED.tipo_cuenta,
     empresa = EXCLUDED.empresa,
     matricula = EXCLUDED.matricula,
     updated_at = v_now,
-    is_archived = false;
+    is_archived = false,
+    can_drive = EXCLUDED.can_drive;
 
   -- ─── 3 conductor_empresa ───────────────────────────────────────────────────
   IF EXISTS (SELECT 1 FROM public.conductor_empresa WHERE empresa_id = v_empresa AND user_id = v_conductor) THEN

@@ -384,7 +384,12 @@ function AuthScreen({ onAuth }) {
         const profRes = await sbFetch("/rest/v1/profiles", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates" },
-          body: JSON.stringify({ id: uid, nombre: nombre.trim(), tipo_cuenta: tipo }),
+          body: JSON.stringify({
+            id: uid,
+            nombre: nombre.trim(),
+            tipo_cuenta: tipo,
+            can_drive: tipo === "empresa" ? false : true,
+          }),
         });
         if (!profRes.ok) {
           const profErr = await profRes.text().catch(() => "");
@@ -590,7 +595,7 @@ function AuthScreen({ onAuth }) {
   );
 }
 const KM_KEY="cuaderno_km_v1";
-const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:""};
+const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:"",tipo_cuenta:"autonomo",canDrive:false};
 
 // Símbolos oficiales tacógrafo EU (renderizados como SVG inline en los botones)
 // ⊙ conducción · ⊓ pausa/descanso · ⊠ disponibilidad · ✱ otros trabajos
@@ -2102,7 +2107,7 @@ function AppInner(){
       }
       if(profRows.length){
         const p=profRows[0];
-        setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||""}));
+        setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||"",tipo_cuenta:p.tipo_cuenta||"autonomo",canDrive:!!p.can_drive}));
       }
       const entRows=await sbSelect("entries",`user_id=eq.${uid}&limit=5000&order=ts.asc`);
       const sbEntries=entRows.map(r=>({
@@ -7444,6 +7449,24 @@ function ProfView({prof,onSave,norma,db,showToast}){
               </div>
             ))}
           </div>
+        </div>
+
+        <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#64748B",letterSpacing:1.5,marginBottom:10}}>OPERACIÓN COMO CONDUCTOR</div>
+          <label style={{display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"}}>
+            <input
+              type="checkbox"
+              checked={!!p.canDrive}
+              onChange={e=>setP(prev=>({...prev,canDrive:e.target.checked}))}
+              style={{width:18,height:18,marginTop:2,accentColor:"#F59E0B",flexShrink:0}}
+            />
+            <span>
+              <span style={{display:"block",fontSize:14,fontWeight:700,color:"#0F172A",lineHeight:1.35}}>También conduzco con esta cuenta</span>
+              <span style={{display:"block",fontSize:12,color:"#64748B",marginTop:4,lineHeight:1.5}}>
+                Activa el panel conductor y el cambio rápido entre gestión de empresa y conducción.
+              </span>
+            </span>
+          </label>
         </div>
 
         <button onClick={save} style={{width:"100%",background:saved?"#22C55E":"#0F172A",color:"white",border:"none",borderRadius:11,padding:"15px",fontSize:16,fontWeight:800,cursor:"pointer",transition:"background .3s",marginBottom:12}}>

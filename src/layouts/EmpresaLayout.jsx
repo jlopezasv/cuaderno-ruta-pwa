@@ -3,6 +3,7 @@ import { EMPRESA_TABS } from "../navigation/empresaTabs";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
 import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
+import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 
 export default function EmpresaLayout({
@@ -66,6 +67,7 @@ export default function EmpresaLayout({
             ciudad: p.ciudad || "",
             tipo_cuenta: p.tipo_cuenta || "empresa",
             lang: p.lang || "es",
+            canDrive: !!p.can_drive,
           }));
         }
         setLoaded(true);
@@ -83,6 +85,7 @@ export default function EmpresaLayout({
   function onSave(p) {
     const uid = getUserId();
     if (!uid) return;
+    const prevCanDrive = !!prof.canDrive;
     setProf(p);
     sbUpsert("profiles", [
       {
@@ -94,9 +97,17 @@ export default function EmpresaLayout({
         email_empresa: p.emailEmpresa || null,
         cp: p.cp || null,
         ciudad: p.ciudad || null,
+        can_drive: !!p.canDrive,
         updated_at: new Date().toISOString(),
       },
-    ]).catch(() => {});
+    ])
+      .then(async () => {
+        if (!!p.canDrive !== prevCanDrive) {
+          await bootstrapAuthSession(uid, sbSelect);
+          window.location.reload();
+        }
+      })
+      .catch(() => {});
   }
 
   const authSession = getStoredAuthSession(getUserId());
