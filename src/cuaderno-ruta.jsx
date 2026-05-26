@@ -95,7 +95,7 @@ import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForS
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
-import { getExpedienteCierre } from "./domain/service/expedienteCierre.js";
+import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -5067,7 +5067,9 @@ async function resolveDriverActiveServiceAndStops(uid){
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
-  const candidates=[...byId.values()].sort((a,b)=>{
+  const candidates=[...byId.values()]
+    .filter(isConductorServicioOperativoActivo)
+    .sort((a,b)=>{
     const ra=estadoRank(a?.estado);
     const rb=estadoRank(b?.estado);
     if(ra!==rb)return ra-rb;
@@ -16303,19 +16305,15 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function cerrarExpediente({ comentario, firmaCanvas }) {
     if (!servicio?.id) throw new Error("Sin servicio activo");
-    const { servicio: updated, referencia } = await cerrarExpedienteServicio({
+    await cerrarExpedienteServicio({
       servicio,
       comentario,
       firmaCanvas,
       conductorId: uid,
       conductorNombre: conductorNombre || null,
     });
-    setServicio((prev) => ({
-      ...prev,
-      ...updated,
-      estado: "completado",
-      referencia: referencia ?? updated?.referencia ?? prev?.referencia,
-    }));
+    setServicio(null);
+    setStops([]);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   return{
@@ -17319,7 +17317,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     </div>
   );
 
-  if(servicio.estado==="cerrado"){
+  if(servicio.estado==="cerrado"||isServicioExpedienteCerrado(servicio)){
     const cierre=getExpedienteCierre(servicio);
     const cerradoLabel=cierre?.closed_at
       ?new Date(cierre.closed_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})

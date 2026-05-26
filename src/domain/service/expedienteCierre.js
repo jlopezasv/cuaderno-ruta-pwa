@@ -36,6 +36,20 @@ export function needsExpedienteClosure(servicio, stops) {
   return st === SERVICIO_ESTADO_COMPLETADO || st === SERVICIO_ESTADO_EN_CURSO;
 }
 
+/**
+ * Servicio que el conductor debe ver en tab Servicio / copiloto.
+ * Incluye `completado` pendiente de firma; excluye expediente ya cerrado por conductor.
+ */
+export function isConductorServicioOperativoActivo(servicio) {
+  if (!servicio?.id || isServicioExpedienteCerrado(servicio)) return false;
+  const st = String(servicio.estado || "").toLowerCase();
+  return (
+    st === SERVICIO_ESTADO_EN_CURSO ||
+    st === SERVICIO_ESTADO_ASIGNADO ||
+    st === SERVICIO_ESTADO_COMPLETADO
+  );
+}
+
 export function operativaProgressLabel(stops) {
   const total = Array.isArray(stops) ? stops.length : 0;
   const done = countCompletedStops(stops);
