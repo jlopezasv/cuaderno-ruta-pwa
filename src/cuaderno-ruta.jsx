@@ -96,6 +96,10 @@ import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
 import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
+import {
+  pickNextAssignedService,
+  sortDriverOperationalCandidates,
+} from "./domain/service/driverServiceQueue.js";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -5036,16 +5040,10 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   }
 }
 
-async function resolveDriverActiveServiceAndStops(uid){
-  if(!uid)return{servicio:null,stops:[]};
+async function fetchDriverOperationalCandidates(uid){
+  if(!uid)return[];
   /** Incluye `completado` (firma) y `pendiente_asignacion` con conductor ya fijado; excluye `cerrado`. */
   const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado,pendiente_asignacion";
-  const estadoRank=(estado)=>{
-    if(estado==="en_curso")return 0;
-    if(estado==="asignado")return 1;
-    if(estado==="completado")return 2;
-    return 9;
-  };
   async function fetchServiciosByConductorId(){
     const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=40`);
     if(!r.ok)return[];
@@ -5067,34 +5065,39 @@ async function resolveDriverActiveServiceAndStops(uid){
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
-  const candidates=[...byId.values()]
-    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid))
-    .sort((a,b)=>{
-    const ra=estadoRank(a?.estado);
-    const rb=estadoRank(b?.estado);
-    if(ra!==rb)return ra-rb;
-    return new Date(b?.created_at||0)-new Date(a?.created_at||0);
-  });
+  return [...byId.values()]
+    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid));
+}
+
+async function fetchStopsForServicioId(servicioId){
+  if(!servicioId)return[];
+  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicioId}&order=orden.asc`);
+  const stops=sr.ok?await sr.json():[];
+  return Array.isArray(stops)?stops:[];
+}
+
+async function resolveDriverActiveServiceAndStops(uid){
+  const empty={servicio:null,stops:[],siguienteServicio:null,siguientesStops:[]};
+  if(!uid)return empty;
+  const rawCandidates=await fetchDriverOperationalCandidates(uid);
+  const candidates=sortDriverOperationalCandidates(rawCandidates);
   console.log("[OP2] active service candidates",{
     uid,
     rows:candidates.length,
     ids:candidates.map(s=>s?.id),
     estados:candidates.map(s=>s?.estado),
-    sourceByConductorId:primaryCandidates.length,
-    sourceByAsignaciones:fallbackCandidates.length,
   });
-  if(!candidates.length)return{servicio:null,stops:[]};
+  if(!candidates.length)return empty;
   let fallbackServicio=null;
   let fallbackStops=[];
+  let servicio=null;
+  let stops=[];
   for(const sv of candidates){
     if(!sv?.id)continue;
-    const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${sv.id}&order=orden.asc`);
-    const stops=sr.ok?await sr.json():[];
-    const arr=Array.isArray(stops)?stops:[];
+    const arr=await fetchStopsForServicioId(sv.id);
     console.log("[OP2] candidate stops",{
       servicioId:sv.id,
       estado:sv?.estado||null,
-      status:sr?.status,
       rows:arr.length,
       stopIds:arr.map(s=>s?.id),
     });
@@ -5102,9 +5105,24 @@ async function resolveDriverActiveServiceAndStops(uid){
       fallbackServicio=sv;
       fallbackStops=arr;
     }
-    if(arr.length>0)return{servicio:sv,stops:arr};
+    if(arr.length>0){
+      servicio=sv;
+      stops=arr;
+      break;
+    }
   }
-  return{servicio:fallbackServicio,stops:fallbackStops};
+  if(!servicio){
+    servicio=fallbackServicio;
+    stops=fallbackStops;
+  }
+  const siguienteServicio=pickNextAssignedService(candidates,servicio?.id||null);
+  const siguientesStops=siguienteServicio?.id?await fetchStopsForServicioId(siguienteServicio.id):[];
+  console.log("[OP2] driver queue resolved",{
+    uid,
+    currentId:servicio?.id||null,
+    nextId:siguienteServicio?.id||null,
+  });
+  return{servicio,stops,siguienteServicio,siguientesStops};
 }
 
 async function readActiveServiceForDriver(uid){
@@ -16055,6 +16073,8 @@ function ServiciosTimelineView({uid}){
 function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   const[servicio,setServicio]=useState(null);
   const[stops,setStops]=useState([]);
+  const[siguienteServicio,setSiguienteServicio]=useState(null);
+  const[siguientesStops,setSiguientesStops]=useState([]);
   const[loading,setLoading]=useState(true);
   const emptyStopsRetryRef=useRef(0);
   const emptyStopsRetryTimerRef=useRef(null);
@@ -16104,6 +16124,8 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
           })) : [],
         });
         setStops(stopsRows);
+        setSiguienteServicio(resolved?.siguienteServicio||null);
+        setSiguientesStops(Array.isArray(resolved?.siguientesStops)?resolved.siguientesStops:[]);
         if(stopsRows.length>0){
           emptyStopsRetryRef.current=0;
           if(emptyStopsRetryTimerRef.current){
@@ -16123,7 +16145,12 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
             });
           }
         }
-      }else{setServicio(null);setStops([]);}
+      }else{
+        setServicio(null);
+        setStops([]);
+        setSiguienteServicio(null);
+        setSiguientesStops([]);
+      }
     }catch(e){console.warn("useServicioActivo:",e);}
     finally{setLoading(false);}
   },[uid]);
@@ -16316,11 +16343,15 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     });
     setServicio(null);
     setStops([]);
+    setSiguienteServicio(null);
+    setSiguientesStops([]);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
   return{
     servicio,
     stops,
+    siguienteServicio,
+    siguientesStops,
     completados,
     loading,
     marcarLlegado,
@@ -17245,7 +17276,7 @@ function EvidenciasStop(props) {
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
-  const{servicio,stops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const card="#FFFFFF",tx="#0F172A",su="#64748B";
@@ -17348,6 +17379,8 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         mode={panelMode}
         servicio={servicio}
         stops={stops}
+        siguienteServicio={siguienteServicio}
+        siguientesStops={siguientesStops}
         evidenciasByStop={evidenciasByStop}
         showToast={showToast}
         onIniciarServicio={iniciarServicio}

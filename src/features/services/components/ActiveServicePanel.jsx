@@ -17,6 +17,7 @@ import { getServiceOperationalPresentation } from "../../../domain/service/servi
 import { formatStopNotesForDisplay } from "../../../domain/service/stopOperacionMeta.js";
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
+import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteServicioAccordion.jsx";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -712,6 +713,8 @@ export function ActiveServicePanel({
   mode,
   servicio,
   stops,
+  siguienteServicio = null,
+  siguientesStops = [],
   evidenciasByStop,
   showToast,
   onIniciarServicio,
@@ -1021,6 +1024,11 @@ export function ActiveServicePanel({
           />
         ) : null}
       </CockpitShell>
+      {siguienteServicio ? (
+        <SiguienteServicioAccordion servicio={siguienteServicio} stops={siguientesStops} />
+      ) : (
+        <SiguienteServicioEmpty />
+      )}
       {confirmMuelleDialog}
     </div>
   );
