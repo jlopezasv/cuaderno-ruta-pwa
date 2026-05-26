@@ -31,8 +31,10 @@ export function servicioPendienteAsignacion(servicio) {
 /** El conductor solo ve servicios ya asignados a su uid. */
 export function servicioVisibleParaConductor(servicio, conductorUid) {
   if (!servicio?.id || !conductorUid) return false;
-  if (servicio.estado === SERVICIO_ESTADO_PENDIENTE_ASIGNACION) return false;
   if (servicioSinConductor(servicio)) return false;
+  if (servicio.estado === SERVICIO_ESTADO_PENDIENTE_ASIGNACION) {
+    return servicio.conductor_id === conductorUid;
+  }
   return servicio.conductor_id === conductorUid;
 }
 

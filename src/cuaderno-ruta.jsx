@@ -5038,8 +5038,8 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
 async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return{servicio:null,stops:[]};
-  /** Incluye `completado` para cierre documental (firma); excluye `cerrado`. */
-  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado";
+  /** Incluye `completado` (firma) y `pendiente_asignacion` con conductor ya fijado; excluye `cerrado`. */
+  const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR="en_curso,asignado,completado,pendiente_asignacion";
   const estadoRank=(estado)=>{
     if(estado==="en_curso")return 0;
     if(estado==="asignado")return 1;
@@ -5047,7 +5047,7 @@ async function resolveDriverActiveServiceAndStops(uid){
     return 9;
   };
   async function fetchServiciosByConductorId(){
-    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=20`);
+    const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${ESTADOS_SERVICIO_ACTIVO_CONDUCTOR})&order=created_at.desc&limit=40`);
     if(!r.ok)return[];
     const rows=await r.json();
     return Array.isArray(rows)?rows:[];
@@ -5068,7 +5068,7 @@ async function resolveDriverActiveServiceAndStops(uid){
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
   const candidates=[...byId.values()]
-    .filter(isConductorServicioOperativoActivo)
+    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid))
     .sort((a,b)=>{
     const ra=estadoRank(a?.estado);
     const rb=estadoRank(b?.estado);
@@ -5084,6 +5084,8 @@ async function resolveDriverActiveServiceAndStops(uid){
     sourceByAsignaciones:fallbackCandidates.length,
   });
   if(!candidates.length)return{servicio:null,stops:[]};
+  let fallbackServicio=null;
+  let fallbackStops=[];
   for(const sv of candidates){
     if(!sv?.id)continue;
     const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${sv.id}&order=orden.asc`);
@@ -5096,13 +5098,13 @@ async function resolveDriverActiveServiceAndStops(uid){
       rows:arr.length,
       stopIds:arr.map(s=>s?.id),
     });
+    if(!fallbackServicio){
+      fallbackServicio=sv;
+      fallbackStops=arr;
+    }
     if(arr.length>0)return{servicio:sv,stops:arr};
   }
-  const fallback=candidates[0];
-  const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${fallback.id}&order=orden.asc`);
-  const stops=sr.ok?await sr.json():[];
-  const arr=Array.isArray(stops)?stops:[];
-  return{servicio:fallback,stops:arr};
+  return{servicio:fallbackServicio,stops:fallbackStops};
 }
 
 async function readActiveServiceForDriver(uid){
@@ -6042,13 +6044,11 @@ function useCopilotServicio(uid){
   const cargar=useCallback(async()=>{
     if(!uid){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
     try{
-      const r=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`);
-      const data=await r.json();
-      if(!data.length){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
-      setServicio(data[0]);
-      const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${data[0].id}&order=orden.asc`);
-      const st=await sr.json();
-      const list=Array.isArray(st)?st:[];
+      const resolved=await resolveDriverActiveServiceAndStops(uid);
+      const sv=resolved?.servicio||null;
+      const list=Array.isArray(resolved?.stops)?resolved.stops:[];
+      if(!sv?.id){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
+      setServicio(sv);
       setStops(list);
       const ids=list.map(s=>s.id).filter(Boolean).join(",");
       if(!ids){setEvidenciasByStop({});return;}
@@ -10123,14 +10123,16 @@ function MapTab({norma,prof,dark,viajeActivo}){
   const[servicioActivo,setServicioActivo]=useState(null);
   useEffect(()=>{
     if(!uid)return;
-    sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(asignado,en_curso)&order=created_at.desc&limit=1`)
-      .then(r=>r.json()).then(async svs=>{
-        if(!svs.length)return;
-        setServicioActivo(svs[0]);
-        const sr=await sbFetch(`/rest/v1/stops?servicio_id=eq.${svs[0].id}&estado=in.(pendiente,en_camino)&order=orden.asc&limit=1`);
-        const stps=await sr.json();
-        if(stps.length)setStopActivo(stps[0]);
-      }).catch(()=>{});
+    resolveDriverActiveServiceAndStops(uid)
+      .then(async (resolved)=>{
+        const sv=resolved?.servicio;
+        if(!sv?.id)return;
+        setServicioActivo(sv);
+        const list=Array.isArray(resolved?.stops)?resolved.stops:[];
+        const pend=list.find(s=>s?.estado==="pendiente"||s?.estado==="en_camino")||list[0]||null;
+        if(pend)setStopActivo(pend);
+      })
+      .catch(()=>{});
   },[uid]);
 
   const[dest,setDest]=useState(()=>{try{return localStorage.getItem(RUTA_KEY+"_dest")||"";}catch(_){return "";}});
