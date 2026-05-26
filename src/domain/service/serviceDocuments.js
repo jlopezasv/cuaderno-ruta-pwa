@@ -1,6 +1,6 @@
 import { getDocMeta } from "../documents/operationalDocumentRecord.js";
 
-export const DOCUMENT_TYPES = Object.freeze(["cmr", "foto", "incidencia", "qr", "nota"]);
+export const DOCUMENT_TYPES = Object.freeze(["cmr", "foto", "incidencia", "qr"]);
 
 export function getDocumentLabel(ev) {
   const meta = getDocMeta(ev);

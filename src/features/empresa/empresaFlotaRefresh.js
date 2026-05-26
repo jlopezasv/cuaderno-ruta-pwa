@@ -1,19 +1,8 @@
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
-import { getLastServiceActivity } from "../../domain/service/serviceActivity.js";
-import { needsAttention } from "../../domain/service/serviceAttention.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import { ETA_UI_VISUAL_TICK_MS } from "../../domain/service/operationalEtaPresentation.js";
 
 const EMPRESA_VISTA_ESTADOS_COMPLETADOS = Object.freeze(["completado", "cerrado"]);
-
-function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
-  const stops = flotaStops?.[servicioId] || [];
-  const o = {};
-  for (const st of stops) {
-    if (flotaEvs?.[st.id]) o[st.id] = flotaEvs[st.id];
-  }
-  return o;
-}
 
 /**
  * Misma regla que el listado Servicios (pestaña activa).
@@ -36,20 +25,11 @@ export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
   if (tab === "incidencias") {
     const flotaStops = ctx.flotaStops || {};
     const flotaEvs = ctx.flotaEvs || {};
-    const svStops = flotaStops[servicio.id] || [];
-    const evs = evidenciasForServicioStops(servicio.id, flotaStops, flotaEvs);
-    const lastActivity = getLastServiceActivity({ service: servicio, stops: svStops, evidencias: evs });
-    const attention = needsAttention({
-      service: servicio,
-      stops: svStops,
-      evidencias: evs,
-      lastActivity,
-    });
     const incN =
       typeof ctx.countIncidencias === "function"
         ? ctx.countIncidencias(servicio.id, flotaStops, flotaEvs)
         : 0;
-    return attention || incN > 0;
+    return incN > 0;
   }
   return true;
 }

@@ -7,6 +7,7 @@
 export const ATTENTION_IDLE_MS = 48 * 60 * 60 * 1000;
 
 function hasIncidencia(evidencias, stops) {
+  if (Number.isFinite(Number(stops?.incidenciasTotal)) && Number(stops.incidenciasTotal) > 0) return true;
   if (Array.isArray(evidencias)) {
     return evidencias.some((ev) => ev?.tipo === "incidencia");
   }

@@ -4,6 +4,7 @@ import { uploadOperationalDocument } from "../../data/uploadOperationalDocument.
 import { DOCUMENT_TYPES } from "../../domain/service/serviceDocuments.js";
 import { enrichEvidenciaDisplay, mergeDocMetaIntoDatos } from "../../domain/documents/operationalDocumentRecord.js";
 import { processOperationalDocumentImage, formatStorageBytes } from "../../domain/documents/operationalDocumentPipeline.js";
+import { INCIDENT_UPLOAD_MAX_BYTES } from "../../domain/documents/operationalDocumentPipeline.js";
 import {
   diagnoseEvidencia,
   isOperationalDocTraceEnabled,
@@ -13,7 +14,8 @@ import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documen
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
 import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
 import { OperationalDocumentRow } from "./OperationalDocumentRow.jsx";
-import { notifyEvidenciaSaved } from "../../domain/documents/operationalEvidenciaSync.js";
+import { notifyEvidenciaSaved, notifyIncidenciaSaved } from "../../domain/documents/operationalEvidenciaSync.js";
+import { createIncidencia, listIncidenciasByServicio } from "../../domain/incidencias/incidenciasApi.js";
 
 const CMR_FIELDS = [
   { k: "num_cmr", l: "Nº CMR" },
@@ -47,8 +49,12 @@ export function OperationalEvidenciasStop({
   onOpenDocument = null,
 }) {
   const [evidencias, setEvidencias] = useState([]);
+  const [incidencias, setIncidencias] = useState([]);
   const [modal, setModal] = useState(null);
-  const [nota, setNota] = useState("");
+  const [notaFoto, setNotaFoto] = useState("");
+  const [incTitulo, setIncTitulo] = useState("");
+  const [incDescripcion, setIncDescripcion] = useState("");
+  const [incFotos, setIncFotos] = useState([]);
   const [cmrFase, setCmrFase] = useState("scan");
   const [cmrCampos, setCmrCampos] = useState({});
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -104,6 +110,17 @@ export function OperationalEvidenciasStop({
       .catch(() => {});
   }, [stopId]);
 
+  useEffect(() => {
+    if (!servicioId && !servicio?.id) return;
+    listIncidenciasByServicio(servicioId || servicio?.id)
+      .then((rows) => {
+        const sid = stopId || null;
+        const list = sid ? rows.filter((it) => !it.stop_id || it.stop_id === sid) : rows;
+        setIncidencias(list);
+      })
+      .catch(() => {});
+  }, [servicioId, servicio?.id, stopId]);
+
   const visibleEvs = useMemo(() => {
     const list = !allowedTipos ? evidencias : evidencias.filter((ev) => allowedTipos.has(String(ev?.tipo || "").toLowerCase()));
     return list.map((ev) => enrichEvidenciaDisplay(ev, { stop, conductorName }));
@@ -122,7 +139,7 @@ export function OperationalEvidenciasStop({
       tipo,
       url,
       datos: datos || null,
-      nota: nota || null,
+      nota: notaFoto || null,
     };
     const r = await sbFetch("/rest/v1/evidencias", {
       method: "POST",
@@ -176,7 +193,7 @@ export function OperationalEvidenciasStop({
     try {
       await persistEvidencia(tipo, { datos });
       setModal(null);
-      setNota("");
+      setNotaFoto("");
       showToast?.("✅ Evidencia guardada");
     } catch (e) {
       setError("Error: " + e.message);
@@ -239,7 +256,7 @@ export function OperationalEvidenciasStop({
       const datos = mergeDocMetaIntoDatos({}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
-      setNota("");
+      setNotaFoto("");
       revokePreview();
       showToast?.("✅ Foto guardada");
     } catch (err) {
@@ -323,13 +340,87 @@ export function OperationalEvidenciasStop({
       }
       await persistEvidencia("cmr", { url, datos });
       setModal(null);
-      setNota("");
+      setNotaFoto("");
       setCmrFase("scan");
       setCmrCampos({});
       revokePreview();
-      showToast?.("✅ CMR guardado");
+      showToast?.("Documento guardado");
     } catch (e) {
       setError("Error: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addIncFotos(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setIncFotos((prev) => [...prev, ...files].slice(0, 6));
+  }
+
+  function removeIncFoto(index) {
+    setIncFotos((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function guardarIncidencia() {
+    if (saving) return;
+    const titulo = String(incTitulo || "").trim();
+    if (titulo.length < 3) {
+      setError("El titulo debe tener al menos 3 caracteres");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const savedInc = await createIncidencia({
+        servicio: servicio || (servicioId ? { id: servicioId } : null),
+        stop,
+        titulo,
+        descripcion: incDescripcion,
+        conductorNombre,
+      });
+      const fotos = incFotos.slice(0, 6);
+      for (const file of fotos) {
+        const geo = await captureUploadGeo();
+        const up = await uploadOperationalDocument(file, {
+          folder: `incidencias/${savedInc.id}`,
+          tipo: "foto",
+          imageOptions: { maxBytes: INCIDENT_UPLOAD_MAX_BYTES, initialQuality: 0.62 },
+          context: { ...uploadContext, eventoOperacional: "Foto de incidencia", geo },
+        });
+        const datos = mergeDocMetaIntoDatos({}, up.docMeta);
+        const r = await sbFetch("/rest/v1/evidencias", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: JSON.stringify({
+            stop_id: stopId,
+            tipo: "foto",
+            url: up.previewUrl,
+            datos,
+            incidencia_id: savedInc.id,
+            nota: null,
+          }),
+        });
+        if (!r.ok) {
+          throw new Error(`No se pudo adjuntar foto de incidencia (${r.status})`);
+        }
+        const evArr = await r.json().catch(() => []);
+        const ev = Array.isArray(evArr) ? evArr[0] : evArr;
+        if (ev?.id) {
+          setEvidencias((prev) => [...prev, ev]);
+          notifyEvidenciaSaved({ ev, stopId, servicioId: servicioId || servicio?.id || null });
+        }
+      }
+      setIncidencias((prev) => [savedInc, ...prev]);
+      notifyIncidenciaSaved({ incidencia: savedInc, servicioId: servicioId || servicio?.id || null });
+      setIncTitulo("");
+      setIncDescripcion("");
+      setIncFotos([]);
+      setModal(null);
+      showToast?.("Incidencia registrada");
+    } catch (e) {
+      setError("Error: " + (e?.message || e));
     } finally {
       setSaving(false);
     }
@@ -366,6 +457,19 @@ export function OperationalEvidenciasStop({
           ))}
         </div>
       )}
+      {incidencias.length > 0 && (
+        <div style={{ marginBottom: isDocsShell ? 8 : 12 }}>
+          <div style={{ fontSize: 10, color: panel.head, fontWeight: 800, marginBottom: 6, letterSpacing: isDocsShell ? 0.6 : 0, textTransform: isDocsShell ? "uppercase" : "none" }}>
+            Incidencias ({incidencias.length})
+          </div>
+          {incidencias.slice(0, 6).map((inc) => (
+            <div key={inc.id} style={{ background: isDocsShell ? "rgba(239,68,68,.12)" : "#fff1f2", border: "1px solid rgba(239,68,68,.2)", borderRadius: 10, padding: "8px 10px", marginBottom: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#b91c1c" }}>{inc.titulo}</div>
+              {inc.descripcion && <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>{inc.descripcion}</div>}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: isDocsShell ? 6 : 8 }}>
         {canTipo("foto") && (
@@ -377,21 +481,19 @@ export function OperationalEvidenciasStop({
         {canTipo("cmr") && (
           <button type="button" onClick={() => { setModal("cmr"); setCmrFase("scan"); setError(""); revokePreview(); }} style={gBtn(isDocsShell ? "rgba(56,189,248,.12)" : "#0EA5E920", isDocsShell ? "1px solid rgba(56,189,248,.35)" : "1.5px solid #0EA5E950", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📄</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#7DD3FC" : "#0EA5E9" }}>CMR</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#7DD3FC" : "#0EA5E9" }}>Documento</span>
           </button>
         )}
         {canTipo("incidencia") && (
-          <button type="button" onClick={() => { setModal("incidencia"); setNota(""); setError(""); }} style={gBtn(isDocsShell ? "rgba(248,113,113,.12)" : "#EF444420", isDocsShell ? "1px solid rgba(248,113,113,.35)" : "1.5px solid #EF444450", isDocsShell ? "10px 4px" : "12px 6px")}>
+          <button type="button" onClick={() => { setModal("incidencia"); setIncTitulo(""); setIncDescripcion(""); setIncFotos([]); setError(""); }} style={gBtn(isDocsShell ? "rgba(248,113,113,.12)" : "#EF444420", isDocsShell ? "1px solid rgba(248,113,113,.35)" : "1.5px solid #EF444450", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>⚠️</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#FCA5A5" : "#EF4444" }}>Incidencia</span>
           </button>
         )}
-        {canTipo("nota") && (
-          <button type="button" onClick={() => { setModal("nota"); setNota(""); setError(""); }} style={gBtn(isDocsShell ? "rgba(148,163,184,.14)" : "#64748B20", isDocsShell ? "1px solid rgba(148,163,184,.28)" : "1.5px solid #64748B50", isDocsShell ? "10px 4px" : "12px 6px")}>
-            <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📝</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#CBD5E1" : "#64748B" }}>Nota</span>
-          </button>
-        )}
+        <button type="button" onClick={() => setModal("ia")} style={gBtn(isDocsShell ? "rgba(99,102,241,.14)" : "#6366F120", isDocsShell ? "1px solid rgba(129,140,248,.35)" : "1.5px solid #6366F150", isDocsShell ? "10px 4px" : "12px 6px")}>
+          <span style={{ fontSize: isDocsShell ? 22 : 24 }}>🤖</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#C7D2FE" : "#4F46E5" }}>IA</span>
+        </button>
       </div>
 
       {modal === "cmr" && (
@@ -436,7 +538,7 @@ export function OperationalEvidenciasStop({
                   ))}
                   {error && <div style={{ background: "#FEE2E2", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#DC2626", marginBottom: 10 }}>{error}</div>}
                   <button type="button" onClick={guardarCmr} disabled={saving} style={{ width: "100%", background: saving ? "#CBD5E1" : "#22C55E", color: "white", border: "none", borderRadius: 10, padding: "13px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
-                    {saving ? "⏳ Guardando…" : "✅ Guardar CMR"}
+                    {saving ? "⏳ Guardando…" : "✅ Guardar documento"}
                   </button>
                 </div>
               )}
@@ -450,7 +552,7 @@ export function OperationalEvidenciasStop({
           <div style={{ background: LIGHT.card, borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, padding: "16px 18px 40px" }} onClick={(e) => e.stopPropagation()}>
             <input ref={fotoRef} {...cameraProps} onChange={onFotoSelected} style={{ display: "none" }} />
             <div style={{ fontSize: 16, fontWeight: 800, color: "#22C55E", marginBottom: 12 }}>📸 Foto documental</div>
-            <input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Nota opcional…" style={iStyle} />
+            <input value={notaFoto} onChange={(e) => setNotaFoto(e.target.value)} placeholder="Nota opcional…" style={iStyle} />
             <button type="button" onClick={() => fotoRef.current?.click()} disabled={saving} style={{ width: "100%", background: "#22C55E", color: "white", border: "none", borderRadius: 13, padding: "18px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
               {saving ? "⏳ Procesando…" : "📷 Capturar"}
             </button>
@@ -461,21 +563,40 @@ export function OperationalEvidenciasStop({
       {modal === "incidencia" && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.35)", zIndex: 400, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setModal(null)}>
           <div style={{ background: LIGHT.card, borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, padding: "16px 18px 40px" }} onClick={(e) => e.stopPropagation()}>
-            <textarea value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Describe la incidencia…" rows={4} style={{ ...iStyle, resize: "vertical" }} />
-            <button type="button" onClick={() => nota.trim() && guardarEvidencia("incidencia", { texto: nota })} disabled={saving || !nota.trim()} style={{ width: "100%", background: "#EF4444", color: "white", border: "none", borderRadius: 13, padding: "15px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
-              Registrar incidencia
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#EF4444", marginBottom: 8 }}>⚠️ Nueva incidencia</div>
+            <input value={incTitulo} onChange={(e) => setIncTitulo(e.target.value)} placeholder="Titulo (obligatorio)" style={iStyle} />
+            <textarea value={incDescripcion} onChange={(e) => setIncDescripcion(e.target.value)} placeholder="Descripcion (opcional)" rows={3} style={{ ...iStyle, resize: "vertical" }} />
+            <label style={{ fontSize: 12, color: LIGHT.su, fontWeight: 700, display: "block", marginBottom: 6 }}>
+              Fotos (0-6) · {incFotos.length}/6
+            </label>
+            <input type="file" accept="image/*" multiple onChange={addIncFotos} />
+            {incFotos.length > 0 && (
+              <div style={{ marginTop: 8, marginBottom: 10, display: "grid", gap: 6 }}>
+                {incFotos.map((f, i) => (
+                  <div key={`${f.name}-${i}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
+                    <span>{f.name}</span>
+                    <button type="button" onClick={() => removeIncFoto(i)} style={{ border: "none", background: "#fee2e2", color: "#b91c1c", borderRadius: 8, padding: "3px 8px", cursor: "pointer" }}>
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {error && <div style={{ background: "#FEE2E2", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#DC2626", marginBottom: 10 }}>{error}</div>}
+            <button type="button" onClick={guardarIncidencia} disabled={saving || String(incTitulo || "").trim().length < 3} style={{ width: "100%", background: "#EF4444", color: "white", border: "none", borderRadius: 13, padding: "15px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
+              {saving ? "Guardando..." : "Registrar incidencia"}
             </button>
           </div>
         </div>
       )}
 
-      {modal === "nota" && (
+      {modal === "ia" && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.35)", zIndex: 400, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setModal(null)}>
           <div style={{ background: LIGHT.card, borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, padding: "16px 18px 40px" }} onClick={(e) => e.stopPropagation()}>
-            <textarea value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Observación…" rows={4} style={{ ...iStyle, resize: "vertical" }} />
-            <button type="button" onClick={() => nota.trim() && guardarEvidencia("nota", { texto: nota })} disabled={saving || !nota.trim()} style={{ width: "100%", background: "#64748B", color: "white", border: "none", borderRadius: 13, padding: "15px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
-              Guardar nota
-            </button>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#4F46E5", marginBottom: 8 }}>🤖 Asistente IA</div>
+            <div style={{ fontSize: 13, color: LIGHT.su, lineHeight: 1.45 }}>
+              Funcionalidad en preparacion. En esta version solo se muestra como placeholder visual.
+            </div>
           </div>
         </div>
       )}

@@ -100,8 +100,10 @@ import { OperationalEtaSnapshotBlock } from "./features/services/components/Oper
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
+import { fetchIncidenciasResumenByEmpresa } from "./domain/incidencias/incidenciasApi.js";
 import {
   EVIDENCIA_SAVED_EVENT,
+  INCIDENCIA_SAVED_EVENT,
   mergeEvidenciaIntoByStop,
 } from "./domain/documents/operationalEvidenciaSync.js";
 import { ExpedienteDocumentsPanel } from "./features/documents/ExpedienteDocumentsPanel.jsx";
@@ -12218,7 +12220,9 @@ function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}
   );
 }
 
-function incidenciasCountServicio(servicioId,flotaStops,flotaEvs){
+function incidenciasCountServicio(servicioId,flotaStops,flotaEvs,incResumenMap={}){
+  const resumenN=Number(incResumenMap?.[servicioId]?.total_incidencias||0);
+  if(resumenN>0)return resumenN;
   const stops=flotaStops[servicioId]||[];
   let n=0;
   for(const st of stops){
@@ -12436,6 +12440,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[flotaServicios,setFlotaServicios]=useState([]);
   const[flotaStops,setFlotaStops]=useState({});
   const[flotaEvs,setFlotaEvs]=useState({});
+  const[flotaIncidenciasResumen,setFlotaIncidenciasResumen]=useState({});
   const[flotaExtraDocs,setFlotaExtraDocs]=useState({});
   const[flotaLoading,setFlotaLoading]=useState(false);
   const[flotaBootstrapped,setFlotaBootstrapped]=useState(false);
@@ -12461,9 +12466,26 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       if (!ev?.id || !stopId) return;
       setFlotaEvs((prev) => mergeEvidenciaIntoByStop(prev, stopId, ev));
     }
+    async function onIncidenciaSaved(e){
+      const servicioId=e?.detail?.servicioId||null;
+      if(!empresa?.id)return;
+      const rows=await fetchIncidenciasResumenByEmpresa(empresa.id);
+      const next={};
+      for(const row of rows){
+        if(row?.servicio_id)next[row.servicio_id]=row;
+      }
+      setFlotaIncidenciasResumen(next);
+      if(servicioId){
+        setFlotaServicios(prev=>prev.map((sv)=>sv.id===servicioId?{...sv,incidencias_total:Number(next?.[servicioId]?.total_incidencias||0)}:sv));
+      }
+    }
     window.addEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
-    return () => window.removeEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
-  }, []);
+    window.addEventListener(INCIDENCIA_SAVED_EVENT, onIncidenciaSaved);
+    return () => {
+      window.removeEventListener(EVIDENCIA_SAVED_EVENT, onEvidenciaSaved);
+      window.removeEventListener(INCIDENCIA_SAVED_EVENT, onIncidenciaSaved);
+    };
+  }, [empresa?.id]);
 
   // Documentos de la flota
   const[docsLoading,setDocsLoading]=useState(false);
@@ -13049,6 +13071,21 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return()=>{cancelled=true;};
   },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops]);
 
+  useEffect(()=>{
+    if(!empresa?.id||modo!=="jefe")return;
+    let cancelled=false;
+    (async()=>{
+      const rows=await fetchIncidenciasResumenByEmpresa(empresa.id);
+      if(cancelled)return;
+      const next={};
+      for(const row of rows){
+        if(row?.servicio_id)next[row.servicio_id]=row;
+      }
+      setFlotaIncidenciasResumen(next);
+    })();
+    return()=>{cancelled=true;};
+  },[empresa?.id,modo,flotaServicios.length]);
+
   const flotaActivityTsById=useMemo(()=>{
     const m={};
     for(const sv of flotaServicios){
@@ -13064,13 +13101,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       archivedExpedienteIds,
       flotaStops,
       flotaEvs,
-      countIncidencias: incidenciasCountServicio,
+      countIncidencias: (servicioId,stopsMap,evsMap)=>incidenciasCountServicio(servicioId,stopsMap,evsMap,flotaIncidenciasResumen),
     }),
-    [archivedExpedienteIds,flotaStops,flotaEvs],
+    [archivedExpedienteIds,flotaStops,flotaEvs,flotaIncidenciasResumen],
   );
 
   const serviciosListaOperativa=useMemo(()=>{
-    const list=filterServiciosForEmpresaVistaTab(flotaServicios,serviciosVistaTab,empresaVistaTabCtx);
+    const list=filterServiciosForEmpresaVistaTab(
+      flotaServicios.map((sv)=>({
+        ...sv,
+        incidencias_total:Number(flotaIncidenciasResumen?.[sv.id]?.total_incidencias||0),
+      })),
+      serviciosVistaTab,
+      empresaVistaTabCtx,
+    );
     const q=String(serviciosBusqueda||"").trim();
     const filtered=q
       ?list.filter((sv)=>{
@@ -13083,7 +13127,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       :list;
     filtered.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
     return filtered;
-  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores]);
+  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores,flotaIncidenciasResumen]);
 
   useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length,serviciosBusqueda]);
 
@@ -14287,7 +14331,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   const matricula=sv.matricula||conductor?.matricula||"";
                   if(filtMatricula&&!lower(matricula).includes(lower(filtMatricula)))return false;
                   const svStops=flotaStops[sv.id]||[];
-                  const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
+                  const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs,flotaIncidenciasResumen);
                   if(filtIncidencias==="con"&&incN<=0)return false;
                   if(filtIncidencias==="sin"&&incN>0)return false;
                   const refVisible=getServiceNumber(sv);
@@ -14354,7 +14398,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           const preview=buildServiceExpedienteListPreview({servicio:sv,stops:svStops,nombreConductor});
                           const refVisible=getServiceNumber(sv);
                           const clienteDoc=getServiceClient(sv)||"—";
-                          const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs);
+                          const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs,flotaIncidenciasResumen);
                           const isArchived=archivedExpedienteIds.has(sv.id);
                           return(
                             <div key={sv.id} style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(132px,1fr))",gap:10,alignItems:"center",padding:"10px 11px",borderBottom:"1px solid #eef2f7"}}>

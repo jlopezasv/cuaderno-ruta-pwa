@@ -147,19 +147,16 @@ function stopDocumentSummary(evidencias) {
   const docs = Array.isArray(evidencias) ? evidencias : [];
   const cmr = docs.filter((ev) => ev?.tipo === "cmr").length;
   const fotos = docs.filter((ev) => ev?.tipo === "foto").length;
-  const incidencias = docs.filter((ev) => ev?.tipo === "incidencia").length;
-  const notas = docs.filter((ev) => ev?.tipo === "nota").length;
+  const incidencias = docs.filter((ev) => ev?.tipo === "incidencia" || ev?.incidencia_id).length;
   const labels = [];
-  if (cmr) labels.push(`${cmr} CMR`);
+  if (cmr) labels.push(`${cmr} documento${cmr === 1 ? "" : "s"}`);
   if (fotos) labels.push(`${fotos} foto${fotos === 1 ? "" : "s"}`);
   if (incidencias) labels.push(`${incidencias} incidencia${incidencias === 1 ? "" : "s"}`);
-  if (notas) labels.push(`${notas} observación${notas === 1 ? "" : "es"}`);
   return {
     total: docs.length,
     cmr,
     fotos,
     incidencias,
-    notas,
     label: labels.length ? labels.join(" · ") : "Sin documentos",
   };
 }

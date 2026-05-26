@@ -15,6 +15,8 @@ import {
 export const OPERATIONAL_UPLOAD_MAX_BYTES = 500 * 1024;
 export const OPERATIONAL_UPLOAD_MAX_EDGE = 1600;
 export const OPERATIONAL_UPLOAD_JPEG_QUALITY = 0.7;
+export const INCIDENT_UPLOAD_TARGET_BYTES = 100 * 1024;
+export const INCIDENT_UPLOAD_MAX_BYTES = 200 * 1024;
 
 const DEFAULT_MAX_BYTES = OPERATIONAL_UPLOAD_MAX_BYTES;
 const MAX_EDGE = OPERATIONAL_UPLOAD_MAX_EDGE;
@@ -137,6 +139,13 @@ export async function compressOperationalImageFile(
   } finally {
     releaseDecodedImage(decoded);
   }
+}
+
+export async function compressIncidentImageFile(file) {
+  return compressOperationalImageFile(file, {
+    maxBytes: INCIDENT_UPLOAD_MAX_BYTES,
+    initialQuality: 0.62,
+  });
 }
 
 /**

@@ -22,6 +22,7 @@ export async function uploadOperationalDocument(file, {
   tipo = "foto",
   context = {},
   processImage = true,
+  imageOptions = {},
 } = {}) {
   const traceOn = isOperationalDocTraceEnabled();
   const isFotoTipo = String(tipo || "").toLowerCase() === "foto";
@@ -98,7 +99,11 @@ export async function uploadOperationalDocument(file, {
       });
       await traceBlobColor("uploadOperationalDocument:foto_input", file, { tipo });
     }
-    const processed = await processOperationalDocumentImage(file, { documentMode: false, forUpload: true });
+    const processed = await processOperationalDocumentImage(file, {
+      documentMode: false,
+      forUpload: true,
+      ...(imageOptions || {}),
+    });
     if (traceOn) {
       await traceBlobColor("uploadOperationalDocument:foto_jpeg_blob", processed.previewBlob, { tipo });
     }
@@ -129,7 +134,11 @@ export async function uploadOperationalDocument(file, {
       });
     }
     mime = "image/jpeg";
-    const processed = await processOperationalDocumentImage(file, { documentMode, forUpload: true });
+    const processed = await processOperationalDocumentImage(file, {
+      documentMode,
+      forUpload: true,
+      ...(imageOptions || {}),
+    });
     const previewName = buildOperationalFileName(displayName, "jpg");
     if (traceOn) {
       await traceBlobColor("uploadOperationalDocument:preview_blob_before_storage", processed.previewBlob, {

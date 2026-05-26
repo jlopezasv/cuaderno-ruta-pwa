@@ -1,10 +1,9 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { getCurrentStop, countCompletedStops } from "../../domain/service/serviceStops.js";
 import {
   OPERATIONAL_GROUP_LABEL,
   computeTripOperationalMetrics,
-  incidenciaLinesForStop,
 } from "../../domain/service/tripOperationalDossier.js";
 import { getServicioOperativaTimelineForCard } from "../../domain/service/serviceExpediente.js";
 import {
@@ -18,6 +17,7 @@ import { flotaEvsSigForStops, stopsOperativaSig } from "./empresaFlotaRefresh.js
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
+import { sbFetch } from "../../data/supabaseClient.js";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -63,6 +63,8 @@ function nextPendingStop(stops) {
 }
 
 function incidenciasCountServicio(servicioId, flotaStops, flotaEvs) {
+  const sid = servicioId;
+  if (!sid) return 0;
   const stops = flotaStops[servicioId] || [];
   let n = 0;
   for (const st of stops) {
@@ -102,6 +104,8 @@ function EmpresaFlotaServicioCardImpl({
 
   const sinOp = servicioSinConductorOperacional(servicio);
   const puedeEditarAdmin = servicioAdminEditMode(servicio?.estado) != null;
+  const [incidenciasServicio, setIncidenciasServicio] = useState([]);
+  const [incFotosById, setIncFotosById] = useState({});
 
   const stopActual = getCurrentStop(stops);
   const nextStop = nextPendingStop(stops);
@@ -129,6 +133,36 @@ function EmpresaFlotaServicioCardImpl({
       }),
     [servicio, stops, nowMs, tacografoEstado, nextStop],
   );
+
+  useEffect(() => {
+    if (!expanded || !servicio?.id) return;
+    let cancelled = false;
+    (async () => {
+      const ir = await sbFetch(`/rest/v1/incidencias?servicio_id=eq.${servicio.id}&order=registrado_en.desc`);
+      const incs = ir.ok ? await ir.json().catch(() => []) : [];
+      if (cancelled) return;
+      const list = Array.isArray(incs) ? incs : [];
+      setIncidenciasServicio(list);
+      const ids = list.map((it) => it.id).filter(Boolean);
+      if (!ids.length) {
+        setIncFotosById({});
+        return;
+      }
+      const er = await sbFetch(`/rest/v1/evidencias?incidencia_id=in.(${ids.join(",")})&order=created_at.desc`);
+      const evs = er.ok ? await er.json().catch(() => []) : [];
+      if (cancelled) return;
+      const grouped = {};
+      for (const ev of Array.isArray(evs) ? evs : []) {
+        if (!ev?.incidencia_id) continue;
+        if (!grouped[ev.incidencia_id]) grouped[ev.incidencia_id] = [];
+        grouped[ev.incidencia_id].push(ev);
+      }
+      setIncFotosById(grouped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, servicio?.id]);
 
   const servicioReferencia = servicio?.referencia ?? "";
 
@@ -178,7 +212,8 @@ function EmpresaFlotaServicioCardImpl({
 
   const completados = countCompletedStops(stops);
   const progressLabel = stops.length ? `${completados}/${stops.length}` : "0/0";
-  const incNCompact = expanded ? incidenciasCountServicio(servicio.id, flotaStopsMap, flotaEvs) : 0;
+  const incResumen = Number(servicio?.incidencias_total || 0);
+  const incNCompact = expanded ? (incResumen || incidenciasCountServicio(servicio.id, flotaStopsMap, flotaEvs)) : incResumen;
   const serviceNumber = getServiceNumberForDisplay(servicio) || "—";
   const refClienteCompact = getServiceClientReference(servicio);
   const stateColor = ESTADO_COLOR[servicio.estado] || su;
@@ -490,6 +525,38 @@ function EmpresaFlotaServicioCardImpl({
               background: UI.surface,
               borderRadius: 10,
               padding: "12px 12px",
+              marginBottom: 10,
+              border: `1px solid ${UI.border}`,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, color: tx, marginBottom: 8 }}>
+              Incidencias ({incidenciasServicio.length})
+            </div>
+            {!incidenciasServicio.length ? (
+              <div style={{ fontSize: 12, color: su }}>Sin incidencias registradas.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {incidenciasServicio.map((inc) => {
+                  const fotos = incFotosById[inc.id] || [];
+                  return (
+                    <div key={inc.id} style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 9, padding: "8px 9px" }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "#9f1239" }}>{inc.titulo}</div>
+                      {inc.descripcion ? <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>{inc.descripcion}</div> : null}
+                      <div style={{ fontSize: 11, color: su, marginTop: 3 }}>
+                        {inc.fase_operativa || "—"} · {inc.servicio_estado || "—"} · Fotos {fotos.length}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              background: UI.surface,
+              borderRadius: 10,
+              padding: "12px 12px",
               marginBottom: 12,
               border: `1px solid ${UI.border}`,
             }}
@@ -565,7 +632,6 @@ function EmpresaFlotaServicioCardImpl({
               </div>
             ) : (
               dossierMetrics.perStop.map((row, idx) => {
-                const incLines = incidenciaLinesForStop(row.stop.id, flotaEvs);
                 const labelGroup = OPERATIONAL_GROUP_LABEL[row.group] || row.stop.tipo || "PARADA";
                 const titulo = `${labelGroup} — ${row.stop.nombre || "Sin nombre"}`;
                 return (
@@ -608,18 +674,6 @@ function EmpresaFlotaServicioCardImpl({
                         </span>
                       </div>
                     </div>
-                    {incLines.length > 0 ? (
-                      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${UI.border}` }}>
-                        <div style={{ fontSize: 10, color: su, fontWeight: 650, marginBottom: 4 }}>
-                          Incidencias
-                        </div>
-                        {incLines.map((t, j) => (
-                          <div key={j} style={{ fontSize: 12, color: UI.amber, lineHeight: 1.35 }}>
-                            {t}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
                 );
               })

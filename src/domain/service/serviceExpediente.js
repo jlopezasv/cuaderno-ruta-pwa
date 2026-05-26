@@ -260,8 +260,8 @@ function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
 }
 
 /**
- * Vista empresa / expediente: quita solo telemetría de tacógrafo (pausa, descanso, conducción, disponible…).
- * Conserva fotos, CMR, incidencias, notas y el resto de evidencias operativas.
+ * Vista empresa / expediente: quita telemetría de tacógrafo y evidencias documentales.
+ * La timeline operacional queda separada de incidencias/documentos.
  */
 function filterExpedienteTimelineOperacional(items, servicio) {
   const out = [];
@@ -450,9 +450,6 @@ export function buildServiceExpediente({
         detail: appendGeoToDetail(stop.label, stopMeta.entrada_geo),
         stopId: stop.id,
       });
-    }
-    for (const ev of stop.evidencias) {
-      timeline.push({ ts: ev.created_at, time: ev.hora, type: ev.tipo, title: ev.titulo, detail: ev.detalle, stopId: stop.id, evidenceId: ev.id });
     }
     if (stop.salida) {
       timeline.push({
