@@ -15,6 +15,7 @@ DO $$
 DECLARE
   v_owner uuid := 'a0000000-0000-4000-8000-000000000010';
   v_conductor uuid := 'a0000000-0000-4000-8000-000000000020';
+  v_autonomo uuid := 'a0000000-0000-4000-8000-000000000030';
   v_instance uuid := '00000000-0000-0000-0000-000000000000';
   v_pw text := crypt('DemoCuaderno2026!', gen_salt('bf'));
 BEGIN
@@ -60,6 +61,25 @@ BEGIN
     encrypted_password = EXCLUDED.encrypted_password,
     updated_at = now();
 
+  -- Autónomo PRO
+  INSERT INTO auth.users (
+    instance_id, id, aud, role, email, encrypted_password,
+    email_confirmed_at, recovery_sent_at, last_sign_in_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+    confirmation_token, email_change, email_change_token_new, recovery_token
+  ) VALUES (
+    v_instance, v_autonomo, 'authenticated', 'authenticated',
+    'demo-autonomo@cuaderno.test', v_pw,
+    now(), now(), now(),
+    '{"provider":"email","providers":["email"]}'::jsonb,
+    '{"nombre":"Laura Demo Autónomo PRO"}'::jsonb,
+    now(), now(), '', '', '', ''
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    encrypted_password = EXCLUDED.encrypted_password,
+    updated_at = now();
+
   -- Identidades email (Supabase Auth)
   IF to_regclass('auth.identities') IS NOT NULL THEN
     BEGIN
@@ -88,9 +108,22 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE 'auth.identities conductor: %', SQLERRM;
     END;
+    BEGIN
+      INSERT INTO auth.identities (
+        id, provider_id, user_id, identity_data, provider,
+        last_sign_in_at, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), v_autonomo::text, v_autonomo,
+        jsonb_build_object('sub', v_autonomo::text, 'email', 'demo-autonomo@cuaderno.test'),
+        'email', now(), now(), now()
+      )
+      ON CONFLICT DO NOTHING;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'auth.identities autonomo: %', SQLERRM;
+    END;
   END IF;
 
-  RAISE NOTICE 'Auth demo: demo-empresa@cuaderno.test / demo-conductor@cuaderno.test · pass DemoCuaderno2026!';
+  RAISE NOTICE 'Auth demo: empresa / conductor / autonomo @cuaderno.test · pass DemoCuaderno2026!';
 END $$;
 
 COMMIT;

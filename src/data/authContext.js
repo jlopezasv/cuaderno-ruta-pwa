@@ -1,3 +1,5 @@
+import { deriveFeatureFlags, isHybridCapabilities, parseProfileAccount } from "../auth/accountModel.js";
+
 const AUTH_SESSION_KEY = "cuaderno_auth_session_v2";
 const LEGACY_CONTEXT_KEY = "cuaderno_auth_context_v1";
 
@@ -6,10 +8,15 @@ export function normalizeActiveMode(mode) {
 }
 
 function normalizeCapabilities(caps = {}) {
+  const features =
+    caps.features && typeof caps.features === "object" ? { ...caps.features } : {};
   return {
-    conductor: caps.conductor !== false,
-    empresa: !!caps.empresa,
+    conductor: caps.conductor === true,
+    empresa: caps.empresa === true,
     admin: !!caps.admin,
+    accountType: caps.accountType ?? null,
+    empresaStatus: caps.empresaStatus ?? null,
+    features,
   };
 }
 
@@ -67,18 +74,30 @@ export function persistAuthSession({ uid, activeMode, capabilities }) {
   } catch {}
 }
 
-export function switchActiveMode(uid, activeMode) {
+export function switchActiveMode(uid, activeMode, account = null) {
   const session = getStoredAuthSession(uid);
   if (!session?.uid) return;
+  const caps = session.capabilities || {
+    conductor: true,
+    empresa: false,
+    admin: false,
+    features: {},
+  };
+  const acct =
+    account ||
+    (caps.accountType
+      ? { accountType: caps.accountType, canDrive: false, empresaStatus: caps.empresaStatus }
+      : null);
+  const features = acct ? deriveFeatureFlags(acct, normalizeActiveMode(activeMode)) : caps.features;
   persistAuthSession({
     uid: session.uid,
     activeMode,
-    capabilities: session.capabilities || { conductor: true, empresa: false, admin: false },
+    capabilities: { ...caps, features },
   });
 }
 
 export function isHybridSession(session) {
-  return !!session?.capabilities?.empresa && !!session?.capabilities?.conductor;
+  return isHybridCapabilities(session?.capabilities);
 }
 
 export function clearAuthContext() {
@@ -101,9 +120,7 @@ export function getStoredAuthContext(uid = null) {
   };
 }
 
-export function contextKindFromProfileTipo(tipoCuenta) {
-  return tipoCuenta === "empresa" ? "empresa" : "conductor";
-}
+export { contextKindFromAccountType as contextKindFromProfileTipo } from "../auth/accountModel.js";
 
 /** @deprecated Use persistAuthSession / bootstrapAuthSession */
 export function persistAuthContext(kind, uid) {
@@ -115,6 +132,7 @@ export function persistAuthContext(kind, uid) {
       conductor: true,
       empresa: kind === "empresa",
       admin: false,
+      features: {},
     },
   });
 }

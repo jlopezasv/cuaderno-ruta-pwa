@@ -9,6 +9,7 @@
 -- Login QA:
 --   Empresa:    demo-empresa@cuaderno.test    / DemoCuaderno2026!
 --   Conductor:  demo-conductor@cuaderno.test  / DemoCuaderno2026!
+--   Autónomo PRO: demo-autonomo@cuaderno.test / DemoCuaderno2026!
 --
 -- Idempotente: ON CONFLICT / upserts por UUID fijo.
 -- Sin dependencias del frontend.
@@ -20,6 +21,7 @@ BEGIN;
 -- Empresa     a0000000-0000-4000-8000-000000000001
 -- Owner       a0000000-0000-4000-8000-000000000010
 -- Conductor   a0000000-0000-4000-8000-000000000020
+-- Autónomo PRO a0000000-0000-4000-8000-000000000030
 -- Servicio A  a0000000-0000-4000-8000-000000000101  (creado CON conductor)
 -- Servicio B  a0000000-0000-4000-8000-000000000102  (sin conductor → asignado)
 -- Stop A1 carga    a0000000-0000-4000-8000-000000000201
@@ -148,10 +150,11 @@ BEGIN
     codigo_equipo = EXCLUDED.codigo_equipo;
 
   -- ─── 2 Perfiles ──────────────────────────────────────────────────────────
-  INSERT INTO public.profiles (id, nombre, tipo_cuenta, empresa, matricula, updated_at, is_archived, can_drive)
+  INSERT INTO public.profiles (id, nombre, tipo_cuenta, empresa, matricula, updated_at, is_archived, can_drive, empresa_status)
   VALUES
-    (v_owner, 'Ana Demo Empresa', 'empresa', 'Cuaderno Demo QA', NULL, v_now, false, true),
-    (v_conductor, 'Carlos Demo Conductor', 'conductor', 'Cuaderno Demo QA', '1234-DEMO', v_now, false, true)
+    (v_owner, 'Ana Demo Empresa', 'empresa', 'Cuaderno Demo QA', NULL, v_now, false, true, 'approved'),
+    (v_conductor, 'Carlos Demo Conductor', 'conductor', 'Cuaderno Demo QA', '1234-DEMO', v_now, false, false, NULL),
+    (v_autonomo, 'Laura Demo Autónomo PRO', 'autonomo_pro', NULL, '5678-DEMO', v_now, false, false, NULL)
   ON CONFLICT (id) DO UPDATE SET
     nombre = EXCLUDED.nombre,
     tipo_cuenta = EXCLUDED.tipo_cuenta,
@@ -159,7 +162,8 @@ BEGIN
     matricula = EXCLUDED.matricula,
     updated_at = v_now,
     is_archived = false,
-    can_drive = EXCLUDED.can_drive;
+    can_drive = EXCLUDED.can_drive,
+    empresa_status = EXCLUDED.empresa_status;
 
   -- ─── 3 conductor_empresa ───────────────────────────────────────────────────
   IF EXISTS (SELECT 1 FROM public.conductor_empresa WHERE empresa_id = v_empresa AND user_id = v_conductor) THEN

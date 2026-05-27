@@ -116,6 +116,8 @@ export const DEMO_LOGIN_HINT = Object.freeze({
 
   conductor: "demo-conductor@cuaderno.test",
 
+  autonomoPro: "demo-autonomo@cuaderno.test",
+
   password: "DemoCuaderno2026!",
 
 });

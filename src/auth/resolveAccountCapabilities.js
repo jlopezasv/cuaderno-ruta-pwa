@@ -1,44 +1,50 @@
 import { isPlatformAdminUid } from "../config/adminUsers.js";
+import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
+import {
+  buildSessionCapabilities,
+  deriveFeatureFlags,
+  deriveShellCapabilities,
+  isHybridCapabilities,
+  parseProfileAccount,
+} from "./accountModel.js";
 
-const OPERATOR_ACCOUNT_TYPES = new Set(["autonomo", "conductor"]);
-
-function isOperatorAccountType(tipoCuenta) {
-  return OPERATOR_ACCOUNT_TYPES.has(tipoCuenta || "autonomo");
-}
+export { isHybridCapabilities as isHybridAccount };
 
 export async function resolveAccountCapabilities(uid, sbSelect) {
   if (!uid) {
-    return { conductor: false, empresa: false, admin: false };
+    return {
+      conductor: false,
+      empresa: false,
+      admin: false,
+      accountType: null,
+      empresaStatus: null,
+      features: {},
+    };
   }
 
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const profile = profiles[0] || null;
-  const tipoCuenta = profile?.tipo_cuenta || "autonomo";
+  const account = parseProfileAccount(profile);
 
-  const capabilities = {
-    empresa: false,
-    conductor: false,
-    admin: isPlatformAdminUid(uid),
-  };
+  const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+  const hasFleetLink = rels.length > 0;
 
-  const ownerEmpresas = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
-  if (ownerEmpresas.length || tipoCuenta === "empresa") {
-    capabilities.empresa = true;
-  }
+  const shells = deriveShellCapabilities(account, {
+    hasFleetLink,
+    isDemo: isDemoApp(),
+    isProduction: isProductionApp(),
+  });
 
-  if (isOperatorAccountType(tipoCuenta)) {
-    capabilities.conductor = true;
-  } else if (profile?.can_drive === true) {
-    capabilities.conductor = true;
-  } else {
-    const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
-    if (rels.length) {
-      capabilities.conductor = true;
-    }
-  }
+  const admin = isPlatformAdminUid(uid);
 
-  return capabilities;
+  return buildSessionCapabilities({
+    account,
+    shells,
+    admin,
+    activeMode: "conductor",
+    features: deriveFeatureFlags(account, "conductor"),
+  });
 }
 
 export function resolveActiveMode(capabilities, cachedMode = null) {
@@ -49,19 +55,32 @@ export function resolveActiveMode(capabilities, cachedMode = null) {
     return "empresa";
   }
   if (capabilities.empresa) return "empresa";
+  if (capabilities.conductor) return "conductor";
   return "conductor";
 }
 
-export function isHybridAccount(capabilities) {
-  return !!capabilities?.empresa && !!capabilities?.conductor;
-}
-
 export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
-  const capabilities = await resolveAccountCapabilities(uid, sbSelect);
+  const base = await resolveAccountCapabilities(uid, sbSelect);
   const cached = options.preferMode ?? getStoredAuthSession(uid)?.activeMode ?? null;
-  const activeMode = resolveActiveMode(capabilities, cached);
+  let activeMode = resolveActiveMode(base, cached);
+
+  if (activeMode === "empresa" && !base.empresa) {
+    activeMode = base.conductor ? "conductor" : "conductor";
+  }
+  if (activeMode === "conductor" && !base.conductor && base.empresa) {
+    activeMode = "empresa";
+  }
+
+  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
+  const account = parseProfileAccount(profiles[0] || null);
+  const features = deriveFeatureFlags(account, activeMode);
+
+  const capabilities = {
+    ...base,
+    features,
+  };
 
   persistAuthSession({ uid, activeMode, capabilities });
 
-  return { capabilities, activeMode };
+  return { capabilities, activeMode, account };
 }

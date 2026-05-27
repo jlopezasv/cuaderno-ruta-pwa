@@ -35,8 +35,16 @@ import {
   isHybridSession,
 } from "./data/authContext";
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
+import {
+  ACCOUNT_TYPES,
+  FEATURE_KEYS,
+  hasFeature,
+  isEmpresaPendingBlocked,
+  registrationProfilePayload,
+} from "./auth/accountModel.js";
 import { isPlatformAdminUid } from "./config/adminUsers.js";
 import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
+import { EmpresaPendingScreen } from "./ui/EmpresaPendingScreen.jsx";
 import { getPushClientContext, initFcmPush } from "./data/fcmPush";
 import {
   ESTADO_COLOR,
@@ -366,7 +374,7 @@ function AuthScreen({ onAuth }) {
     if (mode === "register") {
       if (!allowRegister) { setError("Registro desactivado en este entorno"); return; }
       if (!nombre.trim()) { setError("El nombre es obligatorio"); return; }
-      if (!tipo) { setError("Indica si eres conductor/autónomo o empresa"); return; }
+      if (!tipo) { setError("Elige tu tipo de cuenta: Conductor, Autónomo PRO o Empresa"); return; }
       if (!pwdOk) { setError("La contraseña no cumple los requisitos"); return; }
       if (password !== password2) { setError("Las contraseñas no coinciden"); return; }
     }
@@ -387,8 +395,7 @@ function AuthScreen({ onAuth }) {
           body: JSON.stringify({
             id: uid,
             nombre: nombre.trim(),
-            tipo_cuenta: tipo,
-            can_drive: tipo === "empresa" ? false : true,
+            ...registrationProfilePayload(tipo),
           }),
         });
         if (!profRes.ok) {
@@ -448,6 +455,7 @@ function AuthScreen({ onAuth }) {
           <div style={{ fontSize:12, fontWeight:800, color:STATE_TONES.info.fg, marginBottom:6 }}>Entorno demo aislado</div>
           <div style={{ fontSize:11, color:"#334155", lineHeight:1.5 }}>
             Empresa: <strong>{DEMO_LOGIN_HINT.empresa}</strong><br/>
+            Autónomo PRO: <strong>{DEMO_LOGIN_HINT.autonomoPro}</strong><br/>
             Conductor: <strong>{DEMO_LOGIN_HINT.conductor}</strong><br/>
             Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong>
           </div>
@@ -479,10 +487,11 @@ function AuthScreen({ onAuth }) {
         {mode === "register" && (
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:8, fontFamily:"sans-serif" }}>¿QUIÉN ERES?</div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:8 }}>
               {[
-                {id:"autonomo", icon:"◉", title:"Conductor / Autónomo", sub:"Un solo conductor"},
-                {id:"empresa",  icon:"◇", title:"Empresa de transporte", sub:"Varios conductores"},
+                {id:ACCOUNT_TYPES.CONDUCTOR, icon:"◎", title:"Conductor", sub:"Servicios asignados por tu empresa"},
+                {id:ACCOUNT_TYPES.AUTONOMO_PRO, icon:"◉", title:"Autónomo PRO", sub:"Tus servicios y documentación propia"},
+                {id:ACCOUNT_TYPES.EMPRESA, icon:"◇", title:"Empresa", sub:"Gestión de flota y equipo"},
               ].map(({id,icon,title,sub})=>(
                 <button key={id} onClick={()=>setTipo(id)}
                   style={{ background:tipo===id?"#F59E0B15":"#0F172A", border:`2px solid ${tipo===id?"#F59E0B":"#334155"}`, borderRadius:10, padding:"12px 8px", cursor:"pointer", textAlign:"center" }}>
@@ -595,7 +604,7 @@ function AuthScreen({ onAuth }) {
   );
 }
 const KM_KEY="cuaderno_km_v1";
-const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:"",tipo_cuenta:"autonomo",canDrive:false};
+const PROF0={nombre:"",dni:"",empresa:"",matricula:"",remolque:"",tipoVehiculo:"articulado",licencia:"",paisBase:"ES",ccaa:"AN",abroadNow:false,tipoServicio:"nacional",lang:"es",cif:"",direccion:"",telefono:"",emailEmpresa:"",cp:"",ciudad:"",tipo_cuenta:ACCOUNT_TYPES.CONDUCTOR,canDrive:false};
 
 // Símbolos oficiales tacógrafo EU (renderizados como SVG inline en los botones)
 // ⊙ conducción · ⊓ pausa/descanso · ⊠ disponibilidad · ✱ otros trabajos
@@ -2107,7 +2116,7 @@ function AppInner(){
       }
       if(profRows.length){
         const p=profRows[0];
-        setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||"",tipo_cuenta:p.tipo_cuenta||"autonomo",canDrive:!!p.can_drive}));
+        setProf(prev=>({...prev,nombre:p.nombre||"",dni:p.dni||"",empresa:p.empresa||"",matricula:p.matricula||"",remolque:p.remolque||"",tipoVehiculo:p.tipo_vehiculo||"articulado",licencia:p.licencia||"",paisBase:p.pais_base||"ES",tipoServicio:p.tipo_servicio||"nacional",lang:p.lang||"es",cif:p.cif||"",direccion:p.direccion||"",telefono:p.telefono||"",emailEmpresa:p.email_empresa||"",cp:p.cp||"",ciudad:p.ciudad||"",tipo_cuenta:p.tipo_cuenta||ACCOUNT_TYPES.CONDUCTOR,canDrive:!!p.can_drive}));
       }
       const entRows=await sbSelect("entries",`user_id=eq.${uid}&limit=5000&order=ts.asc`);
       const sbEntries=entRows.map(r=>({
@@ -3050,6 +3059,13 @@ function AppInner(){
   const authSession=getStoredAuthSession(getUserId());
   const showModeSwitch=isHybridSession(authSession);
   const isAdmin=!!authSession?.capabilities?.admin;
+  const canCreateServices=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_CREATE_SERVICES);
+  const canViewAdvancedDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS);
+  const canViewEnterpriseDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS);
+  const showEmpresaPendingBanner=
+    authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
+    authSession?.capabilities?.empresaStatus==="pending"&&
+    !authSession?.capabilities?.empresa;
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3097,6 +3113,12 @@ function AppInner(){
           </button>}
         </div>
       </header>
+
+      {showEmpresaPendingBanner&&(
+        <div style={{background:"#422006",borderBottom:"1px solid #92400E",padding:"10px 16px",fontSize:13,color:"#FDE68A",lineHeight:1.45}}>
+          Tu cuenta empresa está en revisión. Puedes operar como conductor; el panel de gestión estará disponible tras la validación.
+        </div>
+      )}
 
       {/* Banner trial — desactivado hasta activar pagos */}
       {false&&subStatus?.status==="trial"&&subStatus.days_left<=5&&(
@@ -3200,7 +3222,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal}/>
+          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} canCreateServices={canCreateServices}/>
         )}
 
         {tab==="resumen"&&(
@@ -3321,16 +3343,20 @@ function AppInner(){
                     <div style={{fontSize:16,fontWeight:800,color:"#22C55E",letterSpacing:.3}}>Gastos</div>
                     <div style={{fontSize:12,color:docsUi.muted,marginTop:6,lineHeight:1.4}}>Consultar combustible, peajes y dietas</div>
                   </button>
+                  {canViewAdvancedDocs&&(
                   <button onClick={()=>setDocsTab("documentos")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:28,marginBottom:6}}>📄</div>
                     <div style={{fontSize:14,fontWeight:800,color:"#3B82F6"}}>Plantillas</div>
                     <div style={{fontSize:11,color:docsUi.muted,marginTop:4,lineHeight:1.35}}>Partes e informes guardados</div>
                   </button>
+                  )}
+                  {canViewEnterpriseDocs&&(
                   <button onClick={()=>setDocsTab("empresa_home")} style={{background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:18,padding:"20px 12px",cursor:"pointer",textAlign:"center",boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                     <div style={{fontSize:28,marginBottom:6}}>🏢</div>
                     <div style={{fontSize:14,fontWeight:800,color:"#F59E0B"}}>Empresa</div>
                     <div style={{fontSize:11,color:docsUi.muted,marginTop:4,lineHeight:1.35}}>Cargas e informes de empresa</div>
                   </button>
+                  )}
                 </div>
                 <button onClick={()=>setDocsTab("km")} style={{width:"100%",background:docsUi.card,border:`1px solid ${docsUi.border}`,borderRadius:14,padding:"16px",cursor:"pointer",display:"flex",alignItems:"center",gap:14,marginBottom:8,boxShadow:"0 3px 10px rgba(15,23,42,.06)"}}>
                   <span style={{fontSize:28}}>🛣️</span>
@@ -7712,7 +7738,7 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
       return;
     }
     sbSelect("profiles",`id=eq.${uid}`).then(rows=>{
-      const tc=rows[0]?.tipo_cuenta||"autonomo";
+      const tc=rows[0]?.tipo_cuenta||ACCOUNT_TYPES.CONDUCTOR;
       setTipoCuenta(tc);
       if(tc==="empresa"){
         sbSelect("empresas",`owner_id=eq.${uid}`).then(emps=>{
@@ -7721,11 +7747,8 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
         }).catch(()=>setLoading(false));
       } else setLoading(false);
     }).catch(()=>{
-      sbSelect("empresas",`owner_id=eq.${getUserId()}`).then(emps=>{
-        if(emps.length){setTipoCuenta("empresa");setEmpresa(emps[0]);}
-        else setTipoCuenta("autonomo");
-        setLoading(false);
-      }).catch(()=>{setTipoCuenta("autonomo");setLoading(false);});
+      setTipoCuenta(ACCOUNT_TYPES.CONDUCTOR);
+      setLoading(false);
     });
   },[tipoCuentaProp]);
 
@@ -12721,15 +12744,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         window.location.reload();
         return;
       }
-      const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-      if(emps.length){
+      const isEmpresaAccount=perfilesSelf[0]?.tipo_cuenta===ACCOUNT_TYPES.EMPRESA;
+      const emps=isEmpresaAccount?await sbSelect("empresas",`owner_id=eq.${uid}`):[];
+      if(emps.length&&isEmpresaAccount){
         setEmpresa(emps[0]);setModo("jefe");
         onRoleChange?.("jefe");
         await loadConductores(emps[0].id);
         return;
       }
       const relsAll=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-      if(perfilesSelf[0]?.tipo_cuenta==="empresa"){
+      if(isEmpresaAccount){
         setModo("crear_empresa");
         setLoading(false);
         return;
@@ -16412,7 +16436,7 @@ function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
 // ─────────────────────────────────────────────────────────────
 //  CREAR SERVICIO PROPIO — con pasos y geocodificación
 // ─────────────────────────────────────────────────────────────
-function CrearServicioModal({uid,onClose,onCreado}){
+function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
@@ -16460,27 +16484,18 @@ function CrearServicioModal({uid,onClose,onCreado}){
     setSaving(true);setError("");
     try{
       const srData=await crearServicioConIdentidad({
-        conductor_id:null,
-        estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
+        conductor_id:uid,
+        estado:"asignado",
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
         fecha_inicio:new Date(fechaInicio).toISOString(),
+        _debugSource:"CrearServicioModal.autonomoPro",
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      const assignResult=await asignarConductorEnServicioCreado({
-        servicioId:sv.id,
-        servicio:sv,
-        conductorId:uid,
-        conductorNombre:"Conductor",
-        origen:origen.trim(),
-        destino:destino.trim(),
-        fechaInicio:new Date(fechaInicio).toISOString(),
-        skipEnsureStops:true,
-      });
       await persistServicioStopsTrasCrear({
         servicioId:sv.id,
         stops,
@@ -16489,7 +16504,7 @@ function CrearServicioModal({uid,onClose,onCreado}){
         logTag:"CrearServicioModal",
       });
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-      onCreado(mergeServicioTrasAsignacion(sv,assignResult,uid));
+      onCreado(sv);
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
@@ -17249,7 +17264,7 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal}){
+const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false}){
   const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
@@ -17317,10 +17332,16 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
       <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",marginBottom:16,boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
         <div style={{fontSize:12,fontWeight:800,color:"#64748B",letterSpacing:.8,marginBottom:10}}>SERVICIO</div>
         <div style={{fontSize:18,fontWeight:750,color:tx,marginBottom:6}}>Sin servicio activo</div>
-        <div style={{fontSize:14,color:su,lineHeight:1.6,marginBottom:24}}>Crea tu propio servicio o espera<br/>a que tu empresa te asigne uno.</div>
+        <div style={{fontSize:14,color:su,lineHeight:1.6,marginBottom:24}}>
+          {canCreateServices
+            ?<>Crea tu propio servicio o espera<br/>a que te asignen uno.</>
+            :<>Espera a que tu empresa<br/>te asigne un servicio.</>}
+        </div>
+        {canCreateServices&&(
         <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Crear servicio</button>
+        )}
       </div>
-      {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </div>
   );
 
@@ -17337,9 +17358,11 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
           <div style={{fontSize:14,color:su,marginBottom:8}}>{servicio.origen} → {servicio.destino}</div>
           {cerradoLabel?<div style={{fontSize:12,color:su,marginBottom:20}}>Cerrado {cerradoLabel}</div>:null}
           {cierre?.comentario?<div style={{fontSize:13,color:tx,textAlign:"left",background:"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:16,lineHeight:1.45}}>{cierre.comentario}</div>:null}
+          {canCreateServices&&(
           <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
+          )}
         </div>
-        {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+        {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
       </div>
     );
   }
@@ -17369,7 +17392,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         conductorNombre={conductorNombre}
         norma={norma}
       />
-      {creando&&<CrearServicioModal uid={uid} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>
     );
   }
@@ -17724,12 +17747,17 @@ export default function App(){
   // Elegir shell según modo activo (revalidado contra backend)
   const[activeMode,setActiveMode]=useState(null);
   const[checking,setChecking]=useState(true);
+  const[pendingBlocked,setPendingBlocked]=useState(false);
+  const[pendingStatus,setPendingStatus]=useState(null);
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setChecking(false);return;}
     bootstrapAuthSession(uid,sbSelect)
-      .then(({activeMode:mode})=>{
+      .then(({activeMode:mode,account,capabilities})=>{
+        const shells={conductor:!!capabilities?.conductor,empresa:!!capabilities?.empresa};
+        setPendingBlocked(isEmpresaPendingBlocked(account,shells));
+        setPendingStatus(account?.empresaStatus||null);
         setActiveMode(mode);
         setChecking(false);
       })
@@ -17745,9 +17773,18 @@ export default function App(){
     </div>
   );
 
+  if(pendingBlocked){
+    return (
+      <EmpresaPendingScreen
+        empresaStatus={pendingStatus}
+        onSignOut={async()=>{await sbSignOut();window.location.reload();}}
+      />
+    );
+  }
+
   if(import.meta.env.DEV){
     const session=getStoredAuthSession(getUserId());
-    console.log("[AUTH-1] App shell",{
+    console.log("[PRODUCT-1] App shell",{
       activeMode,
       capabilities:session?.capabilities||null,
       renderiza:activeMode==="empresa"?"EmpresaLayout":"AppInner",

@@ -42,8 +42,10 @@ export default function EmpresaLayout({
     }
     const session = getStoredAuthSession(uid);
     if (session && !session.capabilities?.empresa) {
-      switchActiveMode(uid, "conductor");
-      window.location.reload();
+      if (session.capabilities?.conductor) {
+        switchActiveMode(uid, "conductor");
+        window.location.reload();
+      }
       return;
     }
     sbSelect("profiles", `id=eq.${uid}`)
@@ -112,7 +114,6 @@ export default function EmpresaLayout({
 
   const authSession = getStoredAuthSession(getUserId());
   const showModeSwitch = isHybridSession(authSession);
-
   if (!loaded)
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f1f5f9" }}>
