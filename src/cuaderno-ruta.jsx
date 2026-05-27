@@ -11727,6 +11727,7 @@ async function crearServicioConIdentidad({
     estado: basePayload.estado,
   });
   const { empresa_id: empresaId, conductor_id: conductorId, estado: resolvedEstado } = insertCtx;
+  const empresaIdRaw = basePayload.empresa_id;
   const corePayload = {
     empresa_id: empresaId,
     conductor_id: conductorId,
