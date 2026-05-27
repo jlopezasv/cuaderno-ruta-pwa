@@ -36,6 +36,28 @@ export async function fetchDebugServicioInsertRlsContext({
 }
 
 /**
+ * @param {object|null|undefined} data
+ * @returns {string}
+ */
+export function formatServicioRlsDiagSummary(data) {
+  if (!data || typeof data !== "object") return "sin_datos_rpc";
+  const b = data.autonomo_branch_checks || {};
+  const policies = Array.isArray(data.insert_policies) ? data.insert_policies : [];
+  const policyNames = policies.map((p) => p.name).filter(Boolean).join(",") || "ninguna";
+  return [
+    `can_insert=${data.user_can_insert_servicio}`,
+    `is_autonomo_pro=${data.user_profile_is_autonomo_pro}`,
+    `tipo_cuenta=${data.tipo_cuenta_invoker ?? "null"}`,
+    `profile_exists=${data.profile_exists_invoker}`,
+    `auth_uid_pg=${data.auth_uid ?? "null"}`,
+    `auth_role=${data.auth_role ?? "null"}`,
+    `jwt_sub=${data.jwt_sub ?? "null"}`,
+    `insert_policies=${policyNames}`,
+    `branch=${JSON.stringify(b)}`,
+  ].join(" | ");
+}
+
+/**
  * @param {string} label
  * @param {{ empresaId?: string|null, conductorId?: string|null }} params
  */

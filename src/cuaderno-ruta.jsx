@@ -23,7 +23,10 @@ import {
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
-import { logDebugServicioInsertRlsContext } from "./data/debugServicioInsertRls.js";
+import {
+  fetchDebugServicioInsertRlsContext,
+  formatServicioRlsDiagSummary,
+} from "./data/debugServicioInsertRls.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -11805,19 +11808,29 @@ async function crearServicioConIdentidad({
     throw new Error(msg);
   }
 
+  let pgRlsPreCheck = null;
   if (SERVICE_INSERT_RLS_DIAG) {
-    const rlsDiag = await logDebugServicioInsertRlsContext(
-      _debugSource || "crearServicioConIdentidad.pre_insert",
+    const rlsDiag = await fetchDebugServicioInsertRlsContext(
       { empresaId, conductorId },
+    );
+    pgRlsPreCheck = rlsDiag;
+    console.warn(
+      `[SERVICE_INSERT_RLS_DIAG] ${_debugSource || "crearServicioConIdentidad.pre_insert"}`,
+      rlsDiag,
     );
     if (!rlsDiag.ok) {
       console.warn(
-        "[SERVICE_INSERT_RLS_DIAG] RPC no disponible — aplica migración 20260530120000 en Supabase:",
+        "[SERVICE_INSERT_RLS_DIAG] RPC no disponible — reaplica debug_servicio_insert_rls_context en Supabase:",
         rlsDiag.error,
       );
-    } else if (rlsDiag.data && rlsDiag.data.user_can_insert_servicio === false) {
+    } else if (rlsDiag.data?.user_can_insert_servicio === false) {
       console.warn(
         "[SERVICE_INSERT_RLS_DIAG] Postgres rechazaría INSERT (user_can_insert_servicio=false):",
+        rlsDiag.data,
+      );
+    } else if (rlsDiag.data?.user_can_insert_servicio === true) {
+      console.warn(
+        "[SERVICE_INSERT_RLS_DIAG] user_can_insert_servicio=TRUE pero INSERT puede fallar por policies duplicadas/legacy — revisa insert_policies",
         rlsDiag.data,
       );
     }
@@ -11870,15 +11883,22 @@ async function crearServicioConIdentidad({
       payloadJson: JSON.stringify(corePayload),
     };
     console.warn("SERVICE_CREATE_RLS_42501", rlsDiag);
-    if (SERVICE_INSERT_RLS_DIAG) {
-      await logDebugServicioInsertRlsContext("crearServicioConIdentidad.post_42501", {
+    let pgSummary = pgRlsPreCheck?.data
+      ? formatServicioRlsDiagSummary(pgRlsPreCheck.data)
+      : null;
+    if (!pgSummary && SERVICE_INSERT_RLS_DIAG) {
+      const postDiag = await fetchDebugServicioInsertRlsContext({
         empresaId: corePayload.empresa_id,
         conductorId: corePayload.conductor_id,
       });
+      pgSummary = postDiag.data
+        ? formatServicioRlsDiagSummary(postDiag.data)
+        : postDiag.error || "RPC falló";
+      console.warn("[SERVICE_INSERT_RLS_DIAG] post_42501", postDiag);
     }
     throw new Error(
       `Permisos insuficientes (RLS 42501). conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
-        "Comprueba profiles.tipo_cuenta=autonomo_pro o vuelve a iniciar sesión.",
+        `Postgres: ${pgSummary ?? "sin RPC"}.`,
     );
   }
   throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
