@@ -23,6 +23,7 @@ import {
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
+import { logDebugServicioInsertRlsContext } from "./data/debugServicioInsertRls.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -11692,6 +11693,8 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
 
 /** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
 const SERVICE_CREATE_DEBUG=false;
+/** TEMP: RPC Postgres con JWT real antes del INSERT (migración debug_servicio_insert_rls_context). */
+const SERVICE_INSERT_RLS_DIAG=true;
 function logServiceCreate(tag,payload){
   if(!SERVICE_CREATE_DEBUG)return;
   const line=`[${tag}]`;
@@ -11802,6 +11805,24 @@ async function crearServicioConIdentidad({
     throw new Error(msg);
   }
 
+  if (SERVICE_INSERT_RLS_DIAG) {
+    const rlsDiag = await logDebugServicioInsertRlsContext(
+      _debugSource || "crearServicioConIdentidad.pre_insert",
+      { empresaId, conductorId },
+    );
+    if (!rlsDiag.ok) {
+      console.warn(
+        "[SERVICE_INSERT_RLS_DIAG] RPC no disponible — aplica migración 20260530120000 en Supabase:",
+        rlsDiag.error,
+      );
+    } else if (rlsDiag.data && rlsDiag.data.user_can_insert_servicio === false) {
+      console.warn(
+        "[SERVICE_INSERT_RLS_DIAG] Postgres rechazaría INSERT (user_can_insert_servicio=false):",
+        rlsDiag.data,
+      );
+    }
+  }
+
   let res;
   try{
     res=await sbFetch("/rest/v1/servicios", {
@@ -11849,6 +11870,12 @@ async function crearServicioConIdentidad({
       payloadJson: JSON.stringify(corePayload),
     };
     console.warn("SERVICE_CREATE_RLS_42501", rlsDiag);
+    if (SERVICE_INSERT_RLS_DIAG) {
+      await logDebugServicioInsertRlsContext("crearServicioConIdentidad.post_42501", {
+        empresaId: corePayload.empresa_id,
+        conductorId: corePayload.conductor_id,
+      });
+    }
     throw new Error(
       `Permisos insuficientes (RLS 42501). conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
         "Comprueba profiles.tipo_cuenta=autonomo_pro o vuelve a iniciar sesión.",
