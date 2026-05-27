@@ -27,6 +27,12 @@ import {
   fetchDebugServicioInsertRlsContext,
   formatServicioRlsDiagSummary,
 } from "./data/debugServicioInsertRls.js";
+import {
+  assertPostgrestOk,
+  formatServiceCreateStepError,
+  parsePostgrestError,
+  traceServiceCreateStep,
+} from "./domain/service/serviceCreateStepTrace.js";
 import DemoServicioInsertRlsPanel from "./components/DemoServicioInsertRlsPanel.jsx";
 import {
   loadLocalDb as loadDB,
@@ -11659,6 +11665,8 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   console.warn(`[OP3] create stops failed (${logTag})`,{
     servicioId,
     status:result.status,
+    pgTable:result.pgTable,
+    pgCode:result.pgCode,
     detail:String(result.detail||"").slice(0,400),
   });
   try{
@@ -11671,7 +11679,12 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
       error:fallbackErr?.message||fallbackErr,
     });
   }
-  throw new Error(result.error||"No se pudieron crear las paradas del servicio");
+  const err=new Error(result.error||"No se pudieron crear las paradas del servicio");
+  err.stepId="INSERT stops";
+  err.pgTable=result.pgTable||"stops";
+  err.pgCode=result.pgCode||"";
+  err.raw=result.detail||null;
+  throw err;
 }
 
 async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,referenciaCliente,referencia}){
@@ -11690,11 +11703,31 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
   });
   if(res.ok)return;
   const t=await res.text().catch(()=>"");
-  if(!/service_number|referencia_cliente|cliente|column|schema|PGRST/i.test(t))return;
-  await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{
+  if(!/service_number|referencia_cliente|cliente|column|schema|PGRST/i.test(t)){
+    const parsed=parsePostgrestError(t);
+    if(parsed.code==="42501"){
+      const err=new Error(`RLS 42501 en "${parsed.table||"servicios"}" [PATCH servicios identidad]: ${parsed.message||t}`);
+      err.stepId="PATCH servicios.identidad";
+      err.pgTable=parsed.table||"servicios";
+      err.pgCode="42501";
+      throw err;
+    }
+    return;
+  }
+  const res2=await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{
     method:"PATCH",
     body:JSON.stringify({referencia}),
-  }).catch(()=>{});
+  });
+  if(res2.ok)return;
+  const t2=await res2.text().catch(()=>"");
+  const parsed2=parsePostgrestError(t2);
+  if(parsed2.code==="42501"){
+    const err=new Error(`RLS 42501 en "${parsed2.table||"servicios"}" [PATCH servicios referencia]: ${parsed2.message||t2}`);
+    err.stepId="PATCH servicios.referencia";
+    err.pgTable=parsed2.table||"servicios";
+    err.pgCode="42501";
+    throw err;
+  }
 }
 
 /** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
@@ -11862,7 +11895,11 @@ async function crearServicioConIdentidad({
       estado_en_respuesta:row?.estado??null,
     });
     if(row?.id&&(referenciaBase||cliente?.trim()||referenciaCliente?.trim())){
-      await patchServicioIdentidadOpcional(row.id,{serviceNumber,cliente,referenciaCliente,referencia});
+      await traceServiceCreateStep(
+        "PATCH servicios.identidad",
+        { servicioId: row.id },
+        () => patchServicioIdentidadOpcional(row.id,{serviceNumber,cliente,referenciaCliente,referencia}),
+      );
     }
     return result;
   }
@@ -11873,6 +11910,7 @@ async function crearServicioConIdentidad({
     errJson = JSON.parse(errText);
   } catch (_) {}
   const errCode = errJson?.code || "";
+  const parsedErr = parsePostgrestError(errText);
   if (res.status === 401 || !getAccessToken()) {
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
@@ -11884,6 +11922,7 @@ async function crearServicioConIdentidad({
       empresa_id: corePayload.empresa_id,
       conductor_id: corePayload.conductor_id,
       payloadJson: JSON.stringify(corePayload),
+      pgTable: parsedErr.table,
     };
     console.warn("SERVICE_CREATE_RLS_42501", rlsDiag);
     let pgSummary = pgRlsPreCheck?.data
@@ -11899,12 +11938,19 @@ async function crearServicioConIdentidad({
         : postDiag.error || "RPC falló";
       console.warn("[SERVICE_INSERT_RLS_DIAG] post_42501", postDiag);
     }
-    throw new Error(
-      `Permisos insuficientes (RLS 42501). conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
-        `Postgres: ${pgSummary ?? "sin RPC"}.`,
+    const rpcSaysOk = pgRlsPreCheck?.data?.user_can_insert_servicio === true;
+    const err = new Error(
+      `RLS 42501 en "${parsedErr.table || "servicios"}" [POST servicios]. ` +
+        `conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
+        `Postgres: ${pgSummary ?? "sin RPC"}.` +
+        (rpcSaysOk ? " RPC can_insert=true: si ves esto tras crear servicio, el fallo real puede ser un paso posterior (stops/PATCH)." : ""),
     );
+    err.stepId = "POST servicios";
+    err.pgTable = parsedErr.table || "servicios";
+    err.pgCode = "42501";
+    throw err;
   }
-  throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
+  await assertPostgrestOk(res, "POST servicios", "servicios");
 }
 
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
@@ -16553,41 +16599,53 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
     setSaving(true);setError("");
     try{
       const fechaIso=new Date(fechaInicio).toISOString();
-      const srData=await crearServicioConIdentidad({
-        ownershipMode:SERVICIO_OWNERSHIP.AUTONOMO_PRO,
-        uid:authUid,
-        conductor_id:authUid,
-        origen:origen.trim(),
-        destino:destino.trim(),
-        serviceNumber:ref.trim(),
-        cliente:cliente.trim(),
-        referenciaCliente:refCliente.trim(),
-        fecha_inicio:fechaIso,
-        _debugSource:"CrearServicioModal.autonomoPro",
-      });
+      const srData=await traceServiceCreateStep(
+        "POST servicios",
+        { ownershipMode: "autonomo_pro", authUid },
+        () => crearServicioConIdentidad({
+          ownershipMode:SERVICIO_OWNERSHIP.AUTONOMO_PRO,
+          uid:authUid,
+          conductor_id:authUid,
+          origen:origen.trim(),
+          destino:destino.trim(),
+          serviceNumber:ref.trim(),
+          cliente:cliente.trim(),
+          referenciaCliente:refCliente.trim(),
+          fecha_inicio:fechaIso,
+          _debugSource:"CrearServicioModal.autonomoPro",
+        }),
+      );
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      await persistServicioStopsTrasCrear({
-        servicioId:sv.id,
-        stops,
-        origen:origen.trim(),
-        destino:destino.trim(),
-        logTag:"CrearServicioModal",
-      });
-      const referenciaBoot=await bootstrapOperationalFlowOnConductorAssign({
-        servicio:sv,
-        conductorId:authUid,
-        conductorNombre:conductorNombre||"Conductor",
-        origen:origen.trim(),
-        destino:destino.trim(),
-        fechaInicio:fechaIso,
-        persist:true,
-        dispatchRecarga:false,
-      });
+      await traceServiceCreateStep(
+        "INSERT stops",
+        { servicioId: sv.id, stopCount: stops.length },
+        () => persistServicioStopsTrasCrear({
+          servicioId:sv.id,
+          stops,
+          origen:origen.trim(),
+          destino:destino.trim(),
+          logTag:"CrearServicioModal",
+        }),
+      );
+      const referenciaBoot=await traceServiceCreateStep(
+        "PATCH servicios.bootstrap",
+        { servicioId: sv.id },
+        () => bootstrapOperationalFlowOnConductorAssign({
+          servicio:sv,
+          conductorId:authUid,
+          conductorNombre:conductorNombre||"Conductor",
+          origen:origen.trim(),
+          destino:destino.trim(),
+          fechaInicio:fechaIso,
+          persist:true,
+          dispatchRecarga:false,
+        }),
+      );
       const svFinal={...sv,conductor_id:authUid,estado:"asignado",referencia:referenciaBoot||sv.referencia};
       void sendAssignmentPush({conductorId:authUid,origen,destino,fechaInicio,servicioId:sv.id});
       onCreado(svFinal);
-    }catch(e){setError("Error: "+e.message);}
+    }catch(e){setError("Error: "+formatServiceCreateStepError(e));}
     finally{setSaving(false);}
   }
 

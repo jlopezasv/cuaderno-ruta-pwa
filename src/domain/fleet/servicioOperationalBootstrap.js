@@ -1,4 +1,5 @@
 import { sbFetch } from "../../data/supabaseClient.js";
+import { parsePostgrestError } from "../service/serviceCreateStepTrace.js";
 import { geocode, getRoute, buildPlan, fmtDur } from "../route/routePlanning.js";
 import { formatOperationalEtaLabel } from "../service/etaFormatter.js";
 import {
@@ -191,7 +192,16 @@ export async function bootstrapOperationalFlowOnConductorAssign({
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(t || `No se pudo persistir referencia operativa (${res.status})`);
+    const parsed = parsePostgrestError(t);
+    const err = new Error(
+      parsed.code === "42501"
+        ? `RLS 42501 en "${parsed.table || "servicios"}" [PATCH servicios.bootstrap]: ${parsed.message || t}`
+        : t || `No se pudo persistir referencia operativa (${res.status})`,
+    );
+    err.stepId = "PATCH servicios.bootstrap";
+    err.pgTable = parsed.table || "servicios";
+    err.pgCode = parsed.code || "";
+    throw err;
   }
 
   const rows = await res.json().catch(() => null);

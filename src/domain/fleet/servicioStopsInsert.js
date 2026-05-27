@@ -1,4 +1,5 @@
 import { sbFetch } from "../../data/supabaseClient.js";
+import { parsePostgrestError } from "../service/serviceCreateStepTrace.js";
 
 const STOP_TIPOS_SAFE = new Set([
   "carga",
@@ -33,11 +34,13 @@ export function buildStopsInsertRows(servicioId, stops) {
 }
 
 function parseInsertErrorDetail(res, fallbackText) {
+  const parsed = parsePostgrestError(fallbackText);
+  const table = parsed.table || "stops";
   if (res?.status === 401) return "Sesión caducada. Vuelve a iniciar sesión.";
-  if (res?.status === 403 || res?.status === 42501) {
+  if (parsed.code === "42501" || res?.status === 403 || res?.status === 42501) {
     return (
-      "Sin permiso para crear paradas. Asigna el conductor antes o ejecuta en Supabase la migración " +
-      "20260522120000_stops_rls_conductor_empresa.sql (SQL Editor)."
+      `RLS 42501 en "${table}": sin permiso para crear paradas (user_can_access_servicio). ` +
+      "Revisa RLS stops para Autónomo PRO."
     );
   }
   const t = String(fallbackText || "").trim();
@@ -104,5 +107,7 @@ export async function insertStopsForServicio(servicioId, stops) {
     error: parseInsertErrorDetail(lastFail.res, lastFail.detail),
     detail: lastFail.detail,
     status: lastFail.status,
+    pgTable: parsePostgrestError(lastFail.detail).table || "stops",
+    pgCode: parsePostgrestError(lastFail.detail).code || "",
   };
 }
