@@ -3,7 +3,7 @@
  * Usar ownershipMode en INSERT; no inferir empresa por owner_id en cuentas autónomas.
  */
 import { ACCOUNT_TYPES } from "../../auth/accountModel.js";
-import { getUserId, sbSelect } from "../../data/supabaseClient.js";
+import { getAuthUid, sbSelect } from "../../data/supabaseClient.js";
 import { SERVICIO_ESTADO_PENDIENTE_ASIGNACION } from "../fleet/servicioAssignment.js";
 
 export const SERVICIO_OWNERSHIP = Object.freeze({
@@ -39,7 +39,7 @@ export function normalizeServicioConductorIdForInsert(conductorId) {
 export async function resolveFleetEmpresaIdForInsert(empresaIdProp, uid = null) {
   const fromProp = normalizeServicioEmpresaId(empresaIdProp);
   if (fromProp) return fromProp;
-  const authUid = uid || getUserId?.();
+  const authUid = uid || getAuthUid?.();
   if (!authUid) return null;
   try {
     const emps = await sbSelect("empresas", `owner_id=eq.${authUid}`);
@@ -64,7 +64,7 @@ export async function resolveServicioInsertContext({
   estado = null,
   uid = null,
 }) {
-  const authUid = uid || getUserId?.();
+  const authUid = uid || getAuthUid?.();
 
   if (ownershipMode === SERVICIO_OWNERSHIP.AUTONOMO_PRO) {
     if (!authUid) throw new Error("Sesión no válida — inicia sesión de nuevo");

@@ -7,6 +7,7 @@ import {
 } from "./serviceOwnership.js";
 
 vi.mock("../../data/supabaseClient.js", () => ({
+  getAuthUid: vi.fn(() => "user-abc"),
   getUserId: vi.fn(() => "user-abc"),
   sbSelect: vi.fn(),
 }));

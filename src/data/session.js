@@ -1,4 +1,4 @@
-import { SB_URL, SB_KEY, sbFetch } from "./supabaseClient";
+import { SB_URL, SB_KEY, sbFetch, persistSbSession } from "./supabaseClient";
 
 import { clearAuthContext } from "./authContext";
 
@@ -276,7 +276,7 @@ export async function refreshSession() {
 
   if (d.access_token) {
 
-    localStorage.setItem("sb_session", JSON.stringify(d));
+    persistSbSession(d);
 
     return d;
 

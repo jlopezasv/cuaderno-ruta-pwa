@@ -144,6 +144,56 @@ function readSbSession() {
 
 
 
+function decodeJwtPayload(token) {
+
+  if (!token || typeof token !== "string") return null;
+
+  const parts = token.split(".");
+
+  if (parts.length !== 3) return null;
+
+  try {
+
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+
+    const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+
+    return JSON.parse(atob(b64 + pad));
+
+  } catch {
+
+    return null;
+
+  }
+
+}
+
+
+
+/** Conserva `user` al refrescar tokens (GoTrue a veces no lo devuelve). */
+
+export function persistSbSession(tokenResponse) {
+
+  const prev = readSbSession();
+
+  const merged = {
+
+    ...prev,
+
+    ...tokenResponse,
+
+    user: tokenResponse?.user ?? prev?.user,
+
+  };
+
+  localStorage.setItem("sb_session", JSON.stringify(merged));
+
+  return merged;
+
+}
+
+
+
 /**
 
  * REST a PostgREST. Sesión en localStorage `sb_session`.
@@ -200,7 +250,7 @@ export async function sbFetch(path, opts = {}) {
 
       if (rd.access_token) {
 
-        localStorage.setItem("sb_session", JSON.stringify(rd));
+        persistSbSession(rd);
 
         const headers2 = { ...headers, Authorization: `Bearer ${rd.access_token}` };
 
@@ -239,6 +289,26 @@ export function getUserId() {
   const s = getSession();
 
   return s?.user?.id || null;
+
+}
+
+
+
+/** auth.uid() en Postgres ≈ JWT `sub` (rol authenticated). Fuente de verdad para RLS. */
+
+export function getAuthUid() {
+
+  const token = getAccessToken();
+
+  const payload = token ? decodeJwtPayload(token) : null;
+
+  if (payload?.role === "authenticated" && payload.sub) {
+
+    return payload.sub;
+
+  }
+
+  return getUserId();
 
 }
 

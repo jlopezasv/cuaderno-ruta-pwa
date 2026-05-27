@@ -5,6 +5,7 @@ import {
   SB_KEY,
   getSession,
   getUserId,
+  getAuthUid,
   getAccessToken,
   setSessionExpiredHandler,
   sbFetch,
@@ -11704,12 +11705,17 @@ async function crearServicioConIdentidad({
   referenciaCliente,
   operationalPlaces = null,
   ownershipMode = SERVICIO_OWNERSHIP.FLEET_EMPRESA,
+  uid: uidProp = null,
   _debugSource,
   ...basePayload
 }) {
   // RLS en `servicios` solo permite INSERT a `authenticated`.
   // Si no hay JWT, PostgREST actúa como anon y devuelve 42501.
   if (!getAccessToken()) {
+    throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
+  }
+  const authUid = getAuthUid();
+  if (!authUid) {
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
   const referenciaBase = serviceNumber?.trim() || null;
@@ -11730,8 +11736,20 @@ async function crearServicioConIdentidad({
     empresaIdProp: basePayload.empresa_id,
     conductorIdProp: basePayload.conductor_id,
     estado: basePayload.estado,
+    uid: uidProp || authUid,
   });
   const { empresa_id: empresaId, conductor_id: conductorId, estado: resolvedEstado } = insertCtx;
+  if (ownershipMode === SERVICIO_OWNERSHIP.AUTONOMO_PRO) {
+    if (empresaId != null) {
+      throw new Error("Autónomo PRO: empresa_id debe ser null en el INSERT.");
+    }
+    if (!conductorId || conductorId !== authUid) {
+      throw new Error(
+        `Autónomo PRO: conductor_id debe coincidir con auth.uid(). ` +
+          `payload=${conductorId ?? "null"}, auth.uid=${authUid}, session.user.id=${getUserId() ?? "null"}`,
+      );
+    }
+  }
   const empresaIdRaw = basePayload.empresa_id;
   const corePayload = {
     empresa_id: empresaId,
@@ -11746,7 +11764,10 @@ async function crearServicioConIdentidad({
 
   logServiceCreate("SERVICE_CREATE_START",{
     source:_debugSource||"crearServicioConIdentidad",
-    authUid:getUserId?.()||null,
+    authUid,
+    sessionUserId:getUserId?.()||null,
+    uidMatchesJwt:authUid===getUserId?.(),
+    ownershipMode,
     sinConductor:!conductorId,
   });
   logServiceCreate("SERVICE_CREATE_EMPRESA_ID",{
@@ -11819,8 +11840,18 @@ async function crearServicioConIdentidad({
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
   if (errCode === "42501") {
+    const rlsDiag = {
+      ownershipMode,
+      authUid,
+      sessionUserId: getUserId() ?? null,
+      empresa_id: corePayload.empresa_id,
+      conductor_id: corePayload.conductor_id,
+      payloadJson: JSON.stringify(corePayload),
+    };
+    console.warn("SERVICE_CREATE_RLS_42501", rlsDiag);
     throw new Error(
-      "Permisos insuficientes al crear servicio (RLS 42501). Aplica/revisa la migración de RLS de servicios para Autónomo PRO y vuelve a iniciar sesión.",
+      `Permisos insuficientes (RLS 42501). conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
+        "Comprueba profiles.tipo_cuenta=autonomo_pro o vuelve a iniciar sesión.",
     );
   }
   throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
@@ -16464,11 +16495,18 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
 
   async function guardar(){
     if(!validarPaso2())return;
+    const authUid=getAuthUid()||uid;
+    if(!authUid){
+      setError("Sesión no válida — cierra sesión y vuelve a entrar.");
+      return;
+    }
     setSaving(true);setError("");
     try{
       const fechaIso=new Date(fechaInicio).toISOString();
       const srData=await crearServicioConIdentidad({
         ownershipMode:SERVICIO_OWNERSHIP.AUTONOMO_PRO,
+        uid:authUid,
+        conductor_id:authUid,
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
@@ -16488,7 +16526,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
       });
       const referenciaBoot=await bootstrapOperationalFlowOnConductorAssign({
         servicio:sv,
-        conductorId:uid,
+        conductorId:authUid,
         conductorNombre:conductorNombre||"Conductor",
         origen:origen.trim(),
         destino:destino.trim(),
@@ -16496,8 +16534,8 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
         persist:true,
         dispatchRecarga:false,
       });
-      const svFinal={...sv,conductor_id:uid,estado:"asignado",referencia:referenciaBoot||sv.referencia};
-      void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
+      const svFinal={...sv,conductor_id:authUid,estado:"asignado",referencia:referenciaBoot||sv.referencia};
+      void sendAssignmentPush({conductorId:authUid,origen,destino,fechaInicio,servicioId:sv.id});
       onCreado(svFinal);
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
