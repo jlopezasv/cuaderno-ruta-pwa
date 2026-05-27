@@ -7,6 +7,10 @@ import {
   getUserId,
   getAuthUid,
   getAccessToken,
+  ensureAuthAccessToken,
+  hasValidAuthSession,
+  getSessionAuthDiagnostics,
+  jwtSubFromToken,
   setSessionExpiredHandler,
   sbFetch,
   sbSelect,
@@ -3068,7 +3072,7 @@ function AppInner(){
 
   // Mostrar login si no hay sesión
   if(!authChecked)return <div style={{minHeight:"100vh",background:"#0F172A",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:14,color:"#475569"}}>Cargando...</div></div>;
-  if(!user||!getSession())return <AuthScreen onAuth={()=>{setUser(getUserId());setSubStatus(null);}}/>;
+  if(!user||!hasValidAuthSession())return <AuthScreen onAuth={()=>{setUser(getUserId());setSubStatus(null);}}/>;
   // ── PAGOS DESACTIVADOS — acceso libre para todos ──
   // Activar cuando esté dado de alta como autónomo
   // if(subStatus===null){ ... check stripe ... }
@@ -11752,13 +11756,14 @@ async function crearServicioConIdentidad({
   ...basePayload
 }) {
   // RLS en `servicios` solo permite INSERT a `authenticated`.
-  // Si no hay JWT, PostgREST actúa como anon y devuelve 42501.
-  if (!getAccessToken()) {
+  // Sin JWT válido (sub), PostgREST actúa como anon → auth.uid() NULL → 42501.
+  const authToken = await ensureAuthAccessToken();
+  if (!authToken) {
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
-  const authUid = getAuthUid();
+  const authUid = jwtSubFromToken(authToken);
   if (!authUid) {
-    throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
+    throw new Error("Sesión no válida (JWT sin sub). Cierra sesión y vuelve a entrar.");
   }
   const referenciaBase = serviceNumber?.trim() || null;
   const placesPatch = operationalPlaces
@@ -11956,7 +11961,7 @@ async function crearServicioConIdentidad({
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
   if(!conductorId)return;
   const salidaLabel=fechaInicio?new Date(fechaInicio).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}):"";
-  const access=getAccessToken();
+  const access=await ensureAuthAccessToken();
   const headers={"Content-Type":"application/json"};
   if(access)headers.Authorization=`Bearer ${access}`;
   await fetch("/api/push",{
@@ -16591,9 +16596,10 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
 
   async function guardar(){
     if(!validarPaso2())return;
-    const authUid=getAuthUid()||uid;
+    const authToken=await ensureAuthAccessToken();
+    const authUid=jwtSubFromToken(authToken);
     if(!authUid){
-      setError("Sesión no válida — cierra sesión y vuelve a entrar.");
+      setError("Sesión no válida (JWT sin sub) — cierra sesión y vuelve a entrar.");
       return;
     }
     setSaving(true);setError("");

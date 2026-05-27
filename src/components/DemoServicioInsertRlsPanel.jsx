@@ -5,7 +5,13 @@
 import { useCallback, useState } from "react";
 import { isDemoApp } from "../config/appEnvironment.js";
 import { fetchDebugServicioInsertRlsContext } from "../data/debugServicioInsertRls.js";
-import { getAuthUid, getSupabasePublicHost, getUserId } from "../data/supabaseClient.js";
+import {
+  ensureAuthAccessToken,
+  getSessionAuthDiagnostics,
+  getSupabasePublicHost,
+  getUserId,
+  jwtSubFromToken,
+} from "../data/supabaseClient.js";
 
 function fmtBool(v) {
   if (v === true) return "true";
@@ -39,7 +45,9 @@ export default function DemoServicioInsertRlsPanel() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const authUid = getAuthUid();
+      const authToken = await ensureAuthAccessToken();
+      const authUid = jwtSubFromToken(authToken);
+      const sessionDiag = getSessionAuthDiagnostics();
       const rpc = await fetchDebugServicioInsertRlsContext({
         empresaId: null,
         conductorId: authUid,
@@ -48,13 +56,15 @@ export default function DemoServicioInsertRlsPanel() {
         fetchedAt: new Date().toISOString(),
         clientAuthUid: authUid,
         clientSessionUserId: getUserId(),
+        sessionDiag,
         rpc,
       });
     } catch (e) {
       setResult({
         fetchedAt: new Date().toISOString(),
-        clientAuthUid: getAuthUid(),
+        clientAuthUid: jwtSubFromToken(await ensureAuthAccessToken()),
         clientSessionUserId: getUserId(),
+        sessionDiag: getSessionAuthDiagnostics(),
         rpc: { ok: false, error: String(e?.message || e) },
       });
     } finally {
@@ -66,6 +76,7 @@ export default function DemoServicioInsertRlsPanel() {
 
   const data = result?.rpc?.ok ? result.rpc.data : null;
   const err = result?.rpc?.ok === false ? result.rpc.error : null;
+  const sd = result?.sessionDiag;
 
   return (
     <>
@@ -182,6 +193,18 @@ export default function DemoServicioInsertRlsPanel() {
             </div>
           )}
 
+          {sd && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#FBBF24", marginBottom: 6 }}>Cliente JWT</div>
+              <Row label="jwt.sub [cliente]" value={sd.jwtSub ?? "null"} />
+              <Row label="jwt.role [cliente]" value={sd.jwtRole ?? "null"} />
+              <Row label="isUsableAccessToken" value={fmtBool(sd.isUsableAccessToken)} />
+              <Row label="wouldSendAnonKey" value={fmtBool(sd.wouldSendAnonKey)} />
+              <Row label="subMatchesSessionUser" value={fmtBool(sd.subMatchesSessionUser)} />
+              <div style={{ borderTop: "1px solid #1E293B", margin: "10px 0" }} />
+            </>
+          )}
+
           {data && (
             <>
               <Row label="auth.uid() [Postgres]" value={data.auth_uid ?? "null"} />
@@ -202,7 +225,7 @@ export default function DemoServicioInsertRlsPanel() {
                 label="autonomo_branch_checks"
                 value={JSON.stringify(data.autonomo_branch_checks ?? {})}
               />
-              <Row label="client getAuthUid()" value={result.clientAuthUid ?? "null"} />
+              <Row label="client JWT sub" value={result.clientAuthUid ?? "null"} />
               <Row label="client session.user.id" value={result.clientSessionUserId ?? "null"} />
               <Row label="consultado" value={result.fetchedAt} mono={false} />
             </>

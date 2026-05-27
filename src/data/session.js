@@ -1,5 +1,7 @@
 import { SB_URL, SB_KEY, sbFetch, persistSbSession } from "./supabaseClient";
 
+import { refreshSbSession } from "./sbSession.js";
+
 import { clearAuthContext } from "./authContext";
 
 import { isPublicRegistrationAllowed } from "../config/appEnvironment.js";
@@ -126,7 +128,7 @@ export async function signUp(email, password) {
 
   if (d.access_token) {
 
-    localStorage.setItem("sb_session", JSON.stringify(d));
+    persistSbSession(d);
 
   } else if (isDemoDevUnlocked()) {
 
@@ -200,7 +202,7 @@ export async function signIn(email, password) {
 
   if (dark) localStorage.setItem("dark", dark);
 
-  localStorage.setItem("sb_session", JSON.stringify(d));
+  persistSbSession(d);
 
   return d;
 
@@ -262,27 +264,9 @@ export async function refreshSession() {
 
   if (!session?.refresh_token) return null;
 
-  const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+  const refreshed = await refreshSbSession(SB_URL, SB_KEY, session.refresh_token);
 
-    method: "POST",
-
-    headers: { "Content-Type": "application/json", apikey: SB_KEY },
-
-    body: JSON.stringify({ refresh_token: session.refresh_token }),
-
-  });
-
-  const d = await res.json();
-
-  if (d.access_token) {
-
-    persistSbSession(d);
-
-    return d;
-
-  }
-
-  return null;
+  return refreshed;
 
 }
 

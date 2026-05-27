@@ -14,6 +14,23 @@ import { guardDemoCannotUseProduction } from "../lib/demoSafety.js";
 
 import { SUPABASE_REAL_PROJECT_REF } from "./supabaseConstants.js";
 
+import {
+  getSessionAuthDiagnostics,
+  hasSbSessionRecord,
+  isUsableAccessToken,
+  jwtSubFromToken,
+  normalizeGoTrueSession,
+  persistSbSession,
+  refreshSbSession,
+  resolveAuthenticatedAccessToken,
+} from "./sbSession.js";
+
+export {
+  getSessionAuthDiagnostics,
+  jwtSubFromToken,
+  persistSbSession,
+} from "./sbSession.js";
+
 
 
 export { SUPABASE_REAL_PROJECT_REF };
@@ -130,6 +147,12 @@ export function setSessionExpiredHandler(handler) {
 
 function readSbSession() {
 
+  return normalizeGoTrueSession(readSbSessionRaw());
+
+}
+
+function readSbSessionRaw() {
+
   try {
 
     return JSON.parse(localStorage.getItem("sb_session") || "null");
@@ -142,53 +165,9 @@ function readSbSession() {
 
 }
 
+function clearSbSession() {
 
-
-function decodeJwtPayload(token) {
-
-  if (!token || typeof token !== "string") return null;
-
-  const parts = token.split(".");
-
-  if (parts.length !== 3) return null;
-
-  try {
-
-    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-
-    const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
-
-    return JSON.parse(atob(b64 + pad));
-
-  } catch {
-
-    return null;
-
-  }
-
-}
-
-
-
-/** Conserva `user` al refrescar tokens (GoTrue a veces no lo devuelve). */
-
-export function persistSbSession(tokenResponse) {
-
-  const prev = readSbSession();
-
-  const merged = {
-
-    ...prev,
-
-    ...tokenResponse,
-
-    user: tokenResponse?.user ?? prev?.user,
-
-  };
-
-  localStorage.setItem("sb_session", JSON.stringify(merged));
-
-  return merged;
+  localStorage.removeItem("sb_session");
 
 }
 
@@ -206,13 +185,16 @@ export async function sbFetch(path, opts = {}) {
 
   guardDemoCannotUseProduction(SB_URL, `sbFetch:${path.split("?")[0]}`);
 
+  const hadSession = hasSbSessionRecord();
+  let bearerToken = await resolveAuthenticatedAccessToken(SB_URL, SB_KEY);
 
-
-  const session = readSbSession();
-
-  const bearerToken = session?.access_token || SB_KEY;
-
-
+  if (!bearerToken) {
+    if (hadSession) {
+      clearSbSession();
+      if (onSessionExpired) onSessionExpired();
+    }
+    bearerToken = SB_KEY;
+  }
 
   const headers = {
 
@@ -228,46 +210,26 @@ export async function sbFetch(path, opts = {}) {
 
   const res = await fetch(`${SB_URL}${path}`, { ...opts, headers });
 
-
-
-  if (res.status === 401 && session?.refresh_token) {
-
-    try {
-
-      guardDemoCannotUseProduction(SB_URL, "sbFetch:auth/refresh");
-
-      const ref = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
-
-        method: "POST",
-
-        headers: { "Content-Type": "application/json", apikey: SB_KEY },
-
-        body: JSON.stringify({ refresh_token: session.refresh_token }),
-
-      });
-
-      const rd = await ref.json();
-
-      if (rd.access_token) {
-
-        persistSbSession(rd);
-
-        const headers2 = { ...headers, Authorization: `Bearer ${rd.access_token}` };
-
-        return fetch(`${SB_URL}${path}`, { ...opts, headers: headers2 });
-
+  if (res.status === 401 && bearerToken !== SB_KEY) {
+    const session = readSbSession();
+    if (session?.refresh_token) {
+      try {
+        guardDemoCannotUseProduction(SB_URL, "sbFetch:auth/refresh");
+        const refreshed = await refreshSbSession(SB_URL, SB_KEY, session.refresh_token);
+        const token2 =
+          refreshed?.access_token && isUsableAccessToken(refreshed.access_token)
+            ? refreshed.access_token
+            : null;
+        if (token2) {
+          const headers2 = { ...headers, Authorization: `Bearer ${token2}` };
+          return fetch(`${SB_URL}${path}`, { ...opts, headers: headers2 });
+        }
+      } catch {
+        /* refresh falló */
       }
-
-    } catch {
-
-      /* refresh falló */
-
     }
-
-    localStorage.removeItem("sb_session");
-
+    clearSbSession();
     if (onSessionExpired) onSessionExpired();
-
   }
 
   return res;
@@ -286,41 +248,69 @@ export function getSession() {
 
 export function getUserId() {
 
-  const s = getSession();
+  const uid = getAuthUid();
 
-  return s?.user?.id || null;
+  if (uid) return uid;
+
+  return getSession()?.user?.id || null;
 
 }
 
 
 
-/** auth.uid() en Postgres ≈ JWT `sub` (rol authenticated). Fuente de verdad para RLS. */
+/** auth.uid() en Postgres ≈ JWT `sub` (rol authenticated). Sin fallback silencioso. */
 
 export function getAuthUid() {
 
   const token = getAccessToken();
 
-  const payload = token ? decodeJwtPayload(token) : null;
-
-  if (payload?.role === "authenticated" && payload.sub) {
-
-    return payload.sub;
-
-  }
-
-  return getUserId();
+  return jwtSubFromToken(token);
 
 }
 
 
 
-/** JWT de sesión (para Authorization en APIs propias como /api/push). */
+/** JWT de sesión usable en Authorization (null si no hay JWT authenticated). */
 
 export function getAccessToken() {
 
-  const s = getSession();
+  const token = getSession()?.access_token || null;
 
-  return s?.access_token || null;
+  if (!token || !isUsableAccessToken(token)) return null;
+
+  return token;
+
+}
+
+
+
+/** Token en storage aunque esté expirado (p. ej. antes de refresh). */
+
+export function getStoredAccessToken() {
+
+  return getSession()?.access_token || null;
+
+}
+
+
+
+export function hasValidAuthSession() {
+
+  const session = readSbSession();
+
+  if (session?.access_token && isUsableAccessToken(session.access_token)) return true;
+
+  return !!session?.refresh_token;
+
+}
+
+
+
+/** Refresca si hace falta y devuelve JWT authenticated para API/RLS. */
+
+export async function ensureAuthAccessToken() {
+
+  return resolveAuthenticatedAccessToken(SB_URL, SB_KEY);
 
 }
 
