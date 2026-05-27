@@ -133,7 +133,7 @@ function addressFallbackCandidates(q) {
   return candidates;
 }
 
-function localFind(q) {
+export function localFind(q) {
   const nq = normC(q);
   for (const r of CITIES) {
     const nm = r[r.length - 3],

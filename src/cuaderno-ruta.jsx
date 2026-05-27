@@ -208,6 +208,7 @@ import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
 import {
   LIM,
   geocode,
+  localFind,
   getRoute,
   buildPlan,
   fmtT,
@@ -217,6 +218,14 @@ import {
   p2,
   revGeo,
 } from "./domain/route/routePlanning.js";
+import { bootstrapOperationalFlowOnConductorAssign } from "./domain/fleet/servicioOperationalBootstrap.js";
+import {
+  SERVICIO_OWNERSHIP,
+  buildConductorOwnServiciosQuery,
+  normalizeServicioConductorIdForInsert,
+  normalizeServicioEmpresaId,
+  resolveServicioInsertContext,
+} from "./domain/service/serviceOwnership.js";
 
 // ─────────────────────────────────────────────────────────────
 //  ERROR BOUNDARY — evita pantalla negra en errores de render
@@ -11629,36 +11638,6 @@ function useModalLayout(){
 // ─────────────────────────────────────────────────────────────
 //  ASIGNAR SERVICIO A CONDUCTOR — modal para el jefe de flota
 // ─────────────────────────────────────────────────────────────
-function normalizeServicioEmpresaId(value){
-  if(value===undefined||value===null)return null;
-  const s=String(value).trim();
-  return s?s:null;
-}
-
-/** UUID conductor o NULL; cadenas vacías → NULL (evita RLS/UUID rotos en PostgREST). */
-function normalizeServicioConductorIdForInsert(conductorId){
-  if(conductorId===undefined||conductorId===null)return null;
-  const s=String(conductorId).trim();
-  return s||null;
-}
-
-async function resolveEmpresaIdForServicioInsert(empresaIdProp){
-  const fromProp=normalizeServicioEmpresaId(empresaIdProp);
-  if(fromProp)return fromProp;
-  const uid=getUserId?.();
-  if(!uid)return null;
-  try{
-    const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-    const ownerEmp=normalizeServicioEmpresaId(emps?.[0]?.id);
-    if(ownerEmp)return ownerEmp;
-    const links=await sbSelect("conductor_empresa",`user_id=eq.${uid}`);
-    const link=Array.isArray(links)?links.find(r=>r?.activo!==false):links;
-    return normalizeServicioEmpresaId(link?.empresa_id);
-  }catch(_){
-    return null;
-  }
-}
-
 async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,logTag}){
   const result=await insertStopsForServicio(servicioId,stops);
   if(result.ok){
@@ -11685,23 +11664,6 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
     });
   }
   throw new Error(result.error||"No se pudieron crear las paradas del servicio");
-}
-
-function buildServicioInsertCorePayload({empresaId,conductorId,estado,origen,destino,referencia,fecha_inicio}){
-  const cid=normalizeServicioConductorIdForInsert(conductorId);
-  const st=
-    cid==null
-      ?SERVICIO_ESTADO_PENDIENTE_ASIGNACION
-      :(estado&&String(estado).trim())||"asignado";
-  return{
-    empresa_id:empresaId||null,
-    conductor_id:cid,
-    estado:st,
-    origen:String(origen||"").trim(),
-    destino:String(destino||"").trim(),
-    referencia:referencia||null,
-    fecha_inicio:fecha_inicio||null,
-  };
 }
 
 async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,referenciaCliente,referencia}){
@@ -11741,6 +11703,7 @@ async function crearServicioConIdentidad({
   cliente,
   referenciaCliente,
   operationalPlaces = null,
+  ownershipMode = SERVICIO_OWNERSHIP.FLEET_EMPRESA,
   _debugSource,
   ...basePayload
 }) {
@@ -11757,19 +11720,23 @@ async function crearServicioConIdentidad({
     Object.keys(identityMeta).length || Object.keys(placesPatch).length
       ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch })
       : referenciaBase;
-  const empresaIdRaw=basePayload.empresa_id;
-  const empresaId=await resolveEmpresaIdForServicioInsert(empresaIdRaw);
-  const conductorId=normalizeServicioConductorIdForInsert(basePayload.conductor_id);
-  const corePayload=buildServicioInsertCorePayload({
-    empresaId,
-    conductorId,
-    estado:basePayload.estado,
-    origen:basePayload.origen,
-    destino:basePayload.destino,
-    referencia,
-    fecha_inicio:basePayload.fecha_inicio,
+  const insertCtx = await resolveServicioInsertContext({
+    ownershipMode,
+    empresaIdProp: basePayload.empresa_id,
+    conductorIdProp: basePayload.conductor_id,
+    estado: basePayload.estado,
   });
-  const payload=corePayload;
+  const { empresa_id: empresaId, conductor_id: conductorId, estado: resolvedEstado } = insertCtx;
+  const corePayload = {
+    empresa_id: empresaId,
+    conductor_id: conductorId,
+    estado: resolvedEstado,
+    origen: String(basePayload.origen || "").trim(),
+    destino: String(basePayload.destino || "").trim(),
+    referencia: referencia || null,
+    fecha_inicio: basePayload.fecha_inicio || null,
+  };
+  const payload = corePayload;
 
   logServiceCreate("SERVICE_CREATE_START",{
     source:_debugSource||"crearServicioConIdentidad",
@@ -11984,6 +11951,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       });
       const srData=await crearServicioConIdentidad({
         _debugSource:"AsignarServicioModal",
+        ownershipMode:SERVICIO_OWNERSHIP.FLEET_EMPRESA,
         empresa_id:empresaId||null,
         conductor_id:null,
         estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
@@ -15864,7 +15832,7 @@ function ServiciosTimelineView({uid}){
     if(!uid){setLoading(false);return;}
     async function cargar(){
       try{
-        const sr=await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=50`);
+        const sr=await sbFetch(buildConductorOwnServiciosQuery(uid,{limit:50}));
         const svs=await sr.json();
         const svsArr=Array.isArray(svs)?svs:[];
         setServicios(svsArr);
@@ -16483,15 +16451,15 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
     if(!validarPaso2())return;
     setSaving(true);setError("");
     try{
+      const fechaIso=new Date(fechaInicio).toISOString();
       const srData=await crearServicioConIdentidad({
-        conductor_id:uid,
-        estado:"asignado",
+        ownershipMode:SERVICIO_OWNERSHIP.AUTONOMO_PRO,
         origen:origen.trim(),
         destino:destino.trim(),
         serviceNumber:ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
-        fecha_inicio:new Date(fechaInicio).toISOString(),
+        fecha_inicio:fechaIso,
         _debugSource:"CrearServicioModal.autonomoPro",
       });
       const sv=Array.isArray(srData)?srData[0]:srData;
@@ -16503,8 +16471,19 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
         destino:destino.trim(),
         logTag:"CrearServicioModal",
       });
+      const referenciaBoot=await bootstrapOperationalFlowOnConductorAssign({
+        servicio:sv,
+        conductorId:uid,
+        conductorNombre:conductorNombre||"Conductor",
+        origen:origen.trim(),
+        destino:destino.trim(),
+        fechaInicio:fechaIso,
+        persist:true,
+        dispatchRecarga:false,
+      });
+      const svFinal={...sv,conductor_id:uid,estado:"asignado",referencia:referenciaBoot||sv.referencia};
       void sendAssignmentPush({conductorId:uid,origen,destino,fechaInicio,servicioId:sv.id});
-      onCreado(sv);
+      onCreado(svFinal);
     }catch(e){setError("Error: "+e.message);}
     finally{setSaving(false);}
   }
@@ -16822,7 +16801,7 @@ function ServicioDocsView({ uid, showToast, onBack }) {
     }
     async function cargar() {
       try {
-        const sr = await sbFetch(`/rest/v1/servicios?conductor_id=eq.${uid}&order=created_at.desc&limit=20`);
+        const sr = await sbFetch(buildConductorOwnServiciosQuery(uid, { limit: 20 }));
         if (!sr.ok) throw new Error(`servicios HTTP ${sr.status}`);
         const svs = await sr.json();
         const list = Array.isArray(svs) ? svs : [];
