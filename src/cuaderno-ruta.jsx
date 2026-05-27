@@ -11798,7 +11798,12 @@ async function crearServicioConIdentidad({
     }
   }
   const empresaIdRaw = basePayload.empresa_id;
+  const servicioId =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : null;
   const corePayload = {
+    ...(servicioId ? { id: servicioId } : {}),
     empresa_id: empresaId,
     conductor_id: conductorId,
     estado: resolvedEstado,
@@ -11871,7 +11876,7 @@ async function crearServicioConIdentidad({
       );
     } else if (rlsDiag.data?.user_can_insert_servicio === true) {
       console.warn(
-        "[SERVICE_INSERT_RLS_DIAG] user_can_insert_servicio=TRUE pero INSERT puede fallar por policies duplicadas/legacy — revisa insert_policies",
+        "[SERVICE_INSERT_RLS_DIAG] user_can_insert_servicio=TRUE. Si POST falla con 42501, suele ser srv_sel (return=representation) no el INSERT.",
         rlsDiag.data,
       );
     }
@@ -11881,7 +11886,7 @@ async function crearServicioConIdentidad({
   try{
     res=await sbFetch("/rest/v1/servicios", {
       method: "POST",
-      headers: { "Prefer": "return=representation" },
+      headers: { Prefer: "return=minimal" },
       body: JSON.stringify(corePayload),
     });
   }catch(error){
@@ -11890,8 +11895,24 @@ async function crearServicioConIdentidad({
   }
 
   if (res.ok) {
-    const result=await res.json();
-    const row=Array.isArray(result)?result[0]:result;
+    let row = null;
+    if (servicioId) {
+      const getRes = await sbFetch(
+        `/rest/v1/servicios?id=eq.${servicioId}&select=id,empresa_id,conductor_id,estado,origen,destino,referencia,fecha_inicio,created_at`,
+      );
+      if (getRes.ok) {
+        const rows = await getRes.json().catch(() => []);
+        row = Array.isArray(rows) ? rows[0] : rows;
+      }
+      if (!row?.id) {
+        console.warn(
+          "[SERVICE_CREATE] INSERT ok (minimal) pero SELECT srv_sel falló o vacío — fila sintética",
+          { servicioId },
+        );
+        row = { id: servicioId, ...corePayload };
+      }
+    }
+    const result = row ? [row] : [];
     logServiceCreate("SERVICE_CREATE_RESPONSE_OK",{
       status:res.status,
       row,
@@ -11948,7 +11969,9 @@ async function crearServicioConIdentidad({
       `RLS 42501 en "${parsedErr.table || "servicios"}" [POST servicios]. ` +
         `conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
         `Postgres: ${pgSummary ?? "sin RPC"}.` +
-        (rpcSaysOk ? " RPC can_insert=true: si ves esto tras crear servicio, el fallo real puede ser un paso posterior (stops/PATCH)." : ""),
+        (rpcSaysOk
+          ? " can_insert=true: revisa srv_sel (SELECT tras INSERT) o aplica migración user_can_access_servicio autonomo_pro."
+          : ""),
     );
     err.stepId = "POST servicios";
     err.pgTable = parsedErr.table || "servicios";

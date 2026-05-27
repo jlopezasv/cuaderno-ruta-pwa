@@ -53,6 +53,7 @@ export function formatServicioRlsDiagSummary(data) {
     `auth_role=${data.auth_role ?? "null"}`,
     `jwt_sub=${data.jwt_sub ?? "null"}`,
     `insert_policies=${policyNames}`,
+    `hint=${data.hint_return_representation ? "return_rep_needs_srv_sel" : "ok"}`,
     `branch=${JSON.stringify(b)}`,
   ].join(" | ");
 }
