@@ -27,6 +27,7 @@ import {
   fetchDebugServicioInsertRlsContext,
   formatServicioRlsDiagSummary,
 } from "./data/debugServicioInsertRls.js";
+import DemoServicioInsertRlsPanel from "./components/DemoServicioInsertRlsPanel.jsx";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -3133,6 +3134,8 @@ function AppInner(){
           Tu cuenta empresa está en revisión. Puedes operar como conductor; el panel de gestión estará disponible tras la validación.
         </div>
       )}
+
+      <DemoServicioInsertRlsPanel />
 
       {/* Banner trial — desactivado hasta activar pagos */}
       {false&&subStatus?.status==="trial"&&subStatus.days_left<=5&&(
