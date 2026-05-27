@@ -11707,6 +11707,11 @@ async function crearServicioConIdentidad({
   _debugSource,
   ...basePayload
 }) {
+  // RLS en `servicios` solo permite INSERT a `authenticated`.
+  // Si no hay JWT, PostgREST actúa como anon y devuelve 42501.
+  if (!getAccessToken()) {
+    throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
+  }
   const referenciaBase = serviceNumber?.trim() || null;
   const placesPatch = operationalPlaces
     ? buildOperationalPlacesMetaPatch(operationalPlaces)
@@ -11809,6 +11814,15 @@ async function crearServicioConIdentidad({
   try {
     errJson = JSON.parse(errText);
   } catch (_) {}
+  const errCode = errJson?.code || "";
+  if (res.status === 401 || !getAccessToken()) {
+    throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
+  }
+  if (errCode === "42501") {
+    throw new Error(
+      "Permisos insuficientes al crear servicio (RLS 42501). Aplica/revisa la migración de RLS de servicios para Autónomo PRO y vuelve a iniciar sesión.",
+    );
+  }
   throw new Error(errText || JSON.stringify(errJson) || `HTTP ${res.status}`);
 }
 
