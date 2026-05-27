@@ -121,6 +121,11 @@ import {
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { OperationalSummaryLite } from "./modules/operational-lite/OperationalSummaryLite.jsx";
+import {
+  canShowOperationalSummaryLite,
+  canShowOperationalSummaryLiteInDocs,
+} from "./modules/operational-lite/operationalLiteVisibility.js";
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
 import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
 import {
@@ -237,7 +242,9 @@ import {
 import { bootstrapOperationalFlowOnConductorAssign } from "./domain/fleet/servicioOperationalBootstrap.js";
 import {
   SERVICIO_OWNERSHIP,
+  buildAutonomoProOwnServiciosQuery,
   buildConductorOwnServiciosQuery,
+  isAutonomoProOwnershipMode,
   normalizeServicioConductorIdForInsert,
   normalizeServicioEmpresaId,
   resolveServicioInsertContext,
@@ -2044,6 +2051,16 @@ function AppInner(){
   const[gpsLoading,setGpsLoading]=useState(false);
   const[subStatus,setSubStatus]=useState(null); // null=loading, objeto=cargado
 
+  // Rehidratar capabilities (features Autónomo PRO / operational lite) si la sesión en caché está incompleta
+  useEffect(()=>{
+    const uid=getUserId();
+    if(!uid||!authChecked)return;
+    const session=getStoredAuthSession(uid);
+    const caps=session?.capabilities;
+    if(caps?.accountType&&caps?.features&&Object.keys(caps.features).length>0)return;
+    bootstrapAuthSession(uid,sbSelect).catch(()=>{});
+  },[user,authChecked]);
+
   // Detectar sesión caducada y forzar re-login
   useEffect(()=>{
     // Verificar sesión al arrancar
@@ -3086,6 +3103,7 @@ function AppInner(){
   const isAdmin=!!authSession?.capabilities?.admin;
   const canCreateServices=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_CREATE_SERVICES);
   const canViewAdvancedDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS);
+  const canViewOperationalLite=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE);
   const canViewEnterpriseDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS);
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
@@ -3249,7 +3267,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} canCreateServices={canCreateServices}/>
+          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite}/>
         )}
 
         {tab==="resumen"&&(
@@ -3523,7 +3541,7 @@ function AppInner(){
             {docsTab==="empresa"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>📊 INFORME</span></div><EmpresaReport db={db} prof={prof} dark={dark} norma={norma}/></div>}
             {docsTab==="auditoria"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("empresa_home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>🔍 AUDITORÍA</span></div><AuditoriaView db={db} prof={prof} dark={dark}/></div>}
             {docsTab==="info"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>ℹ️ EMERGENCIAS</span></div><InfoEmergencias dark={dark}/></div>}
-            {docsTab==="servicio_docs"&&<ServicioDocsView uid={getUserId()} showToast={showToast} onBack={()=>setDocsTab("home")}/>}
+            {docsTab==="servicio_docs"&&<ServicioDocsView uid={getUserId()} showToast={showToast} onBack={()=>setDocsTab("home")} showOperationalLite={canViewOperationalLite} conductorNombre={prof.nombre?.trim()||"Conductor"}/>}
             {docsTab==="km"&&<div><div style={{background:"#FFFFFF",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #DBE4EE"}}><button onClick={()=>setDocsTab("home")} style={{background:"transparent",border:"none",color:"#F59E0B",fontSize:18,cursor:"pointer",padding:"4px"}}>←</button><span style={{fontSize:15,fontWeight:800,color:"#0F172A"}}>🛣️ LIBRO KM</span></div><LibroKm dark={dark} prof={prof}/></div>}
           </div>
         )}
@@ -4731,14 +4749,20 @@ function getDriverActionGps(opts={}){
   });
 }
 
-/** empresa_id: servicio primero; fallback conductor_empresa activo. */
-async function resolveEmpresaIdForUbicacion(uid,servicio){
-  const fromServicio=servicio?.empresa_id;
+/**
+ * empresa_id para tracking: del servicio si tiene tenant flota.
+ * No inferir conductor_empresa si el servicio es autónomo (empresa_id null en fila).
+ */
+async function resolveEmpresaIdForUbicacion(uid,servicio,{inferFleetFromLink=true}={}){
+  const fromServicio=normalizeServicioEmpresaId(servicio?.empresa_id);
   if(fromServicio)return fromServicio;
-  if(!uid)return null;
+  if(servicio?.id&&(servicio.empresa_id===null||servicio.empresa_id===undefined)){
+    return null;
+  }
+  if(!inferFleetFromLink||!uid)return null;
   try{
     const rels=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true&select=empresa_id&limit=1`);
-    return rels?.[0]?.empresa_id||null;
+    return normalizeServicioEmpresaId(rels?.[0]?.empresa_id);
   }catch{
     return null;
   }
@@ -4765,9 +4789,7 @@ async function resolveOperationalUbicacionSnapshot(uid,servicioHint=null,stopsHi
     trackingLog("operativa ubicacion resolve",{uid,servicio_hint_id:hintId||null,resolved_servicio_id:null,resolved_empresa_id:null,source:"no_active_service"});
     return out;
   }
-  let empresaId=svc.empresa_id||null;
-  if(!empresaId)empresaId=await resolveEmpresaIdForUbicacion(uid,svc);
-  if(empresaId&&!svc.empresa_id)svc={...svc,empresa_id:empresaId};
+  const empresaId=await resolveEmpresaIdForUbicacion(uid,svc);
   out.servicio=svc;
   out.stops=depStops;
   out.empresa_id=empresaId||null;
@@ -11786,8 +11808,10 @@ async function crearServicioConIdentidad({
     uid: uidProp || authUid,
   });
   const { empresa_id: empresaId, conductor_id: conductorId, estado: resolvedEstado } = insertCtx;
-  if (ownershipMode === SERVICIO_OWNERSHIP.AUTONOMO_PRO) {
-    if (empresaId != null) {
+  const autonomoProInsert = isAutonomoProOwnershipMode(ownershipMode);
+  const resolvedEmpresaId = autonomoProInsert ? null : empresaId;
+  if (autonomoProInsert) {
+    if (empresaId != null || normalizeServicioEmpresaId(basePayload.empresa_id) != null) {
       throw new Error("Autónomo PRO: empresa_id debe ser null en el INSERT.");
     }
     if (!conductorId || conductorId !== authUid) {
@@ -11804,7 +11828,7 @@ async function crearServicioConIdentidad({
       : null;
   const corePayload = {
     ...(servicioId ? { id: servicioId } : {}),
-    empresa_id: empresaId,
+    empresa_id: resolvedEmpresaId,
     conductor_id: conductorId,
     estado: resolvedEstado,
     origen: String(basePayload.origen || "").trim(),
@@ -11824,8 +11848,8 @@ async function crearServicioConIdentidad({
   });
   logServiceCreate("SERVICE_CREATE_EMPRESA_ID",{
     raw:empresaIdRaw,
-    resolved:empresaId,
-    isNull:empresaId==null,
+    resolved:resolvedEmpresaId,
+    isNull:resolvedEmpresaId==null,
     typeRaw:empresaIdRaw==null?"null/undefined":typeof empresaIdRaw,
   });
   logServiceCreate("SERVICE_CREATE_CONDUCTOR_ID",{
@@ -11842,7 +11866,7 @@ async function crearServicioConIdentidad({
     json:JSON.stringify(corePayload),
   });
 
-  if(!empresaId&&!conductorId){
+  if(!resolvedEmpresaId&&!conductorId){
     const msg="Falta empresa_id y conductor_id: no se puede crear el servicio.";
     logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{status:0,errText:msg,empresa_id:null});
     console.log("SERVICE_CREATE_RESPONSE_FAIL",{
@@ -11857,7 +11881,7 @@ async function crearServicioConIdentidad({
   let pgRlsPreCheck = null;
   if (SERVICE_INSERT_RLS_DIAG) {
     const rlsDiag = await fetchDebugServicioInsertRlsContext(
-      { empresaId, conductorId },
+      { empresaId: resolvedEmpresaId, conductorId },
     );
     pgRlsPreCheck = rlsDiag;
     console.warn(
@@ -16962,13 +16986,14 @@ function bucketServiceDocDate(sv, refDate) {
   return "older";
 }
 
-function ServicioDocsView({ uid, showToast, onBack }) {
+function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false, conductorNombre = "Conductor" }) {
   const [servicios, setServicios] = useState([]);
   const [stops, setStops] = useState({});
   const [evidencias, setEvidencias] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandido, setExpandido] = useState({});
   const [visorCtx, setVisorCtx] = useState(null);
+  const [expedienteLiteSv, setExpedienteLiteSv] = useState(null);
 
   const shell = "#0F172A";
   const card = "#1E293B";
@@ -16991,7 +17016,10 @@ function ServicioDocsView({ uid, showToast, onBack }) {
     }
     async function cargar() {
       try {
-        const sr = await sbFetch(buildConductorOwnServiciosQuery(uid, { limit: 20 }));
+        const serviciosQuery = showOperationalLite
+          ? buildAutonomoProOwnServiciosQuery(uid, { limit: 20 })
+          : buildConductorOwnServiciosQuery(uid, { limit: 20 });
+        const sr = await sbFetch(serviciosQuery);
         if (!sr.ok) throw new Error(`servicios HTTP ${sr.status}`);
         const svs = await sr.json();
         const list = Array.isArray(svs) ? svs : [];
@@ -17297,6 +17325,27 @@ function ServicioDocsView({ uid, showToast, onBack }) {
               );
             })}
           </div>
+          {showOperationalLite && canShowOperationalSummaryLiteInDocs(sv) ? (
+            <button
+              type="button"
+              onClick={() => setExpedienteLiteSv(sv)}
+              style={{
+                width: "calc(100% - 20px)",
+                margin: "0 10px 10px",
+                minHeight: 42,
+                borderRadius: 10,
+                border: "1px solid rgba(14,165,233,.45)",
+                background: "rgba(14,165,233,.12)",
+                color: "#7DD3FC",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+                letterSpacing: 0.3,
+              }}
+            >
+              📋 Documento operacional
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -17311,6 +17360,25 @@ function ServicioDocsView({ uid, showToast, onBack }) {
 
   return (
     <div style={{ minHeight: "calc(100vh - 120px)", background: shell, padding: "0 0 88px" }}>
+      {expedienteLiteSv && showOperationalLite && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.88)", zIndex: 520, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setExpedienteLiteSv(null)}
+        >
+          <div
+            style={{ background: "#F8FAFC", borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 560, maxHeight: "92vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #E2E8F0", background: "#fff", position: "sticky", top: 0, zIndex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#0F172A" }}>Expediente operacional</div>
+              <button type="button" onClick={() => setExpedienteLiteSv(null)} style={{ background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 8, width: 32, height: 32, cursor: "pointer" }}>
+                ✕
+              </button>
+            </div>
+            <OperationalSummaryLite servicio={expedienteLiteSv} conductorNombre={conductorNombre} showToast={showToast} compact />
+          </div>
+        </div>
+      )}
       {visorCtx && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.92)", zIndex: 500, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setVisorCtx(null)}>
           <div style={{ background: card, borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 520, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${cardBorder}` }} onClick={(e) => e.stopPropagation()}>
@@ -17433,7 +17501,7 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false}){
+const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false,useOperationalLite=false}){
   const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
@@ -17514,23 +17582,13 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
     </div>
   );
 
-  if(servicio.estado==="cerrado"||isServicioExpedienteCerrado(servicio)){
-    const cierre=getExpedienteCierre(servicio);
-    const cerradoLabel=cierre?.closed_at
-      ?new Date(cierre.closed_at).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})
-      :null;
+  if(useOperationalLite&&canShowOperationalSummaryLite(servicio)){
     return(
-      <div style={{padding:"24px 16px",background:"#F8FAFC",minHeight:"60vh"}}>
-        <div style={{background:card,border:"1px solid #E2E8F0",borderRadius:18,padding:"28px 20px",textAlign:"center",boxShadow:"0 10px 28px rgba(15,23,42,.06)"}}>
-          <div style={{fontSize:12,fontWeight:800,color:"#0F766E",letterSpacing:.8,marginBottom:10}}>EXPEDIENTE CERRADO</div>
-          <div style={{fontSize:18,fontWeight:750,color:"#0F766E",marginBottom:6}}>Viaje cerrado</div>
-          <div style={{fontSize:14,color:su,marginBottom:8}}>{servicio.origen} → {servicio.destino}</div>
-          {cerradoLabel?<div style={{fontSize:12,color:su,marginBottom:20}}>Cerrado {cerradoLabel}</div>:null}
-          {cierre?.comentario?<div style={{fontSize:13,color:tx,textAlign:"left",background:"#F8FAFC",borderRadius:10,padding:"10px 12px",marginBottom:16,lineHeight:1.45}}>{cierre.comentario}</div>:null}
-          {canCreateServices&&(
-          <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
-          )}
-        </div>
+      <div style={{padding:"12px 12px 24px",background:"#F8FAFC",minHeight:"60vh"}}>
+        <OperationalSummaryLite servicio={servicio} conductorNombre={conductorNombre} showToast={showToast} compact/>
+        {canCreateServices&&(
+        <button onClick={()=>setCreando(true)} style={{width:"100%",marginTop:14,background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
+        )}
         {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
       </div>
     );

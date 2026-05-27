@@ -24,6 +24,7 @@ BEGIN;
 -- Autónomo PRO a0000000-0000-4000-8000-000000000030
 -- Servicio A  a0000000-0000-4000-8000-000000000101  (creado CON conductor)
 -- Servicio B  a0000000-0000-4000-8000-000000000102  (sin conductor → asignado)
+-- Servicio autónomo (sin empresa_id) a0000000-0000-4000-8000-000000000103
 -- Stop A1 carga    a0000000-0000-4000-8000-000000000201
 -- Stop A2 descarga a0000000-0000-4000-8000-000000000202
 -- Stop B1 carga    a0000000-0000-4000-8000-000000000211
@@ -36,8 +37,10 @@ DECLARE
   v_empresa uuid := 'a0000000-0000-4000-8000-000000000001';
   v_owner uuid := 'a0000000-0000-4000-8000-000000000010';
   v_conductor uuid := 'a0000000-0000-4000-8000-000000000020';
+  v_autonomo uuid := 'a0000000-0000-4000-8000-000000000030';
   v_svc1 uuid := 'a0000000-0000-4000-8000-000000000101';
   v_svc2 uuid := 'a0000000-0000-4000-8000-000000000102';
+  v_svc_autonomo uuid := 'a0000000-0000-4000-8000-000000000103';
   v_stop_a1 uuid := 'a0000000-0000-4000-8000-000000000201';
   v_stop_a2 uuid := 'a0000000-0000-4000-8000-000000000202';
   v_stop_b1 uuid := 'a0000000-0000-4000-8000-000000000211';
@@ -173,6 +176,14 @@ BEGIN
     VALUES (v_empresa, v_conductor, true);
   END IF;
 
+  -- Autónomo PRO también vinculado a flota (QA tenant: servicios propios con empresa_id NULL)
+  IF EXISTS (SELECT 1 FROM public.conductor_empresa WHERE empresa_id = v_empresa AND user_id = v_autonomo) THEN
+    UPDATE public.conductor_empresa SET activo = true WHERE empresa_id = v_empresa AND user_id = v_autonomo;
+  ELSE
+    INSERT INTO public.conductor_empresa (empresa_id, user_id, activo)
+    VALUES (v_empresa, v_autonomo, true);
+  END IF;
+
   -- ─── 4 Servicios ───────────────────────────────────────────────────────────
   INSERT INTO public.servicios (
     id, empresa_id, conductor_id, estado, origen, destino, referencia, fecha_inicio
@@ -201,6 +212,19 @@ BEGIN
     conductor_id = EXCLUDED.conductor_id,
     estado = EXCLUDED.estado,
     referencia = EXCLUDED.referencia;
+
+  INSERT INTO public.servicios (
+    id, empresa_id, conductor_id, estado, origen, destino, referencia, fecha_inicio
+  ) VALUES (
+    v_svc_autonomo, NULL, v_autonomo, 'cerrado',
+    'Sevilla, España', 'Cádiz, España', NULL, v_now - interval '5 days'
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    empresa_id = NULL,
+    conductor_id = EXCLUDED.conductor_id,
+    estado = EXCLUDED.estado,
+    origen = EXCLUDED.origen,
+    destino = EXCLUDED.destino;
 
   -- Columnas opcionales identidad servicio
   BEGIN

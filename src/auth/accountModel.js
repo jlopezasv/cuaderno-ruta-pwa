@@ -30,6 +30,7 @@ export const EMPRESA_STATUS = Object.freeze({
 export const FEATURE_KEYS = Object.freeze({
   CAN_CREATE_SERVICES: "can_create_services",
   CAN_VIEW_ADVANCED_DOCS: "can_view_advanced_docs",
+  CAN_VIEW_OPERATIONAL_LITE: "can_view_operational_lite",
   CAN_VIEW_ENTERPRISE_DOCS: "can_view_enterprise_docs",
   CAN_MANAGE_USERS: "can_manage_users",
   CAN_ASSIGN_DRIVERS: "can_assign_drivers",
@@ -99,6 +100,7 @@ export function deriveFeatureFlags(account, activeMode = "conductor") {
   return {
     [FEATURE_KEYS.CAN_CREATE_SERVICES]: !inEmpresaShell && isAutonomoPro,
     [FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS]: !inEmpresaShell && isAutonomoPro,
+    [FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE]: !inEmpresaShell && isAutonomoPro,
     [FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS]: inEmpresaShell && isEmpresaAccount,
     [FEATURE_KEYS.CAN_MANAGE_USERS]: inEmpresaShell && isEmpresaAccount,
     [FEATURE_KEYS.CAN_ASSIGN_DRIVERS]: inEmpresaShell && isEmpresaAccount,

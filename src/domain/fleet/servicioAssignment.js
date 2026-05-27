@@ -84,21 +84,23 @@ export async function ensureServicioHasStops({
   }
 }
 
-/** Carga servicios de flota empresa: por conductores vinculados + empresa_id. */
+/** Carga servicios de flota empresa: solo filas con empresa_id del tenant (no autónomo propio). */
 export async function fetchFlotaServiciosForEmpresa(sbFetchFn, empresaId, conductorUids = []) {
   const byId = new Map();
   const uids = [...new Set((conductorUids || []).filter(Boolean))];
   const ASSIGN_CHUNK = 40;
+  const tenantId = empresaId ? String(empresaId) : "";
 
   for (let i = 0; i < uids.length; i += ASSIGN_CHUNK) {
     const slice = uids.slice(i, i + ASSIGN_CHUNK);
+    if (!tenantId) continue;
     const r = await sbFetchFn(
-      `/rest/v1/servicios?conductor_id=in.(${slice.join(",")})&order=created_at.desc&limit=120`,
+      `/rest/v1/servicios?conductor_id=in.(${slice.join(",")})&empresa_id=eq.${tenantId}&order=created_at.desc&limit=120`,
     );
     if (r.ok) {
       const rows = await r.json();
       (Array.isArray(rows) ? rows : []).forEach((s) => {
-        if (s?.id) byId.set(s.id, s);
+        if (s?.id && String(s.empresa_id || "") === tenantId) byId.set(s.id, s);
       });
     }
   }
