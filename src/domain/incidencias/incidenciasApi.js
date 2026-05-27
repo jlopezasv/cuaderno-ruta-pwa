@@ -1,7 +1,21 @@
-import { sbFetch } from "../../data/supabaseClient.js";
+import { sbFetch, getAuthUid } from "../../data/supabaseClient.js";
 
 function norm(v) {
   return String(v || "").toLowerCase();
+}
+
+/** empresa_id en incidencias: null para Autónomo PRO; copia del servicio en flota. */
+export function resolveIncidenciaEmpresaId(servicio) {
+  const e = servicio?.empresa_id;
+  if (e === undefined || e === null) return null;
+  const s = String(e).trim();
+  return s || null;
+}
+
+export function resolveIncidenciaConductorId(servicio, authUid = null) {
+  const fromServicio = servicio?.conductor_id;
+  if (fromServicio) return fromServicio;
+  return authUid || getAuthUid?.() || null;
 }
 
 export function deriveFaseOperativa({ servicio = null, stop = null } = {}) {
@@ -25,11 +39,20 @@ export async function createIncidencia({
   if (!servicioId) throw new Error("Servicio inválido para incidencia");
   const tituloTrim = String(titulo || "").trim();
   if (tituloTrim.length < 3) throw new Error("El título debe tener al menos 3 caracteres");
+  const authUid = getAuthUid?.() || null;
+  const empresaId = resolveIncidenciaEmpresaId(servicio);
+  const conductorId = resolveIncidenciaConductorId(servicio, authUid);
+  if (!empresaId && !conductorId) {
+    throw new Error("No se puede registrar incidencia: falta conductor del servicio");
+  }
   const body = {
+    ...(typeof crypto !== "undefined" && crypto.randomUUID
+      ? { id: crypto.randomUUID() }
+      : {}),
     servicio_id: servicioId,
     stop_id: stop?.id || null,
-    empresa_id: servicio?.empresa_id,
-    conductor_id: servicio?.conductor_id || null,
+    empresa_id: empresaId,
+    conductor_id: conductorId,
     titulo: tituloTrim,
     descripcion: String(descripcion || "").trim() || null,
     fase_operativa: deriveFaseOperativa({ servicio, stop }),
@@ -46,16 +69,44 @@ export async function createIncidencia({
   };
   const r = await sbFetch("/rest/v1/incidencias", {
     method: "POST",
-    headers: { Prefer: "return=representation" },
+    headers: { Prefer: "return=minimal" },
     body: JSON.stringify(body),
   });
-  const data = await r.json().catch(() => null);
   if (!r.ok) {
-    throw new Error(data?.message || data?.hint || `No se pudo crear la incidencia (${r.status})`);
+    const data = await r.json().catch(() => null);
+    const msg =
+      data?.message ||
+      data?.hint ||
+      (typeof data === "string" ? data : null) ||
+      `No se pudo crear la incidencia (${r.status})`;
+    throw new Error(msg);
   }
-  const saved = Array.isArray(data) ? data[0] : data;
-  if (!saved?.id) throw new Error("La incidencia no devolvió id");
-  return saved;
+  if (body.id) {
+    const getRes = await sbFetch(
+      `/rest/v1/incidencias?id=eq.${body.id}&select=*`,
+    );
+    if (getRes.ok) {
+      const rows = await getRes.json().catch(() => []);
+      const saved = Array.isArray(rows) ? rows[0] : rows;
+      if (saved?.id) return saved;
+    }
+    return {
+      id: body.id,
+      ...body,
+      registrado_en: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const getRes = await sbFetch(
+    `/rest/v1/incidencias?servicio_id=eq.${servicioId}&order=created_at.desc&limit=1&select=*`,
+  );
+  if (getRes.ok) {
+    const rows = await getRes.json().catch(() => []);
+    const saved = Array.isArray(rows) ? rows[0] : rows;
+    if (saved?.id) return saved;
+  }
+  throw new Error("La incidencia se creó pero no se pudo leer (revisa permisos SELECT)");
 }
 
 export async function listIncidenciasByServicio(servicioId) {
