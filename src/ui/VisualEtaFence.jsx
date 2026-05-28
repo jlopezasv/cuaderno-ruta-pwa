@@ -11,7 +11,7 @@ export class VisualEtaFence extends Component {
   }
 
   componentDidCatch(err, info) {
-    console.warn("[VisualEtaFence]", err, info?.componentStack);
+    if (import.meta.env.DEV) console.warn("[VisualEtaFence]", err, info?.componentStack);
   }
 
   componentDidUpdate(prevProps) {

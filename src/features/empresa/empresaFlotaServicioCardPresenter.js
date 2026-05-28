@@ -328,7 +328,7 @@ export function buildEmpresaFlotaCardSummary(args) {
   try {
     return buildEmpresaFlotaCardSummaryInner(args);
   } catch (err) {
-    console.warn("[buildEmpresaFlotaCardSummary]", err);
+    if (import.meta.env.DEV) console.warn("[buildEmpresaFlotaCardSummary]", err);
     const servicio = args?.servicio;
     const stops = args?.stops || [];
     const pres = getServiceOperationalPresentation(servicio, stops);

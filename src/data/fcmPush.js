@@ -25,7 +25,7 @@ const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
 const TOKEN_CACHE_KEY = "cuaderno_fcm_token_v1";
 
 function pushLog(...args) {
-  console.log("[push]", ...args);
+  if (import.meta.env.DEV) console.log("[push]", ...args);
 }
 
 function partialToken(token) {

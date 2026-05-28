@@ -28,16 +28,12 @@ import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./confi
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
-  fetchDebugServicioInsertRlsContext,
-  formatServicioRlsDiagSummary,
-} from "./data/debugServicioInsertRls.js";
-import {
   assertPostgrestOk,
   formatServiceCreateStepError,
   parsePostgrestError,
   traceServiceCreateStep,
 } from "./domain/service/serviceCreateStepTrace.js";
-import DemoServicioInsertRlsPanel from "./components/DemoServicioInsertRlsPanel.jsx";
+import { devInfo, devLog, devWarn } from "./lib/devOnlyLog.js";
 import {
   loadLocalDb as loadDB,
   saveLocalDb as saveDB,
@@ -2380,19 +2376,19 @@ function AppInner(){
     navigator.serviceWorker.register('/sw.js').then(async reg=>{
       swRef.current=reg;
       try{
-        console.log("[push] initFcmPush invoked after conductor session (user state set)",{uid:String(user).slice(0,8)+"…"});
+        devLog("[push] initFcmPush invoked after conductor session (user state set)",{uid:String(user).slice(0,8)+"…"});
         const ctx=getPushClientContext();
         if(ctx.ios&&!ctx.standalone){
           showToast("Instala la app en pantalla de inicio para recibir servicios en tiempo real.");
         }
         const init=await initFcmPush({showToast});
-        if(init?.ok)console.log("[push] FCM listo tras login");
-        else console.log("[push] initFcmPush finished without token",{reason:init?.reason,traceKeys:init?.trace?Object.keys(init.trace):[]});
+        if(init?.ok)devLog("[push] FCM listo tras login");
+        else devLog("[push] initFcmPush finished without token",{reason:init?.reason,traceKeys:init?.trace?Object.keys(init.trace):[]});
       }catch(e){
-        console.log("[push] Push registration exception",e?.message||String(e),e);
+        devLog("[push] Push registration exception",e?.message||String(e),e);
       }
     }).catch((e)=>{
-      console.log("[push] serviceWorker.register failed (AppInner effect)",e?.message||String(e),e);
+      devLog("[push] serviceWorker.register failed (AppInner effect)",e?.message||String(e),e);
     });
   },[user,prof?.tipo_cuenta,showToast]);
 
@@ -3162,8 +3158,6 @@ function AppInner(){
           Tu cuenta empresa está en revisión. Puedes operar como conductor; el panel de gestión estará disponible tras la validación.
         </div>
       )}
-
-      <DemoServicioInsertRlsPanel />
 
       {/* Banner trial — desactivado hasta activar pagos */}
       {false&&subStatus?.status==="trial"&&subStatus.days_left<=5&&(
@@ -4675,9 +4669,8 @@ function isGenericOperationalOrigin(value){
 }
 
 function operationalPlanLog(level,step,data){
-  if(typeof console==="undefined")return;
-  const fn=level==="warn"?console.warn:console.info;
-  fn(`[operational-plan] ${step}`,data??"");
+  if(level==="warn")devWarn(`[operational-plan] ${step}`,data??"");
+  else devInfo(`[operational-plan] ${step}`,data??"");
 }
 
 function operationalGpsFromPlan(plan){
@@ -4707,9 +4700,8 @@ function gpsActionErrorMessage(error){
 }
 
 function trackingLog(step,data){
-  if(typeof console==="undefined")return;
-  if(step.includes("failed")||step.includes("denied")||step.includes("timeout"))console.warn(`[tracking] ${step}`,data??"");
-  else console.info(`[tracking] ${step}`,data??"");
+  if(step.includes("failed")||step.includes("denied")||step.includes("timeout"))devWarn(`[tracking] ${step}`,data??"");
+  else devInfo(`[tracking] ${step}`,data??"");
 }
 
 /**
@@ -4983,7 +4975,7 @@ async function persistServiceOperationalEta({
 
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
   const depStopsIn=Array.isArray(stops)?stops:[];
-  console.log("[OP3] register start",{
+  devLog("[OP3] register start",{
     uid:uid||null,
     eventType:eventType||null,
     servicioId:servicio?.id||null,
@@ -5004,7 +4996,7 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   const gps=await getDriverActionGps({fresh:true,timeoutMs:15000});
   if(!gps.ok){
-    console.warn("[OP3] gps fail",{
+    devWarn("[OP3] gps fail",{
       eventType:eventType||null,
       servicioId:servicio?.id||null,
       stopId:stopId||null,
@@ -5015,7 +5007,7 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
     return{gpsOk:false,error:gps.error};
   }
   const point=gps.point;
-  console.log("[OP3] gps ok",{
+  devLog("[OP3] gps ok",{
     eventType:eventType||null,
     servicioId:servicio?.id||null,
     stopId:stopId||null,
@@ -5030,14 +5022,14 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
 
   try{
     await saveDriverActionLocation(uid,point,{preResolved:snap,eventType,stopId});
-    console.log("[OP3] saveDriverActionLocation ok",{
+    devLog("[OP3] saveDriverActionLocation ok",{
       eventType:eventType||null,
       servicioId:snap?.servicio_id||null,
       stopId:stopId||null,
       empresaId:snap?.empresa_id||null,
     });
   }catch(e){
-    console.warn("ubicacion evento save failed:",e);
+    devWarn("ubicacion evento save failed:",e);
     trackingLog("operativa ubicacion save_exception",{uid,error:String(e?.message||e)});
     const msg=e?.message?String(e.message).slice(0,120):"Error desconocido";
     showToast?.(`Ubicación GPS lista, pero no se guardó: ${msg}`,"#F97316",4200);
@@ -5069,7 +5061,7 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
       empresa_id:snap.empresa_id,
       has_eta:!!etaLabel,
     });
-    console.log("[OP3] register success",{
+    devLog("[OP3] register success",{
       eventType:eventType||null,
       servicioId:snap?.servicio_id||null,
       stopId:stopId||null,
@@ -5077,11 +5069,11 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
     });
     return{gpsOk:true,point,...(etaRes||{})};
   }catch(e){
-    console.warn("eta operacional failed:",e);
+    devWarn("eta operacional failed:",e);
     showToast?.("Ubicación guardada. ETA no recalculada","#F97316",3200);
     showToast?.(successBase,"#166534",2400);
     trackingLog("operativa flow_eta_fail",{uid,error:String(e?.message||e)});
-    console.warn("[OP3] register eta branch fail",{
+    devWarn("[OP3] register eta branch fail",{
       eventType:eventType||null,
       servicioId:snap?.servicio_id||null,
       stopId:stopId||null,
@@ -5132,7 +5124,7 @@ async function resolveDriverActiveServiceAndStops(uid){
   if(!uid)return empty;
   const rawCandidates=await fetchDriverOperationalCandidates(uid);
   const candidates=sortDriverOperationalCandidates(rawCandidates);
-  console.log("[OP2] active service candidates",{
+  devLog("[OP2] active service candidates",{
     uid,
     rows:candidates.length,
     ids:candidates.map(s=>s?.id),
@@ -5146,7 +5138,7 @@ async function resolveDriverActiveServiceAndStops(uid){
   for(const sv of candidates){
     if(!sv?.id)continue;
     const arr=await fetchStopsForServicioId(sv.id);
-    console.log("[OP2] candidate stops",{
+    devLog("[OP2] candidate stops",{
       servicioId:sv.id,
       estado:sv?.estado||null,
       rows:arr.length,
@@ -5168,7 +5160,7 @@ async function resolveDriverActiveServiceAndStops(uid){
   }
   const siguienteServicio=pickNextAssignedService(candidates,servicio?.id||null);
   const siguientesStops=siguienteServicio?.id?await fetchStopsForServicioId(siguienteServicio.id):[];
-  console.log("[OP2] driver queue resolved",{
+  devLog("[OP2] driver queue resolved",{
     uid,
     currentId:servicio?.id||null,
     nextId:siguienteServicio?.id||null,
@@ -5178,7 +5170,7 @@ async function resolveDriverActiveServiceAndStops(uid){
 
 async function readActiveServiceForDriver(uid){
   const out=await resolveDriverActiveServiceAndStops(uid);
-  console.log("[OP2] readActiveServiceForDriver resolved",{
+  devLog("[OP2] readActiveServiceForDriver resolved",{
     uid,
     servicioId:out?.servicio?.id||null,
     estado:out?.servicio?.estado||null,
@@ -6799,7 +6791,7 @@ function RoutePlanner({norma}){
       setOsmParkings(parkings);
       return parkings;
     }catch(e){
-      console.warn("Overpass error:",e);
+      devWarn("Overpass error:",e);
       return[];
     }
   }
@@ -10841,7 +10833,7 @@ function ParkingMap({prof,dark,norma,compact=false}){
           return;
         }
       }catch(e){
-        console.warn("Overpass endpoint failed:",endpoint,e.message);
+        devWarn("Overpass endpoint failed:",endpoint,e.message);
       }
     }
     // Si todos fallan, cargar datos estáticos mínimos
@@ -11682,13 +11674,13 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   const result=await insertStopsForServicio(servicioId,stops);
   if(result.ok){
     if(result.partial){
-      console.warn(`[OP3] create stops partial (${logTag})`,{servicioId,error:result.error});
+      devWarn(`[OP3] create stops partial (${logTag})`,{servicioId,error:result.error});
     }else{
-      console.log(`[OP3] create stops ok (${logTag})`,{servicioId,rows:result.rows?.length||stops?.length});
+      devLog(`[OP3] create stops ok (${logTag})`,{servicioId,rows:result.rows?.length||stops?.length});
     }
     return;
   }
-  console.warn(`[OP3] create stops failed (${logTag})`,{
+  devWarn(`[OP3] create stops failed (${logTag})`,{
     servicioId,
     status:result.status,
     pgTable:result.pgTable,
@@ -11697,10 +11689,10 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   });
   try{
     await ensureServicioHasStops({servicioId,origen,destino});
-    console.log(`[OP3] create stops fallback ok (${logTag})`,{servicioId});
+    devLog(`[OP3] create stops fallback ok (${logTag})`,{servicioId});
     return;
   }catch(fallbackErr){
-    console.warn(`[OP3] create stops fallback failed (${logTag})`,{
+    devWarn(`[OP3] create stops fallback failed (${logTag})`,{
       servicioId,
       error:fallbackErr?.message||fallbackErr,
     });
@@ -11756,15 +11748,9 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
   }
 }
 
-/** TEMP: depuración INSERT servicios (planificar sin conductor / RLS). Quitar cuando RLS esté validado. */
 const SERVICE_CREATE_DEBUG=false;
-/** TEMP: RPC Postgres con JWT real antes del INSERT (migración debug_servicio_insert_rls_context). */
-const SERVICE_INSERT_RLS_DIAG=true;
-function logServiceCreate(tag,payload){
+function logServiceCreate(_tag,_payload){
   if(!SERVICE_CREATE_DEBUG)return;
-  const line=`[${tag}]`;
-  console.log(line,payload);
-  if(tag.includes("FAIL"))console.warn(line,payload);
 }
 
 async function crearServicioConIdentidad({
@@ -11869,41 +11855,7 @@ async function crearServicioConIdentidad({
   if(!resolvedEmpresaId&&!conductorId){
     const msg="Falta empresa_id y conductor_id: no se puede crear el servicio.";
     logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{status:0,errText:msg,empresa_id:null});
-    console.log("SERVICE_CREATE_RESPONSE_FAIL",{
-      error:msg,
-      payload,
-      empresa_id:payload?.empresa_id,
-      conductor_id:payload?.conductor_id,
-    });
     throw new Error(msg);
-  }
-
-  let pgRlsPreCheck = null;
-  if (SERVICE_INSERT_RLS_DIAG) {
-    const rlsDiag = await fetchDebugServicioInsertRlsContext(
-      { empresaId: resolvedEmpresaId, conductorId },
-    );
-    pgRlsPreCheck = rlsDiag;
-    console.warn(
-      `[SERVICE_INSERT_RLS_DIAG] ${_debugSource || "crearServicioConIdentidad.pre_insert"}`,
-      rlsDiag,
-    );
-    if (!rlsDiag.ok) {
-      console.warn(
-        "[SERVICE_INSERT_RLS_DIAG] RPC no disponible — reaplica debug_servicio_insert_rls_context en Supabase:",
-        rlsDiag.error,
-      );
-    } else if (rlsDiag.data?.user_can_insert_servicio === false) {
-      console.warn(
-        "[SERVICE_INSERT_RLS_DIAG] Postgres rechazaría INSERT (user_can_insert_servicio=false):",
-        rlsDiag.data,
-      );
-    } else if (rlsDiag.data?.user_can_insert_servicio === true) {
-      console.warn(
-        "[SERVICE_INSERT_RLS_DIAG] user_can_insert_servicio=TRUE. Si POST falla con 42501, suele ser srv_sel (return=representation) no el INSERT.",
-        rlsDiag.data,
-      );
-    }
   }
 
   let res;
@@ -11929,10 +11881,7 @@ async function crearServicioConIdentidad({
         row = Array.isArray(rows) ? rows[0] : rows;
       }
       if (!row?.id) {
-        console.warn(
-          "[SERVICE_CREATE] INSERT ok (minimal) pero SELECT srv_sel falló o vacío — fila sintética",
-          { servicioId },
-        );
+        devWarn("[SERVICE_CREATE] INSERT ok pero SELECT vacío — fila sintética", { servicioId });
         row = { id: servicioId, ...corePayload };
       }
     }
@@ -11965,37 +11914,10 @@ async function crearServicioConIdentidad({
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
   if (errCode === "42501") {
-    const rlsDiag = {
-      ownershipMode,
-      authUid,
-      sessionUserId: getUserId() ?? null,
-      empresa_id: corePayload.empresa_id,
-      conductor_id: corePayload.conductor_id,
-      payloadJson: JSON.stringify(corePayload),
-      pgTable: parsedErr.table,
-    };
-    console.warn("SERVICE_CREATE_RLS_42501", rlsDiag);
-    let pgSummary = pgRlsPreCheck?.data
-      ? formatServicioRlsDiagSummary(pgRlsPreCheck.data)
-      : null;
-    if (!pgSummary && SERVICE_INSERT_RLS_DIAG) {
-      const postDiag = await fetchDebugServicioInsertRlsContext({
-        empresaId: corePayload.empresa_id,
-        conductorId: corePayload.conductor_id,
-      });
-      pgSummary = postDiag.data
-        ? formatServicioRlsDiagSummary(postDiag.data)
-        : postDiag.error || "RPC falló";
-      console.warn("[SERVICE_INSERT_RLS_DIAG] post_42501", postDiag);
-    }
-    const rpcSaysOk = pgRlsPreCheck?.data?.user_can_insert_servicio === true;
     const err = new Error(
       `RLS 42501 en "${parsedErr.table || "servicios"}" [POST servicios]. ` +
         `conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
-        `Postgres: ${pgSummary ?? "sin RPC"}.` +
-        (rpcSaysOk
-          ? " can_insert=true: revisa srv_sel (SELECT tras INSERT) o aplica migración user_can_access_servicio autonomo_pro."
-          : ""),
+        `${parsedErr.message || errText}`,
     );
     err.stepId = "POST servicios";
     err.pgTable = parsedErr.table || "servicios";
@@ -12727,7 +12649,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       await downloadServiceExpedientePdf(expediente);
       showToast("PDF descargado");
     }catch(e){
-      console.warn("download expediente:",e);
+      devWarn("download expediente:",e);
       showToast("No se pudo descargar el expediente");
     }
   }
@@ -12749,7 +12671,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         if(!res.ok)throw new Error(`Supabase ${res.status}`);
         setFlotaServicios(prev=>prev.map(row=>row.id===sv.id?{...row,referencia}:row));
       }catch(e){
-        console.warn("archive expediente:",e);
+        devWarn("archive expediente:",e);
         showToast("No se pudo archivar el expediente");
         return;
       }
@@ -12823,7 +12745,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       await loadFlotaRef.current?.(true);
       showToast("Servicio anulado");
     }catch(e){
-      console.warn("anular servicio:",e);
+      devWarn("anular servicio:",e);
       const msg=String(e.detail||e.message||"").slice(0,220)||"No se pudo anular el servicio";
       setAnularModal(prev=>prev?{...prev,loading:false,error:msg}:prev);
       showToast("No se pudo anular el servicio");
@@ -12965,7 +12887,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   async function fetchFlotaStopsMapForServicioIds(ids){
     if(!ids?.length)return{};
     const stps=await sbFetch(`/rest/v1/stops?servicio_id=in.(${ids.join(",")})&order=servicio_id.asc,orden.asc`).then(r=>r.json());
-    console.log("[OP3] fetchFlotaStopsMapForServicioIds",{
+    devLog("[OP3] fetchFlotaStopsMapForServicioIds",{
       requestedIds:ids,
       rows:Array.isArray(stps)?stps.length:null,
       servicioIdsInRows:Array.isArray(stps)?[...new Set(stps.map(s=>s?.servicio_id).filter(Boolean))]:[],
@@ -12984,16 +12906,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     const missing=ids.filter((id)=>!flotaStopsFetchedIdsRef.current.has(id));
     if(!missing.length)return;
     try{
-      console.log("[TL2] ensure stops request",{ids,missing});
+      devLog("[TL2] ensure stops request",{ids,missing});
       const map=await fetchFlotaStopsMapForServicioIds(missing);
-      console.log("[TL2] ensure stops response",{
+      devLog("[TL2] ensure stops response",{
         servicios:Object.keys(map||{}),
         counts:Object.fromEntries(Object.entries(map||{}).map(([k,v])=>[k,Array.isArray(v)?v.length:0])),
       });
       missing.forEach((id)=>flotaStopsFetchedIdsRef.current.add(id));
       setFlotaStops((prev)=>{
         const next=mergeFlotaStopsMap(prev,map);
-        console.log("[TL2] ensure stops merged",{
+        devLog("[TL2] ensure stops merged",{
           servicios:Object.keys(next||{}).length,
           changed:next!==prev,
           targetIds:missing,
@@ -13001,7 +12923,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         flotaStopsRef.current=next;
         return next;
       });
-    }catch(e){console.warn("ensureFlotaStopsForServicioIds:",e);}
+    }catch(e){devWarn("ensureFlotaStopsForServicioIds:",e);}
   }
 
   async function ensureFlotaEvidenciasForServicio(servicioId,{force=false}={}){
@@ -13017,7 +12939,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       setFlotaEvs(merged);
       flotaEvsLoadedServiciosRef.current.add(servicioId);
       return grouped;
-    }catch(e){console.warn("ensureFlotaEvidenciasForServicio",servicioId,e);}
+    }catch(e){devWarn("ensureFlotaEvidenciasForServicio",servicioId,e);}
     return null;
   }
 
@@ -13030,7 +12952,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       flotaEvsRef.current=merged;
       setFlotaEvs(merged);
       flotaServiciosRef.current.forEach(s=>{if(s?.id)flotaEvsLoadedServiciosRef.current.add(s.id);});
-    }catch(e){console.warn("ensureFlotaEvidenciasForDocumentos:",e);}
+    }catch(e){devWarn("ensureFlotaEvidenciasForDocumentos:",e);}
   }
 
   async function ensureFlotaExtraDocsForDocumentos({force=false}={}){
@@ -13043,14 +12965,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       flotaExtraDocsRef.current=grouped;
       setFlotaExtraDocs(grouped);
       flotaExtraDocsLoadedRef.current=true;
-      console.log("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_LOAD",{
+      devLog("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_LOAD",{
         empresaId:empresa.id,
         servicios:servicioIds.length,
         filas:rows.length,
         serviciosConExtra:Object.keys(grouped).length,
       });
     }catch(e){
-      console.warn("ensureFlotaExtraDocsForDocumentos:",e);
+      devWarn("ensureFlotaExtraDocsForDocumentos:",e);
       flotaExtraDocsLoadedRef.current=false;
     }
   }
@@ -13066,14 +12988,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       flotaExtraDocsRef.current=next;
       setFlotaExtraDocs(next);
       flotaExtraDocsServicioLoadedRef.current.add(servicioId);
-      console.log("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_SERVICIO",{
+      devLog("[DOCUMENT_EXTRA] DOCUMENT_EMPRESA_SERVICIO",{
         servicioId,
         count:rows.length,
         ids:rows.map(r=>r.id),
       });
       return rows;
     }catch(e){
-      console.warn("ensureFlotaExtraDocsForServicio",servicioId,e);
+      devWarn("ensureFlotaExtraDocsForServicio",servicioId,e);
       flotaExtraDocsServicioLoadedRef.current.delete(servicioId);
       return [];
     }
@@ -13082,7 +13004,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   async function abrirExpedientePreview(sv){
     if(!sv?.id)return;
     setDocsLoading(true);
-    console.log("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_START",{servicioId:sv.id});
+    devLog("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_START",{servicioId:sv.id});
     try{
       await ensureFlotaStopsForServicioIds([sv.id]);
       await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
@@ -13090,7 +13012,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const preview=await buildExpedienteCompleto(sv);
       if(!preview)throw new Error("sin_datos");
       const extraMerged=(preview.evidencias||[]).filter(e=>e.source==="servicio_documentos_extra");
-      console.log("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_OK",{
+      devLog("[DOCUMENT_EXTRA] DOCUMENT_VER_EXPEDIENTE_OK",{
         servicioId:sv.id,
         docs:preview.evidencias?.length??0,
         extraDb:flotaExtraDocsRef.current[sv.id]?.length??0,
@@ -13156,7 +13078,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         flotaExtraDocsServicioLoadedRef.current=new Set();
         flotaStopsFetchedIdsRef.current=new Set();
       }
-    }catch(e){console.warn("loadFlotaServicios:",e);}
+    }catch(e){devWarn("loadFlotaServicios:",e);}
     finally{
       flotaLoadingRef.current=false;
       setFlotaBootstrapped(true);
@@ -13184,7 +13106,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         ubicUids.length?refreshUbicacionConductores(ubicUids,{allowStale:true,requireOpen:false,skipRevGeo:true,silent:true}):Promise.resolve(),
       ]);
       trackingLog("empresa_panel flota_light_refresh",{empresa_id:empresa.id,servicios:svsArr.length,stops_ids:stopIds.length,ubic_uids:ubicUids.length});
-    }catch(e){console.warn("refreshFlotaOperativaLigera:",e);}
+    }catch(e){devWarn("refreshFlotaOperativaLigera:",e);}
     finally{flotaLightBusyRef.current=false;}
   }
 
@@ -13417,7 +13339,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         const loc=await readLatestConductorLocation(uid,{allowStale,skipRevGeo});
         locs[uid]=loc||{label:"Sin ubicación registrada",updatedAt:null,missing:true,recent:false};
       }catch(e){
-        console.warn("readLatestConductorLocation",uid,e);
+        devWarn("readLatestConductorLocation",uid,e);
         trackingLog("empresa_panel ubicacion_read_failed",{empresa_id:empresa?.id||null,uid,error:String(e?.message||e)});
         locs[uid]={label:"Sin lectura de ubicación",updatedAt:null,missing:true,recent:false,fetchError:true};
       }
@@ -13459,7 +13381,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       try{
         await refreshFlotaLigeraRef.current?.({instantFeedback:false});
       }catch(e){
-        console.warn("empresa_panel recarga_servicio loadFlota",e);
+        devWarn("empresa_panel recarga_servicio loadFlota",e);
         trackingLog("empresa_panel recarga_servicio_flota_err",{empresa_id:empresa.id,error:String(e?.message||e)});
       }
       const conds=conductoresFlotaRef.current||[];
@@ -13471,7 +13393,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       try{
         await refreshUbicacionRef.current?.(uids.length?uids:null,{allowStale:true,requireOpen:false});
       }catch(e){
-        console.warn("empresa_panel recarga_servicio ubicaciones",e);
+        devWarn("empresa_panel recarga_servicio ubicaciones",e);
         trackingLog("empresa_panel recarga_servicio_ubi_err",{empresa_id:empresa.id,error:String(e?.message||e)});
       }
     }
@@ -13497,7 +13419,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       if(showResult)showToast(status||"Ubicación actualizada");
       return loc;
     }catch(e){
-      console.warn("actualizar ubicacion conductor:",e);
+      devWarn("actualizar ubicacion conductor:",e);
       const error="No se pudo actualizar ubicación";
       if(showResult)setUbicacionRefreshByUid(prev=>({...prev,[uid]:{loading:false,error}}));
       if(showResult)showToast(error);
@@ -14331,12 +14253,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
                   )}
                   <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"14px 14px 12px",marginBottom:12}}>
-                    {console.log("CARD_RENDER_REAL", {
-                      source: "EmpresaPanel.expedientePreviewModal",
-                      servicioId: expedientePreview?.id,
-                      timelineLength: expedientePreview?.timeline?.length ?? 0,
-                      flotaTab: "documentos",
-                    })}
                     <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12}}>
                       <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>Timeline operacional</div>
                       <div style={{fontSize:11,color:"#64748b",fontWeight:700}}>{expedientePreview.timeline.length} eventos</div>
@@ -14660,7 +14576,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                       const exp=await buildExpedienteCompleto(sv);
                                       await descargarExpediente(exp);
                                     }catch(e){
-                                      console.warn("download expediente:",e);
+                                      devWarn("download expediente:",e);
                                       showToast("No se pudo descargar el expediente");
                                     }
                                   })();
@@ -14676,7 +14592,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                       const exp=await buildExpedienteCompleto(sv);
                                       await archivarMetadataExpediente(exp);
                                     }catch(e){
-                                      console.warn("archivar expediente:",e);
+                                      devWarn("archivar expediente:",e);
                                       showToast("No se pudo archivar el expediente");
                                     }
                                   })()}
@@ -16047,7 +15963,7 @@ function ServiciosTimelineView({uid}){
             setEvidencias(groupDocumentsByStop(evs));
           }
         }
-      }catch(e){console.warn("ServiciosTimelineView:",e);}
+      }catch(e){devWarn("ServiciosTimelineView:",e);}
       finally{setLoading(false);}
     }
     cargar();
@@ -16267,7 +16183,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       if(gen!==loadGenRef.current)return;
       const prevView=driverViewRef.current;
       const merged=mergeDriverActiveViewFromResolution(prevView,resolved);
-      console.log("[OP1] useServicioActivo servicio query",{
+      devLog("[OP1] useServicioActivo servicio query",{
         uid,
         status:merged?.servicio?200:204,
         servicioId:merged?.servicio?.id||null,
@@ -16293,7 +16209,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
           if(retryN<=6){
             if(emptyStopsRetryTimerRef.current)clearTimeout(emptyStopsRetryTimerRef.current);
             emptyStopsRetryTimerRef.current=setTimeout(()=>{cargar();},3000);
-            console.warn("[OP1] servicio sin paradas, reintento",{
+            devWarn("[OP1] servicio sin paradas, reintento",{
               servicioId:merged?.servicio?.id||null,
               estado:merged?.servicio?.estado||null,
               retry:retryN,
@@ -16304,7 +16220,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
         driverViewRef.current=EMPTY_DRIVER_VIEW;
         setDriverView(EMPTY_DRIVER_VIEW);
       }
-    }catch(e){console.warn("useServicioActivo:",e);}
+    }catch(e){devWarn("useServicioActivo:",e);}
     finally{
       if(gen===loadGenRef.current)setLoading(false);
     }
@@ -16331,14 +16247,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   const completados=countCompletedStops(stops);
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
-    console.log("[TL1] click entrada_muelle",{
+    devLog("[TL1] click entrada_muelle",{
       servicioId:servicio?.id||null,
       stopId,
       now,
       estadoServicio:servicio?.estado||null,
     });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
-    console.log("[TL1] patch entrada_muelle",{
+    devLog("[TL1] patch entrada_muelle",{
       ok:res.ok,
       status:res.status,
       servicioId:servicio?.id||null,
@@ -16348,7 +16264,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(!res.ok){
       let detail="";
       try{detail=await res.text();}catch(_){}
-      console.warn("[OP3] patch entrada_muelle failed",{
+      devWarn("[OP3] patch entrada_muelle failed",{
         status:res.status,
         detail:String(detail||"").slice(0,300),
         servicioId:servicio?.id||null,
@@ -16359,13 +16275,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     try{
       const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
       const verifyRows=verify.ok?await verify.json():null;
-      console.log("[TL1] verify entrada_muelle",{
+      devLog("[TL1] verify entrada_muelle",{
         ok:verify.ok,
         status:verify.status,
         row:verifyRows?.[0]||null,
       });
     }catch(e){
-      console.warn("[TL1] verify entrada_muelle failed",e?.message||e);
+      devWarn("[TL1] verify entrada_muelle failed",e?.message||e);
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
@@ -16383,14 +16299,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function marcarCompletado(stopId){
     const now=new Date().toISOString();
-    console.log("[TL1] click salida_muelle",{
+    devLog("[TL1] click salida_muelle",{
       servicioId:servicio?.id||null,
       stopId,
       now,
       estadoServicio:servicio?.estado||null,
     });
     const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
-    console.log("[TL1] patch salida_muelle",{
+    devLog("[TL1] patch salida_muelle",{
       ok:res.ok,
       status:res.status,
       servicioId:servicio?.id||null,
@@ -16400,7 +16316,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(!res.ok){
       let detail="";
       try{detail=await res.text();}catch(_){}
-      console.warn("[OP3] patch salida_muelle failed",{
+      devWarn("[OP3] patch salida_muelle failed",{
         status:res.status,
         detail:String(detail||"").slice(0,300),
         servicioId:servicio?.id||null,
@@ -16411,13 +16327,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     try{
       const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
       const verifyRows=verify.ok?await verify.json():null;
-      console.log("[TL1] verify salida_muelle",{
+      devLog("[TL1] verify salida_muelle",{
         ok:verify.ok,
         status:verify.status,
         row:verifyRows?.[0]||null,
       });
     }catch(e){
-      console.warn("[TL1] verify salida_muelle failed",e?.message||e);
+      devWarn("[TL1] verify salida_muelle failed",e?.message||e);
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
 
@@ -16456,7 +16372,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function iniciarServicio(servicioId){
     if(servicio?.id&&servicioId!==servicio.id){
-      console.warn("[OP1] iniciarServicio id mismatch",{uiId:servicio.id,requestedId:servicioId});
+      devWarn("[OP1] iniciarServicio id mismatch",{uiId:servicio.id,requestedId:servicioId});
       throw new Error("El servicio en pantalla no coincide. Espera a cerrar el expediente o recarga.");
     }
     const fecha_inicio=new Date().toISOString();
@@ -17045,7 +16961,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
           setEvidencias(grouped);
         }
       } catch (e) {
-        console.warn("ServicioDocsView:", e);
+        devWarn("ServicioDocsView:", e);
         showToast?.("No se pudieron cargar los documentos");
       } finally {
         setLoading(false);
@@ -17534,7 +17450,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
   const handleEvidenciaSaved=useCallback((ev)=>{
     const stopId=ev?.stop_id;
     if(!ev?.id||!stopId)return;
-    console.log("[TL1] evidencia saved callback",{
+    devLog("[TL1] evidencia saved callback",{
       evidenciaId:ev.id,
       servicioId:servicio?.id||null,
       stopId,
@@ -17552,7 +17468,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
   },[servicio?.id,servicio?.estado]);
 
   if(import.meta.env.DEV){
-    console.log("[AUDIT PR-22B] TabServicio",{
+    devLog("[AUDIT PR-22B] TabServicio",{
       loading,
       sinServicio:!servicio,
       estado:servicio?.estado,
@@ -17675,7 +17591,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           setServicios(Array.isArray(svs)?svs:[]);
           void refreshDashboardUbicaciones(uids);
         }else setServicios([]);
-      }catch(e){console.warn("EmpresaDashboard:",e);}
+      }catch(e){devWarn("EmpresaDashboard:",e);}
       finally{setLoading(false);}
     }
     cargar();
@@ -17738,7 +17654,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>;
 
   if(import.meta.env.DEV){
-    console.log("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
+    devLog("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
   }
 
   const enCurso=servicios.filter(s=>s.estado==="en_curso").length;
@@ -18011,7 +17927,7 @@ export default function App(){
 
   if(import.meta.env.DEV){
     const session=getStoredAuthSession(getUserId());
-    console.log("[PRODUCT-1] App shell",{
+    devLog("[PRODUCT-1] App shell",{
       activeMode,
       capabilities:session?.capabilities||null,
       renderiza:activeMode==="empresa"?"EmpresaLayout":"AppInner",

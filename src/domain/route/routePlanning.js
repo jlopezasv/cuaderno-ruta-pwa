@@ -159,7 +159,7 @@ export function nearbyCity(lat, lon) {
 }
 
 function routeLog(level, msg, data) {
-  if (typeof console === "undefined") return;
+  if (!import.meta.env.DEV || typeof console === "undefined") return;
   const fn = level === "warn" ? console.warn : console.info;
   fn(`[route-planning] ${msg}`, data ?? "");
 }

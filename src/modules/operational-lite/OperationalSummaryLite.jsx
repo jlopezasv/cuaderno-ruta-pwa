@@ -61,8 +61,7 @@ export function OperationalSummaryLite({
       try {
         const model = await loadOperationalLiteData(servicio, { nombreConductor });
         if (!cancelled) setDoc(model);
-      } catch (e) {
-        console.warn("OperationalSummaryLite:", e);
+      } catch {
         if (!cancelled) setDoc(null);
         showToast?.("No se pudo cargar el documento operacional");
       } finally {
@@ -81,8 +80,7 @@ export function OperationalSummaryLite({
       showToast?.("Generando expediente PDF…");
       await downloadOperationalLitePdf(doc);
       showToast?.("PDF listo");
-    } catch (e) {
-      console.warn("downloadOperationalLitePdf:", e);
+    } catch {
       showToast?.("No se pudo generar el PDF");
     } finally {
       setPdfBusy(false);

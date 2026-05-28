@@ -552,17 +552,7 @@ function OperationalStopCard({
               {canOperate ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    console.log("[OP2] click entrada_muelle", {
-                      stopId,
-                      canOperate,
-                      isCurrent,
-                      estadoStop: stop?.estado || null,
-                      entrada: !!stop?.hora_llegada_real,
-                      salida: !!stop?.hora_salida_real,
-                    });
-                    onConfirmMuelle?.({ kind: "entrada", stopId: stop.id });
-                  }}
+                  onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })}
                   style={actionButtonStyle("green")}
                 >
                   Entrada en muelle
@@ -602,17 +592,7 @@ function OperationalStopCard({
               ) : null}
               <button
                 type="button"
-                onClick={() => {
-                  console.log("[OP2] click salida_muelle", {
-                    stopId,
-                    canOperate,
-                    isCurrent,
-                    estadoStop: stop?.estado || null,
-                    entrada: !!stop?.hora_llegada_real,
-                    salida: !!stop?.hora_salida_real,
-                  });
-                  onConfirmMuelle?.({ kind: "salida", stopId: stop.id });
-                }}
+                onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
                 disabled={!canOperate}
                 style={{
                   ...actionButtonStyle("amber"),
@@ -736,24 +716,6 @@ export function ActiveServicePanel({
     () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
     [servicio, stops, onCerrarExpediente],
   );
-  useEffect(() => {
-    if (showCierreDocumental) {
-      console.log("[CLOSE1] render cierre", {
-        servicioId: servicio?.id ?? null,
-        estado: servicio?.estado ?? null,
-        mode,
-      });
-      console.log("[CLOSE2] open=true");
-    } else {
-      console.log("[CLOSE4] condición ocultación", {
-        servicioId: servicio?.id ?? null,
-        estado: servicio?.estado ?? null,
-        needsClosure: needsExpedienteClosure(servicio, stops),
-        hasCerrarHandler: typeof onCerrarExpediente === "function",
-        mode,
-      });
-    }
-  }, [showCierreDocumental, servicio?.id, servicio?.estado, mode, stops, onCerrarExpediente]);
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
@@ -783,28 +745,9 @@ export function ActiveServicePanel({
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
 
-  useEffect(() => {
-    console.log("[OP1] panel state", {
-      servicioId: servicio?.id || null,
-      mode,
-      estadoServicio: servicio?.estado || null,
-      canOperateStops,
-      currentStopId: stopMostrar?.id || null,
-      timelineItems: timelineItems.length,
-    });
-  }, [servicio?.id, mode, servicio?.estado, canOperateStops, stopMostrar?.id, timelineItems.length]);
-
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
-    console.log("[OP2] confirm callback start", {
-      servicioId: servicio?.id || null,
-      kind,
-      stopId,
-      canOperateStops,
-      mode,
-      estadoServicio: servicio?.estado || null,
-    });
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
@@ -815,14 +758,7 @@ export function ActiveServicePanel({
         // marcarCompletado dispara cuaderno-recargar-servicio; evitar segundo fetch que mezcle estados
       }
       setConfirmMuelle(null);
-      console.log("[OP2] confirm callback success", { kind, stopId, servicioId: servicio?.id || null });
     } catch (error) {
-      console.warn("[OP2] confirm callback error", {
-        kind,
-        stopId,
-        servicioId: servicio?.id || null,
-        error: error?.message || String(error),
-      });
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);

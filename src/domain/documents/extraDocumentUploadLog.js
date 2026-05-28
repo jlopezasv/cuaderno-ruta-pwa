@@ -1,8 +1,13 @@
-/** Logs temporales de depuración — flujo documentos extra. Filtrar consola: DOCUMENT_ */
+/** Logs de depuración — solo desarrollo (sin payload en producción). */
 
 const PREFIX = "[DOCUMENT_EXTRA]";
 
+function devOnly() {
+  return import.meta.env.DEV;
+}
+
 export function logExtraDoc(stage, detail = {}) {
+  if (!devOnly()) return;
   const payload =
     detail && typeof detail === "object" && !Array.isArray(detail)
       ? { stage, ...detail }
@@ -11,6 +16,7 @@ export function logExtraDoc(stage, detail = {}) {
 }
 
 export function logExtraDocFail(stage, error, detail = {}) {
+  if (!devOnly()) return;
   const err =
     error && typeof error === "object"
       ? {

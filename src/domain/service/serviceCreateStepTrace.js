@@ -3,7 +3,7 @@
  */
 import { isDemoApp } from "../../config/appEnvironment.js";
 
-export const SERVICE_CREATE_STEP_TRACE = isDemoApp();
+export const SERVICE_CREATE_STEP_TRACE = import.meta.env.DEV && isDemoApp();
 
 /** @param {string} text */
 export function parsePostgrestError(text) {

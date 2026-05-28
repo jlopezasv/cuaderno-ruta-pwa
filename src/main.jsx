@@ -1,8 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
-import { assertClientEnvironmentSafe, isDemoApp } from './config/appEnvironment.js';
-import { getSupabasePublicHost } from './data/supabaseClient.js';
+import { assertClientEnvironmentSafe } from './config/appEnvironment.js';
 import { demoDevLog, isDemoDevUnlocked } from './lib/demoDevUnlock.js';
 
 assertClientEnvironmentSafe();
@@ -12,20 +11,13 @@ if (isDemoDevUnlocked()) {
   demoDevLog('VITE_APP_ENV:', import.meta.env.VITE_APP_ENV);
 }
 
-if (import.meta.env.PROD) {
-  console.info('[Cuaderno] Supabase host:', getSupabasePublicHost());
-  if (isDemoApp()) {
-    console.info('[Cuaderno DEMO] Aislamiento activo — ref REAL bloqueado en cliente.');
-  }
-}
-
 // Registrar Service Worker tras el primer paint (no compite con carga JS)
 function registerAppServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   navigator.serviceWorker
     .register('/sw.js', { scope: '/' })
     .then((reg) => {
-      console.log('[SW] Registrado:', reg.scope);
+      if (import.meta.env.DEV) console.log('[SW] Registrado:', reg.scope);
       reg.addEventListener('updatefound', () => {
         const newWorker = reg.installing;
         newWorker?.addEventListener('statechange', () => {
@@ -35,7 +27,9 @@ function registerAppServiceWorker() {
         });
       });
     })
-    .catch((err) => console.warn('[SW] Error:', err));
+    .catch((err) => {
+      if (import.meta.env.DEV) console.warn('[SW] Error:', err);
+    });
 }
 if (typeof requestIdleCallback === 'function') {
   requestIdleCallback(registerAppServiceWorker, { timeout: 4000 });

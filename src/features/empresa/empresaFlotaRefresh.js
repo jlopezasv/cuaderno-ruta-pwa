@@ -66,11 +66,6 @@ export function stopsRowsToMap(stps) {
     if (!stopsMap[st.servicio_id]) stopsMap[st.servicio_id] = [];
     stopsMap[st.servicio_id].push(st);
   });
-  console.log("[OP3] stopsRowsToMap", {
-    rows: Array.isArray(stps) ? stps.length : 0,
-    servicioIds: Object.keys(stopsMap),
-    perServicio: Object.fromEntries(Object.entries(stopsMap).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])),
-  });
   return stopsMap;
 }
 
@@ -297,13 +292,6 @@ export function mergeFlotaStopsMap(prev, next) {
     }
     if (sameRef) return prev;
   }
-  console.log("[TL2] mergeFlotaStopsMap",{
-    incomingServicios:Object.keys(next||{}),
-    changed,
-    changedIds,
-    prevServicios:Object.keys(prev||{}).length,
-    nextServicios:Object.keys(out||{}).length,
-  });
   return out;
 }
 

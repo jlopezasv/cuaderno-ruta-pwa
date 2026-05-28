@@ -18,6 +18,7 @@ function shortStack(depth = 4) {
 }
 
 export function isOperationalDocTraceEnabled() {
+  if (!import.meta.env.DEV) return false;
   if (typeof window === "undefined") return false;
   try {
     if (window.__DOC_TRACE__ === true) return true;

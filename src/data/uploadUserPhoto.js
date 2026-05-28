@@ -278,14 +278,16 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       });
     }
 
-    console.warn(
-      "[DOCUMENT_STORAGE] Upload OK pero sign falló; objeto en bucket sin URL HTTP.",
-      { bucket, path: objectPath },
-    );
+    if (import.meta.env.DEV) {
+      console.warn(
+        "[DOCUMENT_STORAGE] Upload OK pero sign falló; objeto en bucket sin URL HTTP.",
+        { bucket, path: objectPath },
+      );
+    }
   } catch (e) {
     logStorageDocFail("DOCUMENT_STORAGE_UPLOAD_FAIL", e, { bucket, path: objectPath });
     if (requireHttpUrl || !allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
-    console.warn("Storage upload failed, using base64:", e.message);
+    if (import.meta.env.DEV) console.warn("Storage upload failed, using base64:", e.message);
   }
 
   if (requireHttpUrl || !allowBase64Fallback) {

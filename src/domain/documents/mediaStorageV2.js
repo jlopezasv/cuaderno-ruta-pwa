@@ -69,7 +69,6 @@ export function docMetaV2StorageFields({ storagePreview = null, storageOriginal 
 /** Log [MEDIA_V2] en consola + buffer docTrace si activo. */
 export function traceMediaV2(step, payload = {}) {
   const entry = { step, ...payload };
-  console.log("[MEDIA_V2]", step, entry);
   if (isOperationalDocTraceEnabled()) {
     traceOperationalDoc(`[MEDIA_V2] ${step}`, entry);
   }

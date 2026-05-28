@@ -41,7 +41,7 @@ export async function fetchEvidenciasGroupedByStop(stopIds, sbFetch) {
       `/rest/v1/evidencias?stop_id=in.(${chunk.join(",")})&order=stop_id.asc,created_at.asc`,
     );
     if (!r.ok) {
-      console.warn("fetchEvidenciasGroupedByStop:", r.status, chunk.length);
+      if (import.meta.env.DEV) console.warn("fetchEvidenciasGroupedByStop:", r.status, chunk.length);
       continue;
     }
     const evs = await r.json();

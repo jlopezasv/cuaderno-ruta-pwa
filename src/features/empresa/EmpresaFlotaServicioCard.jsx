@@ -158,8 +158,7 @@ function EmpresaFlotaServicioCardImpl({
     if (!expanded) return null;
     try {
       return computeTripOperationalMetrics(servicio, stops);
-    } catch (err) {
-      console.warn("[EmpresaFlotaServicioCard] dossierMetrics", err);
+    } catch {
       return null;
     }
   }, [expanded, servicio, servicioReferencia, stops]);
@@ -167,12 +166,6 @@ function EmpresaFlotaServicioCardImpl({
   const operativaTimeline = useMemo(() => {
     if (!expanded) return [];
     try {
-      console.log("[TL3] timeline build input",{
-        servicioId:servicio?.id||null,
-        expanded,
-        stopsCount:Array.isArray(stops)?stops.length:0,
-        evidenciasStops:Object.keys(flotaEvs||{}).length,
-      });
       return getServicioOperativaTimelineForCard({
         servicio,
         stops,
@@ -182,8 +175,7 @@ function EmpresaFlotaServicioCardImpl({
         fmtDur,
         entries: conductor?.entries || [],
       });
-    } catch (err) {
-      console.warn("[EmpresaFlotaServicioCard] operativaTimeline", err);
+    } catch {
       return [];
     }
   }, [
@@ -215,16 +207,6 @@ function EmpresaFlotaServicioCardImpl({
         ? "Sin asignar"
         : null;
   const timelineSoloTexto = operativaTimeline;
-  useEffect(() => {
-    if (!expanded) return;
-    console.log("[TL3] timeline render",{
-      servicioId:servicio?.id||null,
-      expanded,
-      timelineCount:Array.isArray(timelineSoloTexto)?timelineSoloTexto.length:0,
-      stopsCount:Array.isArray(stops)?stops.length:0,
-      sinOp,
-    });
-  }, [expanded, servicio?.id, timelineSoloTexto, stops, sinOp]);
   const ubicLine = ubicInfo?.label || (ubicInfo?.missing ? "Sin ubicación registrada" : "—");
   const ubicUpdated =
     ubicInfo?.recent === false ? "Sin actualización reciente" : ubicInfo ? "Ubicación reciente" : null;
