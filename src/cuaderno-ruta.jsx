@@ -45,6 +45,7 @@ import {
   contextKindFromProfileTipo,
   getStoredAuthSession,
   isHybridSession,
+  normalizeActiveMode,
 } from "./data/authContext";
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import {
@@ -2035,6 +2036,10 @@ function AppInner(){
   const[clock,setClock]=useState(new Date());
   const[dark,setDark]=useState(()=>{
     const d=localStorage.getItem("dark");
+    const darkPrefSet=localStorage.getItem("dark_pref_set")==="1";
+    const activeMode=normalizeActiveMode(getStoredAuthSession(getUserId())?.activeMode);
+    // En DEMO conductor mantenemos claro por defecto salvo preferencia manual explícita.
+    if(isDemoApp()&&activeMode==="conductor"&&!darkPrefSet)return false;
     if(d==="1")return true;
     if(d==="0")return false;
     return false;
@@ -3143,7 +3148,7 @@ function AppInner(){
               </svg>
             )}
           </button>
-          <button onClick={()=>{const nd=!dark;setDark(nd);localStorage.setItem("dark",nd?"1":"0");}} style={{background:"transparent",border:"1.5px solid #334155",borderRadius:8,padding:"5px 8px",fontSize:15,cursor:"pointer",color:"#F59E0B"}}>
+          <button onClick={()=>{const nd=!dark;setDark(nd);localStorage.setItem("dark",nd?"1":"0");localStorage.setItem("dark_pref_set","1");}} style={{background:"transparent",border:"1.5px solid #334155",borderRadius:8,padding:"5px 8px",fontSize:15,cursor:"pointer",color:"#F59E0B"}}>
             {dark?"☀️":"🌙"}
           </button>
           {showModeSwitch&&<ModeSwitchButton uid={getUserId()} targetMode="empresa" compact dark />}
@@ -16526,8 +16531,8 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
   const[error,setError]=useState("");
   const[paso,setPaso]=useState(1);
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
-  const card="#1E293B",bg="#0F172A",tx="#F1F5F9",su="#64748B";
-  const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
+  const card="#FFFFFF",bg="#F8FAFC",tx="#0F172A",su="#64748B";
+  const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
 
   function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
   function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);}
@@ -16623,17 +16628,17 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
       <div style={{...modalStyle,background:card}} onClick={e=>e.stopPropagation()}>
 
         {/* HEADER — sticky */}
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid #334155",flexShrink:0,background:card}}>
+        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid #E2E8F0",flexShrink:0,background:card}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <div style={{fontSize:16,fontWeight:800,color:"#F59E0B"}}>NUEVO SERVICIO</div>
-            <button onClick={onClose} style={{background:"#334155",border:"none",borderRadius:8,width:28,height:28,color:tx,cursor:"pointer",fontSize:14}}>✕</button>
+            <div style={{fontSize:16,fontWeight:800,color:"#B45309"}}>NUEVO SERVICIO</div>
+            <button onClick={onClose} style={{background:"#F1F5F9",border:"1px solid #CBD5E1",borderRadius:8,width:28,height:28,color:"#475569",cursor:"pointer",fontSize:14}}>✕</button>
           </div>
           {/* Indicador pasos */}
           <div style={{display:"flex",gap:6}}>
             {[{n:1,l:"Ruta"},{n:2,l:"Paradas"},{n:3,l:"Confirmar"}].map(p=>(
               <div key={p.n} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                <div style={{width:"100%",height:3,borderRadius:2,background:paso>=p.n?"#F59E0B":"#334155",transition:"background .2s"}}/>
-                <span style={{fontSize:10,fontWeight:700,color:paso>=p.n?"#F59E0B":su}}>{p.l.toUpperCase()}</span>
+                <div style={{width:"100%",height:3,borderRadius:2,background:paso>=p.n?"#F59E0B":"#CBD5E1",transition:"background .2s"}}/>
+                <span style={{fontSize:10,fontWeight:700,color:paso>=p.n?"#B45309":su}}>{p.l.toUpperCase()}</span>
               </div>
             ))}
           </div>
@@ -16655,13 +16660,13 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
             <div style={{marginBottom:14}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>REF CLIENTE (opcional)</div>
               <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821" style={iStyle}/></div>
             <div style={{marginBottom:14}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:5}}>📅 FECHA Y HORA DE SALIDA</div>
-              <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)} style={{...iStyle,colorScheme:"dark"}}/></div>
-            {error&&<div style={{background:"#450a0a",border:"1px solid #EF4444",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#EF4444",marginBottom:14}}>⚠️ {error}</div>}
+              <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)} style={{...iStyle,colorScheme:"light"}}/></div>
+            {error&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#B91C1C",marginBottom:14}}>⚠️ {error}</div>}
           </>)}
 
           {/* PASO 2 */}
           {paso===2&&(<>
-            <div style={{background:"#0D1829",border:"1px solid #1E3A5F",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#3B82F6",lineHeight:1.6}}>
+            <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#1D4ED8",lineHeight:1.6}}>
               🗺 Escribe el nombre o dirección. Usa ↑↓ para reordenar o "+ insertar aquí" para añadir en medio.
             </div>
             {stops.map((stop,i)=>(
@@ -16670,25 +16675,25 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
                   onMoveUp={i>0?()=>moveStop(i,-1):null} onMoveDown={i<stops.length-1?()=>moveStop(i,1):null}/>
                 {i<stops.length-1&&(
                   <button onClick={()=>addStopAfter(i)}
-                    style={{width:"100%",background:"transparent",border:"1px dashed #334155",borderRadius:6,padding:"4px",fontSize:11,color:"#3B82F6",cursor:"pointer",marginBottom:4}}>
+                    style={{width:"100%",background:"transparent",border:"1px dashed #93C5FD",borderRadius:6,padding:"4px",fontSize:11,color:"#1D4ED8",cursor:"pointer",marginBottom:4}}>
                     + insertar parada aquí
                   </button>
                 )}
               </div>
             ))}
-            <button onClick={addStop} style={{width:"100%",background:"transparent",border:"1.5px dashed #334155",borderRadius:10,padding:"11px",fontSize:14,color:"#22C55E",cursor:"pointer",marginBottom:14}}>+ AÑADIR PARADA</button>
+            <button onClick={addStop} style={{width:"100%",background:"transparent",border:"1.5px dashed #93C5FD",borderRadius:10,padding:"11px",fontSize:14,color:"#2563EB",cursor:"pointer",marginBottom:14}}>+ AÑADIR PARADA</button>
             {stops.some(s=>s.nombre.trim())&&(
-              <div style={{background:"#0D1829",borderRadius:10,padding:"10px 12px",marginBottom:14,display:"flex",gap:8,alignItems:"center"}}>
+              <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 12px",marginBottom:14,display:"flex",gap:8,alignItems:"center"}}>
                 <span style={{fontSize:16}}>{stops.filter(s=>s.lat&&s.lon).length===stops.length?"✅":"🔍"}</span>
                 <span style={{fontSize:12,color:stops.filter(s=>s.lat&&s.lon).length===stops.length?"#22C55E":su}}>{stops.filter(s=>s.lat&&s.lon).length}/{stops.length} paradas con navegación lista</span>
               </div>
             )}
-            {error&&<div style={{background:"#450a0a",border:"1px solid #EF4444",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#EF4444",marginBottom:14}}>⚠️ {error}</div>}
+            {error&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#B91C1C",marginBottom:14}}>⚠️ {error}</div>}
           </>)}
 
           {/* PASO 3 */}
           {paso===3&&(<>
-            <div style={{background:"#0D1829",border:"1px solid #1E3A5F",borderRadius:14,padding:"16px",marginBottom:14}}>
+            <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:14,padding:"16px",marginBottom:14}}>
               <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:8}}>RESUMEN DEL SERVICIO</div>
               {ref&&<div style={{fontSize:13,color:"#F59E0B",fontWeight:800,marginBottom:3}}>{ref}</div>}
               {cliente&&<div style={{fontSize:12,color:su,marginBottom:3}}>Cliente: <span style={{color:tx,fontWeight:700}}>{cliente}</span>{refCliente&&<span style={{color:"#94A3B8"}}> · Ref cliente {refCliente}</span>}</div>}
@@ -16697,7 +16702,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
             </div>
             <div style={{fontSize:11,color:su,fontWeight:700,marginBottom:10}}>{stops.length} PARADAS</div>
             {stops.map((stop,i)=>{const color=STOP_COLOR[stop.tipo]||"#06B6D4";return(
-              <div key={i} style={{background:"#0D1829",border:`1px solid ${stop.lat?"#22C55E30":"#334155"}`,borderRadius:12,padding:"11px 13px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
+              <div key={i} style={{background:"#FFFFFF",border:`1px solid ${stop.lat?"#86EFAC":"#CBD5E1"}`,borderRadius:12,padding:"11px 13px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
                 <span style={{fontSize:20,flexShrink:0}}>{STOP_ICON[stop.tipo]||"📍"}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:700,color:tx}}>{stop.nombre}</div>
@@ -16710,19 +16715,19 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
                   })()}
                   <div style={{display:"flex",gap:6,marginTop:4,alignItems:"center"}}>
                     <span style={{fontSize:11,color,fontWeight:600}}>{stop.tipo.replace("_"," ").toUpperCase()}</span>
-                    {stop.lat?<span style={{fontSize:10,color:"#22C55E",background:"#22C55E15",borderRadius:4,padding:"1px 6px"}}>🗺 GPS listo</span>:<span style={{fontSize:10,color:su,background:"#33415515",borderRadius:4,padding:"1px 6px"}}>Sin GPS</span>}
+                    {stop.lat?<span style={{fontSize:10,color:"#15803D",background:"#DCFCE7",borderRadius:4,padding:"1px 6px"}}>🗺 GPS listo</span>:<span style={{fontSize:10,color:su,background:"#F1F5F9",borderRadius:4,padding:"1px 6px"}}>Sin GPS</span>}
                   </div>
                 </div>
                 <span style={{fontSize:14,color:su,fontWeight:800,flexShrink:0}}>{i+1}</span>
               </div>
             );})}
-            {error&&<div style={{background:"#450a0a",border:"1px solid #EF4444",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#EF4444",marginBottom:14}}>⚠️ {error}</div>}
+            {error&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#B91C1C",marginBottom:14}}>⚠️ {error}</div>}
           </>)}
 
         </div>
 
         {/* FOOTER — sticky, siempre visible */}
-        <div style={{padding:"12px 16px",borderTop:"1px solid #334155",flexShrink:0,background:card}}>
+        <div style={{padding:"12px 16px",borderTop:"1px solid #E2E8F0",flexShrink:0,background:card}}>
           {paso===1&&(
             <button onClick={()=>{if(!origen.trim()){setError("Escribe el origen");return;}if(!destino.trim()){setError("Escribe el destino");return;}setError("");setPaso(2);}}
               style={{width:"100%",background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:800,cursor:"pointer"}}>
@@ -16731,14 +16736,14 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
           )}
           {paso===2&&(
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={()=>{setError("");setPaso(1);}} style={{background:"#1E293B",color:su,border:"1px solid #334155",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Atrás</button>
+              <button onClick={()=>{setError("");setPaso(1);}} style={{background:"#FFFFFF",color:"#475569",border:"1px solid #CBD5E1",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Atrás</button>
               <button onClick={()=>{if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return;}setError("");setPaso(3);}}
                 style={{background:"#F59E0B",color:"#0F172A",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer"}}>REVISAR →</button>
             </div>
           )}
           {paso===3&&(
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={()=>{setError("");setPaso(2);}} style={{background:"#1E293B",color:su,border:"1px solid #334155",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Editar</button>
+              <button onClick={()=>{setError("");setPaso(2);}} style={{background:"#FFFFFF",color:"#475569",border:"1px solid #CBD5E1",borderRadius:12,padding:"13px",fontSize:14,cursor:"pointer"}}>← Editar</button>
               <button onClick={()=>void guardar()} disabled={saving}
                 style={{background:saving?"#334155":"#22C55E",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:15,fontWeight:800,cursor:saving?"default":"pointer"}}>
                 {saving?"⏳ Guardando...":"✅ CREAR"}
@@ -16911,11 +16916,11 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
   const [visorCtx, setVisorCtx] = useState(null);
   const [expedienteLiteSv, setExpedienteLiteSv] = useState(null);
 
-  const shell = "#0F172A";
-  const card = "#1E293B";
-  const cardBorder = "rgba(148, 163, 184, 0.12)";
-  const tx = "#F8FAFC";
-  const su = "#94A3B8";
+  const shell = "#F0F4F8";
+  const card = "#FFFFFF";
+  const cardBorder = "#DBE4EE";
+  const tx = "#0F172A";
+  const su = "#64748B";
   const accent = "#3B82F6";
   const TIPO_ICON = { cmr: "📄", foto: "📸", incidencia: "⚠️", qr: "📱", nota: "📝" };
   const TIPO_COLOR = { cmr: "#38BDF8", foto: "#4ADE80", incidencia: "#FB7185", qr: "#C4B5FD", nota: "#94A3B8" };
@@ -17034,7 +17039,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
     return (
       <div style={{ minHeight: "55vh", background: shell, padding: "28px 18px 88px" }}>
         <header style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-          <button type="button" onClick={() => onBack?.()} style={{ background: "rgba(255,255,255,.06)", border: `1px solid ${cardBorder}`, borderRadius: 10, width: 36, height: 36, color: su, cursor: "pointer", fontSize: 16 }}>
+          <button type="button" onClick={() => onBack?.()} style={{ background: "#FFFFFF", border: `1px solid ${cardBorder}`, borderRadius: 10, width: 36, height: 36, color: su, cursor: "pointer", fontSize: 16 }}>
             ←
           </button>
           <div>
@@ -17077,7 +17082,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
           borderRadius: 14,
           background: card,
           border: `1px solid ${cardBorder}`,
-          boxShadow: attention ? "0 0 0 1px rgba(251, 191, 36, 0.35), 0 8px 24px rgba(0,0,0,.18)" : "0 4px 18px rgba(0,0,0,.12)",
+          boxShadow: attention ? "0 0 0 1px rgba(251, 191, 36, 0.35), 0 8px 24px rgba(15,23,42,.12)" : "0 4px 18px rgba(15,23,42,.08)",
           overflow: "hidden",
         }}
       >
@@ -17121,11 +17126,11 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
               </span>
             </div>
           </div>
-          <div style={{ height: 3, borderRadius: 99, background: "rgba(15,23,42,.5)", marginTop: 10, overflow: "hidden" }}>
+          <div style={{ height: 3, borderRadius: 99, background: "#E2E8F0", marginTop: 10, overflow: "hidden" }}>
             <div style={{ width: `${Math.round(docRatio * 100)}%`, height: "100%", borderRadius: 99, background: docRatio >= 1 ? "#4ADE80" : `linear-gradient(90deg,${accent},#60A5FA)` }} />
           </div>
           {attention && (
-            <div style={{ marginTop: 8, fontSize: 10, color: "#FBBF24", lineHeight: 1.35 }}>
+            <div style={{ marginTop: 8, fontSize: 10, color: "#B45309", lineHeight: 1.35 }}>
               ⚠ {attentionReason}
             </div>
           )}
@@ -17196,7 +17201,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
                     <span style={{ color: su, fontSize: 12, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
                   </button>
                   {isOpen && (
-                    <div style={{ margin: "0 0 8px 2px", padding: "8px 8px 10px", borderRadius: 10, background: "rgba(15,23,42,.45)", border: `1px solid ${cardBorder}` }}>
+                    <div style={{ margin: "0 0 8px 2px", padding: "8px 8px 10px", borderRadius: 10, background: "#F8FAFC", border: `1px solid ${cardBorder}` }}>
                       {(stop.hora_llegada_real || stop.hora_salida_real) && (
                         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 10, color: su, marginBottom: 8 }}>
                           {stop.hora_llegada_real && <span>Llegada {new Date(stop.hora_llegada_real).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span>}
