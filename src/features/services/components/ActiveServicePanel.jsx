@@ -226,6 +226,14 @@ function operationNameForStop(stop) {
   return "Parada";
 }
 
+function finishActionLabelForStop(stop) {
+  const group = stopOperationalGroup(stop);
+  if (group === "carga") return "Finalizar carga";
+  if (group === "descarga") return "Finalizar descarga";
+  if (group === "carga_descarga") return "Finalizar operación";
+  return "Finalizar parada";
+}
+
 function stopTimelineIcon(group) {
   if (group === "carga") return "📦";
   if (group === "descarga") return "📤";
@@ -519,11 +527,12 @@ function OperationalStopCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                {salida
-                  ? `${operationName} finalizada · ${stopTime(stop.hora_salida_real)}`
-                  : label}
-              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>{label}</div>
+              {salida ? (
+                <div style={{ fontSize: 12, color: DRIVER_UI.green, marginTop: 3, fontWeight: 800, lineHeight: 1.3 }}>
+                  {operationName} completada · {stopTime(stop.hora_salida_real)}
+                </div>
+              ) : null}
               <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 3, fontWeight: 650, lineHeight: 1.35 }}>
                 {stopPlace(stop)}
               </div>
@@ -601,7 +610,7 @@ function OperationalStopCard({
                   cursor: canOperate ? "pointer" : "default",
                 }}
               >
-                {operationName} finalizada
+                {finishActionLabelForStop(stop)}
               </button>
             </div>
           ) : null}
@@ -803,7 +812,7 @@ export function ActiveServicePanel({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
-          {confirmMuelle.kind === "entrada" ? "Confirmar entrada en muelle" : `Confirmar ${confirmOperationName.toLowerCase()} finalizada`}
+          {confirmMuelle.kind === "entrada" ? "Confirmar entrada en muelle" : `Confirmar fin de ${confirmOperationName.toLowerCase()}`}
         </div>
         <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
           {confirmMuelle.kind === "entrada"
@@ -845,7 +854,11 @@ export function ActiveServicePanel({
               opacity: confirmMuelleSaving ? 0.75 : 1,
             }}
           >
-            {confirmMuelleSaving ? "Guardando..." : confirmMuelle.kind === "entrada" ? "Registrar entrada" : `${confirmOperationName} finalizada`}
+            {confirmMuelleSaving
+              ? "Guardando..."
+              : confirmMuelle.kind === "entrada"
+                ? "Registrar entrada"
+                : finishActionLabelForStop(confirmStop)}
           </button>
         </div>
       </div>
