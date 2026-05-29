@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { getServiceClient, getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { getServiceOperationalPresentation } from "../../../domain/service/serviceOperationalPlaces.js";
 import { formatStopNotesForDisplay } from "../../../domain/service/stopOperacionMeta.js";
+import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
 
 const UI = {
   shell: "#ffffff",
@@ -55,7 +56,7 @@ function ReadonlyRow({ label, value }) {
 /**
  * Vista informativa del siguiente servicio asignado (sin acciones operativas).
  */
-export function SiguienteServicioAccordion({ servicio, stops = [] }) {
+export function SiguienteServicioAccordion({ servicio, stops = [], empresaById = {} }) {
   const sortedStops = useMemo(() => sortStops(stops), [stops]);
   const pres = useMemo(
     () => getServiceOperationalPresentation(servicio, sortedStops),
@@ -125,6 +126,9 @@ export function SiguienteServicioAccordion({ servicio, stops = [] }) {
             }}
           >
             ⏭ SIGUIENTE SERVICIO
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <ServiceOriginBadge servicio={servicio} empresaById={empresaById} size="sm" />
           </div>
           <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx, lineHeight: 1.25 }}>{cliente}</div>
           <div style={{ fontSize: 14, fontWeight: 650, color: UI.su, marginTop: 4, lineHeight: 1.3 }}>

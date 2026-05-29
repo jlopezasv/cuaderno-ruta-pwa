@@ -18,6 +18,7 @@ import { formatStopNotesForDisplay } from "../../../domain/service/stopOperacion
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteServicioAccordion.jsx";
+import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -704,6 +705,7 @@ export function ActiveServicePanel({
   stops,
   siguienteServicio = null,
   siguientesStops = [],
+  empresaById = {},
   evidenciasByStop,
   showToast,
   onIniciarServicio,
@@ -868,6 +870,9 @@ export function ActiveServicePanel({
   return (
     <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
       <CockpitShell>
+        <div style={{ marginBottom: 12 }}>
+          <ServiceOriginBadge servicio={servicio} empresaById={empresaById} />
+        </div>
         <ServiceHero
           clienteNombre={heroCliente}
           routeLine={routeLine}
@@ -974,7 +979,7 @@ export function ActiveServicePanel({
         ) : null}
       </CockpitShell>
       {siguienteServicio ? (
-        <SiguienteServicioAccordion servicio={siguienteServicio} stops={siguientesStops} />
+        <SiguienteServicioAccordion servicio={siguienteServicio} stops={siguientesStops} empresaById={empresaById} />
       ) : (
         <SiguienteServicioEmpty />
       )}

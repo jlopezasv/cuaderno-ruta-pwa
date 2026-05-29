@@ -130,6 +130,8 @@ import {
   pickNextAssignedService,
   sortDriverOperationalCandidates,
 } from "./domain/service/driverServiceQueue.js";
+import { useEmpresaOriginLookup } from "./hooks/useEmpresaOriginLookup.js";
+import { ServiceOriginBadge } from "./ui/ServiceOriginBadge.jsx";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
@@ -16935,8 +16937,10 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
   const [evidencias, setEvidencias] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandido, setExpandido] = useState({});
+  const [svAbierto, setSvAbierto] = useState({});
   const [visorCtx, setVisorCtx] = useState(null);
   const [expedienteLiteSv, setExpedienteLiteSv] = useState(null);
+  const empresaById = useEmpresaOriginLookup(servicios);
 
   const shell = "#F0F4F8";
   const card = "#FFFFFF";
@@ -17095,6 +17099,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
     const rh = refHumano(sv);
     const cliente = getServiceClient(sv);
     const bd = badgeOperativo(sv);
+    const abierto = !!svAbierto[sv.id];
 
     return (
       <div
@@ -17108,7 +17113,12 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
           overflow: "hidden",
         }}
       >
-        <div style={{ padding: "12px 12px 10px" }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setSvAbierto((p) => ({ ...p, [sv.id]: !p[sv.id] }))}
+          style={{ padding: "12px 12px 10px", cursor: "pointer" }}
+        >
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -17117,6 +17127,9 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
               </div>
               <div style={{ fontSize: 16, fontWeight: 800, color: tx, letterSpacing: -0.2, lineHeight: 1.25 }}>
                 {routeFrom} → {routeTo}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <ServiceOriginBadge servicio={sv} empresaById={empresaById} size="sm" />
               </div>
               {(rh || cliente) && (
                 <div style={{ fontSize: 10, color: su, marginTop: 4, opacity: 0.92 }}>
@@ -17133,6 +17146,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
               <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 7, background: `${operationalMeta.color}18`, color: operationalMeta.color, border: `1px solid ${operationalMeta.color}35` }}>
                 {operationalMeta.icon} {operationalMeta.label}
               </span>
+              <span style={{ color: su, fontSize: 16, transform: abierto ? "rotate(90deg)" : "none", transition: "transform .15s", marginTop: 2 }}>›</span>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, gap: 8, flexWrap: "wrap" }}>
@@ -17158,6 +17172,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
           )}
         </div>
 
+        {abierto && (
         <div style={{ padding: "0 10px 10px" }}>
           <div style={{ borderTop: `1px solid ${cardBorder}`, paddingTop: 8 }}>
             {svStops.map((stop, idx) => {
@@ -17290,6 +17305,7 @@ function ServicioDocsView({ uid, showToast, onBack, showOperationalLite = false,
             </button>
           ) : null}
         </div>
+        )}
       </div>
     );
   }
@@ -17446,6 +17462,8 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false,useOperationalLite=false}){
   const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const originServicios=useMemo(()=>[servicio,siguienteServicio].filter(Boolean),[servicio?.id,siguienteServicio?.id]);
+  const empresaById=useEmpresaOriginLookup(originServicios);
   const[creando,setCreando]=useState(false);
   const[evidenciasByStop,setEvidenciasByStop]=useState({});
   const card="#FFFFFF",tx="#0F172A",su="#64748B";
@@ -17549,6 +17567,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         stops={stops}
         siguienteServicio={siguienteServicio}
         siguientesStops={siguientesStops}
+        empresaById={empresaById}
         evidenciasByStop={evidenciasByStop}
         showToast={showToast}
         onIniciarServicio={iniciarServicio}
