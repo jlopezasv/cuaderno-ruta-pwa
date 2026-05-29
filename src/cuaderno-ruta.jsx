@@ -2260,8 +2260,12 @@ function AppInner(){
   },[prof,loaded]);
 
   const today=new Date();
-  const allSorted=[...db.entries].sort((a,b)=>+toDate(a.ts)-+toDate(b.ts));
-  const activeEntries=allSorted.filter(e=>!e.deleted&&!e.corrected_by);
+  // Reloj a resolución de minuto: evita recalcular la norma (coste ~O(n²) sobre TODO el
+  // historial) en cada tick de 1s, que saturaba el hilo principal y congelaba la UI con
+  // conductores de alto volumen de registros. La norma se muestra en minutos.
+  const minuteClock=useMemo(()=>{const d=new Date(clock);d.setSeconds(0,0);return +d;},[clock]);
+  const allSorted=useMemo(()=>[...db.entries].sort((a,b)=>+toDate(a.ts)-+toDate(b.ts)),[db.entries]);
+  const activeEntries=useMemo(()=>allSorted.filter(e=>!e.deleted&&!e.corrected_by),[allSorted]);
   const todayEnts=allSorted.filter(e=>sameDay(e.ts,today));
   const todayActive=activeEntries.filter(e=>sameDay(e.ts,today));
   const active=findActive(todayActive);
@@ -2271,7 +2275,10 @@ function AppInner(){
     try{const v=localStorage.getItem("manual_offset");return v?JSON.parse(v):null;}catch{return null;}
   });
 
-  const normaRaw=calcNorma(activeEntries,clock,prof.abroadNow||false);
+  const normaRaw=useMemo(
+    ()=>calcNorma(activeEntries,new Date(minuteClock),prof.abroadNow||false),
+    [activeEntries,minuteClock,prof.abroadNow]
+  );
   // Aplicar offset manual si existe y es del mismo día
   const norma=useMemo(()=>{
     if(!manualOffset)return normaRaw;
