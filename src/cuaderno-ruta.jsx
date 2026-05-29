@@ -5116,12 +5116,27 @@ async function fetchDriverOperationalCandidates(uid){
     const srows=await sr.json();
     return Array.isArray(srows)?srows:[];
   }
+  /** Momento de asignación al conductor (FIFO): primera fila por servicio en servicio_asignaciones. */
+  async function fetchAssignedAtBySvId(){
+    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at`);
+    if(!ar.ok)return{};
+    const rows=await ar.json().catch(()=>[]);
+    const map={};
+    (Array.isArray(rows)?rows:[]).forEach((r)=>{
+      const sid=r?.servicio_id;const ts=r?.created_at;
+      if(!sid||!ts)return;
+      if(map[sid]===undefined||new Date(ts)<new Date(map[sid]))map[sid]=ts;
+    });
+    return map;
+  }
   const primaryCandidates=await fetchServiciosByConductorId();
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
+  const assignedAtById=await fetchAssignedAtBySvId();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
-  return [...byId.values()]
+  const candidates=[...byId.values()]
     .filter((sv)=>isConductorServicioOperativoActivo(sv,uid));
+  return {candidates,assignedAtById};
 }
 
 async function fetchStopsForServicioId(servicioId){
@@ -5134,8 +5149,8 @@ async function fetchStopsForServicioId(servicioId){
 async function resolveDriverActiveServiceAndStops(uid){
   const empty={servicio:null,stops:[],siguienteServicio:null,siguientesStops:[]};
   if(!uid)return empty;
-  const rawCandidates=await fetchDriverOperationalCandidates(uid);
-  const candidates=sortDriverOperationalCandidates(rawCandidates);
+  const {candidates:rawCandidates,assignedAtById}=await fetchDriverOperationalCandidates(uid);
+  const candidates=sortDriverOperationalCandidates(rawCandidates,assignedAtById);
   devLog("[OP2] active service candidates",{
     uid,
     rows:candidates.length,
@@ -5170,7 +5185,7 @@ async function resolveDriverActiveServiceAndStops(uid){
     servicio=fallbackServicio;
     stops=fallbackStops;
   }
-  const siguienteServicio=pickNextAssignedService(candidates,servicio?.id||null);
+  const siguienteServicio=pickNextAssignedService(candidates,servicio?.id||null,assignedAtById);
   const siguientesStops=siguienteServicio?.id?await fetchStopsForServicioId(siguienteServicio.id):[];
   devLog("[OP2] driver queue resolved",{
     uid,

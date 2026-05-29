@@ -20,36 +20,58 @@ export function estadoRankForDriverQueue(estado) {
   return 9;
 }
 
-/** Orden de candidatos operativos (misma lógica que tab Servicio). */
-export function sortDriverOperationalCandidates(candidates) {
+/**
+ * Momento en que el servicio entró en la cola del conductor (cola FIFO).
+ * Fuente fiable: `servicio_asignaciones.created_at` (fila creada al asignar el conductor).
+ * Si no hay dato de asignación, se usa `created_at` del servicio como aproximación estable.
+ * @param {object} sv
+ * @param {Record<string,string>} assignedAtById — servicio_id → ISO de la primera asignación
+ * @returns {number} epoch ms (Infinity si no hay ningún timestamp fiable)
+ */
+export function driverQueueAssignmentTimeMs(sv, assignedAtById = {}) {
+  const fromAssign = sv?.id && assignedAtById ? assignedAtById[sv.id] : null;
+  const raw = fromAssign ?? sv?.created_at ?? null;
+  const t = raw ? new Date(raw).getTime() : NaN;
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Orden de candidatos operativos. Dentro del mismo estado se respeta el ORDEN DE ASIGNACIÓN
+ * (FIFO): el servicio asignado antes al conductor va primero.
+ * @param {object[]} candidates
+ * @param {Record<string,string>} [assignedAtById]
+ */
+export function sortDriverOperationalCandidates(candidates, assignedAtById = {}) {
   return [...(Array.isArray(candidates) ? candidates : [])].sort((a, b) => {
     const ra = estadoRankForDriverQueue(a?.estado);
     const rb = estadoRankForDriverQueue(b?.estado);
     if (ra !== rb) return ra - rb;
-    return new Date(b?.created_at || 0) - new Date(a?.created_at || 0);
+    return (
+      driverQueueAssignmentTimeMs(a, assignedAtById) -
+      driverQueueAssignmentTimeMs(b, assignedAtById)
+    );
   });
 }
 
 /**
- * Siguiente servicio en cola: solo asignado / pendiente con conductor, por fecha prevista.
+ * Siguiente servicio en cola FIFO: el primer servicio asignado pendiente (asignado /
+ * pendiente_asignacion con conductor) según el momento de asignación al conductor.
  * @param {object[]} candidates — ya filtrados operativos
  * @param {string|null} currentServicioId
+ * @param {Record<string,string>} [assignedAtById] — servicio_id → ISO de la primera asignación
  */
-export function pickNextAssignedService(candidates, currentServicioId) {
+export function pickNextAssignedService(candidates, currentServicioId, assignedAtById = {}) {
   const pool = (Array.isArray(candidates) ? candidates : []).filter((sv) => {
     if (!sv?.id || sv.id === currentServicioId) return false;
     const st = String(sv.estado || "").toLowerCase();
     return st === SERVICIO_ESTADO_ASIGNADO || st === SERVICIO_ESTADO_PENDIENTE_ASIGNACION;
   });
   if (!pool.length) return null;
-  pool.sort((a, b) => {
-    const ta = a?.fecha_inicio ? new Date(a.fecha_inicio).getTime() : NaN;
-    const tb = b?.fecha_inicio ? new Date(b.fecha_inicio).getTime() : NaN;
-    const fa = Number.isFinite(ta) ? ta : Number.POSITIVE_INFINITY;
-    const fb = Number.isFinite(tb) ? tb : Number.POSITIVE_INFINITY;
-    if (fa !== fb) return fa - fb;
-    return new Date(a?.created_at || 0) - new Date(b?.created_at || 0);
-  });
+  pool.sort(
+    (a, b) =>
+      driverQueueAssignmentTimeMs(a, assignedAtById) -
+      driverQueueAssignmentTimeMs(b, assignedAtById),
+  );
   return pool[0];
 }
 
