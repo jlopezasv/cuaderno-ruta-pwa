@@ -12,6 +12,7 @@ export function buildExpedienteForServicio({
   nombreConductor,
   fmtDur,
   entries = [],
+  conductoresParticipantes = [],
 }) {
   if (!servicio?.id) return null;
   const svStops = flotaStopsMap?.[servicio.id] || [];
@@ -34,5 +35,6 @@ export function buildExpedienteForServicio({
     nombreConductor,
     fmtDur,
     entries,
+    conductoresParticipantes,
   });
 }

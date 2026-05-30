@@ -718,11 +718,17 @@ export function ActiveServicePanel({
   onCerrarExpediente,
   conductorNombre = "Conductor",
   norma = null,
+  miParticipacion = null,
+  totalParticipantes = 1,
+  activosParticipantes = 1,
+  onFinalizarParticipacion = null,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [cierreSaving, setCierreSaving] = useState(false);
+  const [confirmFinalizar, setConfirmFinalizar] = useState(false);
+  const [finalizarSaving, setFinalizarSaving] = useState(false);
   const showCierreDocumental = useMemo(
     () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
     [servicio, stops, onCerrarExpediente],
@@ -753,6 +759,22 @@ export function ActiveServicePanel({
   const goods = extractGoodsSummary(sortedStops, evidenciasByStop);
   const observations = extractObservations(sortedStops);
   const canOperateStops = mode !== "asignado" && servicio?.estado === "en_curso" && !showCierreDocumental;
+  // FASE 2A multi-conductor: estado individual del conductor en este servicio.
+  const esMultiConductor = Number(totalParticipantes) > 1;
+  const miParticipacionLabel =
+    miParticipacion === "finalizado"
+      ? "Finalizada"
+      : servicio?.estado === "en_curso"
+        ? "Activa"
+        : "Pendiente";
+  // Anti-huérfano: el último conductor activo NO finaliza su parte; debe cerrar el servicio.
+  const esUltimoActivo = Number(activosParticipantes) <= 1;
+  const puedeFinalizarParticipacion =
+    esMultiConductor &&
+    !esUltimoActivo &&
+    servicio?.estado === "en_curso" &&
+    miParticipacion !== "finalizado" &&
+    typeof onFinalizarParticipacion === "function";
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
 
@@ -773,6 +795,20 @@ export function ActiveServicePanel({
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
+    }
+  };
+
+  const handleConfirmFinalizarParticipacion = async () => {
+    if (!onFinalizarParticipacion || finalizarSaving) return;
+    setFinalizarSaving(true);
+    try {
+      await onFinalizarParticipacion();
+      showToast?.("Has finalizado tu participación en este servicio");
+      setConfirmFinalizar(false);
+    } catch (error) {
+      showToast?.(error?.message || "No se pudo finalizar tu participación");
+    } finally {
+      setFinalizarSaving(false);
     }
   };
 
@@ -884,6 +920,49 @@ export function ActiveServicePanel({
           serviceAction={serviceAction}
         />
 
+        {esMultiConductor ? (
+          <div
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              padding: "9px 12px",
+              borderRadius: 12,
+              border: `1px solid ${DRIVER_UI.line}`,
+              background: DRIVER_UI.surface,
+            }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 700, color: DRIVER_UI.su }}>Mi participación</span>
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 800,
+                padding: "3px 10px",
+                borderRadius: 999,
+                color:
+                  miParticipacionLabel === "Activa"
+                    ? "#166534"
+                    : miParticipacionLabel === "Finalizada"
+                      ? DRIVER_UI.su
+                      : "#92400e",
+                background:
+                  miParticipacionLabel === "Activa"
+                    ? "#dcfce7"
+                    : miParticipacionLabel === "Finalizada"
+                      ? DRIVER_UI.surfaceHi
+                      : "#fef3c7",
+              }}
+            >
+              {miParticipacionLabel}
+            </span>
+            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: DRIVER_UI.muted }}>
+              {totalParticipantes} conductores
+            </span>
+          </div>
+        ) : null}
+
         {hasServiceDetailsContent({ cliente, referenciaCliente, goods, observations }) ? (
           <ServiceDetailsCollapsible
             cliente={cliente}
@@ -917,6 +996,47 @@ export function ActiveServicePanel({
             onEvidenciaSaved={onEvidenciaSaved}
           />
         </div>
+
+        {puedeFinalizarParticipacion ? (
+          <button
+            type="button"
+            onClick={() => setConfirmFinalizar(true)}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              minHeight: 46,
+              padding: "11px 14px",
+              borderRadius: 12,
+              border: "1px solid #fca5a5",
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            Finalizar mi participación
+          </button>
+        ) : esMultiConductor &&
+          esUltimoActivo &&
+          servicio?.estado === "en_curso" &&
+          miParticipacion !== "finalizado" ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: "11px 14px",
+              borderRadius: 12,
+              border: `1px solid ${DRIVER_UI.line}`,
+              background: DRIVER_UI.surfaceHi,
+              color: DRIVER_UI.su,
+              fontSize: 12.5,
+              fontWeight: 600,
+              lineHeight: 1.45,
+            }}
+          >
+            Eres el último conductor activo de este servicio. Completa las paradas y cierra el expediente para finalizarlo.
+          </div>
+        ) : null}
 
         <div
           style={{
@@ -984,6 +1104,80 @@ export function ActiveServicePanel({
         <SiguienteServicioEmpty />
       )}
       {confirmMuelleDialog}
+      {confirmFinalizar ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,.4)",
+            zIndex: 400,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => !finalizarSaving && setConfirmFinalizar(false)}
+        >
+          <div
+            role="dialog"
+            style={{
+              background: "#ffffff",
+              borderRadius: 18,
+              padding: "20px 18px",
+              maxWidth: 400,
+              width: "100%",
+              border: `1px solid ${DRIVER_UI.line}`,
+              boxShadow: "0 20px 50px rgba(15,23,42,.12)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
+              Finalizar mi participación
+            </div>
+            <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
+              El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                disabled={finalizarSaving}
+                onClick={() => setConfirmFinalizar(false)}
+                style={{
+                  flex: 1,
+                  background: DRIVER_UI.surfaceHi,
+                  color: DRIVER_UI.su,
+                  border: `1px solid ${DRIVER_UI.line}`,
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 700,
+                  cursor: finalizarSaving ? "default" : "pointer",
+                  opacity: finalizarSaving ? 0.65 : 1,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={finalizarSaving}
+                onClick={handleConfirmFinalizarParticipacion}
+                style={{
+                  flex: 1,
+                  background: "#dc2626",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 800,
+                  cursor: finalizarSaving ? "default" : "pointer",
+                  opacity: finalizarSaving ? 0.75 : 1,
+                }}
+              >
+                {finalizarSaving ? "Finalizando..." : "Finalizar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

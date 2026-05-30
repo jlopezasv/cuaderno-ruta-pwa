@@ -182,6 +182,10 @@ import {
   fetchFlotaServiciosForEmpresa,
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
   servicioPendienteAsignacion,
+  fetchServicioConductorIds,
+  syncServicioColaboradores,
+  fetchParticipacionServicio,
+  finalizarParticipacionConductor,
 } from "./domain/fleet/servicioAssignment.js";
 import {
   asignarConductorEnServicioCreado,
@@ -5118,27 +5122,33 @@ async function fetchDriverOperationalCandidates(uid){
     const srows=await sr.json();
     return Array.isArray(srows)?srows:[];
   }
-  /** Momento de asignación al conductor (FIFO): primera fila por servicio en servicio_asignaciones. */
+  /** Momento de asignación al conductor (FIFO) + estado de participación (FASE 2A). */
   async function fetchAssignedAtBySvId(){
-    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at`);
-    if(!ar.ok)return{};
+    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at,estado_participacion`);
+    if(!ar.ok)return{assignedAtById:{},participacionBySvId:{}};
     const rows=await ar.json().catch(()=>[]);
-    const map={};
+    const map={};const part={};
     (Array.isArray(rows)?rows:[]).forEach((r)=>{
       const sid=r?.servicio_id;const ts=r?.created_at;
-      if(!sid||!ts)return;
-      if(map[sid]===undefined||new Date(ts)<new Date(map[sid]))map[sid]=ts;
+      if(!sid)return;
+      if(ts&&(map[sid]===undefined||new Date(ts)<new Date(map[sid])))map[sid]=ts;
+      const est=String(r?.estado_participacion||"").toLowerCase();
+      // Si cualquier fila del conductor para el servicio está finalizada, prevalece "finalizado".
+      if(est==="finalizado")part[sid]="finalizado";
+      else if(part[sid]===undefined)part[sid]=est||"pendiente";
     });
-    return map;
+    return{assignedAtById:map,participacionBySvId:part};
   }
   const primaryCandidates=await fetchServiciosByConductorId();
   const fallbackCandidates=await fetchServiciosByAsignacionesFallback();
-  const assignedAtById=await fetchAssignedAtBySvId();
+  const {assignedAtById,participacionBySvId}=await fetchAssignedAtBySvId();
   const byId=new Map();
   [...primaryCandidates,...fallbackCandidates].forEach((sv)=>{if(sv?.id)byId.set(sv.id,sv);});
   const candidates=[...byId.values()]
-    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid));
-  return {candidates,assignedAtById};
+    .filter((sv)=>isConductorServicioOperativoActivo(sv,uid))
+    // FASE 2A: si el conductor ya finalizó su participación, queda libre de ese servicio.
+    .filter((sv)=>participacionBySvId[sv.id]!=="finalizado");
+  return {candidates,assignedAtById,participacionBySvId};
 }
 
 async function fetchStopsForServicioId(servicioId){
@@ -12312,64 +12322,144 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
 function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}){
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
+  const[selected,setSelected]=useState(()=>new Set());
+  const[loadingExisting,setLoadingExisting]=useState(true);
   const{overlayStyle,modalStyle}=useModalLayout();
   const card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
   const lista=(conductores||[]).filter(c=>c.user_id);
+  const principalId=servicio?.conductor_id||null;
 
-  async function elegir(c){
-    if(!servicio?.id||!c?.user_id||saving)return;
+  useEffect(()=>{
+    let cancelled=false;
+    setError("");
+    setLoadingExisting(true);
+    setSelected(new Set(principalId?[principalId]:[]));
+    if(!servicio?.id){setLoadingExisting(false);return;}
+    (async()=>{
+      const ids=await fetchServicioConductorIds(servicio.id);
+      if(cancelled)return;
+      setSelected(new Set([...(principalId?[principalId]:[]),...ids]));
+      setLoadingExisting(false);
+    })();
+    return()=>{cancelled=true;};
+  },[servicio?.id,principalId]);
+
+  const toggle=(uid)=>{
+    if(!uid||uid===principalId||saving)return;
+    setSelected(prev=>{
+      const next=new Set(prev);
+      if(next.has(uid))next.delete(uid);else next.add(uid);
+      return next;
+    });
+  };
+
+  const selCount=selected.size;
+
+  async function guardar(){
+    if(!servicio?.id||saving)return;
+    const ids=[...selected];
+    if(!principalId&&ids.length===0){setError("Selecciona al menos un conductor");return;}
     setSaving(true);setError("");
     try{
-      const assignResult=await asignarConductorEnServicioCreado({
-        servicioId:servicio.id,
-        servicio,
-        conductorId:c.user_id,
-        conductorNombre:c.nombre||"Conductor",
-        origen:servicio.origen,
-        destino:servicio.destino,
-        fechaInicio:servicio.fecha_inicio,
-      });
-      void sendAssignmentPush({
-        conductorId:c.user_id,
-        origen:servicio.origen,
-        destino:servicio.destino,
-        fechaInicio:servicio.fecha_inicio,
-        servicioId:servicio.id,
-      });
+      let principal=principalId;
+      let referencia=servicio.referencia;
+      let principalAssigned=false;
+      if(!principal){
+        principal=ids[0];
+        const c=lista.find(x=>x.user_id===principal);
+        const assignResult=await asignarConductorEnServicioCreado({
+          servicioId:servicio.id,
+          servicio,
+          conductorId:principal,
+          conductorNombre:c?.nombre||"Conductor",
+          origen:servicio.origen,
+          destino:servicio.destino,
+          fechaInicio:servicio.fecha_inicio,
+        });
+        referencia=assignResult.referencia??referencia;
+        principalAssigned=true;
+        void sendAssignmentPush({
+          conductorId:principal,
+          origen:servicio.origen,
+          destino:servicio.destino,
+          fechaInicio:servicio.fecha_inicio,
+          servicioId:servicio.id,
+        });
+      }
+      const colaboradorIds=ids.filter(id=>id!==principal);
+      const sync=await syncServicioColaboradores(servicio.id,principal,colaboradorIds);
+      for(const id of (sync?.added||[])){
+        void sendAssignmentPush({
+          conductorId:id,
+          origen:servicio.origen,
+          destino:servicio.destino,
+          fechaInicio:servicio.fecha_inicio,
+          servicioId:servicio.id,
+        });
+      }
+      const principalNombre=lista.find(x=>x.user_id===principal)?.nombre||"Conductor";
       onAsignado?.({
         servicioId:servicio.id,
-        conductorId:c.user_id,
-        conductorNombre:c.nombre||"Conductor",
-        referencia:assignResult.referencia,
+        conductorId:principal,
+        conductorNombre:principalNombre,
+        referencia,
+        principalAssigned,
+        totalConductores:1+colaboradorIds.length,
       });
-    }catch(e){setError(e?.message||"No se pudo asignar");}
+    }catch(e){setError(e?.message||"No se pudo guardar");}
     finally{setSaving(false);}
   }
 
   return(
     <div style={overlayStyle} onClick={onClose}>
-      <div style={{...modalStyle,background:card,maxHeight:"75vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+      <div style={{...modalStyle,background:card,maxHeight:"80vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
         <div style={{padding:"14px 16px",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
-          <div style={{fontSize:15,fontWeight:650,color:tx}}>Asignar conductor</div>
+          <div style={{fontSize:15,fontWeight:650,color:tx}}>{principalId?"Conductores del servicio":"Asignar conductores"}</div>
           <div style={{fontSize:12,color:su,marginTop:4}}>
             {getServiceNumber(servicio)} · {getFixedServiceRoute(servicio)}
+          </div>
+          <div style={{fontSize:11,color:su,marginTop:6,lineHeight:1.4}}>
+            Marca uno o varios conductores. {principalId?"El principal no se puede quitar aquí.":"El primero seleccionado será el principal."}
           </div>
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
           {!lista.length?(
             <div style={{fontSize:13,color:su,lineHeight:1.45}}>Añade un conductor en la pestaña Conductores para poder asignarlo.</div>
-          ):lista.map(c=>(
-            <button key={c.user_id} type="button" disabled={saving} onClick={()=>elegir(c)}
-              style={{width:"100%",textAlign:"left",background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"12px 14px",fontSize:14,fontWeight:700,color:tx,cursor:saving?"default":"pointer",marginBottom:8}}>
-              {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:500,marginLeft:8}}>· {c.matricula}</span>}
-            </button>
-          ))}
+          ):lista.map(c=>{
+            const isPrincipal=c.user_id===principalId;
+            const checked=selected.has(c.user_id);
+            return(
+              <button key={c.user_id} type="button" disabled={saving||isPrincipal||loadingExisting} onClick={()=>toggle(c.user_id)}
+                style={{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,
+                  background:checked?EMPRESA_UI.accentSoft:EMPRESA_UI.surfaceSoft,
+                  border:`1px solid ${checked?"#bfdbfe":EMPRESA_UI.border}`,borderRadius:10,padding:"12px 14px",
+                  fontSize:14,fontWeight:700,color:tx,cursor:(saving||isPrincipal)?"default":"pointer",marginBottom:8}}>
+                <span aria-hidden style={{width:20,height:20,flexShrink:0,borderRadius:6,
+                  border:`2px solid ${checked?EMPRESA_UI.accent:"#cbd5e1"}`,background:checked?EMPRESA_UI.accent:"#fff",
+                  color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,lineHeight:1}}>
+                  {checked?"✓":""}
+                </span>
+                <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:500,marginLeft:8}}>· {c.matricula}</span>}
+                </span>
+                {isPrincipal?(
+                  <span style={{flexShrink:0,fontSize:10,fontWeight:800,color:EMPRESA_UI.accent,background:"#fff",
+                    border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 8px"}}>PRINCIPAL</span>
+                ):null}
+              </button>
+            );
+          })}
           {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red}}>{error}</div>}
         </div>
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`}}>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,display:"flex",gap:10}}>
           <button type="button" onClick={onClose} disabled={saving}
-            style={{width:"100%",background:"transparent",border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,color:su,cursor:"pointer"}}>
+            style={{flex:1,background:"transparent",border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,color:su,cursor:"pointer"}}>
             Cancelar
+          </button>
+          <button type="button" onClick={()=>void guardar()} disabled={saving||loadingExisting||!lista.length||(!principalId&&selCount===0)}
+            style={{flex:1,background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:10,padding:"11px",fontSize:13,fontWeight:800,
+              color:EMPRESA_UI.accent,cursor:(saving||loadingExisting)?"default":"pointer",opacity:(!principalId&&selCount===0)?0.6:1}}>
+            {saving?"Guardando…":`Guardar${selCount?` (${selCount})`:""}`}
           </button>
         </div>
       </div>
@@ -12571,6 +12661,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   useEffect(()=>{if(initialTab)setFlotaTab(initialTab);},[initialTab]);
   const[asignarModal,setAsignarModal]=useState(null);
   const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
+  const[asignadosByServicioId,setAsignadosByServicioId]=useState({});
+  const[asignadosTick,setAsignadosTick]=useState(0);
   const[editarServicioModal,setEditarServicioModal]=useState(null);
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
@@ -13297,6 +13389,28 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const serviciosListaVisible=serviciosListaOperativa.slice(serviciosFrom,serviciosTo);
   const serviciosPages=Array.from({length:serviciosTotalPages},(_,i)=>i+1).filter(p=>serviciosTotalPages<=6||Math.abs(p-serviciosPageActual)<=2||p===1||p===serviciosTotalPages);
 
+  // Multi-Conductor V1: carga batch de conductores asignados (servicio_asignaciones) para los servicios visibles.
+  const asignadosIdsKey=useMemo(()=>serviciosListaVisible.map((s)=>s.id).join(","),[serviciosListaVisible]);
+  useEffect(()=>{
+    const ids=asignadosIdsKey?asignadosIdsKey.split(","):[];
+    if(!ids.length)return;
+    let cancelled=false;
+    (async()=>{
+      const r=await sbFetch(`/rest/v1/servicio_asignaciones?servicio_id=in.(${ids.join(",")})&select=servicio_id,conductor_id`);
+      if(!r.ok||cancelled)return;
+      const rows=await r.json().catch(()=>[]);
+      const m={};
+      for(const row of (Array.isArray(rows)?rows:[])){
+        const sid=row?.servicio_id,cid=row?.conductor_id;
+        if(!sid||!cid)continue;
+        if(!m[sid])m[sid]=[];
+        if(!m[sid].includes(cid))m[sid].push(cid);
+      }
+      if(!cancelled)setAsignadosByServicioId(m);
+    })();
+    return()=>{cancelled=true;};
+  },[asignadosIdsKey,asignadosTick]);
+
   const serviciosListaRef=useRef(serviciosListaOperativa);
   serviciosListaRef.current=serviciosListaOperativa;
 
@@ -13538,6 +13652,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const buildExpedienteCompleto=useCallback(async(sv)=>{
     const conductor=conductores.find((c)=>c.user_id===sv.conductor_id);
     const incidenciasExpediente=sv?.id?await fetchIncidenciasExpedientePayload(sv.id):null;
+    let conductoresParticipantes=[];
+    if(sv?.id){
+      try{
+        const ids=await fetchServicioConductorIds(sv.id);
+        const ordered=[sv.conductor_id,...ids.filter((id)=>id&&id!==sv.conductor_id)].filter(Boolean);
+        conductoresParticipantes=[...new Set(ordered)].map((id)=>nombreConductor(id)).filter(Boolean);
+      }catch(e){
+        devWarn("buildExpedienteCompleto participantes",e);
+      }
+    }
     return buildExpedienteForServicio({
       servicio:sv,
       flotaStopsMap:flotaStopsRef.current,
@@ -13547,6 +13671,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       nombreConductor,
       fmtDur,
       entries:conductor?.entries||[],
+      conductoresParticipantes,
     });
   },[conductores,nombreConductor,fmtDur]);
 
@@ -13629,7 +13754,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   const handleAsignarConductorServicioId=useCallback((servicioId)=>{
     const sv=flotaServiciosRef.current.find(s=>s.id===servicioId);
-    if(sv&&servicioPendienteAsignacion(sv))setAsignarConductorServicio(sv);
+    if(!sv)return;
+    const st=String(sv.estado||"").toLowerCase();
+    const operativoAsignable=!!sv.conductor_id&&(st==="asignado"||st==="en_curso");
+    if(servicioPendienteAsignacion(sv)||operativoAsignable)setAsignarConductorServicio(sv);
   },[]);
 
   const handleEditarServicioId=useCallback((servicioId)=>{
@@ -14149,6 +14277,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   ubicacionConductorByUid={ubicacionConductorByUid}
                   ubicacionRefreshByUid={ubicacionRefreshByUid}
                   conductoresByUid={conductoresByUid}
+                  asignadosByServicioId={asignadosByServicioId}
                   nombreConductor={nombreConductor}
                   onRefreshServicioId={handleRefreshServicioId}
                   onAnularServicioId={handleAnularServicioId}
@@ -14693,32 +14822,38 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           servicio={asignarConductorServicio}
           conductores={conductores}
           onClose={()=>setAsignarConductorServicio(null)}
-          onAsignado={({conductorNombre,conductorId,servicioId,referencia})=>{
-            const expandedServicioId=svCardExpandRef.current;
-            const prevRow=
-              flotaServiciosRef.current.find((s)=>s.id===servicioId)||asignarConductorServicio;
-            const patchedPreview={
-              ...prevRow,
-              id:servicioId,
-              conductor_id:conductorId,
-              estado:"asignado",
-              referencia:referencia??prevRow?.referencia,
-            };
-
-            if(expandedServicioId===servicioId){
-              const nextTab=resolveEmpresaVistaTabKeepingExpandedServicio(
-                serviciosVistaTab,
-                patchedPreview,
-                empresaVistaTabCtx,
-              );
-              if(nextTab!==serviciosVistaTab)setServiciosVistaTab(nextTab);
-            }
-
+          onAsignado={({conductorNombre,conductorId,servicioId,referencia,principalAssigned,totalConductores})=>{
             setAsignarConductorServicio(null);
-            setFlotaServicios((prev)=>
-              patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}),
+            if(principalAssigned){
+              const expandedServicioId=svCardExpandRef.current;
+              const prevRow=
+                flotaServiciosRef.current.find((s)=>s.id===servicioId)||asignarConductorServicio;
+              const patchedPreview={
+                ...prevRow,
+                id:servicioId,
+                conductor_id:conductorId,
+                estado:"asignado",
+                referencia:referencia??prevRow?.referencia,
+              };
+              if(expandedServicioId===servicioId){
+                const nextTab=resolveEmpresaVistaTabKeepingExpandedServicio(
+                  serviciosVistaTab,
+                  patchedPreview,
+                  empresaVistaTabCtx,
+                );
+                if(nextTab!==serviciosVistaTab)setServiciosVistaTab(nextTab);
+              }
+              setFlotaServicios((prev)=>
+                patchFlotaServicioTrasAsignar(prev,servicioId,{conductorId,referencia,estado:"asignado"}),
+              );
+            }
+            const extra=totalConductores>1?` +${totalConductores-1}`:"";
+            showToast(
+              principalAssigned
+                ?("✅ Conductor asignado: "+conductorNombre+extra)
+                :("✅ Conductores actualizados"+(totalConductores?`: ${totalConductores}`:"")),
             );
-            showToast("✅ Conductor asignado: "+conductorNombre);
+            setAsignadosTick((t)=>t+1);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
         />
@@ -16192,6 +16327,8 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   const[driverView,setDriverView]=useState(EMPTY_DRIVER_VIEW);
   const{servicio,stops,siguienteServicio,siguientesStops}=driverView;
   const[loading,setLoading]=useState(true);
+  // FASE 2A multi-conductor: participación individual del conductor en el servicio activo.
+  const[participacion,setParticipacion]=useState({total:1,activos:1,miEstado:null});
   const emptyStopsRetryRef=useRef(0);
   const emptyStopsRetryTimerRef=useRef(null);
   const loadGenRef=useRef(0);
@@ -16225,6 +16362,22 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       if(merged?.servicio?.id){
         driverViewRef.current=merged;
         setDriverView(merged);
+        // FASE 2A: participación del conductor en el servicio activo (total + mi estado).
+        try{
+          const partRows=await fetchParticipacionServicio(merged.servicio.id);
+          if(gen===loadGenRef.current){
+            const rows=Array.isArray(partRows)?partRows:[];
+            const total=new Set(rows.map(r=>r?.conductor_id).filter(Boolean)).size;
+            const activos=new Set(
+              rows
+                .filter(r=>String(r?.estado_participacion||"pendiente").toLowerCase()!=="finalizado")
+                .map(r=>r?.conductor_id).filter(Boolean)
+            ).size;
+            const miFila=rows.find(r=>r?.conductor_id===uid);
+            const miEstado=miFila?String(miFila.estado_participacion||"pendiente").toLowerCase():null;
+            setParticipacion({total:total||1,activos:activos||total||1,miEstado});
+          }
+        }catch(_){ if(gen===loadGenRef.current)setParticipacion({total:1,activos:1,miEstado:null}); }
         const stopsRows=Array.isArray(merged.stops)?merged.stops:[];
         if(stopsRows.length>0){
           emptyStopsRetryRef.current=0;
@@ -16248,6 +16401,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       }else{
         driverViewRef.current=EMPTY_DRIVER_VIEW;
         setDriverView(EMPTY_DRIVER_VIEW);
+        setParticipacion({total:1,activos:1,miEstado:null});
       }
     }catch(e){devWarn("useServicioActivo:",e);}
     finally{
@@ -16452,6 +16606,17 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     await cargar();
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
+  async function finalizarParticipacion(){
+    if(!servicio?.id||!uid)return;
+    const res=await finalizarParticipacionConductor(servicio.id,uid);
+    if(!res?.ok)throw new Error("No se pudo finalizar tu participación");
+    // Limpiar la vista para que el merge no vuelva a fijar el servicio finalizado.
+    setDriverView(EMPTY_DRIVER_VIEW);
+    driverViewRef.current=EMPTY_DRIVER_VIEW;
+    setParticipacion({total:1,activos:1,miEstado:null});
+    await cargar();
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
   return{
     servicio,
     stops,
@@ -16459,12 +16624,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     siguientesStops,
     completados,
     loading,
+    participacion,
     marcarLlegado,
     marcarCompletado,
     iniciarServicio,
     iniciarViajeOperacional,
     marcarInicioOperacionStop,
     cerrarExpediente,
+    finalizarParticipacion,
     recargar:cargar,
   };
 }
@@ -17461,7 +17628,7 @@ function EvidenciasStop(props) {
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false,useOperationalLite=false}){
-  const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,participacion,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,finalizarParticipacion,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const originServicios=useMemo(()=>[servicio,siguienteServicio].filter(Boolean),[servicio?.id,siguienteServicio?.id]);
   const empresaById=useEmpresaOriginLookup(originServicios);
   const[creando,setCreando]=useState(false);
@@ -17580,6 +17747,10 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         onCerrarExpediente={cerrarExpediente}
         conductorNombre={conductorNombre}
         norma={norma}
+        miParticipacion={participacion?.miEstado||null}
+        totalParticipantes={participacion?.total||1}
+        activosParticipantes={participacion?.activos||1}
+        onFinalizarParticipacion={finalizarParticipacion}
       />
       {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>

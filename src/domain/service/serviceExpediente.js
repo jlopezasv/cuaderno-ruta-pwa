@@ -33,6 +33,21 @@ import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitiz
 import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
 import { getExpedienteCierre } from "./expedienteCierre.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
+import { getFleetTenantDisplayFromServicio } from "./fleetTenantDisplay.js";
+import { normalizeServicioEmpresaId } from "./serviceOwnership.js";
+import { DEMO_FLEET_TENANT_LABELS } from "../../config/demoFleetTenantLabels.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
+
+/** Nombre comercial de la empresa para la cabecera del expediente (solo UI). */
+function resolveExpedienteEmpresaNombre(servicio) {
+  const fromMeta = getFleetTenantDisplayFromServicio(servicio)?.nombre;
+  if (fromMeta) return String(fromMeta).trim();
+  const eid = normalizeServicioEmpresaId(servicio?.empresa_id);
+  if (eid && isDemoApp() && DEMO_FLEET_TENANT_LABELS[eid]?.nombre) {
+    return String(DEMO_FLEET_TENANT_LABELS[eid].nombre).trim();
+  }
+  return null;
+}
 
 const enc = new TextEncoder();
 
@@ -386,6 +401,7 @@ export function buildServiceExpediente({
   nombreConductor,
   fmtDur,
   entries = [],
+  conductoresParticipantes = [],
 }) {
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
@@ -727,6 +743,7 @@ export function buildServiceExpediente({
     cierreDocumental: buildCierreDocumentalForExpediente(servicio, nombreConductor),
     header: {
       referencia: ref,
+      empresa: resolveExpedienteEmpresaNombre(servicio),
       ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
       estado:
         servicio?.estado === "anulado"
@@ -739,6 +756,9 @@ export function buildServiceExpediente({
       conductor: servicio?.conductor_id
         ? (nombreConductor?.(servicio.conductor_id) || "—")
         : "Sin asignar",
+      conductoresParticipantes: Array.isArray(conductoresParticipantes)
+        ? conductoresParticipantes.map((n) => String(n || "").trim()).filter(Boolean)
+        : [],
       cliente: cliente || "—",
       referenciaCliente: referenciaCliente || "—",
       eta: etaResumenLabel,
@@ -960,6 +980,7 @@ async function makePdfBlob(expediente) {
   add("<< /Type /Catalog /Pages 2 0 R >>");
   add("");
   const fontId = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const fontBoldId = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
 
   const imageRefs = new Map();
   let imageIndex = 1;
@@ -993,7 +1014,7 @@ async function makePdfBlob(expediente) {
     const pageId = objects.length + 1;
     const contentId = objects.length + 2;
     pageRefs.push(`${pageId} 0 R`);
-    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontId} 0 R >> ${xObjects ? `/XObject << ${xObjects} >>` : ""} >> /Contents ${contentId} 0 R >>`);
+    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontId} 0 R /F2 ${fontBoldId} 0 R >> ${xObjects ? `/XObject << ${xObjects} >>` : ""} >> /Contents ${contentId} 0 R >>`);
     add(`<< /Length ${enc.encode(content).length} >>\nstream\n${content}\nendstream`);
     commands = [];
     y = 800;
@@ -1007,8 +1028,42 @@ async function makePdfBlob(expediente) {
     return `${((n >> 16) & 255) / 255} ${((n >> 8) & 255) / 255} ${(n & 255) / 255}`;
   };
   const rect = (x, topY, w, h, fill) => commands.push(`${color(fill)} rg ${x} ${topY - h} ${w} ${h} re f`);
-  const text = (value, x, topY, size = 10, fill = "#0f172a") => {
-    commands.push(`BT /F1 ${size} Tf ${color(fill)} rg ${x} ${topY} Td (${pdfEscape(value)}) Tj ET`);
+  const text = (value, x, topY, size = 10, fill = "#0f172a", font = "F1") => {
+    commands.push(`BT /${font} ${size} Tf ${color(fill)} rg ${x} ${topY} Td (${pdfEscape(value)}) Tj ET`);
+  };
+  const hexNums = (hex) => {
+    const clean = String(hex).replace("#", "");
+    const n = parseInt(clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const gradientBand = (x0, topY, w, h, c0, c1, steps = 48) => {
+    const a = hexNums(c0);
+    const b = hexNums(c1);
+    const sw = w / steps;
+    for (let i = 0; i < steps; i++) {
+      const t = steps > 1 ? i / (steps - 1) : 0;
+      const r = (a[0] + (b[0] - a[0]) * t) / 255;
+      const g = (a[1] + (b[1] - a[1]) * t) / 255;
+      const bl = (a[2] + (b[2] - a[2]) * t) / 255;
+      commands.push(`${r.toFixed(3)} ${g.toFixed(3)} ${bl.toFixed(3)} rg ${(x0 + i * sw).toFixed(2)} ${(topY - h).toFixed(2)} ${(sw + 0.8).toFixed(2)} ${h.toFixed(2)} re f`);
+    }
+  };
+  const circle = (cx, cy, r, fill) => {
+    const k = 0.5523 * r;
+    commands.push(
+      `${color(fill)} rg ${(cx + r).toFixed(2)} ${cy.toFixed(2)} m ` +
+        `${(cx + r).toFixed(2)} ${(cy + k).toFixed(2)} ${(cx + k).toFixed(2)} ${(cy + r).toFixed(2)} ${cx.toFixed(2)} ${(cy + r).toFixed(2)} c ` +
+        `${(cx - k).toFixed(2)} ${(cy + r).toFixed(2)} ${(cx - r).toFixed(2)} ${(cy + k).toFixed(2)} ${(cx - r).toFixed(2)} ${cy.toFixed(2)} c ` +
+        `${(cx - r).toFixed(2)} ${(cy - k).toFixed(2)} ${(cx - k).toFixed(2)} ${(cy - r).toFixed(2)} ${cx.toFixed(2)} ${(cy - r).toFixed(2)} c ` +
+        `${(cx + k).toFixed(2)} ${(cy - r).toFixed(2)} ${(cx + r).toFixed(2)} ${(cy - k).toFixed(2)} ${(cx + r).toFixed(2)} ${cy.toFixed(2)} c f`,
+    );
+  };
+  const truckWatermark = (tone) => {
+    commands.push(`${color(tone)} rg 508 800 56 26 re f`);
+    commands.push(`${color(tone)} rg 474 800 m 474 818 l 482 826 l 506 826 l 506 800 l h f`);
+    circle(490, 798, 5.5, tone);
+    circle(520, 798, 5.5, tone);
+    circle(548, 798, 5.5, tone);
   };
   const lines = (value, x, size = 10, fill = "#334155", maxChars = 90, lineHeight = size + 4) => {
     for (const line of wrapText(value, maxChars)) {
@@ -1042,10 +1097,17 @@ async function makePdfBlob(expediente) {
     y -= drawH + 12;
   };
 
-  rect(0, pageHeight, pageWidth, 76, "#0f172a");
-  text("EXPEDIENTE OPERACIONAL", margin, 792, 18, "#ffffff");
-  text("Informe operacional · anexos documental e incidencias al final", margin, 770, 10, "#cbd5e1");
-  y = 728;
+  gradientBand(0, pageHeight, pageWidth, 54, "#0c4a6e", "#0ea5e9");
+  truckWatermark("#3aa9e6");
+  const empresaNombre = expediente.header.empresa;
+  if (empresaNombre) {
+    text(empresaNombre, margin, 819, 17, "#ffffff", "F2");
+    text("EXPEDIENTE OPERACIONAL · Informe operacional, anexos e incidencias", margin, 802, 8.5, "#cbd5e1");
+  } else {
+    text("EXPEDIENTE OPERACIONAL", margin, 819, 17, "#ffffff", "F2");
+    text("Informe operacional · anexos documental e incidencias al final", margin, 802, 8.5, "#cbd5e1");
+  }
+  y = 760;
 
   metric("Servicio", expediente.header.referencia, margin, 120);
   metric("Cliente", expediente.header.cliente, margin + 130, 135);
@@ -1054,6 +1116,12 @@ async function makePdfBlob(expediente) {
   metric("Conductor", expediente.header.conductor, margin, 175);
   metric("Estado", expediente.header.estado, margin + 185, 175);
   y -= 54;
+  const participantes = expediente.header.conductoresParticipantes || [];
+  if (participantes.length > 1) {
+    ensure(28);
+    lines(`Conductores participantes (${participantes.length}): ${participantes.join(", ")}`, margin, 9.5, "#334155", 95, 13);
+    y -= 6;
+  }
   ensure(52);
   rect(margin, y, 268, 48, "#f8fafc");
   text("ETA", margin + 8, y - 14, 8, "#64748b");

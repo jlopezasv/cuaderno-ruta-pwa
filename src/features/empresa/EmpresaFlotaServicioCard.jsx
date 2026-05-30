@@ -83,6 +83,8 @@ function EmpresaFlotaServicioCardImpl({
   onAnular,
   onAsignarConductor,
   onEditarServicio,
+  asignadosCount = 0,
+  asignadosNombresStr = "",
   fmtDur,
   tx,
   su,
@@ -299,7 +301,22 @@ function EmpresaFlotaServicioCardImpl({
             </div>
           ) : null}
 
-          {conductorLine ? (
+          {asignadosCount > 1 ? (
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: UI.subtle,
+                marginTop: 4,
+                lineHeight: 1.3,
+              }}
+            >
+              Conductores asignados: {asignadosCount}
+              <div style={{ fontSize: 12, color: UI.muted, fontWeight: 500, marginTop: 2 }}>
+                {asignadosNombresStr}
+              </div>
+            </div>
+          ) : conductorLine ? (
             <div
               style={{
                 fontSize: 13,
@@ -434,7 +451,7 @@ function EmpresaFlotaServicioCardImpl({
             </div>
           ) : null}
 
-          {onAsignarConductor && !expanded ? (
+          {onAsignarConductor && !expanded && !servicio.conductor_id ? (
             <button
               type="button"
               onClick={(e) => {
@@ -795,7 +812,14 @@ function EmpresaFlotaServicioCardImpl({
                 marginBottom: 10,
               }}
             >
-              <span>Conductor · {sinOp ? "Sin asignar" : nombreConductor(servicio.conductor_id)}</span>
+              <span>
+                {asignadosCount > 1 ? "Conductores · " : "Conductor · "}
+                {asignadosCount > 1
+                  ? asignadosNombresStr
+                  : sinOp
+                    ? "Sin asignar"
+                    : nombreConductor(servicio.conductor_id)}
+              </span>
               <span>Paradas · {progressLabel}</span>
               <span>
                 Próxima: <strong style={{ color: tx }}>{nextStop?.nombre || "—"}</strong>
@@ -967,14 +991,14 @@ function EmpresaFlotaServicioCardImpl({
                   padding: "10px 10px",
                   fontSize: 12.5,
                   fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                Asignar conductor
-              </button>
-            ) : null}
+                cursor: "pointer",
+              }}
+            >
+              {servicio.conductor_id ? "Gestionar conductores" : "Asignar conductor"}
+            </button>
+          ) : null}
 
-            {servicio.estado !== "anulado" ? (
+          {servicio.estado !== "anulado" ? (
               <button
                 type="button"
                 onClick={(e) => {
@@ -1016,6 +1040,8 @@ function propsEqual(prev, next) {
     return false;
   }
   if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (prev.asignadosCount !== next.asignadosCount) return false;
+  if (prev.asignadosNombresStr !== next.asignadosNombresStr) return false;
   if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
   if (flotaEvsSigForStops(prev.stops, prev.flotaEvs) !== flotaEvsSigForStops(next.stops, next.flotaEvs)) return false;
   if (prev.attention !== next.attention) return false;

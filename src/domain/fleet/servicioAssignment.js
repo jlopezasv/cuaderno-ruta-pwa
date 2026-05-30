@@ -249,3 +249,132 @@ export async function assignConductorPrincipalToServicio({
 
   return { servicioId, conductorId, origen, destino, fechaInicio, referencia, bootstrapResultado };
 }
+
+/**
+ * Lee los conductor_id ya asignados a un servicio (principal + colaboradores)
+ * desde servicio_asignaciones. Multi-Conductor V1.
+ * @param {string} servicioId
+ * @returns {Promise<string[]>} ids únicos
+ */
+export async function fetchServicioConductorIds(servicioId) {
+  if (!servicioId) return [];
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id`,
+  );
+  if (!r.ok) return [];
+  const rows = await r.json().catch(() => []);
+  return [...new Set((Array.isArray(rows) ? rows : []).map((x) => x?.conductor_id).filter(Boolean))];
+}
+
+/**
+ * Sincroniza los conductores COLABORADORES de un servicio (multi-conductor V1).
+ * NO toca el conductor principal (servicios.conductor_id) ni el estado ni la cola FIFO.
+ * Inserta filas servicio_asignaciones (tipo 'colaborador') para los nuevos y elimina
+ * las filas 'colaborador' que ya no estén seleccionadas.
+ * @param {string} servicioId
+ * @param {string|null} principalId — conductor principal (nunca se añade/elimina aquí)
+ * @param {string[]} colaboradorIds — conductores adicionales deseados
+ * @returns {Promise<{added:string[],removed:string[]}>}
+ */
+export async function syncServicioColaboradores(servicioId, principalId, colaboradorIds) {
+  if (!servicioId) return { added: [], removed: [] };
+  const desired = [...new Set((colaboradorIds || []).filter((id) => id && id !== principalId))];
+
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,tipo_asignacion`,
+  );
+  const rows = r.ok ? await r.json().catch(() => []) : [];
+  const existing = Array.isArray(rows) ? rows : [];
+  const existingColabIds = new Set(
+    existing
+      .filter((x) => x?.conductor_id && x.conductor_id !== principalId)
+      .map((x) => x.conductor_id),
+  );
+
+  const added = desired.filter((id) => !existingColabIds.has(id));
+  for (const id of added) {
+    await sbFetch("/rest/v1/servicio_asignaciones", {
+      method: "POST",
+      body: JSON.stringify({
+        servicio_id: servicioId,
+        conductor_id: id,
+        stop_id: null,
+        tipo_asignacion: "colaborador",
+      }),
+    }).catch(() => {});
+  }
+
+  const removed = [...existingColabIds].filter((id) => !desired.includes(id));
+  for (const id of removed) {
+    await sbFetch(
+      `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${id}&tipo_asignacion=eq.colaborador`,
+      { method: "DELETE" },
+    ).catch(() => {});
+  }
+
+  return { added, removed };
+}
+
+/**
+ * FASE 2A — Lee las participaciones (filas servicio_asignaciones) de un servicio.
+ * @param {string} servicioId
+ * @returns {Promise<Array<{conductor_id:string,tipo_asignacion:string,estado_participacion:string}>>}
+ */
+export async function fetchParticipacionServicio(servicioId) {
+  if (!servicioId) return [];
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,tipo_asignacion,estado_participacion`,
+  );
+  if (r.ok) {
+    const rows = await r.json().catch(() => []);
+    return Array.isArray(rows) ? rows : [];
+  }
+  // Migración FASE 2A aún no aplicada: reintentar sin la columna nueva (para que el conteo siga funcionando).
+  const r2 = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,tipo_asignacion`,
+  ).catch(() => null);
+  if (r2 && r2.ok) {
+    const rows = await r2.json().catch(() => []);
+    return Array.isArray(rows) ? rows : [];
+  }
+  return [];
+}
+
+/**
+ * FASE 2A — Finaliza la participación de UN conductor sin cerrar el servicio.
+ * Solo toca su fila en servicio_asignaciones (estado_participacion='finalizado').
+ * NO modifica servicios.estado ni la cola global del resto de conductores.
+ * @param {string} servicioId
+ * @param {string} conductorId
+ * @returns {Promise<{ok:boolean}>}
+ */
+export async function finalizarParticipacionConductor(servicioId, conductorId) {
+  if (!servicioId || !conductorId) return { ok: false };
+  const now = new Date().toISOString();
+  const patch = { estado_participacion: "finalizado", fecha_fin_participacion: now };
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patch),
+    },
+  ).catch(() => null);
+  if (r && r.ok) {
+    const rows = await r.json().catch(() => []);
+    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
+  }
+  // Servicio legacy sin fila para este conductor: crear una ya finalizada.
+  const ins = await sbFetch("/rest/v1/servicio_asignaciones", {
+    method: "POST",
+    body: JSON.stringify({
+      servicio_id: servicioId,
+      conductor_id: conductorId,
+      stop_id: null,
+      tipo_asignacion: "colaborador",
+      estado_participacion: "finalizado",
+      fecha_fin_participacion: now,
+    }),
+  }).catch(() => null);
+  return { ok: !!(ins && ins.ok) };
+}

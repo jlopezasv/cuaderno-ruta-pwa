@@ -39,6 +39,8 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   onAnularServicioId,
   onAsignarConductorServicioId,
   onEditarServicioId,
+  asignadosCount,
+  asignadosNombresStr,
   fmtDur,
   tx,
   su,
@@ -57,6 +59,10 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
     [onAsignarConductorServicioId, servicioId],
   );
   const pendienteAsignacion = servicioPendienteAsignacion(servicio);
+  const estadoLower = String(servicio?.estado || "").toLowerCase();
+  const puedeGestionarConductores =
+    pendienteAsignacion ||
+    (!!servicio?.conductor_id && (estadoLower === "asignado" || estadoLower === "en_curso"));
   return (
     <EmpresaFlotaServicioCard
       servicio={servicio}
@@ -77,8 +83,10 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
       attentionReason={rowMeta.attentionReason}
       onRefreshUbicacion={onRefreshUbicacion}
       onAnular={onAnular}
-      onAsignarConductor={pendienteAsignacion ? onAsignarConductor : undefined}
+      onAsignarConductor={puedeGestionarConductores ? onAsignarConductor : undefined}
       onEditarServicio={onEditarServicioId ? () => onEditarServicioId(servicioId) : undefined}
+      asignadosCount={asignadosCount}
+      asignadosNombresStr={asignadosNombresStr}
       fmtDur={fmtDur}
       tx={tx}
       su={su}
@@ -98,6 +106,8 @@ function rowPropsEqual(prev, next) {
     return false;
   }
   if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
+  if (prev.asignadosCount !== next.asignadosCount) return false;
+  if (prev.asignadosNombresStr !== next.asignadosNombresStr) return false;
   if (stopsOperativaSig(prev.stops) !== stopsOperativaSig(next.stops)) return false;
   if (flotaEvsSigForStops(prev.stops, prev.flotaEvs) !== flotaEvsSigForStops(next.stops, next.flotaEvs)) return false;
   if (prev.ubicRefresh !== next.ubicRefresh) return false;
@@ -128,6 +138,7 @@ function EmpresaFlotaServiciosListImpl({
   ubicacionConductorByUid,
   ubicacionRefreshByUid,
   conductoresByUid,
+  asignadosByServicioId = {},
   nombreConductor,
   onRefreshServicioId,
   onAnularServicioId,
@@ -166,11 +177,17 @@ function EmpresaFlotaServiciosListImpl({
       {servicios.map((sv) => {
         const uid = conductorUidOperativoServicio(sv);
         const normaC = uid ? conductoresByUid[uid]?.norma : null;
+        const asgIds = asignadosByServicioId[sv.id] || [];
+        const allConductorIds = [...new Set([sv.conductor_id, ...asgIds].filter(Boolean))];
+        const asignadosCount = allConductorIds.length;
+        const asignadosNombresStr = allConductorIds.map((id) => nombreConductor(id)).join(", ");
         return (
           <EmpresaFlotaServicioRowMemo
             key={sv.id}
             servicioId={sv.id}
             servicio={sv}
+            asignadosCount={asignadosCount}
+            asignadosNombresStr={asignadosNombresStr}
             stops={flotaStops[sv.id] || []}
             flotaEvs={flotaEvs}
             flotaStopsMap={flotaStops}
