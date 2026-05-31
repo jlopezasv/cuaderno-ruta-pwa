@@ -19,6 +19,8 @@ import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteServicioAccordion.jsx";
 import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
+import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
+import { ParticipacionTiemposPanel } from "./ParticipacionTiemposPanel.jsx";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -229,10 +231,10 @@ function operationNameForStop(stop) {
 
 function finishActionLabelForStop(stop) {
   const group = stopOperationalGroup(stop);
-  if (group === "carga") return "Finalizar carga";
-  if (group === "descarga") return "Finalizar descarga";
-  if (group === "carga_descarga") return "Finalizar operación";
-  return "Finalizar parada";
+  if (group === "carga") return "Salida de muelle · fin carga";
+  if (group === "descarga") return "Salida de muelle · fin descarga";
+  if (group === "carga_descarga") return "Salida de muelle · fin operación";
+  return "Salida de muelle";
 }
 
 function stopTimelineIcon(group) {
@@ -850,12 +852,14 @@ export function ActiveServicePanel({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
-          {confirmMuelle.kind === "entrada" ? "Confirmar entrada en muelle" : `Confirmar fin de ${confirmOperationName.toLowerCase()}`}
+          {confirmMuelle.kind === "entrada"
+            ? "Confirmar entrada en muelle"
+            : "Confirmar salida de muelle"}
         </div>
         <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
           {confirmMuelle.kind === "entrada"
             ? "Se registra la hora de entrada y esta parada pasa a estar en operación."
-            : `Se registra la hora de salida del muelle (fin de la operación en planta).`}
+            : "Se registra la salida de muelle y empieza el tramo en ruta hasta la siguiente entrada."}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button
@@ -995,6 +999,7 @@ export function ActiveServicePanel({
             conductorNombre={conductorNombre}
             onEvidenciaSaved={onEvidenciaSaved}
           />
+          <EnRutaHastaProximaEntrada servicio={servicio} stops={sortedStops} />
         </div>
 
         {puedeFinalizarParticipacion ? (
@@ -1056,6 +1061,7 @@ export function ActiveServicePanel({
         <div style={{ marginTop: 20 }}>
           <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
         </div>
+        <ParticipacionTiemposPanel servicio={servicio} stops={sortedStops} />
         {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
           <button
             type="button"

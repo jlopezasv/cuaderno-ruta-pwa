@@ -186,6 +186,7 @@ import {
   syncServicioColaboradores,
   fetchParticipacionServicio,
   finalizarParticipacionConductor,
+  marcarParticipacionActiva,
 } from "./domain/fleet/servicioAssignment.js";
 import {
   asignarConductorEnServicioCreado,
@@ -16428,6 +16429,39 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     };
   },[cargar]);
   const completados=countCompletedStops(stops);
+  async function autoTacografoTramoMuelle({ alEntrada, stop }) {
+    if (!uid || !norma) return;
+    const loc = stop?.direccion || stop?.nombre || null;
+    const note = stop?.nombre ? `Auto tramo: ${stop.nombre}` : "Auto tramo muelle";
+    if (alEntrada && norma.isDriving) {
+      await sbUpsert("entries", [
+        {
+          id: `${Date.now()}-fin-cond-tramo`,
+          user_id: uid,
+          type: "fin_conduccion",
+          ts: new Date().toISOString(),
+          note,
+          location: loc,
+          late: false,
+        },
+      ]).catch(() => {});
+      window.dispatchEvent(new Event("cuaderno-recargar-entries"));
+    }
+    if (!alEntrada && !norma.isDriving) {
+      await sbUpsert("entries", [
+        {
+          id: `${Date.now()}-ini-cond-tramo`,
+          user_id: uid,
+          type: "inicio_conduccion",
+          ts: new Date().toISOString(),
+          note,
+          location: loc,
+          late: false,
+        },
+      ]).catch(() => {});
+      window.dispatchEvent(new Event("cuaderno-recargar-entries"));
+    }
+  }
   async function marcarLlegado(stopId){
     const now=new Date().toISOString();
     devLog("[TL1] click entrada_muelle",{
@@ -16467,6 +16501,9 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       devWarn("[TL1] verify entrada_muelle failed",e?.message||e);
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
+    const stopEntrada=stops.find(s=>s.id===stopId);
+    await autoTacografoTramoMuelle({ alEntrada: true, stop: stopEntrada });
+    if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
@@ -16520,8 +16557,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
 
-    // ── Registrar automáticamente en tacógrafo ──
     const stop=stops.find(s=>s.id===stopId);
+    await autoTacografoTramoMuelle({ alEntrada: false, stop });
+    if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
+
+    // ── Registrar automáticamente en tacógrafo (trabajo en muelle) ──
     if(stop&&uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
       const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
       const finEv=STOP_TIPO_TO_FIN_EV[stop.tipo];
@@ -16560,6 +16600,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     }
     const fecha_inicio=new Date().toISOString();
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio})});
+    if(uid)await marcarParticipacionActiva(servicioId,uid).catch(()=>{});
     const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
     let nextServicio={...started};
     const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast});

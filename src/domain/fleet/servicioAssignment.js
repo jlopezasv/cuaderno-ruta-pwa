@@ -348,6 +348,36 @@ export async function fetchParticipacionServicio(servicioId) {
  * @param {string} conductorId
  * @returns {Promise<{ok:boolean}>}
  */
+/**
+ * FASE 2B — Marca participación activa y fija inicio si aún no existe (sin tocar FASE 2A fetch).
+ */
+export async function marcarParticipacionActiva(servicioId, conductorId) {
+  if (!servicioId || !conductorId) return { ok: false };
+  const now = new Date().toISOString();
+  const patch = { estado_participacion: "activo", fecha_inicio_participacion: now };
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}&fecha_inicio_participacion=is.null`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patch),
+    },
+  ).catch(() => null);
+  if (r?.ok) {
+    const rows = await r.json().catch(() => []);
+    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
+  }
+  await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ estado_participacion: "activo" }),
+    },
+  ).catch(() => null);
+  return { ok: true };
+}
+
 export async function finalizarParticipacionConductor(servicioId, conductorId) {
   if (!servicioId || !conductorId) return { ok: false };
   const now = new Date().toISOString();
