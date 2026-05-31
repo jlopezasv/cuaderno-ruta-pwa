@@ -12863,8 +12863,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     try{
       localStorage.setItem("cuaderno_docs_filters_v1",JSON.stringify({filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView}));
     }catch(_){}
-    setDocsPage(1);
   },[filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView]);
+
+  useEffect(()=>{setDocsPage(1);},[filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView]);
 
   useEffect(()=>{init();},[]);
 
@@ -13318,6 +13319,87 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const serviciosTo=Math.min(serviciosFrom+serviciosPageSize,serviciosTotal);
   const serviciosListaVisible=serviciosListaOperativa.slice(serviciosFrom,serviciosTo);
   const serviciosPages=Array.from({length:serviciosTotalPages},(_,i)=>i+1).filter(p=>serviciosTotalPages<=6||Math.abs(p-serviciosPageActual)<=2||p===1||p===serviciosTotalPages);
+
+  const documentosFiltrados=useMemo(()=>{
+    const lower=(v)=>String(v||"").toLowerCase();
+    const serviceDate=(sv)=>sv.fecha_inicio||sv.created_at||sv.generatedAt||"";
+    return flotaServicios.filter(sv=>{
+      const isArchived=archivedExpedienteIds.has(sv.id);
+      if(docsArchiveView==="activos"&&isArchived)return false;
+      if(docsArchiveView==="archivados"&&!isArchived)return false;
+      if(filtConductor&&sv.conductor_id!==filtConductor)return false;
+      if(filtFecha&&!String(serviceDate(sv)).startsWith(filtFecha))return false;
+      if(filtEstado&&sv.estado!==filtEstado)return false;
+      const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
+      const matricula=sv.matricula||conductor?.matricula||"";
+      if(filtMatricula&&!lower(matricula).includes(lower(filtMatricula)))return false;
+      const svStops=flotaStops[sv.id]||[];
+      const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs,flotaIncidenciasResumen);
+      if(filtIncidencias==="con"&&incN<=0)return false;
+      if(filtIncidencias==="sin"&&incN>0)return false;
+      const refVisible=getServiceNumber(sv);
+      const refClienteVisible=getServiceClientReference(sv);
+      const refSearch=[refVisible,refClienteVisible].filter(Boolean).join(" ").toLowerCase();
+      if(filtRef&&(!refSearch||!refSearch.includes(filtRef.toLowerCase())))return false;
+      if(filtCliente){
+        const q=filtCliente.toLowerCase();
+        if(!getServiceClient(sv).toLowerCase().includes(q))return false;
+      }
+      if(docsSearch){
+        if(!servicioMatchesSearchQuery(sv,docsSearch,{stops:svStops,conductor}))return false;
+      }
+      return true;
+    }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
+  },[
+    flotaServicios,
+    archivedExpedienteIds,
+    docsArchiveView,
+    filtConductor,
+    filtFecha,
+    filtEstado,
+    filtMatricula,
+    filtIncidencias,
+    filtRef,
+    filtCliente,
+    docsSearch,
+    flotaStops,
+    flotaEvs,
+    flotaIncidenciasResumen,
+    conductores,
+  ]);
+
+  const docsPageSize=15;
+  const docsTotal=documentosFiltrados.length;
+  const docsTotalPages=Math.max(1,Math.ceil(docsTotal/docsPageSize));
+  const docsPageActual=Math.min(Math.max(1,docsPage),docsTotalPages);
+  const docsFrom=(docsPageActual-1)*docsPageSize;
+  const docsTo=Math.min(docsFrom+docsPageSize,docsTotal);
+  const docsListaVisible=documentosFiltrados.slice(docsFrom,docsTo);
+  const docsPages=Array.from({length:docsTotalPages},(_,i)=>i+1).filter(p=>docsTotalPages<=6||Math.abs(p-docsPageActual)<=2||p===1||p===docsTotalPages);
+
+  const docsGruposVisibles=useMemo(()=>{
+    const serviceDate=(sv)=>sv.fecha_inicio||sv.created_at||sv.generatedAt||"";
+    const temporalGroup=(sv)=>{
+      const t=new Date(serviceDate(sv)).getTime();
+      if(!Number.isFinite(t))return"Sin fecha";
+      const d=new Date(t),now=new Date();
+      const day0=x=>{const y=new Date(x);y.setHours(0,0,0,0);return y;};
+      const d0=day0(d),n0=day0(now);
+      if(d0.getTime()===n0.getTime())return"Hoy";
+      const weekStart=day0(now);weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7));
+      if(d0>=weekStart)return"Esta semana";
+      if(d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth())return"Este mes";
+      const prev=new Date(now.getFullYear(),now.getMonth()-1,1);
+      if(d.getFullYear()===prev.getFullYear()&&d.getMonth()===prev.getMonth())return"Mes anterior";
+      return d.toLocaleDateString("es-ES",{month:"long",year:"numeric"});
+    };
+    return docsListaVisible.reduce((acc,sv)=>{
+      const g=temporalGroup(sv);
+      if(!acc[g])acc[g]=[];
+      acc[g].push(sv);
+      return acc;
+    },{});
+  },[docsListaVisible]);
 
   // Multi-Conductor V1: carga batch de conductores asignados (servicio_asignaciones) para los servicios visibles.
   const asignadosIdsKey=useMemo(()=>serviciosListaVisible.map((s)=>s.id).join(","),[serviciosListaVisible]);
@@ -14522,101 +14604,42 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   </div>
                 </div>
                 {(filtConductor||filtFecha||filtRef||filtCliente||filtMatricula||filtEstado||filtIncidencias||docsSearch)&&(
-                  <button onClick={()=>{setFiltConductor("");setFiltFecha("");setFiltRef("");setFiltCliente("");setFiltMatricula("");setFiltEstado("");setFiltIncidencias("");setDocsSearch("");}}
+                  <button onClick={()=>{setFiltConductor("");setFiltFecha("");setFiltRef("");setFiltCliente("");setFiltMatricula("");setFiltEstado("");setFiltIncidencias("");setDocsSearch("");setDocsPage(1);}}
                     style={{marginTop:9,background:"transparent",border:"none",color:"#b91c1c",fontSize:12,fontWeight:800,cursor:"pointer",padding:0}}>
                     Limpiar filtros
                   </button>
                 )}
               </div>
 
-              {/* Lista filtrada */}
-              {(()=>{
-                const pageSize=20;
-                const lower=(v)=>String(v||"").toLowerCase();
-                const serviceDate=(sv)=>sv.fecha_inicio||sv.created_at||sv.generatedAt||"";
-                const temporalGroup=(sv)=>{
-                  const t=new Date(serviceDate(sv)).getTime();
-                  if(!Number.isFinite(t))return"Sin fecha";
-                  const d=new Date(t),now=new Date();
-                  const day0=x=>{const y=new Date(x);y.setHours(0,0,0,0);return y;};
-                  const d0=day0(d),n0=day0(now);
-                  if(d0.getTime()===n0.getTime())return"Hoy";
-                  const weekStart=day0(now);weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7));
-                  if(d0>=weekStart)return"Esta semana";
-                  if(d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth())return"Este mes";
-                  const prev=new Date(now.getFullYear(),now.getMonth()-1,1);
-                  if(d.getFullYear()===prev.getFullYear()&&d.getMonth()===prev.getMonth())return"Mes anterior";
-                  return d.toLocaleDateString("es-ES",{month:"long",year:"numeric"});
-                };
-                const serviciosFiltrados=flotaServicios.filter(sv=>{
-                  const isArchived=archivedExpedienteIds.has(sv.id);
-                  if(docsArchiveView==="activos"&&isArchived)return false;
-                  if(docsArchiveView==="archivados"&&!isArchived)return false;
-                  if(filtConductor&&sv.conductor_id!==filtConductor)return false;
-                  if(filtFecha&&!String(serviceDate(sv)).startsWith(filtFecha))return false;
-                  if(filtEstado&&sv.estado!==filtEstado)return false;
-                  const conductor=conductores.find(c=>c.user_id===sv.conductor_id);
-                  const matricula=sv.matricula||conductor?.matricula||"";
-                  if(filtMatricula&&!lower(matricula).includes(lower(filtMatricula)))return false;
-                  const svStops=flotaStops[sv.id]||[];
-                  const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs,flotaIncidenciasResumen);
-                  if(filtIncidencias==="con"&&incN<=0)return false;
-                  if(filtIncidencias==="sin"&&incN>0)return false;
-                  const refVisible=getServiceNumber(sv);
-                  const refClienteVisible=getServiceClientReference(sv);
-                  const refSearch=[refVisible,refClienteVisible].filter(Boolean).join(" ").toLowerCase();
-                  if(filtRef&&(!refSearch||!refSearch.includes(filtRef.toLowerCase())))return false;
-                  if(filtCliente){
-                    const q=filtCliente.toLowerCase();
-                    if(!getServiceClient(sv).toLowerCase().includes(q))return false;
-                  }
-                  if(docsSearch){
-                    if(!servicioMatchesSearchQuery(sv,docsSearch,{stops:svStops,conductor}))return false;
-                  }
-                  return true;
-                }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
-                if(!serviciosFiltrados.length)return(
-                  <div style={{background:card,borderRadius:12,padding:"24px",textAlign:"center",color:su,fontSize:13}}>
-                    Sin resultados para los filtros aplicados
-                  </div>
-                );
-                const total=serviciosFiltrados.length;
-                const totalPages=Math.max(1,Math.ceil(total/pageSize));
-                const page=Math.min(Math.max(1,docsPage),totalPages);
-                const from=(page-1)*pageSize;
-                const to=Math.min(from+pageSize,total);
-                const pageRows=serviciosFiltrados.slice(from,to);
-                const pages=Array.from({length:totalPages},(_,i)=>i+1).filter(p=>totalPages<=6||Math.abs(p-page)<=2||p===1||p===totalPages);
-                const groups=pageRows.reduce((acc,sv)=>{
-                  const g=temporalGroup(sv);
-                  if(!acc[g])acc[g]=[];
-                  acc[g].push(sv);
-                  return acc;
-                },{});
-                return(
+              {/* Lista filtrada (15 informes por página) */}
+              {!documentosFiltrados.length?(
+                <div style={{background:card,borderRadius:12,padding:"24px",textAlign:"center",color:su,fontSize:13}}>
+                  Sin resultados para los filtros aplicados
+                </div>
+              ):(
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
                     <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",boxShadow:EMPRESA_UI.shadow}}>
                       <div style={{fontSize:12,color:"#334155",fontWeight:750}}>
-                        Mostrando {from+1}-{to} de {total} informes
+                        Mostrando {docsTotal?docsFrom+1:0}-{docsTo} de {docsTotal} informes
                       </div>
                       <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
-                        <button type="button" disabled={page<=1} onClick={()=>setDocsPage(page-1)}
-                          style={{background:page<=1?"#f1f5f9":"white",color:page<=1?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:page<=1?"default":"pointer"}}>
+                        <button type="button" disabled={docsPageActual<=1} onClick={()=>setDocsPage(docsPageActual-1)}
+                          style={{background:docsPageActual<=1?"#f1f5f9":"white",color:docsPageActual<=1?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:docsPageActual<=1?"default":"pointer"}}>
                           ← Anterior
                         </button>
-                        {pages.map((p,i)=>(
+                        {docsPages.map((p,i)=>(
                           <button key={`${p}-${i}`} type="button" onClick={()=>setDocsPage(p)}
-                            style={{background:p===page?"#0f172a":"white",color:p===page?"white":"#334155",border:"1px solid #cbd5e1",borderRadius:8,minWidth:30,padding:"6px 8px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
+                            style={{background:p===docsPageActual?"#0f172a":"white",color:p===docsPageActual?"white":"#334155",border:"1px solid #cbd5e1",borderRadius:8,minWidth:30,padding:"6px 8px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                             {p}
                           </button>
                         ))}
-                        <button type="button" disabled={page>=totalPages} onClick={()=>setDocsPage(page+1)}
-                          style={{background:page>=totalPages?"#f1f5f9":"white",color:page>=totalPages?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:page>=totalPages?"default":"pointer"}}>
+                        <button type="button" disabled={docsPageActual>=docsTotalPages} onClick={()=>setDocsPage(docsPageActual+1)}
+                          style={{background:docsPageActual>=docsTotalPages?"#f1f5f9":"white",color:docsPageActual>=docsTotalPages?"#94a3b8":"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"6px 9px",fontSize:12,fontWeight:800,cursor:docsPageActual>=docsTotalPages?"default":"pointer"}}>
                           Siguiente →
                         </button>
                       </div>
                     </div>
-                    {Object.entries(groups).map(([group,rows])=>(
+                    {Object.entries(docsGruposVisibles).map(([group,rows])=>(
                       <div key={group} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,overflow:"hidden",boxShadow:EMPRESA_UI.shadow}}>
                         <div style={{background:"#f8fafc",borderBottom:"1px solid #dbe2ea",padding:"8px 11px",fontSize:11,color:"#475569",fontWeight:850,textTransform:"uppercase",letterSpacing:.4}}>{group}</div>
                         {rows.map(sv=>{
@@ -14709,8 +14732,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       </div>
                     ))}
                   </div>
-                );
-              })()}
+              )}
             </>
           )}
           <button type="button" onClick={()=>{handleManualRefreshFlota();void ensureFlotaExtraDocsForDocumentos({force:true});}} style={{width:"100%",marginTop:16,background:"#334155",color:"white",border:"none",borderRadius:12,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer"}}>Actualizar</button>
