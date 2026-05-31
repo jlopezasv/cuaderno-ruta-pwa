@@ -111,3 +111,14 @@ export async function insertStopsForServicio(servicioId, stops) {
     pgCode: parsePostgrestError(lastFail.detail).code || "",
   };
 }
+
+/** Reemplaza todas las paradas de un servicio (edición flota). */
+export async function replaceStopsForServicio(servicioId, stops) {
+  if (!servicioId) return { ok: false, error: "Falta servicio" };
+  const del = await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicioId}`, { method: "DELETE" });
+  if (!del.ok) {
+    const detail = await del.text().catch(() => "");
+    return { ok: false, error: parseInsertErrorDetail(del, detail) };
+  }
+  return insertStopsForServicio(servicioId, stops);
+}

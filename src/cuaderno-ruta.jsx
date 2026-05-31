@@ -222,7 +222,8 @@ import {
 } from "./domain/service/serviceIdentity.js";
 import {
   buildOperationalPlacesMetaPatch,
-  routeTextFromOperationalPlaces,
+  operationalPlacesFromStops,
+  routeTextFromStops,
   servicioMatchesSearchQuery,
 } from "./domain/service/serviceOperationalPlaces.js";
 import { formatStopNotesForDisplay, getInicioOperacionMs, mergeStopOperacionMeta } from "./domain/service/stopOperacionMeta.js";
@@ -11989,29 +11990,11 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
-function findStopIndexByTipo(stops,kind){
-  if(kind==="carga"){
-    const i=stops.findIndex(s=>/carga/.test(String(s.tipo||""))&&!/solo_descarga/.test(String(s.tipo||"")));
-    return i>=0?i:0;
-  }
-  let i=-1;
-  for(let j=stops.length-1;j>=0;j--){
-    if(/descarga/.test(String(stops[j]?.tipo||""))){i=j;break;}
-  }
-  return i>=0?i:Math.max(0,stops.length-1);
-}
-
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
   const sinConductor=!conductorId;
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
-  const[cargaNombre,setCargaNombre]=useState("");
-  const[cargaEmpresa,setCargaEmpresa]=useState("");
-  const[cargaDir,setCargaDir]=useState("");
-  const[descargaNombre,setDescargaNombre]=useState("");
-  const[descargaEmpresa,setDescargaEmpresa]=useState("");
-  const[descargaDir,setDescargaDir]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
     {orden:1,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""},
@@ -12050,50 +12033,15 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
     });
   }
   function changeStop(i,field,val){
-    setStops(prev=>{
-      const next=prev.map((s,idx)=>idx===i?{...s,[field]:val}:s);
-      const ci=findStopIndexByTipo(next,"carga");
-      const di=findStopIndexByTipo(next,"descarga");
-      if(i===ci){
-        if(field==="nombre")setCargaNombre(val);
-        else if(field==="empresa")setCargaEmpresa(val);
-        else if(field==="direccion")setCargaDir(val);
-      }
-      if(i===di){
-        if(field==="nombre")setDescargaNombre(val);
-        else if(field==="empresa")setDescargaEmpresa(val);
-        else if(field==="direccion")setDescargaDir(val);
-      }
-      return next;
-    });
+    setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));
   }
 
-  function setCargaFields(lugar,empresa,dir){
-    setCargaNombre(lugar);
-    setCargaEmpresa(empresa);
-    setCargaDir(dir);
-    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"carga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
-  }
-
-  function setDescargaFields(lugar,empresa,dir){
-    setDescargaNombre(lugar);
-    setDescargaEmpresa(empresa);
-    setDescargaDir(dir);
-    setStops(prev=>prev.map((s,idx)=>idx===findStopIndexByTipo(prev,"descarga")?{...s,nombre:lugar,empresa,direccion:dir}:s));
-  }
+  const rutaDesdeParadas=useMemo(()=>routeTextFromStops(stops),[stops]);
 
   async function guardar(){
-    const operationalPlaces={
-      cliente_nombre:cliente.trim(),
-      carga_nombre:cargaNombre.trim(),
-      carga_empresa:cargaEmpresa.trim(),
-      carga_direccion:cargaDir.trim(),
-      descarga_nombre:descargaNombre.trim(),
-      descarga_empresa:descargaEmpresa.trim(),
-      descarga_direccion:descargaDir.trim(),
-    };
-    const {origen:origenRuta,destino:destinoRuta}=routeTextFromOperationalPlaces(operationalPlaces);
-    if(!origenRuta||!destinoRuta){setError("Indica el lugar de origen y destino (localidad o dirección)");return;}
+    const operationalPlaces=operationalPlacesFromStops(stops,cliente.trim());
+    const {origen:origenRuta,destino:destinoRuta}=routeTextFromStops(stops);
+    if(!origenRuta||!destinoRuta){setError("Indica origen y destino en las paradas (dirección, lugar o empresa)");return;}
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre de lugar");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     setSaving(true);setError("");
@@ -12214,32 +12162,6 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
               style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
           </div>
 
-          <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:6,letterSpacing:.3}}>LUGARES OPERATIVOS</div>
-          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:8}}>
-            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Origen (carga)</div>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
-            <input value={cargaNombre} onChange={e=>setCargaFields(e.target.value,cargaEmpresa,cargaDir)} placeholder="Antequera"
-              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
-            <input value={cargaEmpresa} onChange={e=>setCargaFields(cargaNombre,e.target.value,cargaDir)} placeholder="Planta, operador logístico…"
-              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
-            <input value={cargaDir} onChange={e=>setCargaFields(cargaNombre,cargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
-              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
-          </div>
-          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"10px",marginBottom:12}}>
-            <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Destino (descarga)</div>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
-            <input value={descargaNombre} onChange={e=>setDescargaFields(e.target.value,descargaEmpresa,descargaDir)} placeholder="Pamplona"
-              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
-            <input value={descargaEmpresa} onChange={e=>setDescargaFields(descargaNombre,e.target.value,descargaDir)} placeholder="Centro de distribución…"
-              style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
-            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
-            <input value={descargaDir} onChange={e=>setDescargaFields(descargaNombre,descargaEmpresa,e.target.value)} placeholder="Calle, polígono…"
-              style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
-          </div>
-
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             <div>
               <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Ref. servicio</div>
@@ -12259,6 +12181,12 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
           </div>
           {/* Paradas */}
               <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:6}}>Paradas · {stops.length}</div>
+              {(rutaDesdeParadas.origen||rutaDesdeParadas.destino)&&(
+                <div style={{fontSize:11,color:EMPRESA_UI.accent,marginBottom:8,fontWeight:600}}>
+                  Ruta: {rutaDesdeParadas.origen||"—"} → {rutaDesdeParadas.destino||"—"}
+                  <span style={{fontWeight:400,color:su,marginLeft:6}}>(última carga · primera descarga)</span>
+                </div>
+              )}
           {stops.map((stop,i)=>(
             <div key={stop.orden}>
               <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:`1px solid ${EMPRESA_UI.border}`}}>
@@ -14367,7 +14295,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:16,width:"100%",maxWidth:760,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 70px rgba(15,23,42,.25)"}} onClick={e=>e.stopPropagation()}>
                 <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #cbd5e1",display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
                   <div style={{minWidth:0}}>
-                    {isDemoApp()&&(expedientePreview.header.empresa||expedientePreview.header.empresaCif)?(
+                    {(expedientePreview.header.empresa||expedientePreview.header.empresaCif)?(
                       <div style={{marginBottom:10}}>
                         {expedientePreview.header.empresa?(
                           <div style={{fontSize:16,fontWeight:800,color:"#0f172a",lineHeight:1.25}}>{expedientePreview.header.empresa}</div>

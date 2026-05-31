@@ -1,16 +1,19 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { getServiceClient, getServiceNumber } from "../../domain/service/serviceIdentity.js";
 import { mergeReferenciaOperacional, getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import {
   buildOperationalPlacesMetaPatch,
-  getServiceOperationalPlaces,
-  routeTextFromOperationalPlaces,
+  operationalPlacesFromStops,
+  routeTextFromStops,
 } from "../../domain/service/serviceOperationalPlaces.js";
 import { assignConductorPrincipalToServicio } from "../../domain/fleet/servicioAssignment.js";
 import { asignarConductorEnServicioCreado } from "../../domain/fleet/servicioCreateFlow.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { insertServicioCambiosRows, fmtAuditVal } from "../../domain/fleet/servicioAudit.js";
+import { replaceStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
+import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
+import { formatStopNotesForDisplay, getStopOperacionMeta, mergeStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -21,6 +24,26 @@ function toDTL(d) {
   const D = new Date(d);
   if (Number.isNaN(D.getTime())) return "";
   return `${D.getFullYear()}-${p2(D.getMonth() + 1)}-${p2(D.getDate())}T${p2(D.getHours())}:${p2(D.getMinutes())}`;
+}
+
+function stopRowToForm(row) {
+  const meta = getStopOperacionMeta(row?.notas);
+  return {
+    orden: Number(row.orden) || 0,
+    tipo: row.tipo || "parada",
+    nombre: String(row.nombre || "").trim(),
+    empresa: String(row.empresa || meta.empresa_logistica || meta.empresa || "").trim(),
+    direccion: String(row.direccion || "").trim(),
+    notas: formatStopNotesForDisplay(row?.notas) || "",
+  };
+}
+
+function prepareStopsForPersist(stops) {
+  return stops.map((s) => {
+    const emp = String(s.empresa || "").trim();
+    if (!emp) return s;
+    return { ...s, notas: mergeStopOperacionMeta(s.notas, { empresa_logistica: emp }) };
+  });
 }
 
 const EMPRESA_UI = {
@@ -46,12 +69,11 @@ export function EmpresaEditarServicioModal({
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
   const wide = mode === "wide";
 
-  const [cargaNombre, setCargaNombre] = useState("");
-  const [cargaEmpresa, setCargaEmpresa] = useState("");
-  const [cargaDir, setCargaDir] = useState("");
-  const [descargaNombre, setDescargaNombre] = useState("");
-  const [descargaEmpresa, setDescargaEmpresa] = useState("");
-  const [descargaDir, setDescargaDir] = useState("");
+  const [stops, setStops] = useState([
+    { orden: 1, tipo: "carga", nombre: "", empresa: "", direccion: "", notas: "" },
+    { orden: 2, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" },
+  ]);
+  const [stopsLoading, setStopsLoading] = useState(false);
   const [fechaInicioLocal, setFechaInicioLocal] = useState("");
   const [serviceNumber, setServiceNumber] = useState("");
   const [cliente, setCliente] = useState("");
@@ -61,15 +83,10 @@ export function EmpresaEditarServicioModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const rutaDesdeParadas = useMemo(() => routeTextFromStops(stops), [stops]);
+
   useEffect(() => {
     if (!servicio?.id) return;
-    const places = getServiceOperationalPlaces(servicio);
-    setCargaNombre(places.carga_nombre);
-    setCargaEmpresa(places.carga_empresa);
-    setCargaDir(places.carga_direccion);
-    setDescargaNombre(places.descarga_nombre);
-    setDescargaEmpresa(places.descarga_empresa);
-    setDescargaDir(places.descarga_direccion);
     setFechaInicioLocal(servicio.fecha_inicio ? toDTL(servicio.fecha_inicio) : "");
     setServiceNumber(String(servicio.service_number ?? "").trim());
     setCliente(String(getServiceClient(servicio) || "").trim());
@@ -79,7 +96,59 @@ export function EmpresaEditarServicioModal({
     setError("");
   }, [servicio]);
 
+  useEffect(() => {
+    if (!servicio?.id || !wide) return;
+    let cancelled = false;
+    setStopsLoading(true);
+    (async () => {
+      try {
+        const res = await sbFetch(
+          `/rest/v1/stops?servicio_id=eq.${servicio.id}&select=id,orden,tipo,nombre,direccion,notas&order=orden.asc`,
+        );
+        if (!res.ok) throw new Error(`Error ${res.status}`);
+        const rows = await res.json().catch(() => []);
+        if (cancelled) return;
+        if (Array.isArray(rows) && rows.length) {
+          setStops(rows.map(stopRowToForm));
+        } else {
+          setStops([
+            { orden: 1, tipo: "carga", nombre: "", empresa: "", direccion: "", notas: "" },
+            { orden: 2, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" },
+          ]);
+        }
+      } catch {
+        if (!cancelled) setError("No se pudieron cargar las paradas");
+      } finally {
+        if (!cancelled) setStopsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [servicio?.id, wide]);
+
   const listaConductores = (conductores || []).filter((c) => c.user_id);
+
+  function addStop() {
+    setStops((prev) => [...prev, { orden: prev.length + 1, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" }]);
+  }
+  function removeStop(i) {
+    setStops((prev) => prev.filter((_, idx) => idx !== i));
+  }
+  function moveStop(i, dir) {
+    setStops((prev) => {
+      const arr = [...prev];
+      const j = i + dir;
+      if (j < 0 || j >= arr.length) return arr;
+      const tmpOrden = arr[i].orden;
+      arr[i] = { ...arr[i], orden: arr[j].orden };
+      arr[j] = { ...arr[j], orden: tmpOrden };
+      return [...arr].sort((a, b) => a.orden - b.orden);
+    });
+  }
+  function changeStop(i, field, val) {
+    setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, [field]: val } : s)));
+  }
 
   const guardar = useCallback(async () => {
     if (!servicio?.id || !mode || saving) return;
@@ -102,32 +171,36 @@ export function EmpresaEditarServicioModal({
     };
 
     try {
-      const operationalPlaces = {
-        cliente_nombre: String(cliente || "").trim(),
-        carga_nombre: String(cargaNombre || "").trim(),
-        carga_empresa: String(cargaEmpresa || "").trim(),
-        carga_direccion: String(cargaDir || "").trim(),
-        descarga_nombre: String(descargaNombre || "").trim(),
-        descarga_empresa: String(descargaEmpresa || "").trim(),
-        descarga_direccion: String(descargaDir || "").trim(),
-      };
-      const placesMetaPatch = buildOperationalPlacesMetaPatch(operationalPlaces);
-      const prevPlaces = getServiceOperationalPlaces(servicio);
-      const placesChanged =
-        operationalPlaces.cliente_nombre !== prevPlaces.cliente_nombre ||
-        operationalPlaces.carga_nombre !== prevPlaces.carga_nombre ||
-        operationalPlaces.carga_empresa !== prevPlaces.carga_empresa ||
-        operationalPlaces.carga_direccion !== prevPlaces.carga_direccion ||
-        operationalPlaces.descarga_nombre !== prevPlaces.descarga_nombre ||
-        operationalPlaces.descarga_empresa !== prevPlaces.descarga_empresa ||
-        operationalPlaces.descarga_direccion !== prevPlaces.descarga_direccion;
-
-      if (placesChanged) {
-        patch.referencia = mergeReferenciaOperacional(servicio.referencia || "", placesMetaPatch);
-      }
-
       if (wide) {
-        const { origen: origenRuta, destino: destinoRuta } = routeTextFromOperationalPlaces(operationalPlaces);
+        const { origen: origenRuta, destino: destinoRuta } = routeTextFromStops(stops);
+        if (!origenRuta || !destinoRuta) {
+          setError("Indica origen y destino en las paradas (dirección, lugar o empresa)");
+          return;
+        }
+        if (stops.some((s) => !s.nombre.trim())) {
+          setError("Todas las paradas necesitan un nombre de lugar");
+          return;
+        }
+
+        const operationalPlaces = operationalPlacesFromStops(stops, cliente);
+        const placesMetaPatch = buildOperationalPlacesMetaPatch(operationalPlaces);
+        const prevMeta = getServicioOperacionMeta(servicio);
+        const prevPlaces = prevMeta.lugares_operativos && typeof prevMeta.lugares_operativos === "object"
+          ? prevMeta.lugares_operativos
+          : {};
+        const placesChanged =
+          operationalPlaces.cliente_nombre !== String(prevPlaces.cliente_nombre || "").trim() ||
+          operationalPlaces.carga_nombre !== String(prevPlaces.carga_nombre || "").trim() ||
+          operationalPlaces.carga_empresa !== String(prevPlaces.carga_empresa || "").trim() ||
+          operationalPlaces.carga_direccion !== String(prevPlaces.carga_direccion || "").trim() ||
+          operationalPlaces.descarga_nombre !== String(prevPlaces.descarga_nombre || "").trim() ||
+          operationalPlaces.descarga_empresa !== String(prevPlaces.descarga_empresa || "").trim() ||
+          operationalPlaces.descarga_direccion !== String(prevPlaces.descarga_direccion || "").trim();
+
+        if (placesChanged) {
+          patch.referencia = mergeReferenciaOperacional(servicio.referencia || "", placesMetaPatch);
+        }
+
         const o0 = String(servicio.origen || "").trim();
         const o1 = String(origenRuta || "").trim();
         if (o1 !== o0) {
@@ -150,6 +223,9 @@ export function EmpresaEditarServicioModal({
           patch.fecha_inicio = fi1 || null;
           pushAudit("fecha_inicio", fi0, fi1);
         }
+
+        const stopsResult = await replaceStopsForServicio(servicio.id, prepareStopsForPersist(stops));
+        if (!stopsResult.ok) throw new Error(stopsResult.error || "No se pudieron guardar las paradas");
       }
 
       const sn0 = String(servicio.service_number ?? "").trim();
@@ -246,12 +322,7 @@ export function EmpresaEditarServicioModal({
     servicio,
     mode,
     wide,
-    cargaNombre,
-    cargaEmpresa,
-    cargaDir,
-    descargaNombre,
-    descargaEmpresa,
-    descargaDir,
+    stops,
     fechaInicioLocal,
     serviceNumber,
     cliente,
@@ -262,9 +333,22 @@ export function EmpresaEditarServicioModal({
     userId,
     onApplied,
     onNotifyAssignment,
+    conductores,
   ]);
 
   if (!servicio || !mode) return null;
+
+  const paradaInputStyle = {
+    width: "100%",
+    boxSizing: "border-box",
+    border: `1px solid ${EMPRESA_UI.border}`,
+    borderRadius: 8,
+    padding: "8px 10px",
+    fontSize: 13,
+    color: EMPRESA_UI.tx,
+    background: EMPRESA_UI.surfaceSoft,
+    marginBottom: 6,
+  };
 
   return (
     <div
@@ -312,36 +396,6 @@ export function EmpresaEditarServicioModal({
 
           {wide ? (
             <>
-              <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "4px 0 8px", letterSpacing: 0.4 }}>
-                ORIGEN (CARGA)
-              </div>
-              <label style={labelStyle}>
-                Lugar
-                <input value={cargaNombre} onChange={(e) => setCargaNombre(e.target.value)} style={inputStyle} placeholder="Ciudad, muelle…" />
-              </label>
-              <label style={labelStyle}>
-                Empresa
-                <input value={cargaEmpresa} onChange={(e) => setCargaEmpresa(e.target.value)} style={inputStyle} placeholder="Planta, operador logístico…" />
-              </label>
-              <label style={labelStyle}>
-                Dirección (opcional)
-                <input value={cargaDir} onChange={(e) => setCargaDir(e.target.value)} style={inputStyle} />
-              </label>
-              <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "8px 0 8px", letterSpacing: 0.4 }}>
-                DESTINO (DESCARGA)
-              </div>
-              <label style={labelStyle}>
-                Lugar
-                <input value={descargaNombre} onChange={(e) => setDescargaNombre(e.target.value)} style={inputStyle} placeholder="Ciudad, muelle…" />
-              </label>
-              <label style={labelStyle}>
-                Empresa
-                <input value={descargaEmpresa} onChange={(e) => setDescargaEmpresa(e.target.value)} style={inputStyle} placeholder="Centro de distribución…" />
-              </label>
-              <label style={labelStyle}>
-                Dirección (opcional)
-                <input value={descargaDir} onChange={(e) => setDescargaDir(e.target.value)} style={inputStyle} />
-              </label>
               <label style={labelStyle}>
                 Salida prevista
                 <input
@@ -351,6 +405,88 @@ export function EmpresaEditarServicioModal({
                   style={inputStyle}
                 />
               </label>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "4px 0 8px", letterSpacing: 0.4 }}>
+                PARADAS · {stops.length}
+              </div>
+              {stopsLoading ? (
+                <div style={{ fontSize: 12, color: EMPRESA_UI.muted, marginBottom: 12 }}>Cargando paradas…</div>
+              ) : (
+                <>
+                  {(rutaDesdeParadas.origen || rutaDesdeParadas.destino) ? (
+                    <div style={{ fontSize: 11, color: EMPRESA_UI.accent, marginBottom: 10, fontWeight: 600 }}>
+                      Ruta: {rutaDesdeParadas.origen || "—"} → {rutaDesdeParadas.destino || "—"}
+                    </div>
+                  ) : null}
+                  {stops.map((stop, i) => (
+                    <div
+                      key={`${stop.orden}-${i}`}
+                      style={{
+                        background: EMPRESA_UI.surfaceSoft,
+                        borderRadius: 10,
+                        padding: "8px 10px",
+                        marginBottom: 8,
+                        border: `1px solid ${EMPRESA_UI.border}`,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: EMPRESA_UI.muted }}>{i + 1}</span>
+                          <select
+                            value={stop.tipo}
+                            onChange={(e) => changeStop(i, "tipo", e.target.value)}
+                            style={{ ...paradaInputStyle, marginBottom: 0, width: "auto", flex: 1 }}
+                          >
+                            {STOP_TIPOS_FORM.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.icon} {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button type="button" onClick={() => moveStop(i, -1)} disabled={i === 0} style={stopBtnStyle}>
+                            ↑
+                          </button>
+                          <button type="button" onClick={() => moveStop(i, 1)} disabled={i === stops.length - 1} style={stopBtnStyle}>
+                            ↓
+                          </button>
+                          {stops.length > 1 ? (
+                            <button type="button" onClick={() => removeStop(i)} style={{ ...stopBtnStyle, color: EMPRESA_UI.red }}>
+                              ✕
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Lugar</div>
+                      <input value={stop.nombre} onChange={(e) => changeStop(i, "nombre", e.target.value)} style={paradaInputStyle} placeholder="Ciudad, muelle…" />
+                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Empresa</div>
+                      <input value={stop.empresa || ""} onChange={(e) => changeStop(i, "empresa", e.target.value)} style={paradaInputStyle} placeholder="Planta, operador…" />
+                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Dirección (opcional)</div>
+                      <input value={stop.direccion} onChange={(e) => changeStop(i, "direccion", e.target.value)} style={paradaInputStyle} />
+                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Detalles</div>
+                      <input value={stop.notas || ""} onChange={(e) => changeStop(i, "notas", e.target.value)} style={{ ...paradaInputStyle, marginBottom: 0 }} placeholder="Puerta, horario…" />
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addStop}
+                    style={{
+                      width: "100%",
+                      background: "transparent",
+                      border: `1.5px dashed ${EMPRESA_UI.border}`,
+                      borderRadius: 9,
+                      padding: "8px",
+                      fontSize: 13,
+                      color: EMPRESA_UI.accent,
+                      cursor: "pointer",
+                      marginBottom: 12,
+                    }}
+                  >
+                    + Añadir parada
+                  </button>
+                </>
+              )}
             </>
           ) : null}
 
@@ -445,7 +581,7 @@ export function EmpresaEditarServicioModal({
           <button
             type="button"
             onClick={() => void guardar()}
-            disabled={saving}
+            disabled={saving || (wide && stopsLoading)}
             style={{
               flex: 1,
               background: EMPRESA_UI.accentSoft,
@@ -455,7 +591,7 @@ export function EmpresaEditarServicioModal({
               fontSize: 13,
               fontWeight: 800,
               color: EMPRESA_UI.accent,
-              cursor: saving ? "default" : "pointer",
+              cursor: saving || (wide && stopsLoading) ? "default" : "pointer",
             }}
           >
             {saving ? "Guardando…" : "Guardar"}
@@ -465,6 +601,16 @@ export function EmpresaEditarServicioModal({
     </div>
   );
 }
+
+const stopBtnStyle = {
+  background: "#e2e8f0",
+  border: "none",
+  borderRadius: 4,
+  width: 22,
+  height: 22,
+  fontSize: 11,
+  cursor: "pointer",
+};
 
 const labelStyle = {
   display: "flex",

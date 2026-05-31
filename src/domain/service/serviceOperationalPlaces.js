@@ -19,8 +19,20 @@ function pickPlaceFromStop(stop) {
   return {
     nombre: String(stop.nombre || "").trim(),
     direccion: String(stop.direccion || "").trim(),
-    empresa: String(meta.empresa_logistica || meta.empresa || "").trim(),
+    empresa:
+      String(stop?.empresa || "").trim() ||
+      String(meta.empresa_logistica || meta.empresa || "").trim(),
   };
+}
+
+/** Texto para ruta: dirección → lugar → empresa. */
+export function routePointTextFromPlace(place) {
+  const p = place || {};
+  return String(p.direccion || p.nombre || p.empresa || "").trim();
+}
+
+export function routePointTextFromStop(stop) {
+  return routePointTextFromPlace(pickPlaceFromStop(stop));
 }
 
 function placeFromLegacyColumn(value) {
@@ -45,23 +57,46 @@ export function deriveOperationalPlacesFromStops(stops) {
   let carga = { nombre: "", direccion: "", empresa: "" };
   let descarga = { nombre: "", direccion: "", empresa: "" };
   for (const st of sorted) {
-    if (isCargaTipo(st.tipo) && !carga.nombre) carga = pickPlaceFromStop(st);
+    if (isCargaTipo(st.tipo)) carga = pickPlaceFromStop(st);
   }
-  for (let i = sorted.length - 1; i >= 0; i -= 1) {
-    if (isDescargaTipo(sorted[i].tipo)) {
-      descarga = pickPlaceFromStop(sorted[i]);
+  for (const st of sorted) {
+    if (isDescargaTipo(st.tipo)) {
+      descarga = pickPlaceFromStop(st);
       break;
     }
   }
-  if (!carga.nombre && sorted.length) {
+  if (!carga.nombre && !carga.direccion && !carga.empresa && sorted.length) {
     const first = sorted.find((s) => isCargaTipo(s.tipo)) || sorted[0];
     carga = pickPlaceFromStop(first);
   }
-  if (!descarga.nombre && sorted.length) {
+  if (!descarga.nombre && !descarga.direccion && !descarga.empresa && sorted.length) {
     const last = [...sorted].reverse().find((s) => isDescargaTipo(s.tipo)) || sorted[sorted.length - 1];
     descarga = pickPlaceFromStop(last);
   }
   return { carga, descarga };
+}
+
+/** Origen/destino para columnas servicio y calculador (última carga, primera descarga). */
+export function routeTextFromStops(stops) {
+  const { carga, descarga } = deriveOperationalPlacesFromStops(stops);
+  return {
+    origen: routePointTextFromPlace(carga),
+    destino: routePointTextFromPlace(descarga),
+  };
+}
+
+/** Snapshot para meta `lugares_operativos` (sin tocar columnas legacy en BD). */
+export function operationalPlacesFromStops(stops, cliente = "") {
+  const { carga, descarga } = deriveOperationalPlacesFromStops(stops);
+  return {
+    cliente_nombre: String(cliente || "").trim(),
+    carga_nombre: carga.nombre,
+    carga_empresa: carga.empresa,
+    carga_direccion: carga.direccion,
+    descarga_nombre: descarga.nombre,
+    descarga_empresa: descarga.empresa,
+    descarga_direccion: descarga.direccion,
+  };
 }
 
 /**
@@ -138,8 +173,10 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
 
 /** Texto para geocoding / columnas `origen` y `destino` (sin cliente). */
 export function routeTextFromOperationalPlaces(places) {
-  const carga = places?.carga_direccion || places?.carga_nombre || "";
-  const descarga = places?.descarga_direccion || places?.descarga_nombre || "";
+  const carga =
+    places?.carga_direccion || places?.carga_nombre || places?.carga_empresa || "";
+  const descarga =
+    places?.descarga_direccion || places?.descarga_nombre || places?.descarga_empresa || "";
   return { origen: String(carga).trim(), destino: String(descarga).trim() };
 }
 
