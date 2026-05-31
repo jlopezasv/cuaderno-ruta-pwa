@@ -18,7 +18,27 @@ function tramoKindLabel(kind) {
 /**
  * Resumen por conductor: total operativo + tramos entre muelles (FASE 2B).
  */
-export function ParticipacionTiemposPanel({ servicio, stops }) {
+function conductorInitials(nombre) {
+  const parts = String(nombre || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
+  return (parts[0]?.[0] || "?").toUpperCase();
+}
+
+function participacionBadgeStyle(estado) {
+  const e = String(estado || "").toLowerCase();
+  if (e === "activa" || e === "activo") {
+    return { bg: "#dcfce7", fg: "#166534", label: "Activa" };
+  }
+  if (e === "finalizado" || e === "finalizada") {
+    return { bg: "#f5f5f4", fg: "#57534e", label: "Finalizada" };
+  }
+  return { bg: "#fef9c3", fg: "#b45309", label: estado || "Pendiente" };
+}
+
+export function ParticipacionTiemposPanel({ servicio, stops, variant }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -77,6 +97,78 @@ export function ParticipacionTiemposPanel({ servicio, stops }) {
   }, [servicio?.id, servicio?.estado, servicio?.updated_at, servicio?.fecha_inicio, stopsKey, show]);
 
   if (!show) return null;
+
+  const driverFlat = variant === "driverRedesign";
+
+  if (driverFlat) {
+    return (
+      <div>
+        {loading && rows.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#57534e" }}>Calculando tramos…</div>
+        ) : error ? (
+          <div style={{ fontSize: 13, color: "#b91c1c" }}>{error}</div>
+        ) : rows.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#57534e" }}>Sin participaciones registradas.</div>
+        ) : (
+          rows.map((r, idx) => {
+            const badge = participacionBadgeStyle(r.estadoParticipacion);
+            const activa = String(r.estadoParticipacion || "").toLowerCase() === "activa";
+            return (
+              <div
+                key={r.conductorId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "12px 0",
+                  borderBottom: idx < rows.length - 1 ? "0.5px solid rgba(28,25,23,.12)" : "none",
+                }}
+              >
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 999,
+                    background: activa ? "#dcfce7" : "#dbeafe",
+                    color: activa ? "#166534" : "#1d4ed8",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    flexShrink: 0,
+                  }}
+                  aria-hidden
+                >
+                  {conductorInitials(r.nombre)}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, color: "#1c1917", lineHeight: 1.25 }}>{r.nombre}</div>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      marginTop: 4,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      padding: "2px 7px",
+                      borderRadius: 4,
+                      background: badge.bg,
+                      color: badge.fg,
+                    }}
+                  >
+                    {badge.label}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1c1917", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {fmtMs(r.totalOperativoMs)}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  }
 
   return (
     <div

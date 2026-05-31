@@ -116,6 +116,7 @@ import {
   downloadServiceExpedientePdf,
 } from "./domain/service/serviceExpediente.js";
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
+import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { OperationalSummaryLite } from "./modules/operational-lite/OperationalSummaryLite.jsx";
@@ -13663,6 +13664,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         devWarn("buildExpedienteCompleto participantes",e);
       }
     }
+    const empresaExpedienteHeader=await resolveExpedienteEmpresaHeaderForServicio(sv,empresa);
     return buildExpedienteForServicio({
       servicio:sv,
       flotaStopsMap:flotaStopsRef.current,
@@ -13673,8 +13675,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       fmtDur,
       entries:conductor?.entries||[],
       conductoresParticipantes,
+      empresaExpedienteHeader,
     });
-  },[conductores,nombreConductor,fmtDur]);
+  },[conductores,nombreConductor,fmtDur,empresa]);
 
   const conductoresByUid=useMemo(()=>{
     const m={};
@@ -14364,6 +14367,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:16,width:"100%",maxWidth:760,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 70px rgba(15,23,42,.25)"}} onClick={e=>e.stopPropagation()}>
                 <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #cbd5e1",display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
                   <div style={{minWidth:0}}>
+                    {isDemoApp()&&(expedientePreview.header.empresa||expedientePreview.header.empresaCif)?(
+                      <div style={{marginBottom:10}}>
+                        {expedientePreview.header.empresa?(
+                          <div style={{fontSize:16,fontWeight:800,color:"#0f172a",lineHeight:1.25}}>{expedientePreview.header.empresa}</div>
+                        ):null}
+                        {expedientePreview.header.empresaCif?(
+                          <div style={{fontSize:12,color:"#64748b",marginTop:expedientePreview.header.empresa?3:0,fontWeight:600}}>CIF {expedientePreview.header.empresaCif}</div>
+                        ):null}
+                      </div>
+                    ):null}
                     <div style={{fontSize:10,fontWeight:800,letterSpacing:1.4,color:"#475569",marginBottom:5}}>EXPEDIENTE OPERACIONAL</div>
                     <div style={{fontSize:21,fontWeight:800,color:"#0f172a",lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis"}}>{expedientePreview.header.referencia}</div>
                     <div style={{fontSize:13,color:"#475569",marginTop:4}}>{expedientePreview.header.ruta}</div>

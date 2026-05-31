@@ -402,6 +402,7 @@ export function buildServiceExpediente({
   fmtDur,
   entries = [],
   conductoresParticipantes = [],
+  empresaExpedienteHeader = null,
 }) {
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
@@ -725,6 +726,13 @@ export function buildServiceExpediente({
   const fechaArchivo = new Date(fechaDocumento).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
   const cliente = getServiceClient(servicio);
   const referenciaCliente = getServiceClientReference(servicio);
+  const demoEmpresaHdr =
+    isDemoApp() && empresaExpedienteHeader?.nombre
+      ? {
+          nombre: String(empresaExpedienteHeader.nombre).trim(),
+          cif: String(empresaExpedienteHeader.cif || "").trim() || null,
+        }
+      : null;
 
   const rawEvidenciasFlat = [
     ...sortedStops.flatMap((st) => (evidenciasByStop?.[st.id] || []).filter((ev) => !isIncidenciaLinkedEvidence(ev))),
@@ -743,7 +751,8 @@ export function buildServiceExpediente({
     cierreDocumental: buildCierreDocumentalForExpediente(servicio, nombreConductor),
     header: {
       referencia: ref,
-      empresa: resolveExpedienteEmpresaNombre(servicio),
+      empresa: demoEmpresaHdr?.nombre || resolveExpedienteEmpresaNombre(servicio),
+      empresaCif: demoEmpresaHdr?.cif ?? null,
       ruta: getFixedServiceRoute(servicio, "—", "—", sortedStops),
       estado:
         servicio?.estado === "anulado"
@@ -1100,9 +1109,15 @@ async function makePdfBlob(expediente) {
   gradientBand(0, pageHeight, pageWidth, 54, "#0c4a6e", "#0ea5e9");
   truckWatermark("#3aa9e6");
   const empresaNombre = expediente.header.empresa;
+  const empresaCif = expediente.header.empresaCif;
   if (empresaNombre) {
-    text(empresaNombre, margin, 819, 17, "#ffffff", "F2");
-    text("EXPEDIENTE OPERACIONAL · Informe operacional, anexos e incidencias", margin, 802, 8.5, "#cbd5e1");
+    text(empresaNombre, margin, 826, 14, "#ffffff", "F2");
+    if (empresaCif) {
+      text(`CIF ${empresaCif}`, margin, 811, 9, "#e2e8f0");
+      text("EXPEDIENTE OPERACIONAL · Informe operacional, anexos e incidencias", margin, 799, 8, "#cbd5e1");
+    } else {
+      text("EXPEDIENTE OPERACIONAL · Informe operacional, anexos e incidencias", margin, 804, 8.5, "#cbd5e1");
+    }
   } else {
     text("EXPEDIENTE OPERACIONAL", margin, 819, 17, "#ffffff", "F2");
     text("Informe operacional · anexos documental e incidencias al final", margin, 802, 8.5, "#cbd5e1");

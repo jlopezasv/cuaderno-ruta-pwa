@@ -22,6 +22,9 @@ import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteS
 import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
 import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
 import { ParticipacionTiemposPanel } from "./ParticipacionTiemposPanel.jsx";
+import { isDemoApp } from "../../../config/appEnvironment.js";
+import { formatOperationalEtaLabel } from "../../../domain/service/etaFormatter.js";
+import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -39,6 +42,30 @@ const DRIVER_UI = {
   amberSoft: "#fffbeb",
   blue: "#2563eb",
   blueSoft: "#eff6ff",
+};
+
+/** Demo conductor — servicio (solo presentación) */
+const DEMO_UI = {
+  page: "#F4F3F0",
+  section: "#ffffff",
+  tx: "#1c1917",
+  su: "#57534e",
+  muted: "#a8a29e",
+  line: "rgba(28,25,23,.12)",
+  green: "#1A7A4A",
+  greenDot: "#1A7A4A",
+  amber: "#b45309",
+  amberSoft: "#fef9c3",
+  amberBorder: "#fde047",
+  blue: "#0F5FA8",
+  carga: "#ea580c",
+  cargaSoft: "#fff7ed",
+  descarga: "#15803d",
+  descargaSoft: "#ecfdf5",
+  avatarBlue: "#dbeafe",
+  avatarBlueTx: "#1d4ed8",
+  avatarGreen: "#dcfce7",
+  avatarGreenTx: "#166534",
 };
 
 function flattenEvidencias(evidenciasByStop) {
@@ -452,6 +479,435 @@ function ServiceDetailsCollapsible({ cliente, referenciaCliente, conductorNombre
             <div style={{ fontWeight: 650, lineHeight: 1.35, color: DRIVER_UI.su }}>{observations}</div>
           </div>
         ) : null}
+      </div>
+    </details>
+  );
+}
+
+function demoRowDivider() {
+  return { borderBottom: `0.5px solid ${DEMO_UI.line}` };
+}
+
+function demoPrimaryBtn(bg) {
+  return {
+    width: "100%",
+    background: bg,
+    color: "#ffffff",
+    border: "none",
+    borderRadius: 8,
+    padding: "14px 16px",
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: "pointer",
+  };
+}
+
+function DriverDemoSection({ children, title, style = {} }) {
+  return (
+    <section
+      style={{
+        background: DEMO_UI.section,
+        padding: title ? "14px 16px 16px" : "14px 16px",
+        ...style,
+      }}
+    >
+      {title ? (
+        <h2
+          style={{
+            margin: "0 0 12px",
+            fontSize: 13,
+            fontWeight: 600,
+            color: DEMO_UI.tx,
+            letterSpacing: 0,
+          }}
+        >
+          {title}
+        </h2>
+      ) : null}
+      {children}
+    </section>
+  );
+}
+
+function DriverServiceHeader({ servicio, empresaById, serviceNumber, scheduleLabel }) {
+  return (
+    <div>
+      <ServiceOriginBadge
+        servicio={servicio}
+        empresaById={empresaById}
+        size="sm"
+        style={{ borderRadius: 4, fontSize: 11, fontWeight: 600, letterSpacing: 0 }}
+      />
+      <div style={{ marginTop: 8, fontSize: 13, color: DEMO_UI.su, lineHeight: 1.35 }}>
+        {serviceNumber ? <span style={{ fontWeight: 500, color: DEMO_UI.tx }}>{serviceNumber}</span> : null}
+        {serviceNumber && scheduleLabel ? <span> · </span> : null}
+        {scheduleLabel ? <span>{scheduleLabel}</span> : null}
+        {!serviceNumber && !scheduleLabel ? <span>Servicio</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function DriverRouteHeroLine({ origen, destino, routeLine }) {
+  const left = safePlaceName(origen, "Origen");
+  const right = safePlaceName(destino, "Destino");
+  const fallback = routeLine && routeLine !== "— → —" ? routeLine.split("→").map((s) => s.trim()) : null;
+  const from = left !== "Origen" ? left : fallback?.[0] || "Origen";
+  const to = right !== "Destino" ? right : fallback?.[1] || "Destino";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 8,
+        fontSize: 16,
+        fontWeight: 500,
+        color: DEMO_UI.tx,
+        lineHeight: 1.3,
+      }}
+    >
+      <span style={{ flexShrink: 0, maxWidth: "38%" }}>{from}</span>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 24,
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          color: DEMO_UI.muted,
+        }}
+        aria-hidden
+      >
+        <div style={{ flex: 1, borderTop: `1px dashed ${DEMO_UI.muted}` }} />
+        <span style={{ fontSize: 14, flexShrink: 0 }}>→</span>
+        <div style={{ flex: 1, borderTop: `1px dashed ${DEMO_UI.muted}` }} />
+      </div>
+      <span style={{ flexShrink: 0, maxWidth: "38%", textAlign: "right" }}>{to}</span>
+    </div>
+  );
+}
+
+function DriverTripHero({
+  conductorNombre,
+  origen,
+  destino,
+  routeLine,
+  servicioNoIniciado,
+  totalParticipantes,
+}) {
+  const statusLabel = servicioNoIniciado ? "Esperando inicio" : "Operativo";
+  const dotColor = servicioNoIniciado ? DEMO_UI.amber : DEMO_UI.greenDot;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 22, fontWeight: 600, color: DEMO_UI.tx, lineHeight: 1.22 }}>{conductorNombre}</div>
+          <DriverRouteHeroLine origen={origen} destino={destino} routeLine={routeLine} />
+          <div
+            style={{
+              marginTop: 10,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 13,
+              color: DEMO_UI.tx,
+              fontWeight: 500,
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 999,
+                background: dotColor,
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ color: servicioNoIniciado ? DEMO_UI.amber : DEMO_UI.green }}>{statusLabel}</span>
+          </div>
+        </div>
+        {Number(totalParticipantes) > 1 ? (
+          <div style={{ fontSize: 11, color: DEMO_UI.su, fontWeight: 500, textAlign: "right", flexShrink: 0, paddingTop: 4 }}>
+            {totalParticipantes} conductores
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DriverAlertNotStarted() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+        background: DEMO_UI.amberSoft,
+        border: `1px solid ${DEMO_UI.amberBorder}`,
+        borderRadius: 4,
+        padding: "10px 12px",
+        fontSize: 13,
+        color: DEMO_UI.amber,
+        fontWeight: 500,
+        lineHeight: 1.4,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>
+        ⚠
+      </span>
+      <span>Atención: servicio sin iniciar</span>
+    </div>
+  );
+}
+
+function stopCityLine(stop) {
+  const dir = String(stop?.direccion || "").trim();
+  const name = String(stop?.nombre || "").trim();
+  if (dir && dir !== name) return dir;
+  return "";
+}
+
+function stopCompactBadge(stop) {
+  const entrada = !!stop.hora_llegada_real;
+  const salida = isStopCompleted(stop);
+  const inOperation = entrada && !salida;
+  const stateText = salida ? "Completada" : inOperation ? "En planta" : "Pendiente";
+  const fg = salida ? DEMO_UI.descarga : inOperation ? DEMO_UI.amber : DEMO_UI.su;
+  const bg = salida ? DEMO_UI.descargaSoft : inOperation ? DEMO_UI.amberSoft : "#f5f5f4";
+  return { stateText, fg, bg };
+}
+
+function StopListRowCompact({ item, isCurrent }) {
+  const { stop, label, group } = item;
+  const { stateText, fg, bg } = stopCompactBadge(stop);
+  const city = stopCityLine(stop);
+  const iconBg = group === "descarga" ? DEMO_UI.descargaSoft : DEMO_UI.cargaSoft;
+  const iconColor = group === "descarga" ? DEMO_UI.descarga : DEMO_UI.carga;
+  const iconChar = group === "descarga" ? "↓" : "↑";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "stretch",
+        ...demoRowDivider(),
+      }}
+    >
+      {isCurrent ? (
+        <div
+          style={{
+            width: 3,
+            flexShrink: 0,
+            background: DEMO_UI.green,
+            borderRadius: 0,
+          }}
+        />
+      ) : null}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          padding: "12px 16px 12px",
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 4,
+            background: iconBg,
+            color: iconColor,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+          aria-hidden
+        >
+          {iconChar}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: DEMO_UI.tx, lineHeight: 1.25 }}>{label}</div>
+          <div style={{ fontSize: 14, color: DEMO_UI.su, marginTop: 2, lineHeight: 1.3 }}>{stopPlace(stop)}</div>
+          {city ? (
+            <div style={{ fontSize: 13, color: DEMO_UI.muted, marginTop: 2, lineHeight: 1.3 }}>{city}</div>
+          ) : null}
+        </div>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            padding: "3px 7px",
+            borderRadius: 4,
+            background: bg,
+            color: fg,
+            flexShrink: 0,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {stateText}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function DriverRecorridoStops({
+  items,
+  currentStopId,
+  evidenciasByStop,
+  canOperate,
+  onConfirmMuelle,
+  EvidenciasStopComponent,
+  showToast,
+  servicio,
+  servicioId,
+  conductorNombre,
+  onEvidenciaSaved,
+}) {
+  if (!items.length) {
+    return (
+      <div style={{ padding: "14px 16px", fontSize: 13, color: DEMO_UI.su }}>Sin paradas definidas para este servicio.</div>
+    );
+  }
+
+  return (
+    <div>
+      {items.map((item) =>
+        item.stop.id === currentStopId ? (
+          <div key={item.stop.id} style={{ padding: "10px 12px 12px", ...demoRowDivider() }}>
+            <OperationalStopCard
+              item={item}
+              isCurrent
+              evidencias={evidenciasByStop?.[item.stop.id]}
+              canOperate={canOperate && item.stop.id === currentStopId}
+              onConfirmMuelle={onConfirmMuelle}
+              EvidenciasStopComponent={EvidenciasStopComponent}
+              showToast={showToast}
+              servicio={servicio}
+              servicioId={servicioId}
+              conductorNombre={conductorNombre}
+              onEvidenciaSaved={onEvidenciaSaved}
+            />
+          </div>
+        ) : (
+          <StopListRowCompact key={item.stop.id} item={item} isCurrent={false} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function DriverEtaRecorridoFooter({ servicio }) {
+  const eta = getEtaPrevista(servicio);
+  const arrival =
+    eta?.arrival_label || (eta?.arrival_at ? formatOperationalEtaLabel(eta.arrival_at) : null);
+  const value = arrival || "Inicia ruta para calcular";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "12px 16px",
+        fontSize: 13,
+        color: DEMO_UI.tx,
+        ...demoRowDivider(),
+      }}
+    >
+      <span style={{ fontWeight: 500 }}>ETA prevista</span>
+      <span style={{ fontStyle: arrival ? "normal" : "italic", color: arrival ? DEMO_UI.tx : DEMO_UI.su, textAlign: "right" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function DriverClienteDocumentosSection({
+  cliente,
+  referenciaCliente,
+  goods,
+  observations,
+  servicio,
+  showToast,
+  conductorNombreUploader,
+}) {
+  const hasDetails = hasServiceDetailsContent({ cliente, referenciaCliente, goods, observations });
+
+  return (
+    <details className="driver-svc-docs-coll" style={{ margin: 0 }}>
+      <style>{`
+        .driver-svc-docs-coll > summary {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          cursor: pointer;
+          list-style: none;
+          font-size: 13px;
+          font-weight: 600;
+          color: ${DEMO_UI.tx};
+          padding: 14px 16px;
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+          border-bottom: 0.5px solid ${DEMO_UI.line};
+        }
+        .driver-svc-docs-coll > summary::-webkit-details-marker { display: none; }
+        .driver-svc-docs-coll > summary::marker { content: ""; }
+        .driver-svc-docs-coll .driver-docs-chev {
+          font-size: 11px;
+          color: ${DEMO_UI.muted};
+          transition: transform 0.18s ease;
+        }
+        .driver-svc-docs-coll[open] .driver-docs-chev { transform: rotate(180deg); }
+        .driver-svc-docs-coll[open] > summary { border-bottom: 0.5px solid ${DEMO_UI.line}; }
+      `}</style>
+      <summary>
+        <span>Cliente y documentos</span>
+        <span className="driver-docs-chev" aria-hidden>
+          ▼
+        </span>
+      </summary>
+      <div style={{ padding: "0 0 4px" }}>
+        {hasDetails ? (
+          <div style={{ padding: "12px 16px 14px", fontSize: 14, color: DEMO_UI.tx, ...demoRowDivider() }}>
+            <div style={{ fontSize: 11, color: DEMO_UI.muted, fontWeight: 600, marginBottom: 4 }}>Cliente</div>
+            <div style={{ marginBottom: 10, lineHeight: 1.35 }}>{cliente || "—"}</div>
+            <div style={{ fontSize: 11, color: DEMO_UI.muted, fontWeight: 600, marginBottom: 4 }}>Ref. cliente</div>
+            <div style={{ marginBottom: 10, lineHeight: 1.35 }}>{referenciaCliente || "—"}</div>
+            <div style={{ fontSize: 11, color: DEMO_UI.muted, fontWeight: 600, marginBottom: 4 }}>Mercancía / bultos</div>
+            <div style={{ marginBottom: 10, lineHeight: 1.35, color: DEMO_UI.su }}>{goods}</div>
+            {observations ? (
+              <>
+                <div style={{ fontSize: 11, color: DEMO_UI.muted, fontWeight: 600, marginBottom: 4 }}>Observaciones</div>
+                <div style={{ lineHeight: 1.35, color: DEMO_UI.su }}>{observations}</div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        <div style={{ padding: "12px 16px", ...demoRowDivider() }}>
+          <ServiceExtraDocumentsBlock
+            servicio={servicio}
+            showToast={showToast}
+            uploaderName={conductorNombreUploader}
+            tone="light"
+            compact
+          />
+        </div>
+        <div style={{ padding: "4px 16px 12px" }}>
+          <ServiceEmpresaDocumentsBlock servicio={servicio} showToast={showToast} role="conductor" tone="light" compact />
+        </div>
       </div>
     </details>
   );
@@ -907,6 +1363,273 @@ export function ActiveServicePanel({
       </div>
     </div>
   ) : null;
+
+  const demoRedesign = isDemoApp();
+  const servicioNoIniciado = mode === "asignado" || !servicio?.fecha_inicio;
+  const origenRuta = operationalPres.places?.carga_nombre || operationalPres.origen;
+  const destinoRuta = operationalPres.places?.descarga_nombre || operationalPres.destino;
+
+  if (demoRedesign) {
+    return (
+      <div style={{ padding: "0 0 88px", maxWidth: 560, margin: "0 auto", background: DEMO_UI.page, minHeight: "70vh" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <DriverDemoSection>
+            <DriverServiceHeader
+              servicio={servicio}
+              empresaById={empresaById}
+              serviceNumber={serviceNumber}
+              scheduleLabel={scheduleLabel}
+            />
+          </DriverDemoSection>
+
+          <DriverDemoSection>
+            <DriverTripHero
+              conductorNombre={conductorNombre}
+              origen={origenRuta}
+              destino={destinoRuta}
+              routeLine={routeLine}
+              servicioNoIniciado={servicioNoIniciado}
+              totalParticipantes={totalParticipantes}
+            />
+          </DriverDemoSection>
+
+          {servicioNoIniciado ? (
+            <DriverDemoSection>
+              <DriverAlertNotStarted />
+            </DriverDemoSection>
+          ) : null}
+
+          {serviceAction ? (
+            <DriverDemoSection style={{ padding: "12px 16px" }}>
+              <button type="button" onClick={serviceAction.onClick} style={demoPrimaryBtn(DEMO_UI.green)}>
+                {serviceAction.label}
+              </button>
+            </DriverDemoSection>
+          ) : null}
+
+          <DriverDemoSection title="Recorrido" style={{ padding: 0 }}>
+            <DriverRecorridoStops
+              items={timelineItems}
+              currentStopId={stopMostrar?.id}
+              evidenciasByStop={evidenciasByStop}
+              canOperate={canOperateStops}
+              onConfirmMuelle={setConfirmMuelle}
+              EvidenciasStopComponent={EvidenciasStopComponent}
+              showToast={showToast}
+              servicio={servicio}
+              servicioId={servicio?.id}
+              conductorNombre={conductorNombre}
+              onEvidenciaSaved={onEvidenciaSaved}
+            />
+            <div style={{ padding: "0 16px" }}>
+              <EnRutaHastaProximaEntrada servicio={servicio} stops={sortedStops} />
+            </div>
+            <DriverEtaRecorridoFooter servicio={servicio} />
+            {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
+              <div style={{ padding: "12px 16px 14px" }}>
+                <button
+                  type="button"
+                  title="Ruta, destino y ETA"
+                  aria-label="Iniciar ruta hasta destino"
+                  onClick={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
+                  style={demoPrimaryBtn(DEMO_UI.blue)}
+                >
+                  Iniciar ruta hasta destino
+                </button>
+              </div>
+            ) : null}
+          </DriverDemoSection>
+
+          <DriverDemoSection style={{ padding: 0 }}>
+            <DriverClienteDocumentosSection
+              cliente={cliente}
+              referenciaCliente={referenciaCliente}
+              goods={goods}
+              observations={observations}
+              servicio={servicio}
+              showToast={showToast}
+              conductorNombreUploader={conductorNombre}
+            />
+          </DriverDemoSection>
+
+          <DriverDemoSection title="Conductores">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                paddingBottom: 12,
+                marginBottom: 12,
+                ...demoRowDivider(),
+              }}
+            >
+              <span style={{ fontSize: 14, fontWeight: 500, color: DEMO_UI.tx }}>Mi participación</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: "3px 8px",
+                  borderRadius: 4,
+                  color:
+                    miParticipacionLabel === "Activa"
+                      ? DEMO_UI.avatarGreenTx
+                      : miParticipacionLabel === "Finalizada"
+                        ? DEMO_UI.su
+                        : DEMO_UI.amber,
+                  background:
+                    miParticipacionLabel === "Activa"
+                      ? DEMO_UI.avatarGreen
+                      : miParticipacionLabel === "Finalizada"
+                        ? "#f5f5f4"
+                        : DEMO_UI.amberSoft,
+                }}
+              >
+                {miParticipacionLabel}
+              </span>
+            </div>
+            <ParticipacionTiemposPanel servicio={servicio} stops={sortedStops} variant="driverRedesign" />
+          </DriverDemoSection>
+
+          {puedeFinalizarParticipacion ? (
+            <DriverDemoSection style={{ padding: "12px 16px" }}>
+              <button
+                type="button"
+                onClick={() => setConfirmFinalizar(true)}
+                style={{
+                  width: "100%",
+                  padding: "13px 14px",
+                  borderRadius: 8,
+                  border: "0.5px solid rgba(185,28,28,.35)",
+                  background: "#fef2f2",
+                  color: "#b91c1c",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Finalizar mi participación
+              </button>
+            </DriverDemoSection>
+          ) : esMultiConductor &&
+            esUltimoActivo &&
+            servicio?.estado === "en_curso" &&
+            miParticipacion !== "finalizado" ? (
+            <DriverDemoSection>
+              <div style={{ fontSize: 13, color: DEMO_UI.su, fontWeight: 500, lineHeight: 1.45 }}>
+                Eres el último conductor activo de este servicio. Completa las paradas y cierra el expediente para finalizarlo.
+              </div>
+            </DriverDemoSection>
+          ) : null}
+
+          {showCierreDocumental ? (
+            <DriverDemoSection>
+              <ExpedienteClosureBlock
+                saving={cierreSaving}
+                onConfirm={async ({ comentario, firmaCanvas }) => {
+                  if (cierreSaving) return;
+                  setCierreSaving(true);
+                  try {
+                    await onCerrarExpediente?.({ comentario, firmaCanvas });
+                    showToast?.("Expediente cerrado");
+                  } catch (e) {
+                    showToast?.(e?.message || "No se pudo cerrar el expediente");
+                  } finally {
+                    setCierreSaving(false);
+                  }
+                }}
+              />
+            </DriverDemoSection>
+          ) : null}
+
+          <DriverDemoSection title="Próximos servicios" style={{ padding: "12px 16px 14px" }}>
+            {siguienteServicio ? (
+              <SiguienteServicioAccordion servicio={siguienteServicio} stops={siguientesStops} empresaById={empresaById} />
+            ) : (
+              <div style={{ fontSize: 13, color: DEMO_UI.su, fontWeight: 500, lineHeight: 1.45, textAlign: "center" }}>
+                No hay próximos servicios asignados
+              </div>
+            )}
+          </DriverDemoSection>
+        </div>
+        {confirmMuelleDialog}
+        {confirmFinalizar ? (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(15,23,42,.4)",
+              zIndex: 400,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 16,
+            }}
+            onClick={() => !finalizarSaving && setConfirmFinalizar(false)}
+          >
+            <div
+              role="dialog"
+              style={{
+                background: "#ffffff",
+                borderRadius: 18,
+                padding: "20px 18px",
+                maxWidth: 400,
+                width: "100%",
+                border: `1px solid ${DRIVER_UI.line}`,
+                boxShadow: "0 20px 50px rgba(15,23,42,.12)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
+                Finalizar mi participación
+              </div>
+              <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
+                El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio.
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  disabled={finalizarSaving}
+                  onClick={() => setConfirmFinalizar(false)}
+                  style={{
+                    flex: 1,
+                    background: DRIVER_UI.surfaceHi,
+                    color: DRIVER_UI.su,
+                    border: `1px solid ${DRIVER_UI.line}`,
+                    borderRadius: 12,
+                    padding: "12px",
+                    fontWeight: 700,
+                    cursor: finalizarSaving ? "default" : "pointer",
+                    opacity: finalizarSaving ? 0.65 : 1,
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={finalizarSaving}
+                  onClick={handleConfirmFinalizarParticipacion}
+                  style={{
+                    flex: 1,
+                    background: "#dc2626",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 12,
+                    padding: "12px",
+                    fontWeight: 800,
+                    cursor: finalizarSaving ? "default" : "pointer",
+                    opacity: finalizarSaving ? 0.75 : 1,
+                  }}
+                >
+                  {finalizarSaving ? "Finalizando..." : "Finalizar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
