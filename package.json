@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && vercel --prod",
+    "deploy:demo": "node scripts/deploy-demo-documentos-empresa.mjs",
+    "deploy:demo:sql": "node scripts/apply-sql-file.mjs supabase/migrations/20260531140000_servicio_documentos_empresa_demo.sql",
     "validate:operativa": "node scripts/validar-sync-operativa.mjs"
   },
   "dependencies": {

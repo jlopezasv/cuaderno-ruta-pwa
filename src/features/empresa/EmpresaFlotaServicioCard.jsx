@@ -18,6 +18,7 @@ import { servicioSinConductorOperacional } from "../../domain/fleet/operationalP
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 import { sbFetch } from "../../data/supabaseClient.js";
+import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -85,6 +86,8 @@ function EmpresaFlotaServicioCardImpl({
   onEditarServicio,
   asignadosCount = 0,
   asignadosNombresStr = "",
+  empresaNombre = "Empresa",
+  showToast,
   fmtDur,
   tx,
   su,
@@ -717,6 +720,17 @@ function EmpresaFlotaServicioCardImpl({
                 })}
               </div>
             )}
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <ServiceEmpresaDocumentsBlock
+              servicio={servicio}
+              showToast={showToast}
+              role="empresa"
+              uploaderDisplayName={empresaNombre}
+              tone="light"
+              compact
+            />
           </div>
 
           <div

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
+import { ServiceEmpresaDocumentsBlock } from "./ServiceEmpresaDocumentsBlock.jsx";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
@@ -1061,6 +1062,13 @@ export function ActiveServicePanel({
         <div style={{ marginTop: 20 }}>
           <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
         </div>
+        <ServiceEmpresaDocumentsBlock
+          servicio={servicio}
+          showToast={showToast}
+          role="conductor"
+          tone="light"
+          compact
+        />
         <ParticipacionTiemposPanel servicio={servicio} stops={sortedStops} />
         {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
           <button

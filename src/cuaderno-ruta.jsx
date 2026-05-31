@@ -14284,6 +14284,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   onAnularServicioId={handleAnularServicioId}
                   onAsignarConductorServicioId={handleAsignarConductorServicioId}
                   onEditarServicioId={handleEditarServicioId}
+                  empresaNombre={empresa?.nombre || "Empresa"}
+                  showToast={showToast}
                   fmtDur={fmtDur}
                   tx={tx}
                   su={su}
