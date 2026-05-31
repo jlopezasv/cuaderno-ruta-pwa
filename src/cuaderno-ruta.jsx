@@ -17755,20 +17755,9 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[servicios,setServicios]=useState([]);
   const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
-  const[viajeLocal,setViajeLocal]=useState(()=>readViajeActivoFromStorage());
   const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
   const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
-
-  useEffect(()=>{
-    function refreshViajeLocal(){setViajeLocal(readViajeActivoFromStorage());}
-    window.addEventListener("focus",refreshViajeLocal);
-    window.addEventListener("storage",refreshViajeLocal);
-    return()=>{
-      window.removeEventListener("focus",refreshViajeLocal);
-      window.removeEventListener("storage",refreshViajeLocal);
-    };
-  },[]);
 
   useEffect(()=>{
     const uid=getUserId();if(!uid)return;
@@ -17846,12 +17835,6 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     return()=>clearInterval(id);
   },[empresa?.id,conductores,servicios]);
 
-  const primerCurso=servicios.find(s=>s.estado==="en_curso");
-  const primerCursoRuta=primerCurso?(()=>{const e=resolveServiceRouteEndpoints(primerCurso,null);return`${e.origen} → ${e.destino}`;})():null;
-  const primerUbic=primerCurso?.conductor_id?ubicacionDashByUid[primerCurso.conductor_id]:null;
-  const primerNorma=primerCurso?.conductor_id?conductores.find(c=>c.user_id===primerCurso.conductor_id)?.norma:null;
-  const localPreviewHeadline=!primerCurso&&viajeLocal?getUnifiedTripPresentation({viajeActivo:viajeLocal,servicio:null,norma:null,etaSlot:null,etaLoading:false}).rutaHeadline:null;
-
   if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>;
 
   if(import.meta.env.DEV){
@@ -17862,77 +17845,10 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const asignados=servicios.filter(s=>s.estado==="asignado").length;
 
   return(
-    <div style={{padding:"24px 24px 60px",maxWidth:1200,margin:"0 auto"}}>
-
-      <div style={{background:card,borderRadius:14,padding:"16px 18px",marginBottom:16,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
-        <div style={{fontSize:11,fontWeight:600,color:su,letterSpacing:.4,marginBottom:10}}>Resumen operacional</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:12,alignItems:"center",fontSize:13,color:tx,lineHeight:1.5}}>
-          <span><strong style={{color:EMPRESA_UI.accent,fontSize:17,fontWeight:650}}>{enCurso}</strong> <span style={{color:su}}>en curso</span></span>
-          <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
-          <span><strong style={{color:EMPRESA_UI.subtle,fontSize:17,fontWeight:650}}>{asignados}</strong> <span style={{color:su}}>pendientes</span></span>
-          <span style={{color:EMPRESA_UI.borderStrong}}>·</span>
-          {(viajeLocal||primerCurso)&&(
-            <span style={{width:"100%",fontSize:12,color:su,marginTop:4,lineHeight:1.45}}>
-              {(primerCursoRuta||localPreviewHeadline)&&(
-                <div>
-                  <strong style={{color:tx}}>{primerCursoRuta||localPreviewHeadline}</strong>
-                </div>
-              )}
-              {primerCurso&&(
-                <div style={{marginTop:6}}>
-                  <OperationalEtaSnapshotBlock
-                    servicio={primerCurso}
-                    nowMs={etaVisualClockMs}
-                    tx={tx}
-                    su={su}
-                    subtle={EMPRESA_UI.subtle}
-                    layout="empresa"
-                    latestLocation={primerUbic && !primerUbic.missing && !primerUbic.fetchError ? primerUbic : null}
-                    tacografoEstado={
-                      primerNorma
-                        ? {
-                            isDriving: !!primerNorma.isDriving,
-                            crType: primerNorma.crType || "",
-                            crDur: Number(primerNorma.crDur),
-                          }
-                        : null
-                    }
-                    activeStop={null}
-                  />
-                </div>
-              )}
-              {viajeLocal&&<span style={{display:"block",marginTop:4,fontSize:11,color:"#475569"}}>Ruta guardada en este navegador (vista previa)</span>}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            onTabChange("documentos");
-            showToast?.("Expedientes y correo: pestaña Documentos");
-          }}
-          style={{
-            marginTop: 12,
-            width: "100%",
-            background: "#1e293b",
-            color: "#f8fafc",
-            border: "1px solid #334155",
-            borderRadius: 10,
-            padding: "10px 12px",
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Documentación y envío por correo →
-        </button>
-      </div>
-      <div style={{fontSize:12,color:su,marginBottom:18}}>
-        {new Date().toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
-      </div>
+    <div style={{padding:"12px 24px 48px",maxWidth:1200,margin:"0 auto"}}>
 
       {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:20}}>
         {[
           {l:"En curso",  v:enCurso,     c:EMPRESA_UI.accent, icon:"▱", action:()=>onTabChange("servicios")},
           {l:"Pendientes salida",  v:asignados,   c:EMPRESA_UI.subtle, icon:"○", action:()=>onTabChange("servicios")},
