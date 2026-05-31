@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { isEmpresaServicioDocumentsDemoEnabled } from "../../../config/empresaServicioDocumentsDemo.js";
+import { isEmpresaServicioDocumentsEnabled } from "../../../config/empresaServicioDocuments.js";
 import {
   EMPRESA_DOC_ACCEPT,
   deleteServicioDocumentoEmpresa,
@@ -21,7 +21,7 @@ const fileNameEllipsisStyle = {
 };
 
 /**
- * Documentos subidos por la empresa al servicio (DEMO). Estilo alineado con Docs Lite / extras.
+ * Documentos subidos por la empresa al servicio (flota). Estilo alineado con Docs Lite / extras.
  * @param {'empresa'|'conductor'} role
  */
 export function ServiceEmpresaDocumentsBlock({
@@ -40,7 +40,7 @@ export function ServiceEmpresaDocumentsBlock({
   const [deletingId, setDeletingId] = useState(null);
   const fileRef = useRef(null);
 
-  const enabled = isEmpresaServicioDocumentsDemoEnabled();
+  const enabled = isEmpresaServicioDocumentsEnabled(servicio);
   const allowUpload = role === "empresa";
   const allowDelete = role === "empresa";
   const sid = servicio?.id;
