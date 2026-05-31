@@ -726,13 +726,12 @@ export function buildServiceExpediente({
   const fechaArchivo = new Date(fechaDocumento).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
   const cliente = getServiceClient(servicio);
   const referenciaCliente = getServiceClientReference(servicio);
-  const demoEmpresaHdr =
-    isDemoApp() && empresaExpedienteHeader?.nombre
-      ? {
-          nombre: String(empresaExpedienteHeader.nombre).trim(),
-          cif: String(empresaExpedienteHeader.cif || "").trim() || null,
-        }
-      : null;
+  const demoEmpresaHdr = empresaExpedienteHeader?.nombre
+    ? {
+        nombre: String(empresaExpedienteHeader.nombre).trim(),
+        cif: String(empresaExpedienteHeader.cif || "").trim() || null,
+      }
+    : null;
 
   const rawEvidenciasFlat = [
     ...sortedStops.flatMap((st) => (evidenciasByStop?.[st.id] || []).filter((ev) => !isIncidenciaLinkedEvidence(ev))),

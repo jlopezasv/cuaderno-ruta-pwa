@@ -22,7 +22,6 @@ import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteS
 import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
 import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
 import { ParticipacionTiemposPanel } from "./ParticipacionTiemposPanel.jsx";
-import { isDemoApp } from "../../../config/appEnvironment.js";
 import { formatOperationalEtaLabel } from "../../../domain/service/etaFormatter.js";
 import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
 
@@ -1364,7 +1363,8 @@ export function ActiveServicePanel({
     </div>
   ) : null;
 
-  const demoRedesign = isDemoApp();
+  /** Layout operativo plano: activo en todos los entornos (antes solo demo). */
+  const demoRedesign = true;
   const servicioNoIniciado = mode === "asignado" || !servicio?.fecha_inicio;
   const origenRuta = operationalPres.places?.carga_nombre || operationalPres.origen;
   const destinoRuta = operationalPres.places?.descarga_nombre || operationalPres.destino;
