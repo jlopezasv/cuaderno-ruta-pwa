@@ -7,6 +7,7 @@ import { getLastServiceActivity } from "../../../domain/service/serviceActivity"
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
+import { hasActiveRouteDestination } from "../../../domain/service/operationalEtaPresentation.js";
 import { EtaPrevistaBlock } from "./EtaPrevistaBlock.jsx";
 import {
   getFixedServiceRoute,
@@ -15,7 +16,10 @@ import {
   getServiceNumberForDisplay,
 } from "../../../domain/service/serviceIdentity.js";
 import { getServiceOperationalPresentation } from "../../../domain/service/serviceOperationalPlaces.js";
-import { formatStopNotesForDisplay } from "../../../domain/service/stopOperacionMeta.js";
+import {
+  formatStopNotesForDisplay,
+  getStopOperacionMeta,
+} from "../../../domain/service/stopOperacionMeta.js";
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
 import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteServicioAccordion.jsx";
@@ -42,6 +46,9 @@ const DRIVER_UI = {
   blue: "#2563eb",
   blueSoft: "#eff6ff",
 };
+
+/** Ancho máximo del panel tab Servicio (conductor). */
+const DRIVER_PANEL_MAX_WIDTH = 720;
 
 /** Demo conductor — servicio (solo presentación) */
 const DEMO_UI = {
@@ -170,8 +177,66 @@ function sortStops(stops) {
   return [...(Array.isArray(stops) ? stops : [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
 }
 
-function stopPlace(stop) {
-  return safePlaceName(stop?.nombre, stop?.direccion || `Parada ${stop?.orden ?? ""}`.trim());
+/** Líneas de recorrido: empresa, lugar, dirección y detalles libres (sin metadatos operativos). */
+function getStopRecorridoLines(stop) {
+  const meta = getStopOperacionMeta(stop?.notas);
+  const empresa =
+    String(stop?.empresa || "").trim() ||
+    String(meta.empresa_logistica || meta.empresa || "").trim();
+  const lugar = safePlaceName(stop?.nombre, "");
+  const dirRaw = String(stop?.direccion || "").trim();
+  const direccion =
+    dirRaw && dirRaw.localeCompare(lugar, undefined, { sensitivity: "accent" }) !== 0 ? dirRaw : "";
+  const detalles = formatStopNotesForDisplay(stop?.notas);
+  return { empresa, lugar, direccion, detalles };
+}
+
+function StopRecorridoInfoLines({ stop, tone = "legacy" }) {
+  const { empresa, lugar, direccion, detalles } = getStopRecorridoLines(stop);
+  const isDemo = tone === "demo";
+  const bodyColor = isDemo ? DEMO_UI.tx : DRIVER_UI.tx;
+  const midColor = isDemo ? DEMO_UI.su : DRIVER_UI.su;
+  const mutedColor = isDemo ? DEMO_UI.muted : DRIVER_UI.muted;
+  const detailColor = isDemo ? DEMO_UI.su : DRIVER_UI.muted;
+  const hasBody = empresa || lugar || direccion || detalles;
+  if (!hasBody) return null;
+
+  return (
+    <div style={{ marginTop: isDemo ? 2 : 3 }}>
+      {empresa ? (
+        <div
+          style={{
+            fontSize: isDemo ? 14 : 13,
+            color: bodyColor,
+            marginTop: 2,
+            lineHeight: 1.35,
+            fontWeight: isDemo ? 600 : 700,
+          }}
+        >
+          {empresa}
+        </div>
+      ) : null}
+      {lugar ? (
+        <div style={{ fontSize: isDemo ? 14 : 13, color: midColor, marginTop: 2, lineHeight: 1.35 }}>{lugar}</div>
+      ) : null}
+      {direccion ? (
+        <div style={{ fontSize: isDemo ? 13 : 12, color: mutedColor, marginTop: 2, lineHeight: 1.3 }}>{direccion}</div>
+      ) : null}
+      {detalles ? (
+        <div
+          style={{
+            fontSize: 12,
+            color: detailColor,
+            marginTop: 4,
+            lineHeight: 1.45,
+            fontWeight: 500,
+          }}
+        >
+          {detalles}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function stopDocumentSummary(evidencias) {
@@ -314,6 +379,156 @@ function openOperationalRouteModal(servicio, onOpenViajeModal) {
     destinoActual: servicio?.destino || "",
     referenciaActual: servicio?.referencia ?? null,
   });
+}
+
+/** Una fila: iniciar ruta o «Ruta iniciada» + Recalcular (misma altura que botón único). */
+function DriverOperationalRouteNav({
+  servicio,
+  onOpenRoute,
+  onRecalculateRoute,
+  showToast,
+  variant = "demo",
+}) {
+  const routeActive = hasActiveRouteDestination(servicio);
+  const [recalculating, setRecalculating] = useState(false);
+  const isDemo = variant === "demo";
+  const minH = 46;
+  const rowGap = 8;
+
+  async function handleRecalculate() {
+    if (!onRecalculateRoute || recalculating) return;
+    setRecalculating(true);
+    try {
+      await onRecalculateRoute(servicio);
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo recalcular la ruta");
+    } finally {
+      setRecalculating(false);
+    }
+  }
+
+  if (!routeActive) {
+    const soloStyle = isDemo
+      ? demoPrimaryBtn(DEMO_UI.blue)
+      : {
+          width: "100%",
+          minHeight: minH,
+          padding: "11px 14px",
+          borderRadius: 12,
+          border: "none",
+          background: DRIVER_UI.blue,
+          color: "#fff",
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: "pointer",
+        };
+    return (
+      <button
+        type="button"
+        title="Ruta, destino y ETA"
+        aria-label="Iniciar ruta hasta destino"
+        onClick={onOpenRoute}
+        style={soloStyle}
+      >
+        Iniciar ruta hasta destino
+      </button>
+    );
+  }
+
+  const primaryFlex = "1 1 74%";
+  const secondaryFlex = "1 1 26%";
+  const primaryStyle = isDemo
+    ? {
+        flex: primaryFlex,
+        minWidth: 0,
+        minHeight: minH,
+        padding: "11px 10px",
+        borderRadius: 8,
+        border: "none",
+        background: DEMO_UI.blue,
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: 600,
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }
+    : {
+        flex: primaryFlex,
+        minWidth: 0,
+        minHeight: minH,
+        padding: "11px 10px",
+        borderRadius: 12,
+        border: "none",
+        background: DRIVER_UI.blue,
+        color: "#fff",
+        fontSize: 13,
+        fontWeight: 700,
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      };
+  const secondaryStyle = isDemo
+    ? {
+        flex: secondaryFlex,
+        minWidth: 0,
+        minHeight: minH,
+        padding: "11px 6px",
+        borderRadius: 8,
+        border: `1px solid ${DEMO_UI.line}`,
+        background: DEMO_UI.section,
+        color: DEMO_UI.tx,
+        fontSize: 11,
+        fontWeight: 600,
+        cursor: recalculating ? "default" : "pointer",
+        opacity: recalculating ? 0.65 : 1,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }
+    : {
+        flex: secondaryFlex,
+        minWidth: 0,
+        minHeight: minH,
+        padding: "11px 6px",
+        borderRadius: 12,
+        border: `1px solid ${DRIVER_UI.line}`,
+        background: DRIVER_UI.surface,
+        color: DRIVER_UI.tx,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: recalculating ? "default" : "pointer",
+        opacity: recalculating ? 0.65 : 1,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      };
+
+  return (
+    <div style={{ display: "flex", alignItems: "stretch", gap: rowGap, width: "100%" }}>
+      <button
+        type="button"
+        title="Ver ruta y navegación activa"
+        aria-label="Ruta iniciada"
+        onClick={onOpenRoute}
+        style={primaryStyle}
+      >
+        ✓ Ruta iniciada
+      </button>
+      <button
+        type="button"
+        title="Recalcular ruta desde tu ubicación actual"
+        aria-label="Recalcular ruta"
+        disabled={recalculating || !onRecalculateRoute}
+        onClick={() => void handleRecalculate()}
+        style={secondaryStyle}
+      >
+        {recalculating ? "…" : "Recalcular"}
+      </button>
+    </div>
+  );
 }
 
 function ServiceHero({
@@ -535,7 +750,15 @@ function DriverServiceHeader({ servicio, empresaById, serviceNumber, scheduleLab
         servicio={servicio}
         empresaById={empresaById}
         size="sm"
-        style={{ borderRadius: 4, fontSize: 11, fontWeight: 600, letterSpacing: 0 }}
+        truncate={false}
+        style={{
+          borderRadius: 6,
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: 0,
+          maxWidth: "100%",
+          width: "100%",
+        }}
       />
       <div style={{ marginTop: 8, fontSize: 13, color: DEMO_UI.su, lineHeight: 1.35 }}>
         {serviceNumber ? <span style={{ fontWeight: 500, color: DEMO_UI.tx }}>{serviceNumber}</span> : null}
@@ -663,13 +886,6 @@ function DriverAlertNotStarted() {
   );
 }
 
-function stopCityLine(stop) {
-  const dir = String(stop?.direccion || "").trim();
-  const name = String(stop?.nombre || "").trim();
-  if (dir && dir !== name) return dir;
-  return "";
-}
-
 function stopCompactBadge(stop) {
   const entrada = !!stop.hora_llegada_real;
   const salida = isStopCompleted(stop);
@@ -683,7 +899,6 @@ function stopCompactBadge(stop) {
 function StopListRowCompact({ item, isCurrent }) {
   const { stop, label, group } = item;
   const { stateText, fg, bg } = stopCompactBadge(stop);
-  const city = stopCityLine(stop);
   const iconBg = group === "descarga" ? DEMO_UI.descargaSoft : DEMO_UI.cargaSoft;
   const iconColor = group === "descarga" ? DEMO_UI.descarga : DEMO_UI.carga;
   const iconChar = group === "descarga" ? "↓" : "↑";
@@ -736,10 +951,7 @@ function StopListRowCompact({ item, isCurrent }) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: DEMO_UI.tx, lineHeight: 1.25 }}>{label}</div>
-          <div style={{ fontSize: 14, color: DEMO_UI.su, marginTop: 2, lineHeight: 1.3 }}>{stopPlace(stop)}</div>
-          {city ? (
-            <div style={{ fontSize: 13, color: DEMO_UI.muted, marginTop: 2, lineHeight: 1.3 }}>{city}</div>
-          ) : null}
+          <StopRecorridoInfoLines stop={stop} tone="demo" />
         </div>
         <span
           style={{
@@ -992,12 +1204,7 @@ function OperationalStopCard({
                   {operationName} completada · {stopTime(stop.hora_salida_real)}
                 </div>
               ) : null}
-              <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 3, fontWeight: 650, lineHeight: 1.35 }}>
-                {stopPlace(stop)}
-              </div>
-              {stop.direccion && stop.direccion !== stop.nombre ? (
-                <div style={{ fontSize: 12, color: DRIVER_UI.muted, marginTop: 3 }}>{stop.direccion}</div>
-              ) : null}
+              <StopRecorridoInfoLines stop={stop} tone="legacy" />
             </div>
             <span
               style={{
@@ -1172,6 +1379,7 @@ export function ActiveServicePanel({
   recargar,
   EvidenciasStopComponent,
   onOpenViajeModal,
+  onRecalculateOperationalRoute = null,
   onEvidenciaSaved,
   onCerrarExpediente,
   conductorNombre = "Conductor",
@@ -1371,7 +1579,7 @@ export function ActiveServicePanel({
 
   if (demoRedesign) {
     return (
-      <div style={{ padding: "0 0 88px", maxWidth: 560, margin: "0 auto", background: DEMO_UI.page, minHeight: "70vh" }}>
+      <div style={{ padding: "0 0 88px", width: "100%", maxWidth: DRIVER_PANEL_MAX_WIDTH, margin: "0 auto", background: DEMO_UI.page, minHeight: "70vh" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <DriverDemoSection>
             <DriverServiceHeader
@@ -1427,15 +1635,13 @@ export function ActiveServicePanel({
             <DriverEtaRecorridoFooter servicio={servicio} />
             {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
               <div style={{ padding: "12px 16px 14px" }}>
-                <button
-                  type="button"
-                  title="Ruta, destino y ETA"
-                  aria-label="Iniciar ruta hasta destino"
-                  onClick={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
-                  style={demoPrimaryBtn(DEMO_UI.blue)}
-                >
-                  Iniciar ruta hasta destino
-                </button>
+                <DriverOperationalRouteNav
+                  servicio={servicio}
+                  variant="demo"
+                  showToast={showToast}
+                  onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
+                  onRecalculateRoute={onRecalculateOperationalRoute}
+                />
               </div>
             ) : null}
           </DriverDemoSection>
@@ -1632,10 +1838,10 @@ export function ActiveServicePanel({
   }
 
   return (
-    <div style={{ padding: "10px 12px 88px", maxWidth: 560, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
+    <div style={{ padding: "10px 12px 88px", width: "100%", maxWidth: DRIVER_PANEL_MAX_WIDTH, margin: "0 auto", background: DRIVER_UI.bg, minHeight: "70vh" }}>
       <CockpitShell>
         <div style={{ marginBottom: 12 }}>
-          <ServiceOriginBadge servicio={servicio} empresaById={empresaById} />
+          <ServiceOriginBadge servicio={servicio} empresaById={empresaById} truncate={false} style={{ maxWidth: "100%", width: "100%" }} />
         </div>
         <ServiceHero
           clienteNombre={heroCliente}
@@ -1794,27 +2000,15 @@ export function ActiveServicePanel({
         />
         <ParticipacionTiemposPanel servicio={servicio} stops={sortedStops} />
         {!showCierreDocumental && servicio && typeof onOpenViajeModal === "function" ? (
-          <button
-            type="button"
-            title="Ruta, destino y ETA"
-            aria-label="Ajustar ruta o destino"
-            onClick={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
-            style={{
-              marginTop: 14,
-              width: "100%",
-              minHeight: 46,
-              padding: "11px 14px",
-              borderRadius: 12,
-              border: `1px dashed ${DRIVER_UI.line}`,
-              background: DRIVER_UI.surfaceHi,
-              color: DRIVER_UI.su,
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            🗺 Ajustar ruta o destino
-          </button>
+          <div style={{ marginTop: 14 }}>
+            <DriverOperationalRouteNav
+              servicio={servicio}
+              variant="driver"
+              showToast={showToast}
+              onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
+              onRecalculateRoute={onRecalculateOperationalRoute}
+            />
+          </div>
         ) : null}
 
         {showCierreDocumental ? (

@@ -3282,7 +3282,7 @@ function AppInner(){
         )}
 
         {tab==="servicio"&&(
-          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite}/>
+          <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} onRecalculateOperationalRoute={recalculateOperationalRouteFromCurrentGps} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite}/>
         )}
 
         {tab==="resumen"&&(
@@ -5437,6 +5437,51 @@ async function retryOperationalPlanBuild({servicio,request,norma,showToast}){
   window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   if(operationalPlan.status==="ok"){
     showToast?.(`✅ Planificación operacional calculada${operationalPlan.planned_eta_label?` · ${operationalPlan.planned_eta_label}`:""}`);
+  }else{
+    showToast?.(`⚠ No se pudo calcular ruta completa${operationalPlan.error?`: ${operationalPlan.error}`:""}`);
+  }
+}
+
+/** Recalcula ruta desde GPS actual del conductor hasta el destino operativo del servicio. */
+async function recalculateOperationalRouteFromCurrentGps({servicio,norma,showToast}){
+  if(!servicio?.id)return;
+  const plan=getOperationalPlanSnapshot(servicio);
+  const liveGps=await getBrowserOperationalGps();
+  if(!liveGps){
+    showToast?.("No se pudo obtener tu ubicación. Activa el GPS e inténtalo de nuevo.");
+    throw new Error("GPS no disponible");
+  }
+  const destino=String(
+    servicio.destino||plan?.input_destination||plan?.planned_destination||"",
+  ).trim();
+  if(!destino){
+    showToast?.("Falta destino operativo para recalcular");
+    throw new Error("Sin destino");
+  }
+  const origen=`${liveGps.lat.toFixed(5)},${liveGps.lon.toFixed(5)}`;
+  showToast?.("Calculando ruta desde tu ubicación…");
+  const operationalPlan=await buildOperationalPlanSnapshot({
+    origen,
+    destino,
+    waypoint:plan?.input_waypoint||plan?.planned_waypoint||"",
+    velocidad:plan?.velocidad||80,
+    norma,
+    gpsOrigen:liveGps,
+    modoManual:false,
+  });
+  const etaPrevista=buildEtaPrevistaFromRoutePlan(operationalPlan);
+  const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
+    operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+    operational_plan:operationalPlan,
+    operational_eta:null,
+    operational_plan_confirmed_at:new Date().toISOString(),
+    ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
+  });
+  const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
+  if(!res.ok)throw new Error(`Supabase ${res.status}`);
+  window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+  if(operationalPlan.status==="ok"){
+    showToast?.(`✅ Ruta recalculada${operationalPlan.planned_eta_label?` · ${operationalPlan.planned_eta_label}`:""}`);
   }else{
     showToast?.(`⚠ No se pudo calcular ruta completa${operationalPlan.error?`: ${operationalPlan.error}`:""}`);
   }
@@ -17633,7 +17678,7 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,canCreateServices=false,useOperationalLite=false}){
+const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,onRecalculateOperationalRoute=null,canCreateServices=false,useOperationalLite=false}){
   const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,participacion,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,finalizarParticipacion,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const originServicios=useMemo(()=>[servicio,siguienteServicio].filter(Boolean),[servicio?.id,siguienteServicio?.id]);
   const empresaById=useEmpresaOriginLookup(originServicios);
@@ -17749,6 +17794,11 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         recargar={recargar}
         EvidenciasStopComponent={EvidenciasStop}
         onOpenViajeModal={onOpenViajeModal}
+        onRecalculateOperationalRoute={
+          onRecalculateOperationalRoute
+            ? (sv)=>onRecalculateOperationalRoute({servicio:sv,norma,showToast})
+            : null
+        }
         onEvidenciaSaved={handleEvidenciaSaved}
         onCerrarExpediente={cerrarExpediente}
         conductorNombre={conductorNombre}

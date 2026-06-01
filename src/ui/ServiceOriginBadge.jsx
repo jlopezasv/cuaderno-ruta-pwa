@@ -3,7 +3,13 @@ import { getServicioOriginPresentation } from "../domain/service/servicioOriginP
 /**
  * Badge de origen del servicio: PRIVADO o nombre de empresa (con logo si existe).
  */
-export function ServiceOriginBadge({ servicio, empresaById = {}, size = "md", style = {} }) {
+export function ServiceOriginBadge({
+  servicio,
+  empresaById = {},
+  size = "md",
+  truncate = true,
+  style = {},
+}) {
   const pres = getServicioOriginPresentation(servicio, empresaById);
   if (!pres) return null;
 
@@ -14,22 +20,24 @@ export function ServiceOriginBadge({ servicio, empresaById = {}, size = "md", st
 
   return (
     <span
-      title={pres.label}
+      title={truncate ? pres.label : undefined}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: compact ? 4 : 5,
-        maxWidth: compact ? 140 : 200,
+        maxWidth: truncate ? (compact ? 140 : 200) : "100%",
+        width: truncate ? undefined : "100%",
+        boxSizing: "border-box",
         padding: pad,
-        borderRadius: 999,
+        borderRadius: truncate ? 999 : 8,
         background: pres.bg,
         color: pres.fg,
         border: `1px solid ${pres.border}`,
         fontSize,
         fontWeight: 800,
         letterSpacing: 0.35,
-        lineHeight: 1.2,
-        flexShrink: 0,
+        lineHeight: 1.25,
+        flexShrink: truncate ? 0 : undefined,
         ...style,
       }}
     >
@@ -65,11 +73,21 @@ export function ServiceOriginBadge({ servicio, empresaById = {}, size = "md", st
         </span>
       ) : null}
       <span
-        style={{
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
+        style={
+          truncate
+            ? {
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }
+            : {
+                flex: 1,
+                minWidth: 0,
+                whiteSpace: "normal",
+                wordBreak: "break-word",
+              }
+        }
       >
         {pres.label}
       </span>
