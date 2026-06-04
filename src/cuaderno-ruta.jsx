@@ -25,6 +25,7 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { isClienteMailEnvioDemoEnabled } from "./config/demoClienteMail.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
@@ -173,6 +174,15 @@ import {
 } from "./domain/service/operationalEtaPresentation.js";
 import { useEtaVisualClockMs } from "./domain/service/useEtaVisualClock.js";
 import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
+import { EnvioClienteHistorialModal } from "./features/mail/EnvioClienteHistorialModal.jsx";
+import {
+  fetchLatestDocumentacionEnvioByServicioIds,
+  fetchNombresByUserIds,
+} from "./domain/mail/documentacionEnviosQuery.js";
+import {
+  formatEnvioClienteDetalle,
+  resolveEnvioClienteEstado,
+} from "./domain/mail/clienteMailEnvioStatus.js";
 import {
   fetchEmpresaDocumentosExtra,
   fetchServicioDocumentosExtra,
@@ -12714,6 +12724,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[visorEv,setVisorEv]=useState(null);
   const[expedientePreview,setExpedientePreview]=useState(null);
   const[mailExpediente,setMailExpediente]=useState(null);
+  const[mailEnviosByServicioId,setMailEnviosByServicioId]=useState({});
+  const[mailHistorial,setMailHistorial]=useState(null);
+  const[mailEnviadorNombres,setMailEnviadorNombres]=useState({});
+  const clienteMailDemo=isClienteMailEnvioDemoEnabled();
   const[svCardExpand,setSvCardExpand]=useState(null);
   const svCardExpandRef=useRef(null);
   svCardExpandRef.current=svCardExpand;
@@ -13291,9 +13305,30 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const pending=flotaServicios.some(s=>s?.id&&!flotaEvsLoadedServiciosRef.current.has(s.id));
       if(pending)await ensureFlotaEvidenciasForDocumentos();
       await ensureFlotaExtraDocsForDocumentos();
+      if(clienteMailDemo&&!cancelled){
+        const ids=flotaServicios.map((s)=>s.id).filter(Boolean);
+        const latest=await fetchLatestDocumentacionEnvioByServicioIds(ids);
+        if(!cancelled){
+          setMailEnviosByServicioId(latest);
+          const uids=[...new Set(Object.values(latest).map((r)=>r?.enviado_por).filter(Boolean))];
+          if(uids.length){
+            const nombres=await fetchNombresByUserIds(uids);
+            if(!cancelled)setMailEnviadorNombres(nombres);
+          }
+        }
+      }
     })();
     return()=>{cancelled=true;};
-  },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops]);
+  },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops,clienteMailDemo]);
+
+  const refreshMailEnviosDocumentos=useCallback(async()=>{
+    if(!clienteMailDemo||!flotaServicios.length)return;
+    const ids=flotaServicios.map((s)=>s.id).filter(Boolean);
+    const latest=await fetchLatestDocumentacionEnvioByServicioIds(ids);
+    setMailEnviosByServicioId(latest);
+    const uids=[...new Set(Object.values(latest).map((r)=>r?.enviado_por).filter(Boolean))];
+    if(uids.length)setMailEnviadorNombres(await fetchNombresByUserIds(uids));
+  },[clienteMailDemo,flotaServicios]);
 
   useEffect(()=>{
     if(!empresa?.id||modo!=="jefe")return;
@@ -14696,8 +14731,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           const clienteDoc=getServiceClient(sv)||"—";
                           const incN=incidenciasCountServicio(sv.id,flotaStops,flotaEvs,flotaIncidenciasResumen);
                           const isArchived=archivedExpedienteIds.has(sv.id);
+                          const envioRow=mailEnviosByServicioId[sv.id];
+                          const envioMeta=resolveEnvioClienteEstado(envioRow?.estado);
+                          const envioDetalle=formatEnvioClienteDetalle(envioRow);
                           return(
-                            <div key={sv.id} style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(132px,1fr))",gap:10,alignItems:"center",padding:"10px 11px",borderBottom:"1px solid #eef2f7"}}>
+                            <div key={sv.id} style={{display:"grid",gridTemplateColumns:clienteMailDemo?"repeat(auto-fit,minmax(118px,1fr))":"repeat(auto-fit,minmax(132px,1fr))",gap:10,alignItems:"center",padding:"10px 11px",borderBottom:"1px solid #eef2f7"}}>
                               <div style={{minWidth:0}}>
                                 <div style={{fontSize:13,fontWeight:850,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{refVisible}</div>
                                 <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{clienteDoc}</div>
@@ -14717,12 +14755,45 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 <div style={{fontSize:12,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.eta}</div>
                                 <div style={{fontSize:10.5,color:"#166534",marginTop:2,fontWeight:750}}>✓ Integridad validada</div>
                               </div>
+                              {clienteMailDemo?(
+                                <div
+                                  style={{minWidth:0,cursor:envioRow?"pointer":"default"}}
+                                  role={envioRow?"button":undefined}
+                                  tabIndex={envioRow?0:undefined}
+                                  onClick={()=>{
+                                    if(!envioRow)return;
+                                    setMailHistorial({servicio:sv,envio:envioRow,serviceRef:refVisible});
+                                  }}
+                                  onKeyDown={(e)=>{
+                                    if(!envioRow)return;
+                                    if(e.key==="Enter"||e.key===" "){
+                                      e.preventDefault();
+                                      setMailHistorial({servicio:sv,envio:envioRow,serviceRef:refVisible});
+                                    }
+                                  }}
+                                  title={envioRow?"Ver historial de envío":undefined}
+                                >
+                                  <div style={{fontSize:10,color:"#64748b",fontWeight:800,textTransform:"uppercase",marginBottom:3}}>Envío cliente</div>
+                                  <div style={{fontSize:11.5,fontWeight:800,color:envioMeta.color,display:"flex",alignItems:"center",gap:4}}>
+                                    <span aria-hidden>{envioMeta.icon}</span>
+                                    <span>{envioMeta.label}</span>
+                                  </div>
+                                  {envioDetalle?(
+                                    <div style={{fontSize:10,color:"#64748b",marginTop:3,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                      {envioDetalle}
+                                    </div>
+                                  ):(
+                                    <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>Sin envío registrado</div>
+                                  )}
+                                </div>
+                              ):null}
                               <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
                                 {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
                                 <button type="button" onClick={()=>void abrirExpedientePreview(sv)}
                                   style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Ver
                                 </button>
+                                {clienteMailDemo?(
                                 <button type="button" onClick={()=>{
                                   const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
                                   setMailExpediente({
@@ -14735,6 +14806,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                   style={{background:"#2563eb",color:"white",border:"none",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Correo
                                 </button>
+                                ):null}
                                 <button type="button" onClick={async()=>{
                                   await ensureFlotaStopsForServicioIds([sv.id]);
                                   await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
@@ -14870,7 +14942,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {mailExpediente&&(
+      {mailExpediente&&clienteMailDemo&&(
         <SendDocumentationModal
           open
           onClose={()=>setMailExpediente(null)}
@@ -14879,6 +14951,21 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           evidenciasByStop={mailExpediente.evidenciasByStop}
           extraDocs={mailExpediente.extraDocs}
           showToast={showToast}
+          onBuildExpediente={buildExpedienteCompleto}
+          onEnvioLogged={()=>void refreshMailEnviosDocumentos()}
+          empresaNombre={empresa?.nombre}
+          empresaId={empresa?.id}
+          replyToEmail={prof?.emailEmpresa}
+        />
+      )}
+
+      {mailHistorial&&clienteMailDemo&&(
+        <EnvioClienteHistorialModal
+          open
+          onClose={()=>setMailHistorial(null)}
+          envio={mailHistorial.envio}
+          serviceRef={mailHistorial.serviceRef}
+          nombreEnviador={mailEnviadorNombres[mailHistorial.envio?.enviado_por]||prof?.nombre}
         />
       )}
 

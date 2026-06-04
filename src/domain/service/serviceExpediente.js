@@ -970,7 +970,7 @@ function imageObject(bytesData, width, height) {
   ]);
 }
 
-async function makePdfBlob(expediente) {
+export async function makeServiceExpedientePdfBlob(expediente) {
   const imageMap = await fetchEvidenceImages(expediente);
   const cierreFirmaMap = expediente.cierreDocumental
     ? await fetchCierreFirmaForPdf(expediente.cierreDocumental)
@@ -1371,8 +1371,12 @@ async function makePdfBlob(expediente) {
   return new Blob([concat(parts)], { type: "application/pdf" });
 }
 
+async function makePdfBlob(expediente) {
+  return makeServiceExpedientePdfBlob(expediente);
+}
+
 export async function downloadServiceExpedientePdf(expediente) {
-  const blob = await makePdfBlob(expediente);
+  const blob = await makeServiceExpedientePdfBlob(expediente);
   const a = document.createElement("a");
   const url = URL.createObjectURL(blob);
   a.href = url;
