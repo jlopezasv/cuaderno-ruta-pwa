@@ -13,7 +13,6 @@ import {
 import { getServiceOperationalPlaces } from "../../domain/service/serviceOperationalPlaces.js";
 import { resolveServiceRouteEndpoints } from "../../domain/service/serviceIdentity.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
-import { formatEmpresaFlotaRemainingLine } from "./empresaFlotaServicioCardPresenter.js";
 
 /**
  * Arquitectura multiparada (fase futura). No renderizar hasta `mode: "multistop"`.
@@ -65,7 +64,44 @@ function resolveEtaClockLabel(servicio, nowMs) {
   return resolveEtaInicialDisplayLabel(servicio);
 }
 
-function resolveRemainingKmLine(servicio, nowMs) {
+function resolveEstadoFooterLabel(servicio) {
+  if (!servicio?.estado) return null;
+  if (servicio.estado === "en_curso") return "En ruta";
+  return ESTADO_LABEL[servicio.estado] || servicio.estado;
+}
+
+const ETA_DAY_SHORT = {
+  Domingo: "Dom",
+  Lunes: "Lun",
+  Martes: "Mar",
+  Miércoles: "Mié",
+  Jueves: "Jue",
+  Viernes: "Vie",
+  Sábado: "Sáb",
+};
+
+function shortenEtaLabel(label) {
+  if (label == null || label === "") return null;
+  let s = String(label).trim();
+  for (const [full, short] of Object.entries(ETA_DAY_SHORT)) {
+    if (s.includes(full)) {
+      s = s.replace(full, short);
+      break;
+    }
+  }
+  return s.replace(/\s*·\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function formatShortRemainingMins(mins) {
+  if (!Number.isFinite(mins) || mins <= 0) return null;
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
+function buildCompactFooterLine(servicio, nowMs) {
+  const eta = shortenEtaLabel(resolveEtaClockLabel(servicio, nowMs));
   const v = resolveEtaVisual(servicio, new Date(nowMs));
   const km =
     v.tier === "operational"
@@ -79,13 +115,19 @@ function resolveRemainingKmLine(servicio, nowMs) {
       : v.tier === "plan"
         ? v.remainingMins
         : null;
-  return formatEmpresaFlotaRemainingLine(km, mins);
-}
 
-function resolveEstadoFooterLabel(servicio) {
-  if (!servicio?.estado) return null;
-  if (servicio.estado === "en_curso") return "En ruta";
-  return ESTADO_LABEL[servicio.estado] || servicio.estado;
+  const parts = [];
+  if (eta) parts.push(`ETA ${eta}`);
+  if (Number.isFinite(km) && km > 0) {
+    const kmTxt =
+      km >= 100 ? `${Math.round(km).toLocaleString("es-ES")} km` : `${Math.round(km * 10) / 10} km`;
+    parts.push(kmTxt);
+  }
+  const timeTxt = formatShortRemainingMins(mins);
+  if (timeTxt) parts.push(timeTxt);
+  else if (servicio?.estado === "en_curso") parts.push("En ruta");
+
+  return parts.length ? parts.join(" · ") : resolveEstadoFooterLabel(servicio) || "—";
 }
 
 /**
@@ -112,15 +154,6 @@ export function buildConductorOperationalProgressBandModel({ servicio, stops = [
     destino,
   );
 
-  const eta = resolveEtaClockLabel(servicio, nowMs);
-  const kmLine = resolveRemainingKmLine(servicio, nowMs);
-  const estado = resolveEstadoFooterLabel(servicio);
-
-  const footerParts = [];
-  if (eta) footerParts.push(`ETA ${eta}`);
-  if (kmLine) footerParts.push(kmLine);
-  if (estado) footerParts.push(estado);
-
   return {
     mode: "single",
     /** Reservado multiparada: array de {@link ConductorProgressStage} */
@@ -128,10 +161,27 @@ export function buildConductorOperationalProgressBandModel({ servicio, stops = [
     originLabel,
     destinationLabel,
     progressPct: resolveProgressPct(servicio, stops, nowMs),
-    footerLine: footerParts.join(" · ") || estado || "—",
+    footerLine: buildCompactFooterLine(servicio, nowMs),
   };
 }
 
 export function isConductoresEmpresaDemoUi() {
   return isDemoApp();
+}
+
+/**
+ * ¿Conduce el conductor principal del servicio? (tacógrafo / jornada del principal, no colaboradores).
+ * @param {object|null} servicio
+ * @param {Array<{ user_id?: string, norma?: { isDriving?: boolean }, entries?: object[] }>} conductores
+ * @param {(c: object, now?: Date) => { active?: { type?: string } }} journeyResolver
+ */
+export function resolvePrincipalConductorIsDriving(servicio, conductores, journeyResolver) {
+  const principalUid = servicio?.conductor_id;
+  if (!principalUid) return false;
+  const principal = (conductores || []).find((c) => c.user_id === principalUid);
+  if (!principal) return false;
+  const norma = principal.norma;
+  if (norma?.isDriving) return true;
+  const journey = typeof journeyResolver === "function" ? journeyResolver(principal) : null;
+  return journey?.active?.type === "inicio_conduccion";
 }

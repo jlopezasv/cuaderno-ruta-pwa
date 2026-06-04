@@ -37,7 +37,23 @@ import {
   ConductorOperationalProgressBand,
   CONDUCTOR_PROGRESS_BAND_CSS,
 } from "./features/empresa/ConductorOperationalProgressBand.jsx";
-import { isConductoresEmpresaDemoUi } from "./features/empresa/conductorOperationalProgressBandModel.js";
+import {
+  ConductorUbicacionDemoBlock,
+  CONDUCTOR_UBICACION_DEMO_CSS,
+} from "./features/empresa/ConductorUbicacionDemoBlock.jsx";
+import { formatConductorUbicacionDemoDisplay } from "./features/empresa/conductorUbicacionDemoDisplay.js";
+import {
+  isConductoresEmpresaDemoUi,
+  resolvePrincipalConductorIsDriving,
+} from "./features/empresa/conductorOperationalProgressBandModel.js";
+import {
+  ConductorNormaMetricPills,
+  CONDUCTOR_NORMA_PILLS_CSS,
+} from "./features/empresa/ConductorNormaMetricPills.jsx";
+import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
+import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
+import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
+import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
@@ -184,6 +200,7 @@ import {
   OPERATIONAL_ETA_CALCULATING,
   formatOperationalEtaSnapshotLine,
 } from "./domain/service/operationalEtaPresentation.js";
+import { formatSpanishAgo } from "./domain/service/etaFormatter.js";
 import { useEtaVisualClockMs } from "./domain/service/useEtaVisualClock.js";
 import { SendDocumentationModal } from "./features/mail/SendDocumentationModal";
 import { EnvioClienteHistorialModal } from "./features/mail/EnvioClienteHistorialModal.jsx";
@@ -7708,8 +7725,8 @@ function ProfView({prof,onSave,norma,db,showToast}){
       <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>
         <div style={{fontSize:11,fontWeight:800,color:"#64748B",letterSpacing:1.5,marginBottom:14}}>DATOS PERSONALES</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 13px"}}>
-          {[{l:"Nombre completo",k:"nombre",ph:"Juan García López"},{l:"DNI / Pasaporte",k:"dni",ph:"12345678A"},{l:"Nº Licencia CAP",k:"licencia",ph:"CAP-2025-00123"}].map(({l,k,ph})=>(
-            <div key={k} style={{marginBottom:12}}><label style={{fontSize:11,fontWeight:700,color:"#64748B",letterSpacing:.8,marginBottom:6,display:"block"}}>{l}</label><input type="text" value={p[k]||""} onChange={e=>setP(prev=>({...prev,[k]:e.target.value}))} placeholder={ph} style={s.tIn}/></div>
+          {[{l:"Nombre completo",k:"nombre",ph:"Juan García López"},{l:"DNI / Pasaporte",k:"dni",ph:"12345678A"},{l:"Nº Licencia CAP",k:"licencia",ph:"CAP-2025-00123"},{l:"Teléfono móvil",k:"telefono",ph:"600 123 123",col:"1 / -1"}].map(({l,k,ph,col})=>(
+            <div key={k} style={{marginBottom:12,gridColumn:col||"auto"}}><label style={{fontSize:11,fontWeight:700,color:"#64748B",letterSpacing:.8,marginBottom:6,display:"block"}}>{l}</label><input type={k==="telefono"?"tel":"text"} value={p[k]||""} onChange={e=>setP(prev=>({...prev,[k]:e.target.value}))} placeholder={ph} style={s.tIn}/></div>
           ))}
           <div style={{marginBottom:12,gridColumn:"1 / -1"}}>
             <label style={{fontSize:11,fontWeight:700,color:"#64748B",letterSpacing:.8,marginBottom:8,display:"block"}}>TIPO DE VEHÍCULO</label>
@@ -12985,8 +13002,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           const entries=await sbSelect("entries",`user_id=eq.${r.user_id}&order=ts.asc&limit=2000`);
           const ents=entries.map(e=>({...e,ts:new Date(e.ts)}));
           const normaC=calcNorma(ents,new Date(),false);
-          return{...r,nombre:nombreReal,matricula:matriculaReal,norma:normaC,entries:ents};
-        }catch(_){return{...r,norma:null,entries:[]};}
+          return{
+            ...r,
+            nombre:nombreReal,
+            matricula:matriculaReal,
+            telefono_movil:r.telefono_movil||"",
+            telefono:perfil[0]?.telefono||"",
+            norma:normaC,
+            entries:ents,
+          };
+        }catch(_){return{...r,norma:null,entries:[],telefono_movil:r.telefono_movil||"",telefono:""};}
       }));
       setConductores(conds.filter(Boolean));
     }catch(_){}
@@ -12997,6 +13022,18 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   loadConductoresRef.current=loadConductores;
   const conductoresFlotaRef=useRef(conductores);
   conductoresFlotaRef.current=conductores;
+
+  async function guardarTelefonoMovilConductor(conductorEmpresaId,telefonoMovil){
+    if(!conductorEmpresaId)return;
+    const valor=String(telefonoMovil||"").trim()||null;
+    const res=await sbFetch(`/rest/v1/conductor_empresa?id=eq.${conductorEmpresaId}`,{
+      method:"PATCH",
+      body:JSON.stringify({telefono_movil:valor}),
+    });
+    if(!res.ok)throw new Error(`No se pudo guardar el teléfono (${res.status})`);
+    setConductores(prev=>prev.map(c=>c.id===conductorEmpresaId?{...c,telefono_movil:valor||""}:c));
+    showToast("Teléfono móvil guardado");
+  }
 
   async function resolveFlotaConductorUids(){
     const fromConductores=conductoresFlotaRef.current.map(c=>c.user_id).filter(Boolean);
@@ -14189,7 +14226,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── CONDUCTORES ── */}
       {flotaTab==="conductores"&&(
         <div style={{padding:"14px 14px 80px"}}>
-          {isConductoresEmpresaDemoUi()?<style>{CONDUCTOR_PROGRESS_BAND_CSS}</style>:null}
+          {isConductoresEmpresaDemoUi()?(
+            <style>{CONDUCTOR_PROGRESS_BAND_CSS}{CONDUCTOR_UBICACION_DEMO_CSS}</style>
+          ):null}
+          <style>{CONDUCTOR_NORMA_PILLS_CSS}</style>
           {/* Invite */}
           <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
             {!addOpen?(
@@ -14236,6 +14276,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   : null;
                 const conductoresDemoUi=isConductoresEmpresaDemoUi();
                 const servicioStops=servicioActual?flotaStops[servicioActual.id]||[]:[];
+                const principalIsDriving=resolvePrincipalConductorIsDriving(
+                  servicioActual,
+                  conductores,
+                  conductorJourneyInfo,
+                );
+                const ubicacionDemo=conductoresDemoUi&&!c.pendiente
+                  ?formatConductorUbicacionDemoDisplay(liveLocation,fmtUbicacionConductorEmpresa,etaVisualClockMs)
+                  :null;
                 return(
                   <div key={c.id} style={{background:card,borderRadius:14,padding:conductoresDemoUi?"12px 14px":"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
                     <div
@@ -14243,22 +14291,39 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       style={{
                         display:"flex",
                         justifyContent:"space-between",
-                        alignItems:conductoresDemoUi?"center":"flex-start",
-                        gap:conductoresDemoUi?12:8,
+                        alignItems:"flex-start",
+                        gap:conductoresDemoUi?14:8,
                         marginBottom:c.pendiente?0:conductoresDemoUi?8:10,
                         flexWrap:conductoresDemoUi?"wrap":"nowrap",
                       }}>
-                      <div style={{flex:conductoresDemoUi?"0 1 auto":"1 1 auto",minWidth:conductoresDemoUi?140:0}}>
+                      <div style={{flex:conductoresDemoUi?"0 1 auto":"1 1 auto",minWidth:conductoresDemoUi?132:0,maxWidth:conductoresDemoUi?200:"none"}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                           <span style={{width:8,height:8,borderRadius:"50%",background:c.pendiente?"#94a3b8":journey.open?sem.col:"#cbd5e1",flexShrink:0}}/>
                           <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
                           <span style={{fontSize:11,background:empresaTone(journey.open?sem.col:"#94A3B8").bg,color:empresaTone(journey.open?sem.col:"#94A3B8").fg,border:`1px solid ${empresaTone(journey.open?sem.col:"#94A3B8").border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>{c.pendiente?"Sin vincular":journey.open?sem.label:"Fuera jornada"}</span>
                         </div>
                         {c.matricula&&<div style={{fontSize:12,color:su}}>Unidad {c.matricula}</div>}
+                        {!c.pendiente&&(
+                          <ConductorTelefonoMovilField
+                            conductorId={c.id}
+                            value={resolveConductorTelefonoMovil(c)}
+                            editable
+                            compact={conductoresDemoUi}
+                            ui={EMPRESA_UI}
+                            onSave={guardarTelefonoMovilConductor}
+                          />
+                        )}
                         {c.pendiente&&<div style={{fontSize:12,color:su,marginTop:4}}>Dale el código para que se vincule desde PERFIL</div>}
+                        {ubicacionDemo?(
+                          <ConductorUbicacionDemoBlock
+                            lugar={ubicacionDemo.lugar}
+                            freshness={ubicacionDemo.freshness}
+                            isRecent={ubicacionDemo.isRecent}
+                          />
+                        ):null}
                         {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
                         {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:600}}>{fmtUbicacionActualizada(liveLocation)}</div>}
-                        {!c.pendiente&&<div style={{fontSize:12,color:journey.color,marginTop:conductoresDemoUi?4:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
+                        {!c.pendiente&&<div style={{fontSize:conductoresDemoUi?11:12,color:journey.color,marginTop:conductoresDemoUi?3:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
                         {!conductoresDemoUi&&!c.pendiente&&servicioActual&&(
                           <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>
                             Servicio actual: <span style={{color:tx,fontWeight:600}}>{servicioRuta}</span>
@@ -14270,6 +14335,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           servicio={servicioActual}
                           stops={servicioStops}
                           nowMs={etaVisualClockMs}
+                          isDriving={principalIsDriving}
                         />
                       ):null}
                       <div className={conductoresDemoUi?"conductor-card-demo-actions":undefined} style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end",flexShrink:0}}>
@@ -14290,19 +14356,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                     </div>
 
                     {!c.pendiente&&n&&(
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:10}}>
-                        {[
-                          {l:"Puede conducir",v:n.canDrive<=0?"¡PARAR!":fmtDur(n.canDrive),c:n.canDrive<=0?"#EF4444":n.canDrive<=30?"#EF4444":n.canDrive<=90?"#F97316":"#22C55E"},
-                          {l:"Conducido hoy", v:fmtDur(n.todayDrive),c:"#F59E0B"},
-                          {l:"Continua",      v:fmtDur(n.cont),c:n.cont>=270?"#EF4444":n.cont>=210?"#F97316":"#64748B"},
-                          {l:"Semana",        v:`${fmtDur(n.weekDrive)}/56h`,c:n.weekDrive>LIM.WEEK*0.9?"#EF4444":n.weekDrive>LIM.WEEK*0.7?"#F97316":"#64748B"},
-                        ].map(({l,v,c})=>(
-                          <div key={l} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"8px 10px"}}>
-                            <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:2}}>{l}</div>
-                            <div style={{fontSize:15,fontWeight:650,color:empresaTone(c).fg,fontFamily:"monospace"}}>{v}</div>
-                          </div>
-                        ))}
-                      </div>
+                      <ConductorNormaMetricPills norma={n} fmtDur={fmtDur} empresaTone={empresaTone} />
                     )}
 
                     {!c.pendiente&&c.user_id&&(
@@ -18050,11 +18104,24 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
   const[servicios,setServicios]=useState([]);
+  const[incidenciasResumen,setIncidenciasResumen]=useState({});
   const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
   const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
-  const bg=EMPRESA_UI.bg,card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
+  const su=EMPRESA_UI.muted;
+
+  const tower=useMemo(
+    ()=>buildEmpresaDashboardTowerState({
+      conductores,
+      servicios,
+      ubicacionByUid:ubicacionDashByUid,
+      incidenciasByServicioId:incidenciasResumen,
+      formatLugar:fmtUbicacionConductorEmpresa,
+      nowMs:etaVisualClockMs,
+    }),
+    [conductores,servicios,ubicacionDashByUid,incidenciasResumen,etaVisualClockMs],
+  );
 
   useEffect(()=>{
     const uid=getUserId();if(!uid)return;
@@ -18065,19 +18132,48 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         if(!emp?.id){setLoading(false);return;}
         setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);
-        const relsWithProf=await Promise.all(rels.map(async(r)=>{
-          if(!r.user_id)return r;
+        const conds=await Promise.all(rels.map(async(r)=>{
+          if(!r.user_id)return{...r,norma:null,entries:[]};
           const pr=await sbSelect("profiles",`id=eq.${r.user_id}`);
-          return pr[0]?.is_archived?null:r;
+          if(pr[0]?.is_archived)return null;
+          try{
+            const entries=await sbSelect("entries",`user_id=eq.${r.user_id}&order=ts.asc&limit=2000`);
+            const ents=entries.map(e=>({...e,ts:new Date(e.ts)}));
+            const normaC=calcNorma(ents,new Date(),false);
+            return{
+              ...r,
+              nombre:pr[0]?.nombre||r.nombre||"Conductor",
+              matricula:pr[0]?.matricula||r.matricula||"",
+              telefono_movil:r.telefono_movil||"",
+              telefono:pr[0]?.telefono||"",
+              norma:normaC,
+              entries:ents,
+            };
+          }catch(_){
+            return{
+              ...r,
+              nombre:pr[0]?.nombre||r.nombre||"Conductor",
+              telefono_movil:r.telefono_movil||"",
+              telefono:pr[0]?.telefono||"",
+              norma:null,
+              entries:[],
+            };
+          }
         }));
-        const relsActivos=relsWithProf.filter(Boolean);
+        const relsActivos=conds.filter(Boolean);
         const uids=relsActivos.filter(r=>r.user_id).map(r=>r.user_id);
         setConductores(relsActivos);
-        if(uids.length){
-          const svs=await sbFetch(`/rest/v1/servicios?conductor_id=in.(${uids.join(",")})&estado=in.(asignado,en_curso)&order=created_at.desc&limit=20`).then(r=>r.json());
-          setServicios(Array.isArray(svs)?svs:[]);
-          void refreshDashboardUbicaciones(uids);
-        }else setServicios([]);
+        const [svs,incRows]=await Promise.all([
+          uids.length?fetchFlotaServiciosForEmpresa(sbFetch,emp.id,uids):Promise.resolve([]),
+          fetchIncidenciasResumenByEmpresa(emp.id).catch(()=>[]),
+        ]);
+        setServicios(Array.isArray(svs)?svs:[]);
+        const incMap={};
+        for(const row of Array.isArray(incRows)?incRows:[]){
+          if(row?.servicio_id)incMap[row.servicio_id]=row;
+        }
+        setIncidenciasResumen(incMap);
+        if(uids.length)void refreshDashboardUbicaciones(uids);
       }catch(e){devWarn("EmpresaDashboard:",e);}
       finally{setLoading(false);}
     }
@@ -18138,136 +18234,14 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     devLog("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
   }
 
-  const enCurso=servicios.filter(s=>s.estado==="en_curso").length;
-  const asignados=servicios.filter(s=>s.estado==="asignado").length;
-
   return(
     <div className="empresa-page-shell">
-
-      {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:20}}>
-        {[
-          {l:"En curso",  v:enCurso,     c:EMPRESA_UI.accent, icon:"▱", action:()=>onTabChange("servicios")},
-          {l:"Pendientes salida",  v:asignados,   c:EMPRESA_UI.subtle, icon:"○", action:()=>onTabChange("servicios")},
-          {l:"Conductores activos",v:conductores.filter(c=>c.user_id).length, c:EMPRESA_UI.green, icon:"◇", action:()=>onTabChange("conductores")},
-          {l:"Total servicios hoy",v:servicios.length, c:"#475569", icon:"▤", action:null},
-        ].map(({l,v,c,icon,action})=>(
-          <button key={l} onClick={action||undefined}
-            style={{background:card,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:14,padding:"16px 18px",textAlign:"left",cursor:action?"pointer":"default",transition:"border-color .15s",boxShadow:EMPRESA_UI.shadow}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-              <span style={{fontSize:18,color:"#94a3b8"}}>{icon}</span>
-              <span style={{fontSize:11,color:empresaTone(c).fg,background:empresaTone(c).bg,border:`1px solid ${empresaTone(c).border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>Hoy</span>
-            </div>
-            <div style={{fontSize:30,fontWeight:650,color:c,fontFamily:"monospace",lineHeight:1,marginBottom:5}}>{v}</div>
-            <div style={{fontSize:12,color:su,fontWeight:500}}>{l}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* Servicios en curso */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 320px), 1fr))",gap:20}}>
-        <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:650,color:tx}}>En curso</div>
-            <button onClick={()=>onTabChange("servicios")} style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>Ver todos →</button>
-          </div>
-          {servicios.filter(s=>s.estado==="en_curso").length===0?(
-            <div style={{textAlign:"center",padding:"24px 0",color:su,fontSize:13}}>Sin servicios en curso ahora mismo</div>
-          ):servicios.filter(s=>s.estado==="en_curso").slice(0,5).map(sv=>{
-            const operationalStatus=getOperationalStatus({service:sv,stops:[],evidencias:[]});
-            const operationalMeta=OPERATIONAL_STATUS_META[operationalStatus];
-            const lastActivity=getLastServiceActivity({service:sv,stops:[],evidencias:[]});
-            const attention=needsAttention({service:sv,stops:[],evidencias:[],lastActivity});
-            const attentionReason=attention?getAttentionReason({service:sv,stops:[],evidencias:[],lastActivity}):"";
-            const refVisible=getServiceNumber(sv);
-            const clienteVisible=getServiceClient(sv);
-            const {origen:routeFrom,destino:routeTo}=resolveServiceRouteEndpoints(sv,null);
-            const ubic=sv.conductor_id?ubicacionDashByUid[sv.conductor_id]:null;
-            const ubicUpdated=fmtUbicacionActualizada(ubic);
-            return(
-            <div key={sv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"11px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`,boxShadow:attention?`inset 3px 0 0 ${EMPRESA_UI.amber}`:"none",paddingLeft:attention?8:0}}>
-              <div style={{minWidth:0,flex:1}}>
-                <div style={{fontSize:13,fontWeight:600,color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{routeFrom} → {routeTo}</div>
-                <div style={{marginTop:4}}>
-                  <OperationalEtaSnapshotBlock
-                    servicio={sv}
-                    nowMs={etaVisualClockMs}
-                    tx={tx}
-                    su={su}
-                    subtle={EMPRESA_UI.subtle}
-                    layout="empresa"
-                    latestLocation={ubic && !ubic.missing && !ubic.fetchError ? ubic : null}
-                    tacografoEstado={null}
-                    activeStop={null}
-                  />
-                </div>
-                <div style={{fontSize:10.5,color:su,marginTop:3,lineHeight:1.35}}>
-                  Última ubicación · <span style={{color:EMPRESA_UI.subtle,fontWeight:600}}>{fmtUbicacionConductorEmpresa(ubic)}</span>
-                </div>
-                <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.35,fontWeight:600}}>
-                  {ubicUpdated}
-                </div>
-                {attention&&(
-                  <div style={{marginTop:4}}>
-                    <span style={{background:EMPRESA_UI.amberSoft,color:EMPRESA_UI.amber,border:"1px solid #fed7aa",borderRadius:999,padding:"2px 7px",fontSize:9,fontWeight:600}}>Atención requerida</span>
-                    {attentionReason&&<div style={{fontSize:9,color:su,marginTop:2,lineHeight:1.3}}>{attentionReason}</div>}
-                  </div>
-                )}
-                {refVisible&&<div style={{fontSize:11,color:EMPRESA_UI.subtle,marginTop:1}}>{refVisible}{clienteVisible?` · Cliente: ${clienteVisible}`:""}</div>}
-              </div>
-              <div style={{display:"flex",alignItems:"flex-start",gap:6,flexShrink:0,marginLeft:10}}>
-                <span style={{background:empresaTone(ESTADO_COLOR[sv.estado]).bg,color:empresaTone(ESTADO_COLOR[sv.estado]).fg,border:`1px solid ${empresaTone(ESTADO_COLOR[sv.estado]).border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600}}>
-                  ● {ESTADO_LABEL[sv.estado]}
-                </span>
-                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                  <span style={{background:empresaTone(operationalMeta.color).bg,color:empresaTone(operationalMeta.color).fg,border:`1px solid ${empresaTone(operationalMeta.color).border}`,borderRadius:999,padding:"2px 8px",fontSize:11,fontWeight:600}}>
-                    ● {operationalMeta.label}
-                  </span>
-                  <span style={{fontSize:10,color:su,lineHeight:1.2}}>{lastActivity.label}</span>
-                </div>
-              </div>
-            </div>
-            );
-          })}
-        </div>
-
-        {/* Conductores */}
-        <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:650,color:tx}}>Conductores</div>
-            <button onClick={()=>onTabChange("conductores")} style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>Gestionar →</button>
-          </div>
-          {conductores.length===0?(
-            <div style={{textAlign:"center",padding:"24px 0",color:su,fontSize:13}}>
-              Sin conductores vinculados
-              {empresa&&(
-                <div style={{marginTop:10,fontSize:11,color:"#475569"}}>
-                  Código equipo:{" "}
-                  <span style={{fontFamily:"monospace",color:tx}}>{getEmpresaCodigoEquipoDisplay(empresa)}</span>
-                </div>
-              )}
-            </div>
-          ):conductores.filter(c=>c.user_id).map(c=>{
-            const ubic=ubicacionDashByUid[c.user_id];
-            const ubicUpdated=fmtUbicacionActualizada(ubic);
-            return(
-              <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
-                <div style={{minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:600,color:tx}}>{c.nombre||"Conductor"}</div>
-                  {c.matricula&&<div style={{fontSize:11,color:su,marginTop:1}}>Unidad {c.matricula}</div>}
-                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.3}}>
-                    Última ubicación · {fmtUbicacionConductorEmpresa(ubic)}
-                  </div>
-                  <div style={{fontSize:10.5,color:su,marginTop:2,lineHeight:1.3,fontWeight:600}}>
-                    {ubicUpdated}
-                  </div>
-                </div>
-                <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.green,flexShrink:0}}/>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <EmpresaDashboardTower
+        tower={tower}
+        ui={EMPRESA_UI}
+        onTabChange={onTabChange}
+        empresaCodigo={empresa?getEmpresaCodigoEquipoDisplay(empresa):null}
+      />
     </div>
   );
 }
