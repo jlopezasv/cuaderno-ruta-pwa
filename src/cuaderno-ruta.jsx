@@ -33,6 +33,11 @@ import {
   DocsServicioEstadoPill,
   DOCUMENTOS_DEMO_ROW_CSS,
 } from "./features/documents/documentosEmpresaDemoUi.jsx";
+import {
+  ConductorOperationalProgressBand,
+  CONDUCTOR_PROGRESS_BAND_CSS,
+} from "./features/empresa/ConductorOperationalProgressBand.jsx";
+import { isConductoresEmpresaDemoUi } from "./features/empresa/conductorOperationalProgressBandModel.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
@@ -12644,6 +12649,7 @@ function empresaListaEtaChip(servicio, nowMs){
 }
 
 function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
+  const etaVisualClockMs=useEtaVisualClockMs();
   const[modo,setModo]=useState(null);
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
@@ -14183,6 +14189,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── CONDUCTORES ── */}
       {flotaTab==="conductores"&&(
         <div style={{padding:"14px 14px 80px"}}>
+          {isConductoresEmpresaDemoUi()?<style>{CONDUCTOR_PROGRESS_BAND_CSS}</style>:null}
           {/* Invite */}
           <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
             {!addOpen?(
@@ -14227,10 +14234,21 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 const servicioRuta=servicioActual
                   ? getFixedServiceRoute(servicioActual)
                   : null;
+                const conductoresDemoUi=isConductoresEmpresaDemoUi();
+                const servicioStops=servicioActual?flotaStops[servicioActual.id]||[]:[];
                 return(
-                  <div key={c.id} style={{background:card,borderRadius:14,padding:"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:c.pendiente?0:10}}>
-                      <div>
+                  <div key={c.id} style={{background:card,borderRadius:14,padding:conductoresDemoUi?"12px 14px":"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
+                    <div
+                      className={conductoresDemoUi?"conductor-card-demo-head":undefined}
+                      style={{
+                        display:"flex",
+                        justifyContent:"space-between",
+                        alignItems:conductoresDemoUi?"center":"flex-start",
+                        gap:conductoresDemoUi?12:8,
+                        marginBottom:c.pendiente?0:conductoresDemoUi?8:10,
+                        flexWrap:conductoresDemoUi?"wrap":"nowrap",
+                      }}>
+                      <div style={{flex:conductoresDemoUi?"0 1 auto":"1 1 auto",minWidth:conductoresDemoUi?140:0}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                           <span style={{width:8,height:8,borderRadius:"50%",background:c.pendiente?"#94a3b8":journey.open?sem.col:"#cbd5e1",flexShrink:0}}/>
                           <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
@@ -14238,16 +14256,23 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                         </div>
                         {c.matricula&&<div style={{fontSize:12,color:su}}>Unidad {c.matricula}</div>}
                         {c.pendiente&&<div style={{fontSize:12,color:su,marginTop:4}}>Dale el código para que se vincule desde PERFIL</div>}
-                        {!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
-                        {!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:600}}>{fmtUbicacionActualizada(liveLocation)}</div>}
-                        {!c.pendiente&&<div style={{fontSize:12,color:journey.color,marginTop:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
-                        {!c.pendiente&&servicioActual&&(
+                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
+                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:600}}>{fmtUbicacionActualizada(liveLocation)}</div>}
+                        {!c.pendiente&&<div style={{fontSize:12,color:journey.color,marginTop:conductoresDemoUi?4:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
+                        {!conductoresDemoUi&&!c.pendiente&&servicioActual&&(
                           <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>
                             Servicio actual: <span style={{color:tx,fontWeight:600}}>{servicioRuta}</span>
                           </div>
                         )}
                       </div>
-                      <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+                      {conductoresDemoUi&&!c.pendiente?(
+                        <ConductorOperationalProgressBand
+                          servicio={servicioActual}
+                          stops={servicioStops}
+                          nowMs={etaVisualClockMs}
+                        />
+                      ):null}
+                      <div className={conductoresDemoUi?"conductor-card-demo-actions":undefined} style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end",flexShrink:0}}>
                         <button onClick={()=>toggleActivo(c.id,c.activo)} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,padding:"5px 10px",fontSize:11,color:su,cursor:"pointer"}}>
                           {c.activo?"Desactivar":"Activar"}
                         </button>
