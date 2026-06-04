@@ -1,7 +1,7 @@
 /**
- * Validación y simulación de envío de documentación al cliente.
- * Demo (VITE_APP_ENV=demo): solo simulación — sin proveedor de correo.
- * Producción: no activo hasta integrar Resend.
+ * Envío de documentación por email al cliente.
+ * Sin RESEND_API_KEY: simulación (provider=simulacion, estado simulado).
+ * Con RESEND_API_KEY: Resend real.
  */
 
 import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
@@ -11,7 +11,7 @@ import {
 } from "./lib/demoSafety.js";
 import { isDemoApp } from "./lib/appEnvironment.js";
 
-const DEMO_SIM_OK_MSG =
+const SIM_OK_MSG =
   "Simulación completada correctamente. No se ha enviado ningún correo real.";
 
 function resolveSupabaseUrlForAttachments() {
@@ -93,7 +93,7 @@ function respondSimulacion(res, logBase, attachmentCount) {
     simulated: true,
     provider: "simulacion",
     resultado: "simulado",
-    message: DEMO_SIM_OK_MSG,
+    message: SIM_OK_MSG,
     attachmentCount,
   });
 }
@@ -105,24 +105,20 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-  if (!isDemoApp()) {
-    return res.status(503).json({
-      ok: false,
-      error: "El envío por correo no está activo en este entorno",
-      code: "MAIL_NOT_AVAILABLE",
-      provider: null,
-      resultado: "error",
-    });
+  if (isDemoApp()) {
+    try {
+      guardDemoCannotUseProduction(SB_URL, "send-docs-email:handler");
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: e.message, code: "DEMO_SAFETY_BLOCKED" });
+    }
   }
 
-  try {
-    guardDemoCannotUseProduction(SB_URL, "send-docs-email:handler");
-  } catch (e) {
-    return res.status(503).json({ ok: false, error: e.message, code: "DEMO_SAFETY_BLOCKED" });
-  }
+  const apiKey = String(process.env.RESEND_API_KEY || "").trim();
+  const defaultFrom = process.env.EMAIL_FROM || "Cuaderno de Ruta <expedientes@cuadernoderutapro.es>";
 
-  const { from: fromBody, reply_to: replyToBody, to, cc, subject, attachments = [] } = req.body || {};
-  const from = String(fromBody || "").trim() || "Cuaderno de Ruta <expedientes@cuadernoderutapro.es>";
+  const { from: fromBody, reply_to: replyToBody, to, cc, subject, html, text, attachments = [] } =
+    req.body || {};
+  const from = String(fromBody || "").trim() || defaultFrom;
   const replyToList = parseEmails(replyToBody);
   const recipients = parseEmails(to);
   const ccList = parseEmails(cc);
@@ -151,5 +147,81 @@ export default async function handler(req, res) {
     if (resolved) att.push(resolved);
   }
 
-  return respondSimulacion(res, { ...logBase, attachmentCount: att.length }, att.length);
+  if (!apiKey) {
+    return respondSimulacion(res, { ...logBase, attachmentCount: att.length }, att.length);
+  }
+
+  try {
+    const payload = {
+      from,
+      to: recipients,
+      subject: String(subject).slice(0, 998),
+      html: html || `<pre>${escapeHtml(text || "")}</pre>`,
+      attachments: att.length ? att : undefined,
+    };
+    if (ccList.length) payload.cc = ccList;
+    if (replyToList.length) payload.reply_to = replyToList.length === 1 ? replyToList[0] : replyToList;
+
+    logMailEvent({ ...logBase, provider: "resend", resultado: "pending" });
+
+    const out = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await out.json().catch(() => ({}));
+    if (!out.ok) {
+      const errMsg = data?.message || data?.error || `Resend ${out.status}`;
+      logMailEvent({
+        ...logBase,
+        provider: "resend",
+        resultado: "error",
+        error: errMsg,
+        resend_status: out.status,
+      });
+      return res.status(502).json({
+        ok: false,
+        error: errMsg,
+        code: "RESEND_ERROR",
+        provider: "resend",
+        resultado: "error",
+      });
+    }
+    const messageId = data?.id || null;
+    logMailEvent({
+      ...logBase,
+      provider: "resend",
+      resultado: "enviado",
+      provider_message_id: messageId,
+    });
+    return res.status(200).json({
+      ok: true,
+      simulated: false,
+      provider: "resend",
+      resultado: "enviado",
+      provider_message_id: messageId,
+      id: messageId,
+    });
+  } catch (e) {
+    const errMsg = e?.message || String(e);
+    logMailEvent({ ...logBase, provider: "resend", resultado: "error", error: errMsg });
+    return res.status(500).json({
+      ok: false,
+      error: errMsg,
+      code: "MAIL_EXCEPTION",
+      provider: "resend",
+      resultado: "error",
+    });
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

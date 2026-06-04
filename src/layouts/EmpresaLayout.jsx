@@ -5,6 +5,7 @@ import { UI_TOKENS } from "../ui/visualTokens";
 import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
 import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
+import { EMPRESA_PAGE_SHELL_CSS } from "../ui/empresaPageShell.js";
 
 export default function EmpresaLayout({
   PROF0,
@@ -259,7 +260,8 @@ export default function EmpresaLayout({
       )}
 
       {/* ── CONTENIDO ── */}
-      <div style={{ flex: 1, minHeight: 0, paddingBottom: isMobile ? 64 : 0 }}>
+      <style>{EMPRESA_PAGE_SHELL_CSS}</style>
+      <div style={{ flex: 1, minHeight: 0, paddingBottom: isMobile ? 64 : 0, width: "100%" }}>
         {/* DASHBOARD */}
         {tab === "dashboard" && <EmpresaDashboard prof={prof} showToast={showToast} onTabChange={setTab} />}
 

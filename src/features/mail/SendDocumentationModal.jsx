@@ -11,7 +11,8 @@ import {
 } from "../../domain/mail/clienteMailSender.js";
 import { uploadUserFile } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../../domain/documents/mediaStorageV2.js";
-import { CLIENTE_MAIL_SIMULACION_OK_MSG } from "../../config/demoClienteMail.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
+import { CLIENTE_MAIL_SIMULACION_OK_MSG } from "../../config/clienteMail.js";
 
 const LS_HINTS = "cuaderno_cliente_email_hints";
 
@@ -23,43 +24,123 @@ const MAIL_EXTRA_TIPOS = [
   { id: "otro", label: "Otro" },
 ];
 
-const PANEL_BG = "#f5f7fa";
-
-const labelStyle = {
-  display: "block",
-  fontSize: 12,
-  fontWeight: 600,
-  color: "#475569",
-  marginBottom: 8,
+/** Estilos producción (sin cambios visuales en este rediseño). */
+const PROD_UI = {
+  panelClass: "mail-compose-panel-prod",
+  panelBg: "#f5f7fa",
+  headerBg: "#fafafa",
+  footerBg: "#fafafa",
+  overlay: "rgba(17,24,39,.28)",
+  sectionPad: "28px 36px",
+  headerPad: "26px 36px 22px",
+  footerPad: "20px 36px 24px",
+  bodyInset: "20px 36px 0",
+  titleSize: 22,
+  subtitleSize: 14,
+  fieldGap: 20,
+  textareaMin: 180,
+  labelStyle: {
+    display: "block",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: 8,
+  },
+  fieldStyle: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "13px 16px",
+    borderRadius: 8,
+    border: "1px solid #d1d5db",
+    background: "#fff",
+    color: "#111827",
+    fontSize: 15,
+    lineHeight: 1.5,
+    outline: "none",
+    boxShadow: "0 1px 2px rgba(15,23,42,.04)",
+  },
+  sectionTitleStyle: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "#6b7280",
+    textTransform: "uppercase",
+    letterSpacing: "0.1em",
+    marginBottom: 22,
+  },
+  messageLabel: "Texto",
 };
 
-const fieldStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "13px 16px",
-  borderRadius: 8,
-  border: "1px solid #d1d5db",
-  background: "#fff",
-  color: "#111827",
-  fontSize: 15,
-  lineHeight: 1.5,
-  outline: "none",
-  boxShadow: "0 1px 2px rgba(15,23,42,.04)",
+/** Estilos DEMO — modal amplio tipo Outlook/Gmail (solo VITE_APP_ENV=demo). */
+const DEMO_UI = {
+  panelClass: "mail-compose-panel-demo",
+  panelBg: "#f7f8fa",
+  headerBg: "#ffffff",
+  footerBg: "#ffffff",
+  overlay: "rgba(15,23,42,.2)",
+  sectionPad: "clamp(24px, 4.5vw, 40px) clamp(20px, 5vw, 44px)",
+  headerPad: "clamp(22px, 4vw, 32px) clamp(20px, 5vw, 44px) clamp(18px, 3vw, 24px)",
+  footerPad: "clamp(16px, 3vw, 22px) clamp(20px, 5vw, 44px)",
+  bodyInset: "0",
+  titleSize: 24,
+  subtitleSize: 15,
+  fieldGap: 24,
+  textareaMin: 180,
+  labelStyle: {
+    display: "block",
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#374151",
+    marginBottom: 10,
+  },
+  fieldStyle: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "14px 16px",
+    borderRadius: 8,
+    border: "1px solid #d1d5db",
+    background: "#ffffff",
+    color: "#111827",
+    fontSize: 16,
+    lineHeight: 1.55,
+    outline: "none",
+    boxShadow: "0 1px 2px rgba(15,23,42,.05)",
+  },
+  sectionTitleStyle: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "#6b7280",
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    marginBottom: 24,
+  },
+  messageLabel: "Texto del correo",
 };
 
-const sectionStyle = {
-  padding: "28px 36px",
-  borderBottom: "1px solid #e5e7eb",
-};
-
-const sectionTitleStyle = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: "#6b7280",
-  textTransform: "uppercase",
-  letterSpacing: "0.1em",
-  marginBottom: 22,
-};
+const MAIL_MODAL_RESPONSIVE_CSS = `
+  .mail-compose-panel-prod {
+    width: 96vw;
+    max-width: 900px;
+  }
+  @media (min-width: 640px) {
+    .mail-compose-panel-prod {
+      width: min(900px, 92vw);
+    }
+  }
+  .mail-compose-panel-demo {
+    width: 96vw;
+    max-width: 900px;
+  }
+  @media (min-width: 480px) {
+    .mail-compose-panel-demo {
+      width: min(900px, 92vw);
+    }
+  }
+  @media (min-width: 768px) and (max-width: 1200px) {
+    .mail-compose-panel-demo {
+      width: min(900px, 90vw);
+    }
+  }
+`;
 
 function attachmentDisplayName(item) {
   const fn = String(item?.filename || "").trim();
@@ -366,7 +447,12 @@ export function SendDocumentationModal({
         }),
       });
       const data = await r.json().catch(() => ({}));
-      const resultado = data.resultado || (data.ok ? "simulado" : "error");
+      const simulated =
+        !!data.simulated ||
+        data.provider === "simulacion" ||
+        data.resultado === "simulado";
+      const resultado =
+        data.resultado || (data.ok ? (simulated ? "simulado" : "enviado") : "error");
 
       logSendToConsole(data, resultado);
 
@@ -383,17 +469,43 @@ export function SendDocumentationModal({
         return;
       }
 
-      const simMsg = data.message || CLIENTE_MAIL_SIMULACION_OK_MSG;
-      showToast?.(simMsg);
       recipients.forEach((em) => saveHint(clienteKey, em));
+
+      if (simulated) {
+        showToast?.(data.message || CLIENTE_MAIL_SIMULACION_OK_MSG);
+        await logDocumentacionEnvio({
+          ...logEnvioBase(chosen),
+          estado: "simulado",
+          errorDetalle: null,
+          provider: "simulacion",
+        }).catch(() => {});
+        onEnvioLogged?.();
+        onClose?.({ simulated: true });
+        return;
+      }
+
+      if (data.resultado !== "enviado" || data.provider !== "resend") {
+        const errMsg = data.error || "Respuesta de envío incompleta";
+        showToast?.(errMsg);
+        await logDocumentacionEnvio({
+          ...logEnvioBase(chosen),
+          estado: "error",
+          errorDetalle: errMsg,
+          provider: data.provider || "resend",
+        }).catch(() => {});
+        onEnvioLogged?.();
+        return;
+      }
+
+      showToast?.("Correo enviado al cliente");
       await logDocumentacionEnvio({
         ...logEnvioBase(chosen),
-        estado: "simulado",
-        errorDetalle: null,
-        provider: "simulacion",
+        estado: "enviado",
+        provider: "resend",
+        providerMessageId: data.provider_message_id || data.id,
       }).catch(() => {});
       onEnvioLogged?.();
-      onClose?.({ simulated: true });
+      onClose?.({ sent: true });
     } catch (e) {
       const errMsg = e?.message || "Error de red";
       showToast?.(errMsg);
@@ -427,25 +539,21 @@ export function SendDocumentationModal({
 
   const expedienteItem = items.find((x) => x.kind === "expediente_pdf");
   const otrosItems = items.filter((x) => x.kind !== "expediente_pdf");
+  const demoMailUi = isDemoApp();
+  const ui = demoMailUi ? DEMO_UI : PROD_UI;
+  const sectionStyle = {
+    padding: ui.sectionPad,
+    borderBottom: "1px solid #e5e7eb",
+  };
 
   return (
     <>
-      <style>{`
-        .mail-compose-panel {
-          width: 96vw;
-          max-width: 900px;
-        }
-        @media (min-width: 640px) {
-          .mail-compose-panel {
-            width: min(900px, 92vw);
-          }
-        }
-      `}</style>
+      <style>{MAIL_MODAL_RESPONSIVE_CSS}</style>
       <div
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(17,24,39,.28)",
+          background: ui.overlay,
           zIndex: 500,
           display: "flex",
           alignItems: "center",
@@ -455,12 +563,14 @@ export function SendDocumentationModal({
         onClick={() => !sending && void handleCancel()}
       >
         <div
-          className="mail-compose-panel"
+          className={ui.panelClass}
           style={{
-            background: PANEL_BG,
-            borderRadius: 12,
+            background: ui.panelBg,
+            borderRadius: demoMailUi ? 14 : 12,
             border: "1px solid #d1d5db",
-            boxShadow: "0 25px 50px -12px rgba(15,23,42,.2)",
+            boxShadow: demoMailUi
+              ? "0 28px 64px -16px rgba(15,23,42,.22)"
+              : "0 25px 50px -12px rgba(15,23,42,.2)",
             display: "flex",
             flexDirection: "column",
             maxHeight: "90vh",
@@ -470,24 +580,40 @@ export function SendDocumentationModal({
         >
           <div
             style={{
-              padding: "26px 36px 22px",
+              padding: ui.headerPad,
               borderBottom: "1px solid #e5e7eb",
               display: "flex",
               justifyContent: "space-between",
               alignItems: "flex-start",
               gap: 16,
               flexShrink: 0,
-              background: "#fafafa",
+              background: ui.headerBg,
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#111827", letterSpacing: "-0.02em" }}>
+              <div
+                style={{
+                  fontSize: ui.titleSize,
+                  fontWeight: 700,
+                  color: "#111827",
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.25,
+                }}
+              >
                 Preparar envío al cliente
               </div>
-              <div style={{ fontSize: 14, color: "#6b7280", marginTop: 8, lineHeight: 1.5, maxWidth: 520 }}>
-                Revise destinatarios, mensaje y documentos antes del envío
+              <div
+                style={{
+                  fontSize: ui.subtitleSize,
+                  color: "#6b7280",
+                  marginTop: demoMailUi ? 10 : 8,
+                  lineHeight: 1.55,
+                  maxWidth: demoMailUi ? "100%" : 520,
+                }}
+              >
+                Revise destinatarios, mensaje y documentos antes del envío{demoMailUi ? "." : ""}
               </div>
-              <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 10 }}>
+              <div style={{ fontSize: 13, color: "#9ca3af", marginTop: demoMailUi ? 12 : 10 }}>
                 {serviceRef} · {clienteNombre}
               </div>
             </div>
@@ -513,29 +639,45 @@ export function SendDocumentationModal({
           </div>
 
           <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
-            <div
-              style={{
-                margin: "20px 36px 0",
-                padding: "14px 18px",
-                background: "#fffbeb",
-                border: "1px solid #fde68a",
-                borderRadius: 8,
-                fontSize: 13,
-                color: "#92400e",
-                lineHeight: 1.5,
-              }}
-            >
-              Modo demo: el envío es una <strong>simulación</strong>. No se enviará correo real; se
-              guardará el registro en el historial con estado 🟠 Simulado.
-            </div>
+            {demoMailUi ? (
+              <div
+                style={{
+                  padding: "10px clamp(20px, 5vw, 44px)",
+                  background: "#f0f4f8",
+                  borderBottom: "1px solid #e5e7eb",
+                  fontSize: 12,
+                  color: "#64748b",
+                  lineHeight: 1.45,
+                }}
+              >
+                Modo simulación: no se enviará ningún correo real.
+              </div>
+            ) : (
+              <div
+                style={{
+                  margin: "20px 36px 0",
+                  padding: "14px 18px",
+                  background: "#fffbeb",
+                  border: "1px solid #fde68a",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  color: "#92400e",
+                  lineHeight: 1.5,
+                }}
+              >
+                Sin <strong>RESEND_API_KEY</strong> en el servidor, el envío se registra como{" "}
+                <strong>simulación</strong> (🟠 Simulado), sin correo real.
+              </div>
+            )}
 
             <div
               style={{
-                margin: "20px 36px 0",
-                padding: "16px 20px",
+                margin: demoMailUi ? 0 : "20px 36px 0",
+                padding: demoMailUi ? "16px clamp(20px, 5vw, 44px)" : "16px 20px",
                 background: "#fff",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
+                borderBottom: demoMailUi ? "1px solid #e5e7eb" : undefined,
+                border: demoMailUi ? undefined : "1px solid #e5e7eb",
+                borderRadius: demoMailUi ? 0 : 8,
                 fontSize: 13,
                 color: "#4b5563",
                 lineHeight: 1.55,
@@ -554,66 +696,97 @@ export function SendDocumentationModal({
             </div>
 
             <div style={sectionStyle}>
-              <div style={sectionTitleStyle}>Destinatarios</div>
-              <label style={labelStyle}>Para</label>
+              <div style={ui.sectionTitleStyle}>Destinatarios</div>
+              <label style={ui.labelStyle}>Para</label>
               <input
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
                 placeholder="trafico@cliente.com"
                 list="doc-mail-hints-list"
-                style={{ ...fieldStyle, marginBottom: 20 }}
+                style={{ ...ui.fieldStyle, marginBottom: ui.fieldGap }}
               />
               <datalist id="doc-mail-hints-list">
                 {hints.map((h) => (
                   <option key={h} value={h} />
                 ))}
               </datalist>
-              <label style={labelStyle}>CC</label>
+              <label style={ui.labelStyle}>CC</label>
               <input
                 value={cc}
                 onChange={(e) => setCc(e.target.value)}
                 placeholder="copia@cliente.com (opcional)"
-                style={fieldStyle}
+                style={ui.fieldStyle}
               />
             </div>
 
             <div style={sectionStyle}>
-              <div style={sectionTitleStyle}>Mensaje</div>
-              <label style={labelStyle}>Asunto</label>
+              <div style={ui.sectionTitleStyle}>Mensaje</div>
+              <label style={ui.labelStyle}>Asunto</label>
               <input
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                style={{ ...fieldStyle, marginBottom: 20 }}
+                style={{ ...ui.fieldStyle, marginBottom: ui.fieldGap }}
               />
-              <label style={labelStyle}>Texto</label>
+              <label style={ui.labelStyle}>{ui.messageLabel}</label>
               <textarea
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 style={{
-                  ...fieldStyle,
-                  minHeight: 180,
+                  ...ui.fieldStyle,
+                  minHeight: ui.textareaMin,
                   resize: "vertical",
-                  fontFamily: 'Segoe UI, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif',
-                  fontSize: 15,
+                  fontFamily:
+                    'Segoe UI, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif',
                 }}
               />
             </div>
 
-            <div style={{ ...sectionStyle, borderBottom: "none", paddingBottom: 32 }}>
-              <div style={sectionTitleStyle}>Documentos adjuntos</div>
+            <div style={{ ...sectionStyle, borderBottom: "none", paddingBottom: demoMailUi ? 40 : 32 }}>
+              <div style={ui.sectionTitleStyle}>Documentos adjuntos</div>
 
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 12 }}>
-                Expediente operacional PDF
-              </div>
+              {demoMailUi ? (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    marginBottom: 14,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#374151",
+                  }}
+                >
+                  <span style={{ color: "#16a34a", fontSize: 18, lineHeight: 1 }} aria-hidden>
+                    ✓
+                  </span>
+                  <span>Expediente operacional PDF</span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 12 }}>
+                  Expediente operacional PDF
+                </div>
+              )}
               {preparingPdf ? (
                 <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>Generando PDF del expediente…</div>
               ) : expedienteItem ? (
-                <AttachmentCard item={expedienteItem} onToggle={toggle} onRemove={removeItem} />
+                <AttachmentCard
+                  item={expedienteItem}
+                  onToggle={toggle}
+                  onRemove={removeItem}
+                  variant={demoMailUi ? "demo" : "prod"}
+                />
               ) : (
                 <div style={{ fontSize: 14, color: "#9ca3af", marginBottom: 20 }}>Esperando expediente PDF…</div>
               )}
 
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", margin: "28px 0 12px" }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#374151",
+                  margin: demoMailUi ? "32px 0 14px" : "28px 0 12px",
+                }}
+              >
                 Adjuntos añadidos
               </div>
               {otrosItems.length === 0 ? (
@@ -621,9 +794,22 @@ export function SendDocumentationModal({
                   Marque documentos del servicio o use el botón para añadir archivos.
                 </div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: demoMailUi ? 14 : 12,
+                    marginBottom: 24,
+                  }}
+                >
                   {otrosItems.map((it) => (
-                    <AttachmentCard key={it.id} item={it} onToggle={toggle} onRemove={removeItem} />
+                    <AttachmentCard
+                      key={it.id}
+                      item={it}
+                      onToggle={toggle}
+                      onRemove={removeItem}
+                      variant={demoMailUi ? "demo" : "prod"}
+                    />
                   ))}
                 </div>
               )}
@@ -632,19 +818,20 @@ export function SendDocumentationModal({
                 style={{
                   display: "flex",
                   flexWrap: "wrap",
-                  gap: 14,
+                  gap: demoMailUi ? 16 : 14,
                   alignItems: "stretch",
-                  paddingTop: 8,
+                  paddingTop: demoMailUi ? 12 : 8,
                 }}
               >
                 <select
                   value={extraTipo}
                   onChange={(e) => setExtraTipo(e.target.value)}
                   style={{
-                    ...fieldStyle,
+                    ...ui.fieldStyle,
                     width: "auto",
                     minWidth: 160,
-                    flex: "0 1 200px",
+                    flex: demoMailUi ? "1 1 180px" : "0 1 200px",
+                    maxWidth: "100%",
                     padding: "12px 14px",
                     fontSize: 14,
                   }}
@@ -660,8 +847,9 @@ export function SendDocumentationModal({
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    padding: "0 24px",
+                    padding: demoMailUi ? "0 28px" : "0 24px",
                     minHeight: 48,
+                    flex: demoMailUi ? "1 1 auto" : undefined,
                     borderRadius: 8,
                     border: "none",
                     background: uploadingExtra || sending ? "#9ca3af" : "#2563eb",
@@ -691,14 +879,15 @@ export function SendDocumentationModal({
 
           <div
             style={{
-              padding: "20px 36px 24px",
+              padding: ui.footerPad,
               borderTop: "1px solid #e5e7eb",
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
               gap: 16,
               flexShrink: 0,
-              background: "#fafafa",
+              background: ui.footerBg,
+              boxShadow: demoMailUi ? "0 -4px 16px rgba(15,23,42,.06)" : undefined,
             }}
           >
             <button
@@ -745,20 +934,25 @@ export function SendDocumentationModal({
   );
 }
 
-function AttachmentCard({ item, onToggle, onRemove }) {
+function AttachmentCard({ item, onToggle, onRemove, variant = "prod" }) {
   const name = attachmentDisplayName(item);
   const included = item.selected;
+  const isDemo = variant === "demo";
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "14px 18px",
-        borderRadius: 8,
+        gap: isDemo ? 16 : 14,
+        padding: isDemo ? "16px 20px" : "14px 18px",
+        borderRadius: isDemo ? 10 : 8,
         border: `1px solid ${included ? "#bfdbfe" : "#e5e7eb"}`,
-        background: included ? "#fff" : "#f9fafb",
-        boxShadow: included ? "0 1px 3px rgba(37,99,235,.08)" : "none",
+        background: included ? "#fff" : isDemo ? "#f8fafc" : "#f9fafb",
+        boxShadow: included
+          ? isDemo
+            ? "0 2px 8px rgba(37,99,235,.1)"
+            : "0 1px 3px rgba(37,99,235,.08)"
+          : "none",
         opacity: included ? 1 : 0.72,
       }}
     >
@@ -770,15 +964,15 @@ function AttachmentCard({ item, onToggle, onRemove }) {
         title={item.required ? "Incluido obligatoriamente" : "Incluir en el envío"}
         style={{ width: 18, height: 18, accentColor: "#2563eb", flexShrink: 0 }}
       />
-      <span style={{ fontSize: 22, lineHeight: 1, flexShrink: 0 }} aria-hidden>
+      <span style={{ fontSize: isDemo ? 24 : 22, lineHeight: 1, flexShrink: 0 }} aria-hidden>
         📄
       </span>
       <span
         style={{
           flex: 1,
           minWidth: 0,
-          fontSize: 15,
-          fontWeight: 500,
+          fontSize: isDemo ? 16 : 15,
+          fontWeight: isDemo ? 600 : 500,
           color: "#111827",
           overflow: "hidden",
           textOverflow: "ellipsis",

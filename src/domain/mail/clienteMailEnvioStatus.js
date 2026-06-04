@@ -1,17 +1,46 @@
 /** Estados de envío al cliente (pestaña Documentos, demo). */
 
 export const ENVIO_CLIENTE_ESTADOS = Object.freeze({
-  no_enviado: { id: "no_enviado", label: "No enviado", icon: "⚪", color: "#64748b", bg: "#f8fafc" },
-  borrador: { id: "borrador", label: "Borrador preparado", icon: "🟠", color: "#b45309", bg: "#fffbeb" },
-  enviado: { id: "enviado", label: "Enviado", icon: "🟢", color: "#15803d", bg: "#ecfdf5" },
-  simulado: {
-    id: "simulado",
-    label: "Simulado",
+  no_enviado: {
+    id: "no_enviado",
+    label: "No enviado",
+    labelShort: "Pendiente",
+    icon: "⚪",
+    color: "#64748b",
+    bg: "#f8fafc",
+  },
+  borrador: {
+    id: "borrador",
+    label: "Borrador preparado",
+    labelShort: "Borrador",
     icon: "🟠",
     color: "#b45309",
     bg: "#fffbeb",
   },
-  error: { id: "error", label: "Error", icon: "🔴", color: "#b91c1c", bg: "#fef2f2" },
+  enviado: {
+    id: "enviado",
+    label: "Enviado",
+    labelShort: "Enviado",
+    icon: "🟢",
+    color: "#15803d",
+    bg: "#ecfdf5",
+  },
+  simulado: {
+    id: "simulado",
+    label: "Simulado",
+    labelShort: "Simulado",
+    icon: "🟠",
+    color: "#b45309",
+    bg: "#fffbeb",
+  },
+  error: {
+    id: "error",
+    label: "Error",
+    labelShort: "Error",
+    icon: "🔴",
+    color: "#b91c1c",
+    bg: "#fef2f2",
+  },
 });
 
 export function resolveEnvioClienteEstado(raw) {

@@ -25,7 +25,14 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
-import { isClienteMailEnvioDemoEnabled } from "./config/demoClienteMail.js";
+import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
+import {
+  isDocumentosEmpresaDemoUi,
+  EmpresaIdentityBarCompact,
+  DocsExpedienteRowDemo,
+  DocsServicioEstadoPill,
+  DOCUMENTOS_DEMO_ROW_CSS,
+} from "./features/documents/documentosEmpresaDemoUi.jsx";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
@@ -12727,7 +12734,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[mailEnviosByServicioId,setMailEnviosByServicioId]=useState({});
   const[mailHistorial,setMailHistorial]=useState(null);
   const[mailEnviadorNombres,setMailEnviadorNombres]=useState({});
-  const clienteMailDemo=isClienteMailEnvioDemoEnabled();
+  const clienteMailEnabled=isClienteMailEnvioEnabled();
   const[svCardExpand,setSvCardExpand]=useState(null);
   const svCardExpandRef=useRef(null);
   svCardExpandRef.current=svCardExpand;
@@ -13305,7 +13312,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const pending=flotaServicios.some(s=>s?.id&&!flotaEvsLoadedServiciosRef.current.has(s.id));
       if(pending)await ensureFlotaEvidenciasForDocumentos();
       await ensureFlotaExtraDocsForDocumentos();
-      if(clienteMailDemo&&!cancelled){
+      if(clienteMailEnabled&&!cancelled){
         const ids=flotaServicios.map((s)=>s.id).filter(Boolean);
         const latest=await fetchLatestDocumentacionEnvioByServicioIds(ids);
         if(!cancelled){
@@ -13319,16 +13326,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }
     })();
     return()=>{cancelled=true;};
-  },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops,clienteMailDemo]);
+  },[empresa?.id,modo,flotaTab,flotaServicios.length,flotaStops,clienteMailEnabled]);
 
   const refreshMailEnviosDocumentos=useCallback(async()=>{
-    if(!clienteMailDemo||!flotaServicios.length)return;
+    if(!clienteMailEnabled||!flotaServicios.length)return;
     const ids=flotaServicios.map((s)=>s.id).filter(Boolean);
     const latest=await fetchLatestDocumentacionEnvioByServicioIds(ids);
     setMailEnviosByServicioId(latest);
     const uids=[...new Set(Object.values(latest).map((r)=>r?.enviado_por).filter(Boolean))];
     if(uids.length)setMailEnviadorNombres(await fetchNombresByUserIds(uids));
-  },[clienteMailDemo,flotaServicios]);
+  },[clienteMailEnabled,flotaServicios]);
 
   useEffect(()=>{
     if(!empresa?.id||modo!=="jefe")return;
@@ -14091,56 +14098,87 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       )}
 
       {/* Identidad empresa + código de equipo */}
-      <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"10px 14px 12px",display:"flex",flexDirection:"column",gap:10}}>
-        <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
-          <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
-          {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}
-          <span style={{marginLeft:8,color:su}}>
-            · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> en ruta
-          </span>
-        </div>
-        <div style={{display:"flex",flexWrap:"wrap",alignItems:"flex-end",justifyContent:"space-between",gap:10}}>
-          <div style={{minWidth:0,flex:"1 1 160px"}}>
-            <div style={{fontSize:10,color:su,fontWeight:750,letterSpacing:.6,marginBottom:4}}>Código de equipo</div>
-            {generandoCodigoEquipo?(
-              <div style={{fontSize:14,fontWeight:700,color:tx,display:"flex",alignItems:"center",gap:8}}>
-                <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.accent,opacity:.85}}/>
-                Generando código…
-              </div>
-            ):(
-              <div style={{fontFamily:"ui-monospace,monospace",fontSize:17,fontWeight:850,color:tx,letterSpacing:.5}}>{codigoEquipoShow}</div>
-            )}
+      {isDocumentosEmpresaDemoUi()?(
+        <EmpresaIdentityBarCompact
+          empresaNombre={empresa?.nombre}
+          empresaCif={empresa?.cif}
+          serviciosEnRuta={serviciosEnRuta}
+          codigoEquipoShow={codigoEquipoShow}
+          generandoCodigoEquipo={generandoCodigoEquipo}
+          tx={tx}
+          su={su}
+          accent={EMPRESA_UI.accent}
+          surfaceSoft={EMPRESA_UI.surfaceSoft}
+          border={EMPRESA_UI.border}
+          onCopy={()=>{
+            navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));
+          }}
+          onShare={async()=>{
+            const code=codigoEquipoStrict||codigoEquipoShow;
+            if(!code)return;
+            const url=buildEquipoDeepLink(code);
+            const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
+            const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
+            try{
+              if(navigator.share)await navigator.share({title,text,url});
+              else await navigator.clipboard.writeText(`${text}\n${url}`);
+              showToast("Listo para compartir");
+            }catch{/* cancelado */}
+          }}
+          onQrInvite={()=>setInviteEquipoOpen(true)}
+        />
+      ):(
+        <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"10px 14px 12px",display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
+            <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
+            {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}
+            <span style={{marginLeft:8,color:su}}>
+              · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> en ruta
+            </span>
           </div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
-            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-              onClick={()=>{navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));}}
-              style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-              Copiar
-            </button>
-            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-              onClick={async()=>{
-                const code=codigoEquipoStrict||codigoEquipoShow;
-                if(!code)return;
-                const url=buildEquipoDeepLink(code);
-                const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
-                const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
-                try{
-                  if(navigator.share)await navigator.share({title,text,url});
-                  else await navigator.clipboard.writeText(`${text}\n${url}`);
-                  showToast("Listo para compartir");
-                }catch{/* cancelado */}
-              }}
-              style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-              Compartir
-            </button>
-            <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-              onClick={()=>setInviteEquipoOpen(true)}
-              style={{background:EMPRESA_UI.tx,color:"#fff",border:"none",borderRadius:10,fontSize:12,fontWeight:750,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-              QR invitar
-            </button>
+          <div style={{display:"flex",flexWrap:"wrap",alignItems:"flex-end",justifyContent:"space-between",gap:10}}>
+            <div style={{minWidth:0,flex:"1 1 160px"}}>
+              <div style={{fontSize:10,color:su,fontWeight:750,letterSpacing:.6,marginBottom:4}}>Código de equipo</div>
+              {generandoCodigoEquipo?(
+                <div style={{fontSize:14,fontWeight:700,color:tx,display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.accent,opacity:.85}}/>
+                  Generando código…
+                </div>
+              ):(
+                <div style={{fontFamily:"ui-monospace,monospace",fontSize:17,fontWeight:850,color:tx,letterSpacing:.5}}>{codigoEquipoShow}</div>
+              )}
+            </div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+                onClick={()=>{navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));}}
+                style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+                Copiar
+              </button>
+              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+                onClick={async()=>{
+                  const code=codigoEquipoStrict||codigoEquipoShow;
+                  if(!code)return;
+                  const url=buildEquipoDeepLink(code);
+                  const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
+                  const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
+                  try{
+                    if(navigator.share)await navigator.share({title,text,url});
+                    else await navigator.clipboard.writeText(`${text}\n${url}`);
+                    showToast("Listo para compartir");
+                  }catch{/* cancelado */}
+                }}
+                style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+                Compartir
+              </button>
+              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
+                onClick={()=>setInviteEquipoOpen(true)}
+                style={{background:EMPRESA_UI.tx,color:"#fff",border:"none",borderRadius:10,fontSize:12,fontWeight:750,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
+                QR invitar
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ── CONDUCTORES ── */}
       {flotaTab==="conductores"&&(
@@ -14429,7 +14467,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
       {/* ── DOCUMENTOS ── */}
       {flotaTab==="documentos"&&(
-        <div style={{padding:"14px 14px 80px"}}>
+        <div style={{padding:isDocumentosEmpresaDemoUi()?"0 0 80px":"14px 14px 80px"}}>
+          {isDocumentosEmpresaDemoUi()?<style>{DOCUMENTOS_DEMO_ROW_CSS}</style>:null}
           {visorEv&&(
             <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.9)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setVisorEv(null)}>
               <div style={{background:card,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
@@ -14614,11 +14653,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           :(
             <>
               {/* Filtros */}
-              <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"12px",marginBottom:12,boxShadow:EMPRESA_UI.shadow}}>
-                <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:10}}>
+              <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:isDocumentosEmpresaDemoUi()?"10px 12px":"12px",marginBottom:isDocumentosEmpresaDemoUi()?10:12,boxShadow:EMPRESA_UI.shadow}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:isDocumentosEmpresaDemoUi()?8:10}}>
                   <div>
                     <div style={{fontSize:12,color:"#0f172a",fontWeight:850}}>Centro documental</div>
-                    <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Localiza expedientes por servicio, cliente, ruta, conductor o matrícula.</div>
+                    {!isDocumentosEmpresaDemoUi()?(
+                      <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Localiza expedientes por servicio, cliente, ruta, conductor o matrícula.</div>
+                    ):null}
                   </div>
                   <div style={{display:"flex",gap:6,flexShrink:0}}>
                     {[{id:"activos",label:"Activos"},{id:"archivados",label:"Archivados"}].map(tab=>(
@@ -14720,7 +14761,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       </div>
                     </div>
                     {Object.entries(docsGruposVisibles).map(([group,rows])=>(
-                      <div key={group} style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,overflow:"hidden",boxShadow:EMPRESA_UI.shadow}}>
+                      <div key={group} style={{background:"white",border:"1px solid #d1dae6",borderRadius:12,overflow:"hidden",boxShadow:EMPRESA_UI.shadow}}>
                         <div style={{background:"#f8fafc",borderBottom:"1px solid #dbe2ea",padding:"8px 11px",fontSize:11,color:"#475569",fontWeight:850,textTransform:"uppercase",letterSpacing:.4}}>{group}</div>
                         {rows.map(sv=>{
                           const svStops=flotaStops[sv.id]||[];
@@ -14734,11 +14775,85 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           const envioRow=mailEnviosByServicioId[sv.id];
                           const envioMeta=resolveEnvioClienteEstado(envioRow?.estado);
                           const envioDetalle=formatEnvioClienteDetalle(envioRow);
+                          const docsRowActions=[
+                            {id:"ver",label:"Ver",variant:"secondary",onClick:()=>void abrirExpedientePreview(sv)},
+                            ...(clienteMailEnabled?[{
+                              id:"correo",
+                              label:"Correo",
+                              variant:"primary",
+                              onClick:()=>{
+                                const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
+                                setMailExpediente({
+                                  servicio:sv,
+                                  stops:svStops,
+                                  evidenciasByStop:evs,
+                                  extraDocs:flotaExtraDocs[sv.id]||[],
+                                });
+                              },
+                            }]:[]),
+                            {id:"pdf",label:"PDF",variant:"dark",onClick:()=>{
+                              void (async()=>{
+                                await ensureFlotaStopsForServicioIds([sv.id]);
+                                await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                try{
+                                  await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                  await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                  const exp=await buildExpedienteCompleto(sv);
+                                  await descargarExpediente(exp);
+                                }catch(e){
+                                  devWarn("download expediente:",e);
+                                  showToast("No se pudo descargar el expediente");
+                                }
+                              })();
+                            }},
+                            {id:"archivar",label:"Archivar",variant:"ghost",hidden:isArchived,onClick:()=>{
+                              void (async()=>{
+                                try{
+                                  await ensureFlotaEvidenciasForServicio(sv.id,{force:true});
+                                  await ensureFlotaExtraDocsForServicio(sv.id,{force:true});
+                                  const exp=await buildExpedienteCompleto(sv);
+                                  await archivarMetadataExpediente(exp);
+                                }catch(e){
+                                  devWarn("archivar expediente:",e);
+                                  showToast("No se pudo archivar el expediente");
+                                }
+                              })();
+                            }},
+                            {id:"whatsapp",label:"WhatsApp",hidden:true},
+                            {id:"share_link",label:"Enlace",hidden:true},
+                            {id:"cliente",label:"Cliente",hidden:true},
+                            {id:"expediente",label:"Expediente",hidden:true},
+                          ];
+                          if(isDocumentosEmpresaDemoUi()){
+                            return(
+                              <DocsExpedienteRowDemo
+                                key={sv.id}
+                                refVisible={refVisible}
+                                clienteDoc={clienteDoc}
+                                ruta={preview.ruta}
+                                totalEvs={totalEvs}
+                                incN={incN}
+                                conductor={preview.conductor}
+                                matricula={sv.matricula||conductor?.matricula||""}
+                                servicioEstado={sv.estado}
+                                envioRow={clienteMailEnabled?envioRow:null}
+                                onOpenEnvioDetail={()=>{
+                                  if(!envioRow)return;
+                                  setMailHistorial({servicio:sv,envio:envioRow,serviceRef:refVisible});
+                                }}
+                                archived={isArchived}
+                                actions={docsRowActions}
+                              />
+                            );
+                          }
                           return(
-                            <div key={sv.id} style={{display:"grid",gridTemplateColumns:clienteMailDemo?"repeat(auto-fit,minmax(118px,1fr))":"repeat(auto-fit,minmax(132px,1fr))",gap:10,alignItems:"center",padding:"10px 11px",borderBottom:"1px solid #eef2f7"}}>
+                            <div key={sv.id} style={{display:"grid",gridTemplateColumns:clienteMailEnabled?"minmax(72px,.85fr) minmax(100px,1.1fr) minmax(96px,1fr) minmax(80px,.9fr) minmax(80px,.75fr) minmax(88px,.7fr) auto":"minmax(72px,.85fr) minmax(100px,1.1fr) minmax(96px,1fr) minmax(80px,.9fr) minmax(88px,.75fr) auto",gap:10,alignItems:"center",padding:"9px 11px",borderBottom:"1px solid #d1dae6",background:"#fff"}}>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:13,fontWeight:850,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{refVisible}</div>
-                                <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{clienteDoc}</div>
+                                <div style={{fontSize:12.5,fontWeight:800,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{refVisible}</div>
+                              </div>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:13,fontWeight:700,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={clienteDoc}>{clienteDoc}</div>
                               </div>
                               <div style={{minWidth:0}}>
                                 <div style={{fontSize:12.5,fontWeight:700,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.ruta}</div>
@@ -14752,10 +14867,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 <div style={{fontSize:10.5,color:"#64748b",marginTop:2}}>{sv.matricula||conductor?.matricula||"Sin matrícula"}</div>
                               </div>
                               <div style={{minWidth:0}}>
-                                <div style={{fontSize:12,color:"#0f172a",fontWeight:750,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{preview.eta}</div>
-                                <div style={{fontSize:10.5,color:"#166534",marginTop:2,fontWeight:750}}>✓ Integridad validada</div>
+                                <DocsServicioEstadoPill servicioEstado={sv.estado} archived={isArchived}/>
                               </div>
-                              {clienteMailDemo?(
+                              {clienteMailEnabled?(
                                 <div
                                   style={{minWidth:0,cursor:envioRow?"pointer":"default"}}
                                   role={envioRow?"button":undefined}
@@ -14788,12 +14902,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                                 </div>
                               ):null}
                               <div style={{display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
-                                {isArchived&&<span style={{fontSize:10,color:"#475569",background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:999,padding:"3px 7px",fontWeight:800}}>Archivado</span>}
                                 <button type="button" onClick={()=>void abrirExpedientePreview(sv)}
                                   style={{background:"#e2e8f0",color:"#0f172a",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 9px",fontSize:12,fontWeight:850,cursor:"pointer"}}>
                                   Ver
                                 </button>
-                                {clienteMailDemo?(
+                                {clienteMailEnabled?(
                                 <button type="button" onClick={()=>{
                                   const evs=evidenciasForServicioStops(sv.id,flotaStops,flotaEvs);
                                   setMailExpediente({
@@ -14942,7 +15055,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {mailExpediente&&clienteMailDemo&&(
+      {mailExpediente&&clienteMailEnabled&&(
         <SendDocumentationModal
           open
           onClose={()=>setMailExpediente(null)}
@@ -14959,7 +15072,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {mailHistorial&&clienteMailDemo&&(
+      {mailHistorial&&clienteMailEnabled&&(
         <EnvioClienteHistorialModal
           open
           onClose={()=>setMailHistorial(null)}
@@ -18004,7 +18117,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const asignados=servicios.filter(s=>s.estado==="asignado").length;
 
   return(
-    <div style={{padding:"12px 24px 48px",maxWidth:1200,margin:"0 auto"}}>
+    <div className="empresa-page-shell">
 
       {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:20}}>
@@ -18027,7 +18140,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       </div>
 
       {/* Servicios en curso */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 320px), 1fr))",gap:20}}>
         <div style={{background:card,borderRadius:16,padding:"18px",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div style={{fontSize:14,fontWeight:650,color:tx}}>En curso</div>
@@ -18139,7 +18252,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 // ─────────────────────────────────────────────────────────────
 function EmpresaPanelSeccion({seccion,prof,showToast}){
   return(
-    <div style={{padding:"20px 24px 60px",maxWidth:1200,margin:"0 auto",background:EMPRESA_UI.bg}}>
+    <div className="empresa-page-shell" style={{background:EMPRESA_UI.bg}}>
       <EmpresaPanel
         prof={prof}
         dark={false}
