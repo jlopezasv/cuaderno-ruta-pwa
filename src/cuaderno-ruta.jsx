@@ -148,6 +148,12 @@ import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForS
 import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
+import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
+import {
+  emptyStopGeoForm,
+  formatStopGeoSummary,
+  prepareStopsGeoForPersist,
+} from "./domain/geo/stopGeoModel.js";
 import { OperationalSummaryLite } from "./modules/operational-lite/OperationalSummaryLite.jsx";
 import {
   canShowOperationalSummaryLite,
@@ -165,6 +171,8 @@ import { ServiceOriginBadge } from "./ui/ServiceOriginBadge.jsx";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
+import { AsignarConductorServicioModal } from "./features/empresa/AsignarConductorServicioModal.jsx";
+import { EmpresaPlanificadorPanel } from "./features/empresa/EmpresaPlanificadorPanel.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
   fetchIncidenciasExpedientePayload,
@@ -261,6 +269,7 @@ import {
 } from "./domain/service/serviceIdentity.js";
 import {
   buildOperationalPlacesMetaPatch,
+  geocodeQueryFromPlace,
   operationalPlacesFromStops,
   routeTextFromStops,
   servicioMatchesSearchQuery,
@@ -12074,6 +12083,15 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   }).catch(()=>{});
 }
 
+function stopTipoFormMeta(tipo){
+  return STOP_TIPOS_FORM.find(t=>t.id===tipo)||{id:tipo,label:"Parada",icon:"📍"};
+}
+
+function formatNuevoServicioStopSummary(stop){
+  const meta=stopTipoFormMeta(stop.tipo);
+  return `${meta.icon} ${meta.label} · ${formatStopGeoSummary(stop)}`;
+}
+
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
   const sinConductor=!conductorId;
   const[ref,setRef]=useState("");
@@ -12081,16 +12099,18 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const[refCliente,setRefCliente]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
-    {orden:1,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""},
-    {orden:2,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""},
+    emptyStopGeoForm({orden:1,tipo:"carga"}),
+    emptyStopGeoForm({orden:2,tipo:"descarga"}),
   ]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
+  const[routeEditorOpen,setRouteEditorOpen]=useState(false);
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
   const card=EMPRESA_UI.surface,bg=EMPRESA_UI.surfaceSoft,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
-
-  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",empresa:"",direccion:"",notas:""}]);}
+  const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
+  const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
+  function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
     // Insertar después del índice i con orden intermedio
     setStops(prev=>{
@@ -12098,7 +12118,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       const ordenAntes=arr[i].orden;
       const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
       const nuevoOrden=(ordenAntes+ordenDespues)/2;
-      const newStop={orden:nuevoOrden,tipo:"carga",nombre:"",empresa:"",direccion:"",notas:""};
+      const newStop=emptyStopGeoForm({orden:nuevoOrden,tipo:"carga"});
       arr.splice(i+1,0,newStop);
       return arr;
     });
@@ -12125,8 +12145,8 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   async function guardar(){
     const operationalPlaces=operationalPlacesFromStops(stops,cliente.trim());
     const {origen:origenRuta,destino:destinoRuta}=routeTextFromStops(stops);
-    if(!origenRuta||!destinoRuta){setError("Indica origen y destino en las paradas (dirección, lugar o empresa)");return;}
-    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre de lugar");return;}
+    if(!origenRuta||!destinoRuta){setError("Indica ciudad y país en las paradas de carga y descarga");return;}
+    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan ciudad / localidad");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     setSaving(true);setError("");
     try{
@@ -12167,11 +12187,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
           skipEnsureStops:true,
         });
       }
-      const stopsPrepared=stops.map(s=>{
-        const emp=String(s.empresa||"").trim();
-        if(!emp)return s;
-        return{...s,notas:mergeStopOperacionMeta(s.notas,{empresa_logistica:emp})};
-      });
+      const stopsPrepared=prepareStopsGeoForPersist(stops);
       await persistServicioStopsTrasCrear({
         servicioId:sv.id,
         stops:stopsPrepared,
@@ -12207,275 +12223,159 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
     });
   },[]);
 
+  const renderFullStopEditor=(stop,i)=>(
+    <div key={`full-${stop.orden}-${i}`}>
+      <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:`1px solid ${EMPRESA_UI.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div style={{display:"flex",gap:5,alignItems:"center"}}>
+            <span style={{background:"#e2e8f0",color:EMPRESA_UI.subtle,borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:650,flexShrink:0}}>{i+1}</span>
+            <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
+              style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
+              {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",gap:3}}>
+            <button type="button" onClick={()=>moveStop(i,-1)} disabled={i===0}
+              style={{background:i===0?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===0?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===0?"default":"pointer",fontSize:11}}>↑</button>
+            <button type="button" onClick={()=>moveStop(i,1)} disabled={i===stops.length-1}
+              style={{background:i===stops.length-1?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===stops.length-1?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===stops.length-1?"default":"pointer",fontSize:11}}>↓</button>
+            {stops.length>1&&<button type="button" onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
+          </div>
+        </div>
+        <StopGeoFieldsForm stop={stop} index={i} onChange={changeStop} themeKey="empresa" layout="servicio-grid" showGeoStatus={false}/>
+      </div>
+      {i<stops.length-1&&(
+        <button type="button" onClick={()=>addStopAfter(i)}
+          style={{width:"100%",background:"transparent",border:`1px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:6,padding:"3px",fontSize:10,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4}}>
+          + insertar aquí
+        </button>
+      )}
+    </div>
+  );
+
   return(
     <div style={overlayStyle} onClick={onClose}>
-      <div style={{...modalStyle,background:card,boxShadow:"0 24px 60px rgba(15,23,42,.18)",border:`1px solid ${EMPRESA_UI.border}`}} onClick={e=>e.stopPropagation()}>
+      <div style={{
+        ...modalStyle,
+        background:card,
+        boxShadow:"0 24px 60px rgba(15,23,42,.18)",
+        border:`1px solid ${EMPRESA_UI.border}`,
+        display:"flex",
+        flexDirection:"column",
+        ...(isMobile?{}:{width:"min(95vw, 1200px)",maxWidth:1200}),
+      }} onClick={e=>e.stopPropagation()}>
 
-        {/* HEADER — sticky */}
-        <div style={{padding:"14px 16px 12px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
+        <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
-              <div style={{fontSize:11,color:su,marginTop:1}}>{sinConductor?"Planificación sin conductor":"Conductor seleccionado"}</div>
-            </div>
-            <button onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+            <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
+            <button type="button" onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
           </div>
-          {sinConductor?(
-            <div style={{marginTop:12,background:"#eef2ff",border:"1.5px solid #c7d2fe",borderRadius:12,padding:"11px 12px"}}>
-              <div style={{fontSize:14,fontWeight:650,color:"#3730a3"}}>Sin conductor asignado</div>
-              <div style={{fontSize:11,color:"#475569",marginTop:4}}>Quedará en «Pendiente asignación». Podrás asignar chófer después.</div>
-            </div>
-          ):(
-          <div style={{marginTop:12,background:EMPRESA_UI.accentSoft,border:"1.5px solid #93c5fd",borderRadius:12,padding:"11px 12px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 6px 18px rgba(37,99,235,.10)"}}>
-            <span style={{width:22,height:22,borderRadius:"50%",background:EMPRESA_UI.accent,color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,flexShrink:0}}>✓</span>
-            <div style={{minWidth:0}}>
-              <div style={{fontSize:14,fontWeight:650,color:"#1e3a8a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{conductorNombre||"Conductor"}</div>
-              <div style={{fontSize:11,color:"#475569",marginTop:1}}>Asignado a este servicio</div>
-            </div>
-          </div>
-          )}
         </div>
 
-        {/* BODY — scrollable */}
-        <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"12px 16px"}}>
+        <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:isMobile?"12px 16px":"10px 16px",minHeight:0}}>
 
-          {/* Cliente (comercial) — separado de lugares operativos */}
           <div style={{marginBottom:10}}>
-            <div style={{fontSize:10,color:su,fontWeight:800,marginBottom:3,letterSpacing:.3}}>CLIENTE</div>
-            <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona"
-              style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+            <div style={lbl}>Cliente</div>
+            <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona" style={inp}/>
           </div>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"6px 8px",marginBottom:8}}>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:3}}>Ref. servicio</div>
-              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+              <div style={lbl}>Ref. servicio</div>
+              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441" style={inp}/>
             </div>
             <div>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Ref cliente</div>
-              <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821"
-                style={{...iStyle,padding:"9px 10px",fontSize:14,marginBottom:0}}/>
+              <div style={lbl}>Ref. cliente</div>
+              <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821" style={inp}/>
             </div>
-            <div style={{gridColumn:"1 / -1"}}>
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Salida</div>
+            <div>
+              <div style={lbl}>Fecha salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}
-                style={{...iStyle,padding:"9px 10px",fontSize:13,colorScheme:"light",marginBottom:0}}/>
+                style={{...inp,colorScheme:"light"}}/>
+            </div>
+            <div>
+              <div style={lbl}>Conductor</div>
+              {sinConductor?(
+                <div style={{fontSize:12,fontWeight:650,color:"#3730a3",padding:"7px 9px",background:"#eef2ff",borderRadius:8,border:"1px solid #c7d2fe",lineHeight:1.3}}>
+                  Sin conductor asignado
+                </div>
+              ):(
+                <div style={{fontSize:12,fontWeight:650,color:"#1e3a8a",padding:"7px 9px",background:EMPRESA_UI.accentSoft,borderRadius:8,border:"1px solid #93c5fd",lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {conductorNombre||"Conductor"}
+                </div>
+              )}
             </div>
           </div>
-          {/* Paradas */}
-              <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:6}}>Paradas · {stops.length}</div>
-              {(rutaDesdeParadas.origen||rutaDesdeParadas.destino)&&(
-                <div style={{fontSize:11,color:EMPRESA_UI.accent,marginBottom:8,fontWeight:600}}>
-                  Ruta: {rutaDesdeParadas.origen||"—"} → {rutaDesdeParadas.destino||"—"}
-                  <span style={{fontWeight:400,color:su,marginLeft:6}}>(última carga · primera descarga)</span>
-                </div>
-              )}
-          {stops.map((stop,i)=>(
-            <div key={stop.orden}>
-              <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:`1px solid ${EMPRESA_UI.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                  <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                    <span style={{background:"#e2e8f0",color:EMPRESA_UI.subtle,borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:650,flexShrink:0}}>{i+1}</span>
-                    <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
-                      style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
-                      {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
-                    </select>
-                  </div>
-                  <div style={{display:"flex",gap:3}}>
-                    <button onClick={()=>moveStop(i,-1)} disabled={i===0}
-                      style={{background:i===0?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===0?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===0?"default":"pointer",fontSize:11}}>↑</button>
-                    <button onClick={()=>moveStop(i,1)} disabled={i===stops.length-1}
-                      style={{background:i===stops.length-1?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===stops.length-1?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===stops.length-1?"default":"pointer",fontSize:11}}>↓</button>
-                    {stops.length>1&&<button onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
-                  </div>
-                </div>
-                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Lugar</div>
-                <input value={stop.nombre} onChange={e=>changeStop(i,"nombre",e.target.value)}
-                  placeholder="Ciudad, muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
-                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Empresa</div>
-                <input value={stop.empresa||""} onChange={e=>changeStop(i,"empresa",e.target.value)}
-                  placeholder="Planta, operador…" style={{...iStyle,padding:"8px 10px",fontSize:12,marginBottom:5,color:EMPRESA_UI.subtle}}/>
-                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Dirección (opcional)</div>
-                <input value={stop.direccion} onChange={e=>changeStop(i,"direccion",e.target.value)}
-                  placeholder="Calle, polígono…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:5}}/>
-                <div style={{fontSize:10,color:su,fontWeight:600,marginBottom:3}}>Detalles de carga/descarga</div>
-                <input value={stop.notas||""} onChange={e=>changeStop(i,"notas",e.target.value)}
-                  placeholder="Puerta, horario, referencia muelle…" style={{...iStyle,padding:"8px 10px",fontSize:13,marginBottom:0}}/>
-              </div>
-              {i<stops.length-1&&(
-                <button onClick={()=>addStopAfter(i)}
-                  style={{width:"100%",background:"transparent",border:`1px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:6,padding:"3px",fontSize:10,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4}}>
-                  + insertar aquí
-                </button>
-              )}
-            </div>
-          ))}
 
-          <button onClick={addStop}
-            style={{width:"100%",background:"transparent",border:`1.5px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"8px",fontSize:13,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:8}}>
-            + Añadir parada
-          </button>
+          <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"8px 10px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:routeEditorOpen?0:6}}>
+              <div style={{fontSize:10,color:su,fontWeight:700}}>Ruta · {stops.length} parada{stops.length!==1?"s":""}</div>
+              <button type="button" onClick={()=>setRouteEditorOpen(v=>!v)}
+                style={{background:"transparent",border:"none",color:EMPRESA_UI.accent,fontSize:11,fontWeight:800,cursor:"pointer",padding:"2px 0",whiteSpace:"nowrap"}}>
+                {routeEditorOpen?"▲ Ocultar editor":"▼ Editar ruta"}
+              </button>
+            </div>
+            {!routeEditorOpen?(
+              <>
+                {(rutaDesdeParadas.origen||rutaDesdeParadas.destino)&&(
+                  <div style={{fontSize:11,color:EMPRESA_UI.accent,marginBottom:6,fontWeight:600}}>
+                    {rutaDesdeParadas.origen||"—"} → {rutaDesdeParadas.destino||"—"}
+                  </div>
+                )}
+                {stops.map((stop,i)=>(
+                  <div key={`sum-${stop.orden}-${i}`} style={{fontSize:12,fontWeight:600,color:tx,lineHeight:1.45,marginBottom:i<stops.length-1?3:0}}>
+                    {formatNuevoServicioStopSummary(stop)}
+                  </div>
+                ))}
+              </>
+            ):null}
+          </div>
+
+          {routeEditorOpen?(
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":stops.length<=2?"1fr 1fr":"1fr",gap:isMobile?6:12}}>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6,gridColumn:isMobile?"1":"1 / -1"}}>Editor de paradas</div>
+              {stops.map((stop,i)=>renderFullStopEditor(stop,i))}
+              <button type="button" onClick={addStop}
+                style={{width:"100%",background:"transparent",border:`1.5px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"8px",fontSize:13,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4,gridColumn:isMobile?"1":"1 / -1"}}>
+                + Añadir parada
+              </button>
+            </div>
+          ):(
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":stops.length<=2?"1fr 1fr":"1fr",gap:isMobile?6:12}}>
+              {stops.map((stop,i)=>{
+                const meta=stopTipoFormMeta(stop.tipo);
+                return(
+                  <div key={`cmp-${stop.orden}-${i}`} style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"8px 10px",marginBottom:0}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+                        <span style={{fontSize:13,fontWeight:800,color:tx,whiteSpace:"nowrap"}}>{meta.icon} {meta.label}</span>
+                        <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
+                          style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"2px 5px",fontSize:10,color:tx,outline:"none",maxWidth:110}}>
+                          {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
+                        </select>
+                      </div>
+                      <span style={{fontSize:10,color:su,fontWeight:700,flexShrink:0}}>#{i+1}</span>
+                    </div>
+                    <StopGeoFieldsForm stop={stop} index={i} onChange={changeStop} themeKey="empresa" layout="servicio-grid" showGeoStatus={false}/>
+                  </div>
+                );
+              })}
+              <button type="button" onClick={addStop}
+                style={{width:"100%",background:"transparent",border:`1.5px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"7px",fontSize:12,color:EMPRESA_UI.accent,cursor:"pointer",gridColumn:isMobile?"1":"1 / -1"}}>
+                + Añadir parada
+              </button>
+            </div>
+          )}
 
           {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red,marginBottom:8}}>{error}</div>}
         </div>
 
-        {/* FOOTER — sticky, siempre visible */}
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
-          <button onClick={guardar} disabled={saving}
-            style={{width:"100%",background:saving?"#cbd5e1":EMPRESA_UI.tx,color:saving?"#64748B":"white",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:650,cursor:saving?"default":"pointer"}}>
+        <div style={{padding:"10px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
+          <button type="button" onClick={guardar} disabled={saving}
+            style={{width:"100%",background:saving?"#cbd5e1":EMPRESA_UI.tx,color:saving?"#64748B":"white",border:"none",borderRadius:12,padding:isMobile?"14px":"12px",fontSize:15,fontWeight:650,cursor:saving?"default":"pointer"}}>
             {saving?(sinConductor?"Guardando...":"Asignando..."):(sinConductor?"Crear servicio planificado":"Asignar servicio")}
           </button>
         </div>
 
-      </div>
-    </div>
-  );
-}
-
-function AsignarConductorServicioModal({servicio,conductores,onClose,onAsignado}){
-  const[saving,setSaving]=useState(false);
-  const[error,setError]=useState("");
-  const[selected,setSelected]=useState(()=>new Set());
-  const[loadingExisting,setLoadingExisting]=useState(true);
-  const{overlayStyle,modalStyle}=useModalLayout();
-  const card=EMPRESA_UI.surface,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
-  const lista=(conductores||[]).filter(c=>c.user_id);
-  const principalId=servicio?.conductor_id||null;
-
-  useEffect(()=>{
-    let cancelled=false;
-    setError("");
-    setLoadingExisting(true);
-    setSelected(new Set(principalId?[principalId]:[]));
-    if(!servicio?.id){setLoadingExisting(false);return;}
-    (async()=>{
-      const ids=await fetchServicioConductorIds(servicio.id);
-      if(cancelled)return;
-      setSelected(new Set([...(principalId?[principalId]:[]),...ids]));
-      setLoadingExisting(false);
-    })();
-    return()=>{cancelled=true;};
-  },[servicio?.id,principalId]);
-
-  const toggle=(uid)=>{
-    if(!uid||uid===principalId||saving)return;
-    setSelected(prev=>{
-      const next=new Set(prev);
-      if(next.has(uid))next.delete(uid);else next.add(uid);
-      return next;
-    });
-  };
-
-  const selCount=selected.size;
-
-  async function guardar(){
-    if(!servicio?.id||saving)return;
-    const ids=[...selected];
-    if(!principalId&&ids.length===0){setError("Selecciona al menos un conductor");return;}
-    setSaving(true);setError("");
-    try{
-      let principal=principalId;
-      let referencia=servicio.referencia;
-      let principalAssigned=false;
-      if(!principal){
-        principal=ids[0];
-        const c=lista.find(x=>x.user_id===principal);
-        const assignResult=await asignarConductorEnServicioCreado({
-          servicioId:servicio.id,
-          servicio,
-          conductorId:principal,
-          conductorNombre:c?.nombre||"Conductor",
-          origen:servicio.origen,
-          destino:servicio.destino,
-          fechaInicio:servicio.fecha_inicio,
-        });
-        referencia=assignResult.referencia??referencia;
-        principalAssigned=true;
-        void sendAssignmentPush({
-          conductorId:principal,
-          origen:servicio.origen,
-          destino:servicio.destino,
-          fechaInicio:servicio.fecha_inicio,
-          servicioId:servicio.id,
-        });
-      }
-      const colaboradorIds=ids.filter(id=>id!==principal);
-      const sync=await syncServicioColaboradores(servicio.id,principal,colaboradorIds);
-      for(const id of (sync?.added||[])){
-        void sendAssignmentPush({
-          conductorId:id,
-          origen:servicio.origen,
-          destino:servicio.destino,
-          fechaInicio:servicio.fecha_inicio,
-          servicioId:servicio.id,
-        });
-      }
-      const principalNombre=lista.find(x=>x.user_id===principal)?.nombre||"Conductor";
-      onAsignado?.({
-        servicioId:servicio.id,
-        conductorId:principal,
-        conductorNombre:principalNombre,
-        referencia,
-        principalAssigned,
-        totalConductores:1+colaboradorIds.length,
-      });
-    }catch(e){setError(e?.message||"No se pudo guardar");}
-    finally{setSaving(false);}
-  }
-
-  return(
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={{...modalStyle,background:card,maxHeight:"80vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
-        <div style={{padding:"14px 16px",borderBottom:`1px solid ${EMPRESA_UI.border}`}}>
-          <div style={{fontSize:15,fontWeight:650,color:tx}}>{principalId?"Conductores del servicio":"Asignar conductores"}</div>
-          <div style={{fontSize:12,color:su,marginTop:4}}>
-            {getServiceNumber(servicio)} · {getFixedServiceRoute(servicio)}
-          </div>
-          <div style={{fontSize:11,color:su,marginTop:6,lineHeight:1.4}}>
-            Marca uno o varios conductores. {principalId?"El principal no se puede quitar aquí.":"El primero seleccionado será el principal."}
-          </div>
-        </div>
-        <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
-          {!lista.length?(
-            <div style={{fontSize:13,color:su,lineHeight:1.45}}>Añade un conductor en la pestaña Conductores para poder asignarlo.</div>
-          ):lista.map(c=>{
-            const isPrincipal=c.user_id===principalId;
-            const checked=selected.has(c.user_id);
-            return(
-              <button key={c.user_id} type="button" disabled={saving||isPrincipal||loadingExisting} onClick={()=>toggle(c.user_id)}
-                style={{width:"100%",textAlign:"left",display:"flex",alignItems:"center",gap:12,
-                  background:checked?EMPRESA_UI.accentSoft:EMPRESA_UI.surfaceSoft,
-                  border:`1px solid ${checked?"#bfdbfe":EMPRESA_UI.border}`,borderRadius:10,padding:"12px 14px",
-                  fontSize:14,fontWeight:700,color:tx,cursor:(saving||isPrincipal)?"default":"pointer",marginBottom:8}}>
-                <span aria-hidden style={{width:20,height:20,flexShrink:0,borderRadius:6,
-                  border:`2px solid ${checked?EMPRESA_UI.accent:"#cbd5e1"}`,background:checked?EMPRESA_UI.accent:"#fff",
-                  color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,lineHeight:1}}>
-                  {checked?"✓":""}
-                </span>
-                <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                  {c.nombre||"Conductor"}{c.matricula&&<span style={{color:su,fontWeight:500,marginLeft:8}}>· {c.matricula}</span>}
-                </span>
-                {isPrincipal?(
-                  <span style={{flexShrink:0,fontSize:10,fontWeight:800,color:EMPRESA_UI.accent,background:"#fff",
-                    border:"1px solid #bfdbfe",borderRadius:999,padding:"2px 8px"}}>PRINCIPAL</span>
-                ):null}
-              </button>
-            );
-          })}
-          {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red}}>{error}</div>}
-        </div>
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,display:"flex",gap:10}}>
-          <button type="button" onClick={onClose} disabled={saving}
-            style={{flex:1,background:"transparent",border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"11px",fontSize:13,color:su,cursor:"pointer"}}>
-            Cancelar
-          </button>
-          <button type="button" onClick={()=>void guardar()} disabled={saving||loadingExisting||!lista.length||(!principalId&&selCount===0)}
-            style={{flex:1,background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:10,padding:"11px",fontSize:13,fontWeight:800,
-              color:EMPRESA_UI.accent,cursor:(saving||loadingExisting)?"default":"pointer",opacity:(!principalId&&selCount===0)?0.6:1}}>
-            {saving?"Guardando…":`Guardar${selCount?` (${selCount})`:""}`}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -14488,7 +14388,23 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
       {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
       {flotaTab==="planificador"&&(
-        <EmpresaPlanificadorRuta dark={dark}/>
+        isDemoApp()?(
+          <EmpresaPlanificadorPanel
+            dark={dark}
+            routePlanner={<EmpresaPlanificadorRuta dark={dark}/>}
+            mapProps={{
+              servicios:flotaServicios,
+              flotaStops,
+              conductores,
+              ubicacionConductorByUid,
+              flotaIncidenciasResumen,
+              formatLugar:fmtUbicacionConductorEmpresa,
+              onBuscarConductor:handleAsignarConductorServicioId,
+            }}
+          />
+        ):(
+          <EmpresaPlanificadorRuta dark={dark}/>
+        )
       )}
 
       {/* ── DOCUMENTOS ── */}
@@ -15043,6 +14959,12 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <AsignarConductorServicioModal
           servicio={asignarConductorServicio}
           conductores={conductores}
+          flotaServicios={flotaServicios}
+          flotaIncidenciasResumen={flotaIncidenciasResumen}
+          ubicacionConductorByUid={ubicacionConductorByUid}
+          formatLugar={fmtUbicacionConductorEmpresa}
+          flotaStops={flotaStops}
+          onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
           onClose={()=>setAsignarConductorServicio(null)}
           onAsignado={({conductorNombre,conductorId,servicioId,referencia,principalAssigned,totalConductores})=>{
             setAsignarConductorServicio(null);
@@ -16944,16 +16866,9 @@ function useGeoStop(query){
 //  STOP FORM ROW — con geocodificación
 // ─────────────────────────────────────────────────────────────
 function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
-  const bg="#0F172A",tx="#F1F5F9",su="#64748B";
+  const bg="#0F172A",tx="#F1F5F9";
   const iStyle={width:"100%",background:bg,border:"1.5px solid #334155",borderRadius:9,padding:"10px 12px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
-  const geoQuery=stop.direccion.trim()||stop.nombre.trim();
-  const{result:geo,status:geoStatus}=useGeoStop(geoQuery);
   const color=STOP_COLOR[stop.tipo]||"#06B6D4";
-
-  useEffect(()=>{
-    if(geo){onChange(index,"lat",geo.lat);onChange(index,"lon",geo.lon);}
-    else{onChange(index,"lat",null);onChange(index,"lon",null);}
-  },[geo]);
 
   return(
     <div style={{background:bg,borderRadius:12,padding:"12px 13px",marginBottom:10,border:`1.5px solid ${stop.lat?"#22C55E30":"#334155"}`}}>
@@ -16970,18 +16885,7 @@ function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
           {total>1&&<button onClick={()=>onRemove(index)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:18,cursor:"pointer",padding:"4px 6px"}}>✕</button>}
         </div>
       </div>
-      <div style={{marginBottom:8}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:4}}>LUGAR</div>
-        <input value={stop.nombre} onChange={e=>onChange(index,"nombre",e.target.value)} placeholder="Ej: Mercamadrid, Nave 7" style={iStyle}/></div>
-      <div style={{marginBottom:8}}><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:4}}>DIRECCIÓN (opcional)</div>
-        <input value={stop.direccion} onChange={e=>onChange(index,"direccion",e.target.value)} placeholder="Ej: Calle Motores 12, Madrid" style={iStyle}/></div>
-      <div style={{display:"flex",alignItems:"center",gap:6,minHeight:18,marginBottom:8}}>
-        {geoStatus==="loading"&&geoQuery.length>=3&&<span style={{fontSize:11,color:su}}>🔍 Buscando coordenadas...</span>}
-        {geoStatus==="ok"&&geo&&<span style={{fontSize:11,color:"#22C55E",fontWeight:600}}>✓ {geo.name} — navegación lista</span>}
-        {geoStatus==="error"&&geoQuery.length>=3&&<span style={{fontSize:11,color:"#F97316"}}>⚠ No encontrado — se usará dirección escrita</span>}
-        {geoStatus==="idle"&&<span style={{fontSize:11,color:"#334155"}}>Escribe para activar navegación GPS</span>}
-      </div>
-      <div><div style={{fontSize:11,color:su,fontWeight:700,marginBottom:4}}>NOTAS (opcional)</div>
-        <input value={stop.notas||""} onChange={e=>onChange(index,"notas",e.target.value)} placeholder="Ej: Puerta 3, horario 8-14h" style={iStyle}/></div>
+      <StopGeoFieldsForm stop={stop} index={index} onChange={onChange} themeKey="dark" showGeoStatus/>
     </div>
   );
 }
@@ -16996,7 +16900,10 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
-  const[stops,setStops]=useState([{orden:1,tipo:"carga",nombre:"",direccion:"",notas:"",lat:null,lon:null},{orden:2,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);
+  const[stops,setStops]=useState([
+    emptyStopGeoForm({orden:1,tipo:"carga"}),
+    emptyStopGeoForm({orden:2,tipo:"descarga"}),
+  ]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
   const[paso,setPaso]=useState(1);
@@ -17005,14 +16912,14 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
   const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
 
   function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
-  function addStop(){setStops(prev=>[...prev,{orden:prev.length+1,tipo:"descarga",nombre:"",direccion:"",notas:"",lat:null,lon:null}]);}
+  function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
     setStops(prev=>{
       const arr=[...prev];
       const ordenAntes=arr[i].orden;
       const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
       const nuevoOrden=(ordenAntes+ordenDespues)/2;
-      arr.splice(i+1,0,{orden:nuevoOrden,tipo:"carga",nombre:"",direccion:"",notas:"",lat:null,lon:null});
+      arr.splice(i+1,0,emptyStopGeoForm({orden:nuevoOrden,tipo:"carga"}));
       return arr;
     });
   }
@@ -17066,7 +16973,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
         { servicioId: sv.id, stopCount: stops.length },
         () => persistServicioStopsTrasCrear({
           servicioId:sv.id,
-          stops,
+          stops:prepareStopsGeoForPersist(stops),
           origen:origen.trim(),
           destino:destino.trim(),
           logTag:"CrearServicioModal",

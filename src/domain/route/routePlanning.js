@@ -19,6 +19,7 @@ export const LIM = {
 
 const CITIES = [
   ["almeria", "almería", "Almería", 36.8381, -2.4597],
+  ["el ejido", "ejido", "El Ejido", 36.8381, -2.4597],
   ["madrid", "Madrid", 40.4168, -3.7038],
   ["barcelona", "Barcelona", 41.3851, 2.1734],
   ["valencia", "Valencia", 39.4699, -0.3763],
@@ -73,10 +74,11 @@ const CITIES = [
   ["porto", "Porto", 41.1579, -8.6291],
   ["paris", "París", 48.8566, 2.3522],
   ["lyon", "Lyon", 45.764, 4.8357],
-  ["marsella", "Marsella", 43.2965, 5.3698],
+  ["marsella", "marseille", "Marsella", 43.2965, 5.3698],
   ["toulouse", "Toulouse", 43.6047, 1.4442],
   ["calais", "Calais", 50.9513, 1.8587],
   ["perpignan", "Perpiñán", 42.6986, 2.8954],
+  ["bielefeld", "Bielefeld", 52.0302, 8.5325],
   ["berlin", "Berlín", 52.52, 13.405],
   ["hamburgo", "hamburg", "Hamburgo", 53.5511, 9.9937],
   ["munich", "múnich", "Múnich", 48.1351, 11.582],

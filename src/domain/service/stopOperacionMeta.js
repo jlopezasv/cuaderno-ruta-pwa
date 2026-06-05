@@ -48,6 +48,12 @@ const META_SKIP_KEYS = new Set([
   "inicio_operacion_at",
   "entrada_geo",
   "salida_geo",
+  "pais",
+  "codigo_postal",
+  "provincia",
+  "geo_lat",
+  "geo_lon",
+  "empresa_logistica",
 ]);
 
 const META_LABELS = {

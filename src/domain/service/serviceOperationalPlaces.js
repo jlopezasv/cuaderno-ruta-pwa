@@ -13,22 +13,131 @@ function isDescargaTipo(tipo) {
   return /\bdescarga\b/.test(t) || /solo_descarga/.test(t);
 }
 
+const normPlaceKey = (s) =>
+  String(s || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "");
+
+/** Pistas demo / desambiguación (lugar → provincia + país). Nunca empresa. */
+const GEO_PLACE_HINTS = {
+  "el ejido": { provincia: "Almería", pais: "España", canonical: "Almería" },
+  ejido: { provincia: "Almería", pais: "España", canonical: "Almería" },
+  marsella: { provincia: "Bouches-du-Rhône", pais: "France", canonical: "Marsella" },
+  marseille: { provincia: "Bouches-du-Rhône", pais: "France", canonical: "Marsella" },
+};
+
+function isCompleteAddress(direccion) {
+  const d = String(direccion || "").trim();
+  if (!d) return false;
+  if (d.includes(",")) return true;
+  return /\b(calle|av\.?|avenida|carretera|ctra\.?|pol[ií]gono|pg\.?ind|km|n[º°o]|pasaje|plaza|p\.e\.|urbanizaci[oó]n)\b/i.test(
+    d,
+  );
+}
+
 function pickPlaceFromStop(stop) {
-  if (!stop) return { nombre: "", direccion: "", empresa: "" };
+  if (!stop) {
+    return { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
+  }
   const meta = getStopOperacionMeta(stop?.notas);
   return {
     nombre: String(stop.nombre || "").trim(),
     direccion: String(stop.direccion || "").trim(),
+    provincia: String(stop.provincia || meta.provincia || "").trim(),
+    pais: String(stop.pais || meta.pais || "").trim(),
+    codigo_postal: String(stop.codigo_postal || meta.codigo_postal || "").trim(),
     empresa:
       String(stop?.empresa || "").trim() ||
       String(meta.empresa_logistica || meta.empresa || "").trim(),
   };
 }
 
-/** Texto para ruta: dirección → lugar → empresa. */
-export function routePointTextFromPlace(place) {
+/** Enriquece lugar con provincia/país inferidos (demo / alias). */
+export function enrichPlaceForGeo(place) {
   const p = place || {};
-  return String(p.direccion || p.nombre || p.empresa || "").trim();
+  const nombre = String(p.nombre || "").trim();
+  const hint = GEO_PLACE_HINTS[normPlaceKey(nombre)];
+  return {
+    nombre,
+    direccion: String(p.direccion || "").trim(),
+    provincia: String(p.provincia || hint?.provincia || "").trim(),
+    pais: String(p.pais || hint?.pais || "").trim(),
+    codigo_postal: String(p.codigo_postal || "").trim(),
+    empresa: String(p.empresa || "").trim(),
+    canonical: hint?.canonical || "",
+  };
+}
+
+/**
+ * Candidatos de geocodificación (mapas / rutas). Nunca empresa/muelle.
+ * Prioridad: CP+ciudad+país → ciudad+país → fallbacks legacy (sin CP).
+ */
+export function buildGeocodeQueryCandidates(place) {
+  const p = enrichPlaceForGeo(place);
+  const nombre = p.nombre;
+  const direccion = p.direccion;
+  const provincia = p.provincia;
+  const pais = p.pais;
+  const cp = p.codigo_postal;
+  const out = [];
+  const push = (value) => {
+    const clean = String(value || "").trim();
+    if (!clean) return;
+    if (!out.some((x) => normPlaceKey(x) === normPlaceKey(clean))) out.push(clean);
+  };
+
+  if (cp && nombre && pais) push([cp, nombre, pais].join(", "));
+  if (nombre && pais) push([nombre, pais].join(", "));
+  if (cp && !nombre && pais) push([cp, pais].join(", "));
+
+  if (!cp) {
+    if (nombre && provincia && pais) push([nombre, provincia, pais].join(", "));
+    if (p.canonical && pais) push([p.canonical, pais].filter(Boolean).join(", "));
+    if (direccion) {
+      const addrParts = [direccion, nombre, pais].filter(Boolean).join(", ");
+      if (addrParts) push(addrParts);
+      if (isCompleteAddress(direccion)) push(direccion);
+    }
+    if (nombre) push(nombre);
+  }
+
+  return out;
+}
+
+/** Consulta principal para geocodificar / calcular ruta. */
+export function geocodeQueryFromPlace(place) {
+  return buildGeocodeQueryCandidates(place)[0] || "";
+}
+
+/** Evita usar «Origen → Destino» como texto de un solo extremo. */
+export function sanitizeRouteEndpointFallback(text, role = "origen") {
+  const s = String(text || "").trim();
+  if (!s) return "";
+  const parts = s.split(/\s*(?:→|->)\s*/);
+  if (parts.length >= 2) {
+    return role === "destino" ? parts[parts.length - 1].trim() : parts[0].trim();
+  }
+  return s;
+}
+
+/** Etiqueta visible de localidad (origen/destino en UI). Nunca empresa. */
+export function displayLugarFromPlace(place) {
+  const p = place || {};
+  const nombre = String(p.nombre || "").trim();
+  const cp = String(p.codigo_postal || "").trim();
+  const direccion = String(p.direccion || "").trim();
+  if (nombre && cp) return `${nombre} (${cp})`;
+  if (nombre) return nombre;
+  if (cp && p.pais) return `${cp}, ${p.pais}`;
+  if (direccion) return direccion;
+  return "";
+}
+
+/** @deprecated Alias de {@link geocodeQueryFromPlace} — no usar empresa. */
+export function routePointTextFromPlace(place) {
+  return geocodeQueryFromPlace(place);
 }
 
 export function routePointTextFromStop(stop) {
@@ -54,8 +163,8 @@ export function deriveOperationalPlacesFromStops(stops) {
   const sorted = Array.isArray(stops)
     ? [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0))
     : [];
-  let carga = { nombre: "", direccion: "", empresa: "" };
-  let descarga = { nombre: "", direccion: "", empresa: "" };
+  let carga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
+  let descarga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
   for (const st of sorted) {
     if (isCargaTipo(st.tipo)) carga = pickPlaceFromStop(st);
   }
@@ -93,9 +202,15 @@ export function operationalPlacesFromStops(stops, cliente = "") {
     carga_nombre: carga.nombre,
     carga_empresa: carga.empresa,
     carga_direccion: carga.direccion,
+    carga_codigo_postal: carga.codigo_postal,
+    carga_pais: carga.pais,
+    carga_provincia: carga.provincia,
     descarga_nombre: descarga.nombre,
     descarga_empresa: descarga.empresa,
     descarga_direccion: descarga.direccion,
+    descarga_codigo_postal: descarga.codigo_postal,
+    descarga_pais: descarga.pais,
+    descarga_provincia: descarga.provincia,
   };
 }
 
@@ -122,7 +237,10 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
 
   const fromStops = stops?.length
     ? deriveOperationalPlacesFromStops(stops)
-    : { carga: { nombre: "", direccion: "", empresa: "" }, descarga: { nombre: "", direccion: "", empresa: "" } };
+    : {
+        carga: { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" },
+        descarga: { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" },
+      };
   const legacyCarga = placeFromLegacyColumn(servicio?.origen);
   const legacyDescarga = placeFromLegacyColumn(servicio?.destino);
 
@@ -145,6 +263,18 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
     String(lugares.carga_empresa || "").trim() ||
     fromStops.carga.empresa ||
     "";
+  const carga_codigo_postal =
+    String(lugares.carga_codigo_postal || "").trim() ||
+    fromStops.carga.codigo_postal ||
+    "";
+  const carga_pais =
+    String(lugares.carga_pais || "").trim() ||
+    fromStops.carga.pais ||
+    "";
+  const carga_provincia =
+    String(lugares.carga_provincia || "").trim() ||
+    fromStops.carga.provincia ||
+    "";
   const descarga_nombre =
     String(lugares.descarga_nombre || "").trim() ||
     fromStops.descarga.nombre ||
@@ -159,25 +289,54 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
     String(lugares.descarga_empresa || "").trim() ||
     fromStops.descarga.empresa ||
     "";
+  const descarga_codigo_postal =
+    String(lugares.descarga_codigo_postal || "").trim() ||
+    fromStops.descarga.codigo_postal ||
+    "";
+  const descarga_pais =
+    String(lugares.descarga_pais || "").trim() ||
+    fromStops.descarga.pais ||
+    "";
+  const descarga_provincia =
+    String(lugares.descarga_provincia || "").trim() ||
+    fromStops.descarga.provincia ||
+    "";
 
   return {
     cliente_nombre,
     carga_nombre,
     carga_empresa,
     carga_direccion,
+    carga_codigo_postal,
+    carga_pais,
+    carga_provincia,
     descarga_nombre,
     descarga_empresa,
     descarga_direccion,
+    descarga_codigo_postal,
+    descarga_pais,
+    descarga_provincia,
   };
 }
 
-/** Texto para geocoding / columnas `origen` y `destino` (sin cliente). */
+/** Texto para geocoding / columnas `origen` y `destino` (sin cliente ni empresa). */
 export function routeTextFromOperationalPlaces(places) {
-  const carga =
-    places?.carga_direccion || places?.carga_nombre || places?.carga_empresa || "";
-  const descarga =
-    places?.descarga_direccion || places?.descarga_nombre || places?.descarga_empresa || "";
-  return { origen: String(carga).trim(), destino: String(descarga).trim() };
+  return {
+    origen: geocodeQueryFromPlace({
+      nombre: places?.carga_nombre,
+      direccion: places?.carga_direccion,
+      provincia: places?.carga_provincia,
+      pais: places?.carga_pais,
+      codigo_postal: places?.carga_codigo_postal,
+    }),
+    destino: geocodeQueryFromPlace({
+      nombre: places?.descarga_nombre,
+      direccion: places?.descarga_direccion,
+      provincia: places?.descarga_provincia,
+      pais: places?.descarga_pais,
+      codigo_postal: places?.descarga_codigo_postal,
+    }),
+  };
 }
 
 /** Línea de ruta visible: «Antequera → Pamplona». */
@@ -208,9 +367,15 @@ export function buildOperationalPlacesMetaPatch({
   carga_nombre = "",
   carga_empresa = "",
   carga_direccion = "",
+  carga_codigo_postal = "",
+  carga_pais = "",
+  carga_provincia = "",
   descarga_nombre = "",
   descarga_empresa = "",
   descarga_direccion = "",
+  descarga_codigo_postal = "",
+  descarga_pais = "",
+  descarga_provincia = "",
 } = {}) {
   const patch = {
     lugares_operativos: {
@@ -218,9 +383,15 @@ export function buildOperationalPlacesMetaPatch({
       carga_nombre: String(carga_nombre || "").trim() || null,
       carga_empresa: String(carga_empresa || "").trim() || null,
       carga_direccion: String(carga_direccion || "").trim() || null,
+      carga_codigo_postal: String(carga_codigo_postal || "").trim() || null,
+      carga_pais: String(carga_pais || "").trim() || null,
+      carga_provincia: String(carga_provincia || "").trim() || null,
       descarga_nombre: String(descarga_nombre || "").trim() || null,
       descarga_empresa: String(descarga_empresa || "").trim() || null,
       descarga_direccion: String(descarga_direccion || "").trim() || null,
+      descarga_codigo_postal: String(descarga_codigo_postal || "").trim() || null,
+      descarga_pais: String(descarga_pais || "").trim() || null,
+      descarga_provincia: String(descarga_provincia || "").trim() || null,
     },
   };
   const cn = String(cliente_nombre || "").trim();

@@ -13,7 +13,9 @@ import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { insertServicioCambiosRows, fmtAuditVal } from "../../domain/fleet/servicioAudit.js";
 import { replaceStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
 import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
-import { formatStopNotesForDisplay, getStopOperacionMeta, mergeStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
+import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -27,23 +29,7 @@ function toDTL(d) {
 }
 
 function stopRowToForm(row) {
-  const meta = getStopOperacionMeta(row?.notas);
-  return {
-    orden: Number(row.orden) || 0,
-    tipo: row.tipo || "parada",
-    nombre: String(row.nombre || "").trim(),
-    empresa: String(row.empresa || meta.empresa_logistica || meta.empresa || "").trim(),
-    direccion: String(row.direccion || "").trim(),
-    notas: formatStopNotesForDisplay(row?.notas) || "",
-  };
-}
-
-function prepareStopsForPersist(stops) {
-  return stops.map((s) => {
-    const emp = String(s.empresa || "").trim();
-    if (!emp) return s;
-    return { ...s, notas: mergeStopOperacionMeta(s.notas, { empresa_logistica: emp }) };
-  });
+  return stopRowToGeoForm(row);
 }
 
 const EMPRESA_UI = {
@@ -70,8 +56,8 @@ export function EmpresaEditarServicioModal({
   const wide = mode === "wide";
 
   const [stops, setStops] = useState([
-    { orden: 1, tipo: "carga", nombre: "", empresa: "", direccion: "", notas: "" },
-    { orden: 2, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" },
+    emptyStopGeoForm({ orden: 1, tipo: "carga" }),
+    emptyStopGeoForm({ orden: 2, tipo: "descarga" }),
   ]);
   const [stopsLoading, setStopsLoading] = useState(false);
   const [fechaInicioLocal, setFechaInicioLocal] = useState("");
@@ -112,8 +98,8 @@ export function EmpresaEditarServicioModal({
           setStops(rows.map(stopRowToForm));
         } else {
           setStops([
-            { orden: 1, tipo: "carga", nombre: "", empresa: "", direccion: "", notas: "" },
-            { orden: 2, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" },
+            emptyStopGeoForm({ orden: 1, tipo: "carga" }),
+            emptyStopGeoForm({ orden: 2, tipo: "descarga" }),
           ]);
         }
       } catch {
@@ -130,7 +116,7 @@ export function EmpresaEditarServicioModal({
   const listaConductores = (conductores || []).filter((c) => c.user_id);
 
   function addStop() {
-    setStops((prev) => [...prev, { orden: prev.length + 1, tipo: "descarga", nombre: "", empresa: "", direccion: "", notas: "" }]);
+    setStops((prev) => [...prev, emptyStopGeoForm({ orden: prev.length + 1, tipo: "descarga" })]);
   }
   function removeStop(i) {
     setStops((prev) => prev.filter((_, idx) => idx !== i));
@@ -174,11 +160,11 @@ export function EmpresaEditarServicioModal({
       if (wide) {
         const { origen: origenRuta, destino: destinoRuta } = routeTextFromStops(stops);
         if (!origenRuta || !destinoRuta) {
-          setError("Indica origen y destino en las paradas (dirección, lugar o empresa)");
+          setError("Indica ciudad y país en las paradas de carga y descarga");
           return;
         }
         if (stops.some((s) => !s.nombre.trim())) {
-          setError("Todas las paradas necesitan un nombre de lugar");
+          setError("Todas las paradas necesitan ciudad / localidad");
           return;
         }
 
@@ -224,7 +210,7 @@ export function EmpresaEditarServicioModal({
           pushAudit("fecha_inicio", fi0, fi1);
         }
 
-        const stopsResult = await replaceStopsForServicio(servicio.id, prepareStopsForPersist(stops));
+        const stopsResult = await replaceStopsForServicio(servicio.id, prepareStopsGeoForPersist(stops));
         if (!stopsResult.ok) throw new Error(stopsResult.error || "No se pudieron guardar las paradas");
       }
 
@@ -458,14 +444,14 @@ export function EmpresaEditarServicioModal({
                           ) : null}
                         </div>
                       </div>
-                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Lugar</div>
-                      <input value={stop.nombre} onChange={(e) => changeStop(i, "nombre", e.target.value)} style={paradaInputStyle} placeholder="Ciudad, muelle…" />
-                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Empresa</div>
-                      <input value={stop.empresa || ""} onChange={(e) => changeStop(i, "empresa", e.target.value)} style={paradaInputStyle} placeholder="Planta, operador…" />
-                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Dirección (opcional)</div>
-                      <input value={stop.direccion} onChange={(e) => changeStop(i, "direccion", e.target.value)} style={paradaInputStyle} />
-                      <div style={{ fontSize: 10, color: EMPRESA_UI.muted, marginBottom: 2 }}>Detalles</div>
-                      <input value={stop.notas || ""} onChange={(e) => changeStop(i, "notas", e.target.value)} style={{ ...paradaInputStyle, marginBottom: 0 }} placeholder="Puerta, horario…" />
+                      <StopGeoFieldsForm
+                        stop={stop}
+                        index={i}
+                        onChange={changeStop}
+                        themeKey="empresa"
+                        compact
+                        showGeoStatus={false}
+                      />
                     </div>
                   ))}
                   <button

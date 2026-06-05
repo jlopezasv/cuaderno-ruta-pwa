@@ -188,10 +188,15 @@ function getStopRecorridoLines(stop) {
   const empresa =
     String(stop?.empresa || "").trim() ||
     String(meta.empresa_logistica || meta.empresa || "").trim();
-  const lugar = safePlaceName(stop?.nombre, "");
+  const ciudad = safePlaceName(stop?.nombre, "");
+  const cp = String(meta.codigo_postal || stop?.codigo_postal || "").trim();
+  const pais = String(meta.pais || stop?.pais || "").trim();
+  const provincia = String(meta.provincia || stop?.provincia || "").trim();
+  const lugarParts = [ciudad, cp ? `CP ${cp}` : "", provincia, pais].filter(Boolean);
+  const lugar = lugarParts.join(" · ") || ciudad;
   const dirRaw = String(stop?.direccion || "").trim();
   const direccion =
-    dirRaw && dirRaw.localeCompare(lugar, undefined, { sensitivity: "accent" }) !== 0 ? dirRaw : "";
+    dirRaw && dirRaw.localeCompare(ciudad, undefined, { sensitivity: "accent" }) !== 0 ? dirRaw : "";
   const detalles = formatStopNotesForDisplay(stop?.notas);
   return { empresa, lugar, direccion, detalles };
 }

@@ -1,5 +1,7 @@
 import { geocode, getRoute, buildPlan, TRUCK_KMH } from "../route/routePlanning.js";
 import { formatOperationalEtaLabel } from "./etaFormatter.js";
+import { geocodeQueryFromPlace } from "./serviceOperationalPlaces.js";
+import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 
 /**
  * Paradas relevantes para ETA: en curso solo pendientes/llegados;
@@ -79,7 +81,14 @@ export async function getServiceEta({
     const routeReals = [];
     let skippedStops = false;
     for (const st of relevant) {
-      const q = `${st.direccion || ""}`.trim() || `${st.nombre || ""}`.trim();
+      const meta = getStopOperacionMeta(st?.notas);
+      const q = geocodeQueryFromPlace({
+        nombre: st.nombre,
+        direccion: st.direccion,
+        codigo_postal: st.codigo_postal || meta.codigo_postal,
+        pais: st.pais || meta.pais,
+        provincia: st.provincia || meta.provincia,
+      });
       if (!q) continue;
       try {
         const pt = await geocode(q);
