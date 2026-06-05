@@ -13,6 +13,7 @@ import {
   resolveServiceRouteEndpoints,
 } from "../../domain/service/serviceIdentity.js";
 import { classifyConductorTowerState } from "./empresaDashboardTowerModel.js";
+import { resolveConductorOperationalVisual } from "./conductorOperationalVisual.js";
 import {
   formatConductorTelefonoDisplay,
   resolveConductorTelefonoMovil,
@@ -215,19 +216,14 @@ export function buildPlanificadorDriverMarkers({
 }
 
 export function resolveDriverMapStatus(classified, ubic) {
-  if (classified?.needsAttention) {
-    return { key: "atencion", label: "Atención", color: "#b91c1c", bg: "#fee2e2" };
-  }
-  if (classified?.conServicioActivo || classified?.conProximoServicio) {
-    return { key: "en_servicio", label: "En servicio", color: "#c2410c", bg: "#ffedd5" };
-  }
-  if (!ubic || ubic.missing || ubic.fetchError || ubic.recent === false) {
-    return {
-      key: "sin_ubic",
-      label: "Sin ubicación reciente",
-      color: "#64748b",
-      bg: "#f1f5f9",
-    };
-  }
-  return { key: "sin_servicio", label: "Sin servicio", color: "#15803d", bg: "#dcfce7" };
+  const visual = resolveConductorOperationalVisual(classified, ubic);
+  return {
+    key: visual.key,
+    label: visual.label,
+    color: visual.color,
+    bg: visual.bg,
+    border: visual.border,
+    dot: visual.dot,
+    mapColor: visual.mapColor,
+  };
 }

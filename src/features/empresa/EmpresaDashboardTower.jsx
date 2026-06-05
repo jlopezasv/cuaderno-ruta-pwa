@@ -141,12 +141,12 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
           <MetricRow dot="🔴" label="Incidencias" value={servicios.incidencias} />
           <TowerLinkButton onClick={() => onTabChange("servicios")}>Ver servicios →</TowerLinkButton>
 
-          <div className="empresa-tower-section-label">Sin servicio asignado</div>
+          <div className="empresa-tower-section-label">Disponibles para asignar</div>
           {sinServicioList.length === 0 ? (
             <div className="empresa-tower-empty">
               {conductores.total === 0
                 ? "Sin conductores vinculados"
-                : "Ningún conductor sin servicio asignado"}
+                : "Ningún conductor disponible"}
               {empresaCodigo && conductores.total === 0 && (
                 <div style={{ marginTop: 8, fontSize: 11 }}>
                   Código equipo:{" "}
@@ -163,9 +163,9 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
         <div className="empresa-tower-card" style={cardStyle}>
           <div className="empresa-tower-title">Conductores</div>
           <MetricRow dot="◇" label="Total" value={conductores.total} />
-          <MetricRow dot="🟢" label="Sin servicio" value={conductores.sinServicio} />
-          <MetricRow dot="🟠" label="Con servicio activo" value={conductores.conServicioActivo} />
-          <MetricRow dot="🔵" label="Con próximo servicio" value={conductores.conProximoServicio} />
+          <MetricRow dot="🟢" label="Disponibles" value={conductores.sinServicio} />
+          <MetricRow dot="🟠" label="Con servicio asignado" value={conductores.conProximoServicio} />
+          <MetricRow dot="🔵" label="En servicio" value={conductores.conServicioActivo} />
           <MetricRow dot="🔴" label="Atención" value={conductores.atencion} />
 
           <div className="empresa-tower-section-label">Atención</div>

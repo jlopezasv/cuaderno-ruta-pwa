@@ -5,7 +5,10 @@ import {
   syncServicioColaboradores,
 } from "../../domain/fleet/servicioAssignment.js";
 import { getFixedServiceRoute } from "../../domain/service/serviceIdentity.js";
-import { buildAsignarConductorPickerRows } from "./asignarConductorServicioModel.js";
+import {
+  buildAsignarConductorPickerRows,
+  groupAsignarConductorPickerRows,
+} from "./asignarConductorServicioModel.js";
 
 const EMPRESA_UI = {
   border: "#dbe4ee",
@@ -216,6 +219,11 @@ export function AsignarConductorServicioModal({
       formatLugar,
       search,
     ],
+  );
+
+  const pickerSections = useMemo(
+    () => (isAssignMode ? groupAsignarConductorPickerRows(pickerRows) : []),
+    [isAssignMode, pickerRows],
   );
 
   useEffect(() => {
@@ -459,17 +467,33 @@ export function AsignarConductorServicioModal({
                   Añade un conductor en la pestaña Conductores para poder asignarlo.
                 </div>
               ) : isAssignMode ? (
-                pickerRows.length ? (
-                  pickerRows.map((row) => (
-                    <AssignConductorCard
-                      key={row.uid}
-                      row={row}
-                      disabled={busy}
-                      onAssign={(r) => {
-                        setError("");
-                        setPendingConfirm({ uid: r.uid, nombre: r.nombre });
-                      }}
-                    />
+                pickerSections.length ? (
+                  pickerSections.map((section) => (
+                    <div key={section.id} style={{ marginBottom: section.id === "disponibles" ? 4 : 0 }}>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: EMPRESA_UI.muted,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em",
+                          margin: section.id === "disponibles" ? "0 0 10px" : "14px 0 10px",
+                        }}
+                      >
+                        {section.title}
+                      </div>
+                      {section.rows.map((row) => (
+                        <AssignConductorCard
+                          key={row.uid}
+                          row={row}
+                          disabled={busy}
+                          onAssign={(r) => {
+                            setError("");
+                            setPendingConfirm({ uid: r.uid, nombre: r.nombre });
+                          }}
+                        />
+                      ))}
+                    </div>
                   ))
                 ) : (
                   <div style={{ fontSize: 13, color: EMPRESA_UI.muted, lineHeight: 1.45 }}>

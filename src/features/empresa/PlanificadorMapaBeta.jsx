@@ -8,7 +8,7 @@ import {
 const EUROPE_CENTER = [40.4168, -3.7038];
 const EUROPE_ZOOM = 6;
 const MARKER_CARGA_BG = "#ea580c";
-const MARKER_DRIVER_BG = "#16a34d";
+const MARKER_DRIVER_CLUSTER_BG = "#475569";
 
 function ensureLeafletAssets() {
   return new Promise((resolve, reject) => {
@@ -168,7 +168,7 @@ export function PlanificadorMapaBeta({
           attribution: "© OSM",
         }).addTo(map);
         const cargoCluster = createTypedClusterGroup(L, MARKER_CARGA_BG);
-        const driverCluster = createTypedClusterGroup(L, MARKER_DRIVER_BG);
+        const driverCluster = createTypedClusterGroup(L, MARKER_DRIVER_CLUSTER_BG);
         map.addLayer(cargoCluster);
         map.addLayer(driverCluster);
         mapRef.current = map;
@@ -223,7 +223,7 @@ export function PlanificadorMapaBeta({
       if (!driver.hasCoords) continue;
       const { lat, lon } = driver.coords;
       const marker = L.marker([lat, lon], {
-        icon: emojiIcon(L, "🚚", MARKER_DRIVER_BG),
+        icon: emojiIcon(L, "🚚", driver.status.mapColor || driver.status.color),
       });
       marker.bindPopup(
         `<b>🚚 ${driver.nombre}</b><br>${driver.ubicLabel}<br>${driver.status.label}`,
@@ -266,6 +266,7 @@ export function PlanificadorMapaBeta({
 
   const cargasConCoords = cargas.filter((c) => c.hasCoords).length;
   const driversConCoords = drivers.filter((d) => d.hasCoords).length;
+  const driversDisponibles = drivers.filter((d) => d.status?.key === "disponible").length;
 
   return (
     <div
@@ -292,9 +293,8 @@ export function PlanificadorMapaBeta({
         }}
       >
         Vista beta · {cargas.length} carga{cargas.length !== 1 ? "s" : ""} sin conductor ·{" "}
-        {drivers.length} conductor{drivers.length !== 1 ? "es" : ""} · {cargasConCoords} carga
-        {cargasConCoords !== 1 ? "s" : ""} y {driversConCoords} conductor
-        {driversConCoords !== 1 ? "es" : ""} en mapa
+        {driversDisponibles} disponible{driversDisponibles !== 1 ? "s" : ""} ·{" "}
+        {driversConCoords} en mapa · 🟢 libre · 🟠 asignado · 🔵 en curso · 🔴 atención · ⚪ sin GPS
       </div>
 
       <div

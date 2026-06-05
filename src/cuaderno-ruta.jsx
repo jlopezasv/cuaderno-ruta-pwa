@@ -15095,6 +15095,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             );
             setAsignadosTick((t)=>t+1);
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
+            try{window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));}catch(_){/* SSR */}
           }}
         />
       )}

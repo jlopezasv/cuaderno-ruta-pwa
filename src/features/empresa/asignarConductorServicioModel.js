@@ -1,3 +1,7 @@
+import {
+  ASIGNAR_CONDUCTOR_SECTIONS,
+  resolveConductorOperationalVisual,
+} from "./conductorOperationalVisual.js";
 import { classifyConductorTowerState } from "./empresaDashboardTowerModel.js";
 import {
   formatConductorTelefonoDisplay,
@@ -12,34 +16,11 @@ export const ASIGNAR_CONDUCTOR_SORT_STRATEGIES = Object.freeze({
   SMART_SUGGESTIONS: "smart_suggestions",
 });
 
+/** @deprecated Usar resolveConductorOperationalVisual — se mantiene para imports legacy. */
 export const CONDUCTOR_ASSIGN_STATUS_META = Object.freeze({
-  disponible: {
-    key: "disponible",
-    label: "Disponible",
-    dot: "🟢",
-    color: "#15803d",
-    bg: "#dcfce7",
-    border: "#86efac",
-    sortTier: 0,
-  },
-  en_servicio: {
-    key: "en_servicio",
-    label: "En servicio",
-    dot: "🟠",
-    color: "#c2410c",
-    bg: "#ffedd5",
-    border: "#fdba74",
-    sortTier: 1,
-  },
-  atencion: {
-    key: "atencion",
-    label: "Atención",
-    dot: "🔴",
-    color: "#b91c1c",
-    bg: "#fee2e2",
-    border: "#fca5a5",
-    sortTier: 2,
-  },
+  disponible: { key: "disponible", label: "Disponible", dot: "🟢", color: "#15803d", bg: "#dcfce7", border: "#86efac", sortTier: 0 },
+  en_servicio: { key: "proximo_servicio", label: "Con servicio asignado", dot: "🟠", color: "#c2410c", bg: "#ffedd5", border: "#fdba74", sortTier: 1 },
+  atencion: { key: "atencion", label: "Atención", dot: "🔴", color: "#b91c1c", bg: "#fee2e2", border: "#fca5a5", sortTier: 3 },
 });
 
 function normalizeSearchText(value) {
@@ -68,13 +49,19 @@ function resolveCiudadLabel(conductor, ubicacion, formatLugar) {
   return fromProfile || "—";
 }
 
-export function resolveConductorAssignStatus(classified) {
-  if (!classified) return CONDUCTOR_ASSIGN_STATUS_META.disponible;
-  if (classified.needsAttention) return CONDUCTOR_ASSIGN_STATUS_META.atencion;
-  if (classified.conServicioActivo || classified.conProximoServicio) {
-    return CONDUCTOR_ASSIGN_STATUS_META.en_servicio;
-  }
-  return CONDUCTOR_ASSIGN_STATUS_META.disponible;
+export function resolveConductorAssignStatus(classified, ubic = null) {
+  const visual = resolveConductorOperationalVisual(classified, ubic);
+  return {
+    key: visual.key,
+    label: visual.label,
+    dot: visual.dot,
+    color: visual.color,
+    bg: visual.bg,
+    border: visual.border,
+    sortTier: visual.sortTier,
+    assignSection: visual.assignSection,
+    mapColor: visual.mapColor,
+  };
 }
 
 /**
@@ -113,7 +100,7 @@ export function buildAsignarConductorPickerRows({
       incidenciasByServicioId,
       nowMs,
     });
-    const status = resolveConductorAssignStatus(classified);
+    const status = resolveConductorAssignStatus(classified, ubicacionByUid[uid]);
     const telefono = formatConductorTelefonoDisplay(
       resolveConductorTelefonoMovil(conductor),
     );
@@ -152,4 +139,17 @@ export function buildAsignarConductorPickerRows({
   });
 
   return filtered;
+}
+
+/** Agrupa filas del picker por sección (disponibles → ocupados → atención). */
+export function groupAsignarConductorPickerRows(rows = []) {
+  const bySection = Object.fromEntries(ASIGNAR_CONDUCTOR_SECTIONS.map((s) => [s.id, []]));
+  for (const row of rows) {
+    const sectionId = row.status?.assignSection || "disponibles";
+    if (bySection[sectionId]) bySection[sectionId].push(row);
+  }
+  return ASIGNAR_CONDUCTOR_SECTIONS.map((section) => ({
+    ...section,
+    rows: bySection[section.id] || [],
+  })).filter((section) => section.rows.length > 0);
 }

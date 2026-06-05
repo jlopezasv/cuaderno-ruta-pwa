@@ -1,5 +1,6 @@
 import { formatSpanishAgo } from "../../domain/service/etaFormatter.js";
 import { LIM, fmtDur } from "../../domain/route/routePlanning.js";
+import { hasCriticalAttention } from "./conductorOperationalVisual.js";
 import { resolveConductorTelefonoMovil, formatConductorTelefonoDisplay } from "./conductorTelefonoMovil.js";
 
 const TERMINAL_ESTADOS = new Set(["cerrado", "completado", "anulado", "cancelado"]);
@@ -169,7 +170,7 @@ function buildTowerPersonRow(classified, conductorByUid, ubicacionByUid, formatL
     telefono: formatConductorTelefonoDisplay(classified.telefono || resolveConductorTelefonoMovil(source)),
     updatedLabel: ubicLine.updatedLabel,
     ubicRecent: ubicLine.ubicRecent,
-    reason: classified.needsAttention
+    reason: hasCriticalAttention(classified)
       ? classified.attentionReason || classified.attentionSignals?.[0]?.label || "Requiere revisión"
       : null,
   };
@@ -200,7 +201,7 @@ export function buildEmpresaDashboardTowerState({
   const sinServicio = classified.filter((c) => c.sinServicio);
   const conServicioActivo = classified.filter((c) => c.conServicioActivo);
   const conProximoServicio = classified.filter((c) => c.conProximoServicio);
-  const atencion = classified.filter((c) => c.needsAttention);
+  const atencion = classified.filter((c) => hasCriticalAttention(c));
 
   const sinServicioList = sinServicio
     .map((c) => buildTowerPersonRow(c, conductorByUid, ubicacionByUid, formatLugar, nowMs))
