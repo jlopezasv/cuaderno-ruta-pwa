@@ -6,10 +6,10 @@ import {
 export const CONDUCTOR_PROGRESS_BAND_CSS = `
 .conductor-progress-band {
   min-width: 0;
-  flex: 1 1 300px;
-  max-width: 340px;
-  margin-left: 12px;
-  margin-right: 4px;
+  flex: 1 1 380px;
+  max-width: 440px;
+  margin-left: 6px;
+  margin-right: 2px;
   min-height: 112px;
   align-self: flex-start;
   display: flex;
@@ -17,15 +17,15 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
   justify-content: center;
 }
 .conductor-progress-band__route {
-  width: 68%;
+  width: 92%;
   max-width: 100%;
   margin: 0 auto;
   flex-shrink: 0;
 }
 .conductor-progress-band__endpoints {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 8px;
   margin-bottom: 6px;
   min-height: 32px;
 }
@@ -44,6 +44,8 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+  cursor: default;
 }
 .conductor-progress-band__place--dest {
   text-align: right;
@@ -53,7 +55,7 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
   height: 32px;
   flex-shrink: 0;
   margin: 0 0 6px;
-  padding: 0 22px;
+  padding: 0 14px;
 }
 .conductor-progress-band__track {
   position: relative;
@@ -100,8 +102,8 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
 }
 .conductor-progress-band__truck-rail {
   position: absolute;
-  left: 22px;
-  right: 22px;
+  left: 14px;
+  right: 14px;
   top: 50%;
   height: 0;
   transform: translateY(-50%);
@@ -156,7 +158,7 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
   align-items: center;
   justify-content: center;
   min-height: 112px;
-  width: 68%;
+  width: 92%;
   max-width: 100%;
   margin: 0 auto;
   text-align: center;
@@ -191,7 +193,7 @@ export const CONDUCTOR_PROGRESS_BAND_CSS = `
   }
   .conductor-progress-band__route,
   .conductor-progress-band--idle {
-    width: 82%;
+    width: 96%;
   }
   .conductor-card-demo-actions {
     order: 3;

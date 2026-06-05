@@ -78,6 +78,12 @@ export function getOperationalPlanConfirmedAt(servicio) {
   return typeof iso === "string" && iso.trim() ? iso.trim() : null;
 }
 
+/** ISO string o null: marca explícita cuando conductor pulsa "Iniciar ruta". */
+export function getOperationalRouteStartedAt(servicio) {
+  const iso = getServicioOperacionMeta(servicio).operational_route_started_at;
+  return typeof iso === "string" && iso.trim() ? iso.trim() : null;
+}
+
 export function mergeReferenciaOperacional(referencia, patch) {
   const prev = parseMetaFromRef(referencia);
   const next = { ...prev, ...patch };

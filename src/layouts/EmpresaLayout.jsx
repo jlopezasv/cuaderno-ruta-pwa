@@ -138,7 +138,7 @@ export default function EmpresaLayout({
     border: "none",
     borderBottom: `2px solid ${active ? accent : "transparent"}`,
     borderRadius: active ? "8px 8px 0 0" : 0,
-    padding: "14px 18px 12px",
+    padding: "12px 14px 10px",
     fontSize: 13,
     fontWeight: active ? 700 : 550,
     color: active ? tabActive : tabIdle,
@@ -158,7 +158,7 @@ export default function EmpresaLayout({
           style={{
             background: card,
             borderBottom: `1px solid ${border}`,
-            padding: "0 20px",
+            padding: "0 12px",
             display: "flex",
             alignItems: "center",
             gap: 0,
@@ -166,12 +166,15 @@ export default function EmpresaLayout({
             top: 0,
             zIndex: 100,
             boxShadow: "0 1px 2px rgba(15,23,42,.05)",
+            boxSizing: "border-box",
+            width: "100%",
+            overflowX: "hidden",
           }}
         >
-          <div style={{ padding: "12px 0", marginRight: 32, flexShrink: 0 }}>
+          <div style={{ padding: "10px 0", marginRight: 12, flexShrink: 0 }}>
             <BrandHeader panelLabel="Panel Empresa" nameLabel={prof.nombre || "Empresa"} titleColor={tx} subColor={su} />
           </div>
-          <div style={{ display: "flex", flex: 1, gap: 0 }}>
+          <div style={{ display: "flex", flex: 1, gap: 0, minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
             {visibleTabs.map((t) => (
               <button
                 key={t.id}
@@ -190,7 +193,7 @@ export default function EmpresaLayout({
               </button>
             ))}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 8 }}>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: tx }}>{prof.nombre || "Empresa"}</div>
               <div style={{ fontSize: 11, color: su }}>{prof.ciudad || "Panel empresa"}</div>
@@ -215,11 +218,6 @@ export default function EmpresaLayout({
             {showModeSwitch && (
               <ModeSwitchButton uid={getUserId()} targetMode="conductor" />
             )}
-            {canUseConfig && (
-              <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
-                Ajustes
-              </button>
-            )}
             <button
               onClick={async () => {
                 await sbSignOut();
@@ -240,11 +238,6 @@ export default function EmpresaLayout({
           <div style={{ display: "flex", gap: 8 }}>
             {showModeSwitch && (
               <ModeSwitchButton uid={getUserId()} targetMode="conductor" compact />
-            )}
-            {canUseConfig && (
-              <button onClick={() => setTab("config")} style={{ background: UI_TOKENS.surfaceSoft, border: `1px solid ${border}`, borderRadius: 10, padding: "5px 8px", fontSize: 12, fontWeight: 650, color: "#475569", cursor: "pointer" }}>
-                Ajustes
-              </button>
             )}
             <button
               onClick={async () => {

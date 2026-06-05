@@ -16899,8 +16899,10 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function iniciarViajeOperacional(servicioId){
     if(!servicio||servicio.id!==servicioId)return;
-    if(getOperationalTripStartedAt(servicio))return;
-    const referencia=mergeReferenciaOperacional(servicio.referencia||null,{operational_trip_started_at:new Date().toISOString()});
+    const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
+      operational_route_started_at:new Date().toISOString(),
+      operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+    });
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
     patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia}:prev.servicio}));
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
@@ -18073,6 +18075,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         recargar={recargar}
         EvidenciasStopComponent={EvidenciasStop}
         onOpenViajeModal={onOpenViajeModal}
+        onIniciarRuta={iniciarViajeOperacional}
         onRecalculateOperationalRoute={
           onRecalculateOperationalRoute
             ? (sv)=>onRecalculateOperationalRoute({servicio:sv,norma,showToast})

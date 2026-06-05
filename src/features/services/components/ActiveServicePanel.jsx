@@ -3,10 +3,15 @@ import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { ServiceEmpresaDocumentsBlock } from "./ServiceEmpresaDocumentsBlock.jsx";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { getCurrentStop } from "../../../domain/service/serviceStops";
+import {
+  buildDriverStopTimesRows,
+  primaryMuelleActionLabel,
+} from "./driverStopOperationalDisplay.js";
 import { getLastServiceActivity } from "../../../domain/service/serviceActivity";
 import { getAttentionReason, needsAttention } from "../../../domain/service/serviceAttention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "../../../domain/service/serviceOperationalStatus";
 import { getOperationalPlanConfirmedAt, getOperationalPlanSnapshot } from "../../../domain/service/serviceOperacionMeta.js";
+import { getOperationalRouteStartedAt } from "../../../domain/service/serviceOperacionMeta.js";
 import { hasActiveRouteDestination } from "../../../domain/service/operationalEtaPresentation.js";
 import { EtaPrevistaBlock } from "./EtaPrevistaBlock.jsx";
 import {
@@ -322,11 +327,52 @@ function operationNameForStop(stop) {
 }
 
 function finishActionLabelForStop(stop) {
-  const group = stopOperationalGroup(stop);
-  if (group === "carga") return "Salida de muelle · fin carga";
-  if (group === "descarga") return "Salida de muelle · fin descarga";
-  if (group === "carga_descarga") return "Salida de muelle · fin operación";
-  return "Salida de muelle";
+  return primaryMuelleActionLabel(stop, "salida");
+}
+
+function muellePrimaryBtnStyle(tone) {
+  const bg = tone === "amber" ? DRIVER_UI.amber : DRIVER_UI.green;
+  return {
+    width: "100%",
+    minHeight: 52,
+    background: bg,
+    color: "#ffffff",
+    border: "none",
+    borderRadius: 12,
+    padding: "14px 16px",
+    fontSize: 16,
+    fontWeight: 800,
+    cursor: "pointer",
+    boxShadow: "0 2px 10px rgba(15,23,42,.1)",
+  };
+}
+
+function routeSecondaryBtnStyle(isDemo) {
+  return isDemo
+    ? {
+        width: "100%",
+        minHeight: 40,
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: `1px solid ${DEMO_UI.line}`,
+        background: DEMO_UI.section,
+        color: DEMO_UI.su,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+      }
+    : {
+        width: "100%",
+        minHeight: 40,
+        padding: "10px 12px",
+        borderRadius: 10,
+        border: `1px solid ${DRIVER_UI.line}`,
+        background: DRIVER_UI.surface,
+        color: DRIVER_UI.su,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+      };
 }
 
 function stopTimelineIcon(group) {
@@ -385,14 +431,19 @@ function openOperationalRouteModal(servicio, onOpenViajeModal) {
 function DriverOperationalRouteNav({
   servicio,
   onOpenRoute,
+  onStartRoute,
   onRecalculateRoute,
   showToast,
   variant = "demo",
+  emphasis = "secondary",
 }) {
-  const routeActive = hasActiveRouteDestination(servicio);
+  const routeConfigured = hasActiveRouteDestination(servicio);
+  const routeStartedByDriver = !!getOperationalRouteStartedAt(servicio);
+  const routeActive = routeConfigured && routeStartedByDriver;
   const [recalculating, setRecalculating] = useState(false);
   const isDemo = variant === "demo";
-  const minH = 46;
+  const isSecondary = emphasis === "secondary";
+  const minH = isSecondary ? 40 : 46;
   const rowGap = 8;
 
   async function handleRecalculate() {
@@ -407,13 +458,82 @@ function DriverOperationalRouteNav({
     }
   }
 
+  const handleOpenRoute = async () => {
+    try {
+      if (!routeStartedByDriver) {
+        await onStartRoute?.();
+      }
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo iniciar la ruta");
+    }
+    onOpenRoute?.();
+  };
+
   if (!routeActive) {
-    const soloStyle = isDemo
-      ? demoPrimaryBtn(DEMO_UI.blue)
-      : {
-          width: "100%",
+    const soloStyle = isSecondary
+      ? routeSecondaryBtnStyle(isDemo)
+      : isDemo
+        ? demoPrimaryBtn(DEMO_UI.blue)
+        : {
+            width: "100%",
+            minHeight: minH,
+            padding: "11px 14px",
+            borderRadius: 12,
+            border: "none",
+            background: DRIVER_UI.blue,
+            color: "#fff",
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: "pointer",
+          };
+    return (
+      <button
+        type="button"
+        title="Ruta, destino y ETA"
+        aria-label="Iniciar ruta hasta destino"
+        onClick={() => void handleOpenRoute()}
+        style={soloStyle}
+      >
+        Iniciar ruta
+      </button>
+    );
+  }
+
+  const primaryFlex = isSecondary ? "1 1 62%" : "1 1 74%";
+  const secondaryFlex = isSecondary ? "1 1 38%" : "1 1 26%";
+  const primaryStyle = isSecondary
+    ? {
+        ...routeSecondaryBtnStyle(isDemo),
+        flex: primaryFlex,
+        minWidth: 0,
+        width: "auto",
+        minHeight: minH,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }
+    : isDemo
+      ? {
+          flex: primaryFlex,
+          minWidth: 0,
           minHeight: minH,
-          padding: "11px 14px",
+          padding: "11px 10px",
+          borderRadius: 8,
+          border: "none",
+          background: DEMO_UI.blue,
+          color: "#fff",
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }
+      : {
+          flex: primaryFlex,
+          minWidth: 0,
+          minHeight: minH,
+          padding: "11px 10px",
           borderRadius: 12,
           border: "none",
           background: DRIVER_UI.blue,
@@ -421,55 +541,10 @@ function DriverOperationalRouteNav({
           fontSize: 13,
           fontWeight: 700,
           cursor: "pointer",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         };
-    return (
-      <button
-        type="button"
-        title="Ruta, destino y ETA"
-        aria-label="Iniciar ruta hasta destino"
-        onClick={onOpenRoute}
-        style={soloStyle}
-      >
-        Iniciar ruta hasta destino
-      </button>
-    );
-  }
-
-  const primaryFlex = "1 1 74%";
-  const secondaryFlex = "1 1 26%";
-  const primaryStyle = isDemo
-    ? {
-        flex: primaryFlex,
-        minWidth: 0,
-        minHeight: minH,
-        padding: "11px 10px",
-        borderRadius: 8,
-        border: "none",
-        background: DEMO_UI.blue,
-        color: "#fff",
-        fontSize: 14,
-        fontWeight: 600,
-        cursor: "pointer",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      }
-    : {
-        flex: primaryFlex,
-        minWidth: 0,
-        minHeight: minH,
-        padding: "11px 10px",
-        borderRadius: 12,
-        border: "none",
-        background: DRIVER_UI.blue,
-        color: "#fff",
-        fontSize: 13,
-        fontWeight: 700,
-        cursor: "pointer",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      };
   const secondaryStyle = isDemo
     ? {
         flex: secondaryFlex,
@@ -511,11 +586,11 @@ function DriverOperationalRouteNav({
       <button
         type="button"
         title="Ver ruta y navegación activa"
-        aria-label="Ruta iniciada"
-        onClick={onOpenRoute}
+        aria-label={routeActive ? "Ruta iniciada" : "Iniciar ruta"}
+        onClick={() => void handleOpenRoute()}
         style={primaryStyle}
       >
-        ✓ Ruta iniciada
+        {routeActive ? "✓ Ruta iniciada" : "Iniciar ruta"}
       </button>
       <button
         type="button"
@@ -890,10 +965,62 @@ function stopCompactBadge(stop) {
   const entrada = !!stop.hora_llegada_real;
   const salida = isStopCompleted(stop);
   const inOperation = entrada && !salida;
-  const stateText = salida ? "Completada" : inOperation ? "En planta" : "Pendiente";
+  const stateText = salida ? "Completada" : inOperation ? "En muelle" : "Pendiente";
   const fg = salida ? DEMO_UI.descarga : inOperation ? DEMO_UI.amber : DEMO_UI.su;
   const bg = salida ? DEMO_UI.descargaSoft : inOperation ? DEMO_UI.amberSoft : "#f5f5f4";
   return { stateText, fg, bg };
+}
+
+function stopCompletedSummary(item) {
+  const { stop, group } = item;
+  if (!isStopCompleted(stop)) return null;
+  const op =
+    group === "carga" ? "Carga" : group === "descarga" ? "Descarga" : operationNameForStop(stop);
+  return `✓ ${op} completada · ${stopTime(stop.hora_salida_real)}`;
+}
+
+function StopTimesBlock({ stop, isFirstCarga, servicio }) {
+  const rows = buildDriverStopTimesRows({ stop, isFirstCarga, servicio });
+  if (!rows.length) return null;
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: "10px 12px",
+        borderRadius: 10,
+        background: DRIVER_UI.surfaceHi,
+        border: `1px solid ${DRIVER_UI.line}`,
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 800, color: DRIVER_UI.muted, letterSpacing: 0.4, marginBottom: 8 }}>
+        TIEMPOS REGISTRADOS
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {rows.map((row) => (
+          <div
+            key={`${row.label}-${row.value}`}
+            style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}
+          >
+            <span style={{ color: DRIVER_UI.su, fontWeight: 650 }}>{row.label}</span>
+            <span
+              style={{
+                color:
+                  row.kind === "duration"
+                    ? DRIVER_UI.amber
+                    : row.kind === "pending"
+                      ? DRIVER_UI.su
+                      : DRIVER_UI.tx,
+                fontWeight: 800,
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function StopListRowCompact({ item, isCurrent }) {
@@ -951,7 +1078,13 @@ function StopListRowCompact({ item, isCurrent }) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: DEMO_UI.tx, lineHeight: 1.25 }}>{label}</div>
-          <StopRecorridoInfoLines stop={stop} tone="demo" />
+          {stopCompletedSummary(item) ? (
+            <div style={{ fontSize: 12, color: DEMO_UI.descarga, fontWeight: 700, marginTop: 3 }}>
+              {stopCompletedSummary(item)}
+            </div>
+          ) : (
+            <StopRecorridoInfoLines stop={stop} tone="demo" />
+          )}
         </div>
         <span
           style={{
@@ -975,6 +1108,7 @@ function StopListRowCompact({ item, isCurrent }) {
 function DriverRecorridoStops({
   items,
   currentStopId,
+  firstCargaStopId,
   evidenciasByStop,
   canOperate,
   onConfirmMuelle,
@@ -999,6 +1133,7 @@ function DriverRecorridoStops({
             <OperationalStopCard
               item={item}
               isCurrent
+              isFirstCarga={item.stop.id === firstCargaStopId}
               evidencias={evidenciasByStop?.[item.stop.id]}
               canOperate={canOperate && item.stop.id === currentStopId}
               onConfirmMuelle={onConfirmMuelle}
@@ -1127,6 +1262,7 @@ function DriverClienteDocumentosSection({
 function OperationalStopCard({
   item,
   isCurrent,
+  isFirstCarga = false,
   evidencias,
   canOperate,
   onConfirmMuelle,
@@ -1143,7 +1279,7 @@ function OperationalStopCard({
   const docs = stopDocumentSummary(evidencias);
   const operationName = operationNameForStop(stop);
   const inOperation = entrada && !salida;
-  const stateText = salida ? "Salida muelle" : inOperation ? "En planta" : "Pendiente";
+  const stateText = salida ? "Completada" : inOperation ? "En muelle" : "Pendiente";
   const stateTone = salida
     ? { bg: DRIVER_UI.greenSoft, fg: DRIVER_UI.green }
     : inOperation
@@ -1201,10 +1337,13 @@ function OperationalStopCard({
               <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>{label}</div>
               {salida ? (
                 <div style={{ fontSize: 12, color: DRIVER_UI.green, marginTop: 3, fontWeight: 800, lineHeight: 1.3 }}>
-                  {operationName} completada · {stopTime(stop.hora_salida_real)}
+                  ✓ {operationName} completada · {stopTime(stop.hora_salida_real)}
                 </div>
               ) : null}
               <StopRecorridoInfoLines stop={stop} tone="legacy" />
+              {(entrada || salida || (isFirstCarga && servicio?.fecha_inicio)) && (
+                <StopTimesBlock stop={stop} isFirstCarga={isFirstCarga} servicio={servicio} />
+              )}
             </div>
             <span
               style={{
@@ -1228,9 +1367,9 @@ function OperationalStopCard({
                 <button
                   type="button"
                   onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })}
-                  style={actionButtonStyle("green")}
+                  style={muellePrimaryBtnStyle("green")}
                 >
-                  Entrada en muelle
+                  {primaryMuelleActionLabel(stop, "entrada")}
                 </button>
               ) : (
                 <div
@@ -1270,7 +1409,7 @@ function OperationalStopCard({
                 onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
                 disabled={!canOperate}
                 style={{
-                  ...actionButtonStyle("amber"),
+                  ...muellePrimaryBtnStyle("amber"),
                   marginTop: 12,
                   opacity: canOperate ? 1 : 0.55,
                   cursor: canOperate ? "pointer" : "default",
@@ -1281,21 +1420,9 @@ function OperationalStopCard({
             </div>
           ) : null}
 
-          {salida ? (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${DRIVER_UI.line}` }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
-                <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Salida muelle</div>
-                  <div style={{ color: DRIVER_UI.amber, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_salida_real)}</div>
-                </div>
-                <div>
-                  <div style={{ color: DRIVER_UI.muted, fontWeight: 750, marginBottom: 3 }}>Llegada muelle</div>
-                  <div style={{ color: DRIVER_UI.tx, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{stopTime(stop.hora_llegada_real)}</div>
-                </div>
-              </div>
-              {docs.total > 0 ? (
-                <div style={{ color: docs.incidencias ? DRIVER_UI.amber : DRIVER_UI.su, fontSize: 12, fontWeight: 700, marginTop: 8 }}>{docs.label}</div>
-              ) : null}
+          {salida && docs.total > 0 ? (
+            <div style={{ color: docs.incidencias ? DRIVER_UI.amber : DRIVER_UI.su, fontSize: 12, fontWeight: 700, marginTop: 10 }}>
+              {docs.label}
             </div>
           ) : null}
         </div>
@@ -1307,6 +1434,7 @@ function OperationalStopCard({
 function OperationalStops({
   items,
   currentStopId,
+  firstCargaStopId,
   evidenciasByStop,
   canOperate,
   onConfirmMuelle,
@@ -1326,25 +1454,14 @@ function OperationalStops({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {items.map((item, idx) => (
-        <div key={item.stop.id} style={{ position: "relative" }}>
-          {idx > 0 ? (
-            <div
-              style={{
-                position: "absolute",
-                left: 19,
-                top: -10,
-                width: 2,
-                height: 10,
-                background: "linear-gradient(180deg, rgba(148,163,184,.35), rgba(148,163,184,.12))",
-                borderRadius: 1,
-              }}
-            />
-          ) : null}
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {items.map((item) =>
+        item.stop.id === currentStopId ? (
           <OperationalStopCard
+            key={item.stop.id}
             item={item}
-            isCurrent={item.stop.id === currentStopId}
+            isCurrent
+            isFirstCarga={item.stop.id === firstCargaStopId}
             evidencias={evidenciasByStop?.[item.stop.id]}
             canOperate={canOperate && item.stop.id === currentStopId}
             onConfirmMuelle={onConfirmMuelle}
@@ -1355,8 +1472,35 @@ function OperationalStops({
             conductorNombre={conductorNombre}
             onEvidenciaSaved={onEvidenciaSaved}
           />
-        </div>
-      ))}
+        ) : (
+          <div
+            key={item.stop.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "11px 12px",
+              borderRadius: 12,
+              border: `1px solid ${DRIVER_UI.line}`,
+              background: DRIVER_UI.surface,
+            }}
+          >
+            <span style={{ fontSize: 18 }} aria-hidden>
+              {stopTimelineIcon(item.group)}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: DRIVER_UI.tx }}>{item.label}</div>
+              {stopCompletedSummary(item) ? (
+                <div style={{ fontSize: 12, color: DRIVER_UI.green, fontWeight: 700, marginTop: 2 }}>
+                  {stopCompletedSummary(item)}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: DRIVER_UI.su, marginTop: 2 }}>{stopCompactBadge(item.stop).stateText}</div>
+              )}
+            </div>
+          </div>
+        ),
+      )}
     </div>
   );
 }
@@ -1379,6 +1523,7 @@ export function ActiveServicePanel({
   recargar,
   EvidenciasStopComponent,
   onOpenViajeModal,
+  onIniciarRuta = null,
   onRecalculateOperationalRoute = null,
   onEvidenciaSaved,
   onCerrarExpediente,
@@ -1402,6 +1547,15 @@ export function ActiveServicePanel({
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
+  const firstCargaStopId = useMemo(() => {
+    let seen = 0;
+    for (const item of timelineItems) {
+      if (item.group !== "carga") continue;
+      seen += 1;
+      if (seen === 1) return item.stop.id;
+    }
+    return null;
+  }, [timelineItems]);
   const tacografoEstado = useMemo(() => {
     if (!norma) return null;
     return {
@@ -1619,6 +1773,7 @@ export function ActiveServicePanel({
             <DriverRecorridoStops
               items={timelineItems}
               currentStopId={stopMostrar?.id}
+              firstCargaStopId={firstCargaStopId}
               evidenciasByStop={evidenciasByStop}
               canOperate={canOperateStops}
               onConfirmMuelle={setConfirmMuelle}
@@ -1638,7 +1793,9 @@ export function ActiveServicePanel({
                 <DriverOperationalRouteNav
                   servicio={servicio}
                   variant="demo"
+                  emphasis="secondary"
                   showToast={showToast}
+                  onStartRoute={() => onIniciarRuta?.(servicio?.id)}
                   onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
                   onRecalculateRoute={onRecalculateOperationalRoute}
                 />
@@ -1919,6 +2076,7 @@ export function ActiveServicePanel({
           <OperationalStops
             items={timelineItems}
             currentStopId={stopMostrar?.id}
+            firstCargaStopId={firstCargaStopId}
             evidenciasByStop={evidenciasByStop}
             canOperate={canOperateStops}
             onConfirmMuelle={setConfirmMuelle}
@@ -2004,7 +2162,9 @@ export function ActiveServicePanel({
             <DriverOperationalRouteNav
               servicio={servicio}
               variant="driver"
+              emphasis="secondary"
               showToast={showToast}
+              onStartRoute={() => onIniciarRuta?.(servicio?.id)}
               onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
               onRecalculateRoute={onRecalculateOperationalRoute}
             />

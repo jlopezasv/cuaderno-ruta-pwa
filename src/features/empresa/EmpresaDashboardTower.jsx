@@ -120,7 +120,7 @@ function TowerPersonCard({ statusDot, person }) {
 }
 
 export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo }) {
-  const { servicios, conductores, libresList, atencionList } = tower;
+  const { servicios, conductores, sinServicioList, atencionList } = tower;
   const cardStyle = {
     "--tower-border": ui.border,
     "--tower-surface": ui.surface,
@@ -141,12 +141,12 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
           <MetricRow dot="🔴" label="Incidencias" value={servicios.incidencias} />
           <TowerLinkButton onClick={() => onTabChange("servicios")}>Ver servicios →</TowerLinkButton>
 
-          <div className="empresa-tower-section-label">Disponibles para asignar</div>
-          {libresList.length === 0 ? (
+          <div className="empresa-tower-section-label">Sin servicio asignado</div>
+          {sinServicioList.length === 0 ? (
             <div className="empresa-tower-empty">
               {conductores.total === 0
                 ? "Sin conductores vinculados"
-                : "Ningún conductor libre en este momento"}
+                : "Ningún conductor sin servicio asignado"}
               {empresaCodigo && conductores.total === 0 && (
                 <div style={{ marginTop: 8, fontSize: 11 }}>
                   Código equipo:{" "}
@@ -155,7 +155,7 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
               )}
             </div>
           ) : (
-            libresList.map((c) => <TowerPersonCard key={c.uid} statusDot="🟢" person={c} />)
+            sinServicioList.map((c) => <TowerPersonCard key={c.uid} statusDot="🟢" person={c} />)
           )}
           <TowerLinkButton onClick={() => onTabChange("conductores")}>Ver todos →</TowerLinkButton>
         </div>
@@ -163,10 +163,10 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
         <div className="empresa-tower-card" style={cardStyle}>
           <div className="empresa-tower-title">Conductores</div>
           <MetricRow dot="◇" label="Total" value={conductores.total} />
-          <MetricRow dot="🟢" label="Libres" value={conductores.libres} />
-          <MetricRow dot="🟠" label="Ocupados" value={conductores.ocupados} />
+          <MetricRow dot="🟢" label="Sin servicio" value={conductores.sinServicio} />
+          <MetricRow dot="🟠" label="Con servicio activo" value={conductores.conServicioActivo} />
+          <MetricRow dot="🔵" label="Con próximo servicio" value={conductores.conProximoServicio} />
           <MetricRow dot="🔴" label="Atención" value={conductores.atencion} />
-          <MetricRow dot="⚫" label="Sin ubicación" value={conductores.sinUbicacion} />
 
           <div className="empresa-tower-section-label">Atención</div>
           {atencionList.length === 0 ? (
