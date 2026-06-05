@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isDemoApp } from "../../config/appEnvironment.js";
+import { isLocalGeoCatalogEnabled } from "../../config/productFeatures.js";
 import {
   buildPlanificadorDriverMarkers,
   buildPlanificadorPendingCargas,
@@ -125,11 +125,11 @@ export function PlanificadorMapaBeta({
   const su = dark ? "#94A3B8" : "#64748B";
   const border = dark ? "#334155" : "#DBE4EE";
 
-  const isDemo = isDemoApp();
+  const useLocalGeoFallback = isLocalGeoCatalogEnabled();
 
   const cargas = useMemo(
-    () => buildPlanificadorPendingCargas({ servicios, flotaStops, isDemo }),
-    [servicios, flotaStops, isDemo],
+    () => buildPlanificadorPendingCargas({ servicios, flotaStops, useLocalGeoFallback }),
+    [servicios, flotaStops, useLocalGeoFallback],
   );
 
   const drivers = useMemo(

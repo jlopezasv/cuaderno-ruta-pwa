@@ -2,8 +2,7 @@ import { useState } from "react";
 import { PlanificadorMapaBeta } from "./PlanificadorMapaBeta.jsx";
 
 /**
- * Planificador empresa — demo: planificación de ruta + mapa beta.
- * Producción: usar solo el planificador de ruta (sin mapa).
+ * Planificador empresa — planificación de ruta + mapa operativo beta.
  */
 export function EmpresaPlanificadorPanel({
   dark = false,

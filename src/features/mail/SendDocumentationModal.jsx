@@ -11,7 +11,7 @@ import {
 } from "../../domain/mail/clienteMailSender.js";
 import { uploadUserFile } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../../domain/documents/mediaStorageV2.js";
-import { isDemoApp } from "../../config/appEnvironment.js";
+import { isClienteMailEnhancedUiEnabled } from "../../config/productFeatures.js";
 import { CLIENTE_MAIL_SIMULACION_OK_MSG } from "../../config/clienteMail.js";
 
 const LS_HINTS = "cuaderno_cliente_email_hints";
@@ -539,7 +539,7 @@ export function SendDocumentationModal({
 
   const expedienteItem = items.find((x) => x.kind === "expediente_pdf");
   const otrosItems = items.filter((x) => x.kind !== "expediente_pdf");
-  const demoMailUi = isDemoApp();
+  const demoMailUi = isClienteMailEnhancedUiEnabled();
   const ui = demoMailUi ? DEMO_UI : PROD_UI;
   const sectionStyle = {
     padding: ui.sectionPad,

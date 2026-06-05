@@ -12,7 +12,7 @@ import {
 } from "../../domain/service/serviceOperacionMeta.js";
 import { getServiceOperationalPlaces } from "../../domain/service/serviceOperationalPlaces.js";
 import { resolveServiceRouteEndpoints } from "../../domain/service/serviceIdentity.js";
-import { isDemoApp } from "../../config/appEnvironment.js";
+import { isConductoresEmpresaEnhancedUiEnabled } from "../../config/productFeatures.js";
 
 /**
  * Arquitectura multiparada (fase futura). No renderizar hasta `mode: "multistop"`.
@@ -166,7 +166,7 @@ export function buildConductorOperationalProgressBandModel({ servicio, stops = [
 }
 
 export function isConductoresEmpresaDemoUi() {
-  return isDemoApp();
+  return isConductoresEmpresaEnhancedUiEnabled();
 }
 
 /**

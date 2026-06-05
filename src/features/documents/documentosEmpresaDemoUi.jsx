@@ -1,11 +1,11 @@
-import { isDemoApp } from "../../config/appEnvironment.js";
+import { isDocumentosEmpresaEnhancedUiEnabled } from "../../config/productFeatures.js";
 import { ESTADO_COLOR, ESTADO_LABEL } from "../../domain/fleet/serviceStatus.js";
 import { resolveEnvioClienteEstado } from "../../domain/mail/clienteMailEnvioStatus.js";
 
 const DOCS_ROW_BORDER = "1px solid #d1dae6";
 
 export function isDocumentosEmpresaDemoUi() {
-  return isDemoApp();
+  return isDocumentosEmpresaEnhancedUiEnabled();
 }
 
 export const DOCUMENTOS_DEMO_ROW_CSS = `

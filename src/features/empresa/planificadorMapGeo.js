@@ -299,7 +299,7 @@ function finalizeGeoTrace(trace, role) {
 
  * Resuelve coordenadas de un extremo (origen o destino).
 
- * Prioridad: lat/lng almacenados → coord explícito → geocodificación demo (candidatos desambiguados).
+ * Prioridad: lat/lng almacenados → coord explícito → catálogo local (candidatos desambiguados).
 
  * Nunca empresa.
 
@@ -317,7 +317,7 @@ export function resolvePlaceGeo({
 
   fallbackText = "",
 
-  isDemo = false,
+  useLocalGeoFallback = false,
 
 }) {
 
@@ -440,7 +440,7 @@ export function resolvePlaceGeo({
 
 
 
-  if (isDemo && resolvedPlace.codigo_postal) {
+  if (useLocalGeoFallback && resolvedPlace.codigo_postal) {
     const postalHit = lookupPostalCodeLocal(resolvedPlace.pais, resolvedPlace.codigo_postal);
     if (postalHit?.lat != null && postalHit?.lon != null && isPlausibleEuropeMapCoord(postalHit.lat, postalHit.lon)) {
       trace.source = "demo_postal_catalog";
@@ -451,7 +451,7 @@ export function resolvePlaceGeo({
     }
   }
 
-  if (isDemo && candidates.length) {
+  if (useLocalGeoFallback && candidates.length) {
 
     for (const q of candidates) {
 

@@ -18,6 +18,11 @@ const APP_ENV = (import.meta.env.VITE_APP_ENV || "").trim().toLowerCase();
 
 
 
+/**
+ * Capacidades de producto (mapa, documentos, etc.): ver `productFeatures.js`.
+ * `isDemoApp()` solo para aislamiento Supabase, credenciales demo y hints de login.
+ */
+
 /** Entorno demo explícito (Vercel proyecto demo: VITE_APP_ENV=demo). */
 
 export function isDemoApp() {

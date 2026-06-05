@@ -1,4 +1,4 @@
-import { isDemoApp } from "../../config/appEnvironment.js";
+import { isLocalGeoCatalogEnabled } from "../../config/productFeatures.js";
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
 import { stopGeoToPlace } from "../../domain/geo/stopGeoModel.js";
 import {
@@ -78,7 +78,7 @@ function isMarkerReady(geo) {
 export function buildPlanificadorPendingCargas({
   servicios = [],
   flotaStops = {},
-  isDemo = isDemoApp(),
+  useLocalGeoFallback = isLocalGeoCatalogEnabled(),
 }) {
   const rows = [];
   for (const sv of Array.isArray(servicios) ? servicios : []) {
@@ -110,7 +110,7 @@ export function buildPlanificadorPendingCargas({
       stop: cargaStop,
       place: places.carga,
       fallbackText: origenFallback,
-      isDemo,
+      useLocalGeoFallback,
     });
     const destinoGeo = resolvePlaceGeo({
       role: "destino",
@@ -118,7 +118,7 @@ export function buildPlanificadorPendingCargas({
       stop: descargaStop,
       place: places.descarga,
       fallbackText: destinoFallback,
-      isDemo,
+      useLocalGeoFallback,
     });
 
     const hasCoords = isMarkerReady(origenGeo);

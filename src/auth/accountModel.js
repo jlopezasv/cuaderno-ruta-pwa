@@ -4,6 +4,7 @@
  * Preparado para RBAC/planes futuros (roles, permisos, suscripciones).
  */
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
+import { isEmpresaImmediateAccessEnabled } from "../config/productFeatures.js";
 
 /** Tipos de producto contratado (`profiles.tipo_cuenta`). */
 export const ACCOUNT_TYPES = Object.freeze({
@@ -80,7 +81,7 @@ export function deriveShellCapabilities(account, ctx = {}) {
     hasFleetLink;
 
   let empresa = account.accountType === ACCOUNT_TYPES.EMPRESA;
-  if (empresa && isProduction && !isDemo) {
+  if (empresa && isProduction && !isDemo && !isEmpresaImmediateAccessEnabled()) {
     empresa = account.empresaStatus === EMPRESA_STATUS.APPROVED;
   }
 

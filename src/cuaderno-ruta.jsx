@@ -25,6 +25,7 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { isPlanificadorMapaBetaEnabled } from "./config/productFeatures.js";
 import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
 import {
   isDocumentosEmpresaDemoUi,
@@ -14484,7 +14485,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
       {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
       {flotaTab==="planificador"&&(
-        isDemoApp()?(
+        isPlanificadorMapaBetaEnabled()?(
           <EmpresaPlanificadorPanel
             dark={dark}
             routePlanner={<EmpresaPlanificadorRuta dark={dark}/>}
