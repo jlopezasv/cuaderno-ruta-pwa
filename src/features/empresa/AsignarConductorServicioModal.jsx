@@ -19,6 +19,9 @@ const EMPRESA_UI = {
   redSoft: "#fef2f2",
 };
 
+/** Por encima de Leaflet (.leaflet-pane ~400–700) y controles del mapa beta. */
+const MODAL_Z_INDEX = 10000;
+
 function useModalLayout() {
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
@@ -47,12 +50,13 @@ function useModalLayout() {
   const overlayStyle = {
     position: "fixed",
     inset: 0,
-    background: "rgba(15, 23, 42, 0.45)",
-    zIndex: 350,
+    background: "rgba(15, 23, 42, 0.55)",
+    zIndex: MODAL_Z_INDEX,
     display: "flex",
     alignItems: isMobile ? "flex-end" : "center",
     justifyContent: "center",
     padding: isMobile ? 0 : 16,
+    pointerEvents: "auto",
   };
 
   const modalStyle = isMobile
@@ -67,6 +71,7 @@ function useModalLayout() {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        zIndex: MODAL_Z_INDEX + 1,
       }
     : {
         position: "relative",
@@ -78,6 +83,7 @@ function useModalLayout() {
         flexDirection: "column",
         overflow: "hidden",
         boxShadow: "0 24px 48px rgba(15, 23, 42, 0.18)",
+        zIndex: MODAL_Z_INDEX + 1,
       };
 
   return { isMobile, overlayStyle, modalStyle };

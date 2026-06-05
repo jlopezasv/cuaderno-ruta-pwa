@@ -7,6 +7,8 @@ import {
 
 const EUROPE_CENTER = [40.4168, -3.7038];
 const EUROPE_ZOOM = 6;
+const MARKER_CARGA_BG = "#ea580c";
+const MARKER_DRIVER_BG = "#16a34d";
 
 function ensureLeafletAssets() {
   return new Promise((resolve, reject) => {
@@ -80,6 +82,24 @@ function emojiIcon(L, emoji, bg, size = 34) {
   });
 }
 
+function createTypedClusterGroup(L, clusterBg) {
+  return L.markerClusterGroup({
+    showCoverageOnHover: false,
+    maxClusterRadius: 52,
+    spiderfyOnMaxZoom: true,
+    iconCreateFunction: (cluster) => {
+      const count = cluster.getChildCount();
+      const size = count < 10 ? 36 : count < 100 ? 42 : 48;
+      return L.divIcon({
+        html: `<div style="background:${clusterBg};width:${size}px;height:${size}px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(15,23,42,.28);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:${size < 42 ? 13 : 14}px;line-height:1">${count}</div>`,
+        className: "planificador-map-cluster",
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      });
+    },
+  });
+}
+
 export function PlanificadorMapaBeta({
   servicios = [],
   flotaStops = {},
@@ -92,7 +112,8 @@ export function PlanificadorMapaBeta({
 }) {
   const mapDivRef = useRef(null);
   const mapRef = useRef(null);
-  const clusterRef = useRef(null);
+  const cargoClusterRef = useRef(null);
+  const driverClusterRef = useRef(null);
   const [selectedCargoId, setSelectedCargoId] = useState(null);
   const [selectedDriverUid, setSelectedDriverUid] = useState(null);
   const [mapReady, setMapReady] = useState(false);
@@ -135,7 +156,8 @@ export function PlanificadorMapaBeta({
         if (mapRef.current) {
           mapRef.current.remove();
           mapRef.current = null;
-          clusterRef.current = null;
+          cargoClusterRef.current = null;
+          driverClusterRef.current = null;
         }
         const map = L.map(mapDivRef.current, { zoomControl: true }).setView(
           EUROPE_CENTER,
@@ -145,14 +167,13 @@ export function PlanificadorMapaBeta({
           maxZoom: 18,
           attribution: "© OSM",
         }).addTo(map);
-        const cluster = L.markerClusterGroup({
-          showCoverageOnHover: false,
-          maxClusterRadius: 52,
-          spiderfyOnMaxZoom: true,
-        });
-        map.addLayer(cluster);
+        const cargoCluster = createTypedClusterGroup(L, MARKER_CARGA_BG);
+        const driverCluster = createTypedClusterGroup(L, MARKER_DRIVER_BG);
+        map.addLayer(cargoCluster);
+        map.addLayer(driverCluster);
         mapRef.current = map;
-        clusterRef.current = cluster;
+        cargoClusterRef.current = cargoCluster;
+        driverClusterRef.current = driverCluster;
         setMapReady(true);
       })
       .catch((e) => {
@@ -163,7 +184,8 @@ export function PlanificadorMapaBeta({
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
-        clusterRef.current = null;
+        cargoClusterRef.current = null;
+        driverClusterRef.current = null;
       }
       setMapReady(false);
     };
@@ -172,26 +194,28 @@ export function PlanificadorMapaBeta({
   useEffect(() => {
     const L = window.L;
     const map = mapRef.current;
-    const cluster = clusterRef.current;
-    if (!mapReady || !L || !map || !cluster) return;
+    const cargoCluster = cargoClusterRef.current;
+    const driverCluster = driverClusterRef.current;
+    if (!mapReady || !L || !map || !cargoCluster || !driverCluster) return;
 
-    cluster.clearLayers();
+    cargoCluster.clearLayers();
+    driverCluster.clearLayers();
     const bounds = [];
 
     for (const cargo of cargas) {
       if (!cargo.hasCoords) continue;
       const { lat, lon } = cargo.coords;
       const marker = L.marker([lat, lon], {
-        icon: emojiIcon(L, "📦", "#2563eb"),
+        icon: emojiIcon(L, "📦", MARKER_CARGA_BG),
       });
       marker.bindPopup(
-        `<b>📦 Carga pendiente</b><br>${cargo.origenLabel}<br>→ ${cargo.destinoLabel}<br>${cargo.cliente}`,
+        `<b>📦 Servicio pendiente</b><br>${cargo.origenLabel}<br>→ ${cargo.destinoLabel}<br>${cargo.cliente}`,
       );
       marker.on("click", () => {
         setSelectedCargoId(cargo.id);
         setSelectedDriverUid(null);
       });
-      cluster.addLayer(marker);
+      cargoCluster.addLayer(marker);
       bounds.push([lat, lon]);
     }
 
@@ -199,7 +223,7 @@ export function PlanificadorMapaBeta({
       if (!driver.hasCoords) continue;
       const { lat, lon } = driver.coords;
       const marker = L.marker([lat, lon], {
-        icon: emojiIcon(L, "🚚", driver.status.color),
+        icon: emojiIcon(L, "🚚", MARKER_DRIVER_BG),
       });
       marker.bindPopup(
         `<b>🚚 ${driver.nombre}</b><br>${driver.ubicLabel}<br>${driver.status.label}`,
@@ -208,7 +232,7 @@ export function PlanificadorMapaBeta({
         setSelectedDriverUid(driver.uid);
         setSelectedCargoId(null);
       });
-      cluster.addLayer(marker);
+      driverCluster.addLayer(marker);
       bounds.push([lat, lon]);
     }
 
@@ -225,25 +249,35 @@ export function PlanificadorMapaBeta({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!mapReady || !map || !selectedCargo?.hasCoords) return;
-    const { lat, lon } = selectedCargo.coords;
+    if (!mapReady || !map) return;
+    const target = selectedCargo?.hasCoords
+      ? selectedCargo
+      : selectedDriver?.hasCoords
+        ? selectedDriver
+        : null;
+    if (!target?.coords) return;
+    const { lat, lon } = target.coords;
     try {
       map.flyTo([lat, lon], Math.max(map.getZoom(), 8), { duration: 0.6 });
     } catch (_) {
       map.setView([lat, lon], 8);
     }
-  }, [mapReady, selectedCargoId, selectedCargo]);
+  }, [mapReady, selectedCargoId, selectedCargo, selectedDriverUid, selectedDriver]);
 
   const cargasConCoords = cargas.filter((c) => c.hasCoords).length;
   const driversConCoords = drivers.filter((d) => d.hasCoords).length;
 
   return (
     <div
+      className="planificador-mapa-beta-root"
       style={{
         display: "flex",
         flexDirection: "column",
         gap: 10,
         minHeight: 420,
+        position: "relative",
+        zIndex: 0,
+        isolation: "isolate",
       }}
     >
       <div
@@ -369,9 +403,10 @@ export function PlanificadorMapaBeta({
           </div>
         </aside>
 
-        <div style={{ position: "relative", minHeight: 320 }}>
+        <div className="planificador-mapa-beta-map" style={{ position: "relative", minHeight: 320 }}>
           <div
             ref={mapDivRef}
+            className="planificador-mapa-beta-map-host"
             style={{
               height: "100%",
               minHeight: 320,
@@ -402,7 +437,66 @@ export function PlanificadorMapaBeta({
             </div>
           ) : null}
 
-          {selectedDriver ? (
+          {selectedCargo ? (
+            <div
+              style={{
+                position: "absolute",
+                right: 10,
+                bottom: 10,
+                left: 10,
+                maxWidth: 300,
+                marginLeft: "auto",
+                background: card,
+                border: `1px solid ${border}`,
+                borderRadius: 12,
+                padding: "10px 12px",
+                boxShadow: "0 8px 24px rgba(15,23,42,.15)",
+                zIndex: 8,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: tx }}>📦 Servicio pendiente</div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCargoId(null)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: su,
+                    cursor: "pointer",
+                    fontSize: 14,
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: tx, marginTop: 6, lineHeight: 1.4 }}>
+                {selectedCargo.origenLabel} → {selectedCargo.destinoLabel}
+              </div>
+              <div style={{ fontSize: 11, color: su, marginTop: 4, lineHeight: 1.45 }}>
+                {selectedCargo.cliente} · {selectedCargo.salidaLabel}
+              </div>
+              {onBuscarConductor ? (
+                <button
+                  type="button"
+                  onClick={() => onBuscarConductor(selectedCargo.id)}
+                  style={{
+                    marginTop: 8,
+                    background: "#2563eb",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  Buscar conductor
+                </button>
+              ) : null}
+            </div>
+          ) : selectedDriver ? (
             <div
               style={{
                 position: "absolute",
@@ -416,7 +510,7 @@ export function PlanificadorMapaBeta({
                 borderRadius: 12,
                 padding: "10px 12px",
                 boxShadow: "0 8px 24px rgba(15,23,42,.15)",
-                zIndex: 500,
+                zIndex: 8,
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -520,6 +614,19 @@ export function PlanificadorMapaBeta({
     grid-template-columns: 1fr !important;
   }
 }
+/* Leaflet: capas contenidas en el panel (modales app usan z-index 10000+) */
+.planificador-mapa-beta-map .leaflet-container {
+  z-index: 0 !important;
+}
+.planificador-mapa-beta-map .leaflet-pane {
+  z-index: auto !important;
+}
+.planificador-mapa-beta-map .leaflet-tile-pane { z-index: 1 !important; }
+.planificador-mapa-beta-map .leaflet-overlay-pane { z-index: 2 !important; }
+.planificador-mapa-beta-map .leaflet-shadow-pane { z-index: 3 !important; }
+.planificador-mapa-beta-map .leaflet-marker-pane { z-index: 4 !important; }
+.planificador-mapa-beta-map .leaflet-tooltip-pane { z-index: 5 !important; }
+.planificador-mapa-beta-map .leaflet-popup-pane { z-index: 6 !important; }
 `}</style>
     </div>
   );

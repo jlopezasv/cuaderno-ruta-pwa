@@ -150,9 +150,15 @@ import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
 import {
+  defaultStopCountry,
+  EU_COUNTRY_OPTIONS,
+  lookupPostalCode,
+} from "./domain/geo/postalCodeLookup.js";
+import {
   emptyStopGeoForm,
   formatStopGeoSummary,
   prepareStopsGeoForPersist,
+  stopMissingPostalWarning,
 } from "./domain/geo/stopGeoModel.js";
 import { OperationalSummaryLite } from "./modules/operational-lite/OperationalSummaryLite.jsx";
 import {
@@ -12092,6 +12098,88 @@ function formatNuevoServicioStopSummary(stop){
   return `${meta.icon} ${meta.label} · ${formatStopGeoSummary(stop)}`;
 }
 
+/** Campos de parada — solo modal Nuevo servicio (AsignarServicioModal). */
+function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,warn}){
+  const[lookupStatus,setLookupStatus]=useState("idle");
+  const[lookupHint,setLookupHint]=useState("");
+  const lastLookupKey=useRef("");
+  const onChangeRef=useRef(onChange);
+  onChangeRef.current=onChange;
+
+  useEffect(()=>{
+    const cp=String(stop?.codigo_postal||"").trim();
+    const pais=String(stop?.pais||"").trim()||defaultStopCountry();
+    if(cp.length<4){setLookupStatus("idle");if(!cp)setLookupHint("");return;}
+    const key=`${pais}|${cp}`;
+    if(key===lastLookupKey.current)return;
+    let cancelled=false;
+    const timer=setTimeout(async()=>{
+      setLookupStatus("loading");
+      const result=await lookupPostalCode({pais,codigoPostal:cp});
+      if(cancelled)return;
+      lastLookupKey.current=key;
+      if(!result){setLookupStatus("miss");setLookupHint("CP no encontrado — completa ciudad manualmente");return;}
+      setLookupStatus("ok");
+      setLookupHint(result.provincia?`Sugerido: ${result.ciudad}, ${result.provincia}`:`Sugerido: ${result.ciudad}`);
+      if(result.ciudad&&!String(stop?.nombre||"").trim())onChangeRef.current(index,"nombre",result.ciudad);
+      if(result.provincia&&!String(stop?.provincia||"").trim())onChangeRef.current(index,"provincia",result.provincia);
+      if(result.pais&&!String(stop?.pais||"").trim())onChangeRef.current(index,"pais",result.pais);
+      if(result.lat!=null&&(stop?.lat==null||stop?.lat===""))onChangeRef.current(index,"lat",result.lat);
+      if(result.lon!=null&&(stop?.lon==null||stop?.lon===""))onChangeRef.current(index,"lon",result.lon);
+    },400);
+    return()=>{cancelled=true;clearTimeout(timer);};
+  },[stop?.pais,stop?.codigo_postal,index]);
+
+  const set=(field,val)=>{
+    if(field==="detalles"){onChange(index,"detalles",val);onChange(index,"notas",val);return;}
+    if(field==="codigo_postal"||field==="pais")lastLookupKey.current="";
+    onChange(index,field,val);
+  };
+
+  const missingCp=stopMissingPostalWarning(stop);
+
+  return(
+    <div className="nuevo-servicio-parada-grid">
+      <style>{`
+.nuevo-servicio-parada-grid .nsp-row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-bottom:8px;}
+@media(max-width:720px){.nuevo-servicio-parada-grid .nsp-row-2{grid-template-columns:1fr;gap:6px;}}
+`}</style>
+      <div className="nsp-row-2">
+        <div>
+          <div style={lbl}>Ciudad</div>
+          <input value={stop?.nombre||""} onChange={e=>set("nombre",e.target.value)} placeholder="El Ejido" style={inp}/>
+        </div>
+        <div>
+          <div style={lbl}>Código Postal</div>
+          <input value={stop?.codigo_postal||""} onChange={e=>set("codigo_postal",e.target.value.toUpperCase())} placeholder="04700" style={inp}/>
+          <div style={{...lbl,marginTop:4}}>País</div>
+          <select value={stop?.pais||defaultStopCountry()} onChange={e=>set("pais",e.target.value)} style={{...inp,marginBottom:0,fontSize:12,padding:"6px 8px"}}>
+            {EU_COUNTRY_OPTIONS.map(c=><option key={c.code} value={c.label}>{c.label}</option>)}
+          </select>
+        </div>
+      </div>
+      {lookupStatus==="loading"?<div style={{fontSize:10,color:su,marginBottom:4}}>Buscando localidad…</div>:lookupHint?(
+        <div style={{fontSize:10,color:lookupStatus==="ok"?accent:warn,marginBottom:4,fontWeight:600}}>{lookupHint}</div>
+      ):null}
+      {missingCp?<div style={{fontSize:10,color:warn,marginBottom:6}}>Sin código postal: la ubicación puede ser menos precisa.</div>:null}
+      <div className="nsp-row-2">
+        <div>
+          <div style={lbl}>Muelle / Operador</div>
+          <input value={stop?.empresa||""} onChange={e=>set("empresa",e.target.value)} placeholder="Polígono sector 20" style={{...inp,color:su}}/>
+        </div>
+        <div>
+          <div style={lbl}>Dirección</div>
+          <input value={stop?.direccion||""} onChange={e=>set("direccion",e.target.value)} placeholder="Calle, polígono, nave…" style={inp}/>
+        </div>
+      </div>
+      <div>
+        <div style={lbl}>Detalles</div>
+        <input value={stop?.detalles??stop?.notas??""} onChange={e=>set("detalles",e.target.value)} placeholder="Puerta, horario, referencia muelle…" style={{...inp,marginBottom:0}}/>
+      </div>
+    </div>
+  );
+}
+
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,onClose,onCreado}){
   const sinConductor=!conductorId;
   const[ref,setRef]=useState("");
@@ -12110,6 +12198,17 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
   const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
   const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
+  const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309"};
+  const desktopModalStyle=isMobile?modalStyle:{
+    position:"relative",
+    width:"min(95vw, 1200px)",
+    maxWidth:1200,
+    maxHeight:"88vh",
+    borderRadius:16,
+    display:"flex",
+    flexDirection:"column",
+    overflow:"hidden",
+  };
   function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
     // Insertar después del índice i con orden intermedio
@@ -12242,7 +12341,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
             {stops.length>1&&<button type="button" onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
           </div>
         </div>
-        <StopGeoFieldsForm stop={stop} index={i} onChange={changeStop} themeKey="empresa" layout="servicio-grid" showGeoStatus={false}/>
+        <NuevoServicioParadaFields stop={stop} index={i} onChange={changeStop} {...paradaFieldProps}/>
       </div>
       {i<stops.length-1&&(
         <button type="button" onClick={()=>addStopAfter(i)}
@@ -12256,13 +12355,10 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   return(
     <div style={overlayStyle} onClick={onClose}>
       <div style={{
-        ...modalStyle,
+        ...desktopModalStyle,
         background:card,
         boxShadow:"0 24px 60px rgba(15,23,42,.18)",
         border:`1px solid ${EMPRESA_UI.border}`,
-        display:"flex",
-        flexDirection:"column",
-        ...(isMobile?{}:{width:"min(95vw, 1200px)",maxWidth:1200}),
       }} onClick={e=>e.stopPropagation()}>
 
         <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
@@ -12355,7 +12451,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
                       </div>
                       <span style={{fontSize:10,color:su,fontWeight:700,flexShrink:0}}>#{i+1}</span>
                     </div>
-                    <StopGeoFieldsForm stop={stop} index={i} onChange={changeStop} themeKey="empresa" layout="servicio-grid" showGeoStatus={false}/>
+                    <NuevoServicioParadaFields stop={stop} index={i} onChange={changeStop} {...paradaFieldProps}/>
                   </div>
                 );
               })}
