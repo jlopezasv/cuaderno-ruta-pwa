@@ -53,7 +53,7 @@ export function DocsServicioEstadoPill({ servicioEstado, archived }) {
   );
 }
 
-/** Cabecera empresa compacta (identidad + equipo + acciones). */
+/** Cabecera empresa compacta (identidad + equipo + acciones) — demo y producción. */
 export function EmpresaIdentityBarCompact({
   empresaNombre,
   empresaCif,

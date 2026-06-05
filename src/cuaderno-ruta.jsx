@@ -14141,87 +14141,34 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       )}
 
       {/* Identidad empresa + código de equipo */}
-      {isDocumentosEmpresaDemoUi()?(
-        <EmpresaIdentityBarCompact
-          empresaNombre={empresa?.nombre}
-          empresaCif={empresa?.cif}
-          serviciosEnRuta={serviciosEnRuta}
-          codigoEquipoShow={codigoEquipoShow}
-          generandoCodigoEquipo={generandoCodigoEquipo}
-          tx={tx}
-          su={su}
-          accent={EMPRESA_UI.accent}
-          surfaceSoft={EMPRESA_UI.surfaceSoft}
-          border={EMPRESA_UI.border}
-          onCopy={()=>{
-            navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));
-          }}
-          onShare={async()=>{
-            const code=codigoEquipoStrict||codigoEquipoShow;
-            if(!code)return;
-            const url=buildEquipoDeepLink(code);
-            const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
-            const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
-            try{
-              if(navigator.share)await navigator.share({title,text,url});
-              else await navigator.clipboard.writeText(`${text}\n${url}`);
-              showToast("Listo para compartir");
-            }catch{/* cancelado */}
-          }}
-          onQrInvite={()=>setInviteEquipoOpen(true)}
-        />
-      ):(
-        <div style={{background:EMPRESA_UI.surface,borderBottom:`1px solid ${EMPRESA_UI.border}`,padding:"10px 14px 12px",display:"flex",flexDirection:"column",gap:10}}>
-          <div style={{fontSize:12,color:EMPRESA_UI.subtle,minWidth:0}}>
-            <span style={{fontWeight:650,color:tx}}>{empresa?.nombre}</span>
-            {empresa?.cif&&<span style={{marginLeft:8}}>· CIF {empresa.cif}</span>}
-            <span style={{marginLeft:8,color:su}}>
-              · <strong style={{color:EMPRESA_UI.accent}}>{serviciosEnRuta}</strong> en ruta
-            </span>
-          </div>
-          <div style={{display:"flex",flexWrap:"wrap",alignItems:"flex-end",justifyContent:"space-between",gap:10}}>
-            <div style={{minWidth:0,flex:"1 1 160px"}}>
-              <div style={{fontSize:10,color:su,fontWeight:750,letterSpacing:.6,marginBottom:4}}>Código de equipo</div>
-              {generandoCodigoEquipo?(
-                <div style={{fontSize:14,fontWeight:700,color:tx,display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{width:8,height:8,borderRadius:"50%",background:EMPRESA_UI.accent,opacity:.85}}/>
-                  Generando código…
-                </div>
-              ):(
-                <div style={{fontFamily:"ui-monospace,monospace",fontSize:17,fontWeight:850,color:tx,letterSpacing:.5}}>{codigoEquipoShow}</div>
-              )}
-            </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
-              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-                onClick={()=>{navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));}}
-                style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-                Copiar
-              </button>
-              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-                onClick={async()=>{
-                  const code=codigoEquipoStrict||codigoEquipoShow;
-                  if(!code)return;
-                  const url=buildEquipoDeepLink(code);
-                  const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
-                  const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
-                  try{
-                    if(navigator.share)await navigator.share({title,text,url});
-                    else await navigator.clipboard.writeText(`${text}\n${url}`);
-                    showToast("Listo para compartir");
-                  }catch{/* cancelado */}
-                }}
-                style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,color:tx,fontSize:12,fontWeight:700,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-                Compartir
-              </button>
-              <button type="button" disabled={generandoCodigoEquipo||!codigoEquipoShow}
-                onClick={()=>setInviteEquipoOpen(true)}
-                style={{background:EMPRESA_UI.tx,color:"#fff",border:"none",borderRadius:10,fontSize:12,fontWeight:750,cursor:generandoCodigoEquipo?"default":"pointer",padding:"8px 12px",opacity:generandoCodigoEquipo?0.55:1}}>
-                QR invitar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <EmpresaIdentityBarCompact
+        empresaNombre={empresa?.nombre}
+        empresaCif={empresa?.cif}
+        serviciosEnRuta={serviciosEnRuta}
+        codigoEquipoShow={codigoEquipoShow}
+        generandoCodigoEquipo={generandoCodigoEquipo}
+        tx={tx}
+        su={su}
+        accent={EMPRESA_UI.accent}
+        surfaceSoft={EMPRESA_UI.surfaceSoft}
+        border={EMPRESA_UI.border}
+        onCopy={()=>{
+          navigator.clipboard?.writeText(codigoEquipoShow).then(()=>showToast("Copiado ✓")).catch(()=>showToast("No se pudo copiar"));
+        }}
+        onShare={async()=>{
+          const code=codigoEquipoStrict||codigoEquipoShow;
+          if(!code)return;
+          const url=buildEquipoDeepLink(code);
+          const title=`Únete a ${empresa?.nombre||"nuestro equipo"}`;
+          const text=`Abre Cuaderno de Ruta con este código de equipo: ${code}`;
+          try{
+            if(navigator.share)await navigator.share({title,text,url});
+            else await navigator.clipboard.writeText(`${text}\n${url}`);
+            showToast("Listo para compartir");
+          }catch{/* cancelado */}
+        }}
+        onQrInvite={()=>setInviteEquipoOpen(true)}
+      />
 
       {/* ── CONDUCTORES ── */}
       {flotaTab==="conductores"&&(
