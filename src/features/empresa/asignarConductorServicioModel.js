@@ -18,9 +18,10 @@ export const ASIGNAR_CONDUCTOR_SORT_STRATEGIES = Object.freeze({
 
 /** @deprecated Usar resolveConductorOperationalVisual — se mantiene para imports legacy. */
 export const CONDUCTOR_ASSIGN_STATUS_META = Object.freeze({
-  disponible: { key: "disponible", label: "Disponible", dot: "🟢", color: "#15803d", bg: "#dcfce7", border: "#86efac", sortTier: 0 },
-  en_servicio: { key: "proximo_servicio", label: "Con servicio asignado", dot: "🟠", color: "#c2410c", bg: "#ffedd5", border: "#fdba74", sortTier: 1 },
-  atencion: { key: "atencion", label: "Atención", dot: "🔴", color: "#b91c1c", bg: "#fee2e2", border: "#fca5a5", sortTier: 3 },
+  disponible: { key: "disponible", label: "Sin servicio", dot: "🟢", color: "#15803d", bg: "#dcfce7", border: "#86efac", sortTier: 0 },
+  proximo_servicio: { key: "proximo_servicio", label: "Con servicio asignado", dot: "🟠", color: "#c2410c", bg: "#ffedd5", border: "#fdba74", sortTier: 1 },
+  en_servicio: { key: "en_servicio", label: "En curso", dot: "🔵", color: "#1d4ed8", bg: "#dbeafe", border: "#93c5fd", sortTier: 2 },
+  sin_ubic: { key: "sin_ubic", label: "Sin ubicación reciente", dot: "⚪", color: "#64748b", bg: "#f1f5f9", border: "#cbd5e1", sortTier: 3 },
 });
 
 function normalizeSearchText(value) {
@@ -97,8 +98,6 @@ export function buildAsignarConductorPickerRows({
       conductor,
       servicios: flotaServicios,
       ubicacion: ubicacionByUid[uid],
-      incidenciasByServicioId,
-      nowMs,
     });
     const status = resolveConductorAssignStatus(classified, ubicacionByUid[uid]);
     const telefono = formatConductorTelefonoDisplay(
@@ -141,11 +140,11 @@ export function buildAsignarConductorPickerRows({
   return filtered;
 }
 
-/** Agrupa filas del picker por sección (disponibles → ocupados → atención). */
+/** Agrupa filas del picker por sección operativa (servicio / ubicación). */
 export function groupAsignarConductorPickerRows(rows = []) {
   const bySection = Object.fromEntries(ASIGNAR_CONDUCTOR_SECTIONS.map((s) => [s.id, []]));
   for (const row of rows) {
-    const sectionId = row.status?.assignSection || "disponibles";
+    const sectionId = row.status?.assignSection || "sin_servicio";
     if (bySection[sectionId]) bySection[sectionId].push(row);
   }
   return ASIGNAR_CONDUCTOR_SECTIONS.map((section) => ({

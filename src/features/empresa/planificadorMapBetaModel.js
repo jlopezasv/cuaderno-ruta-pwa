@@ -174,8 +174,6 @@ export function buildPlanificadorDriverMarkers({
       conductor,
       servicios: flotaServicios,
       ubicacion: ubic,
-      incidenciasByServicioId,
-      nowMs,
     });
     const status = resolveDriverMapStatus(classified, ubic);
     const rawLat = ubic?.lat;

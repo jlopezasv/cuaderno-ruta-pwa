@@ -293,8 +293,7 @@ export function PlanificadorMapaBeta({
         }}
       >
         Vista beta · {cargas.length} carga{cargas.length !== 1 ? "s" : ""} sin conductor ·{" "}
-        {driversDisponibles} disponible{driversDisponibles !== 1 ? "s" : ""} ·{" "}
-        {driversConCoords} en mapa · 🟢 libre · 🟠 asignado · 🔵 en curso · 🔴 atención · ⚪ sin GPS
+        {driversDisponibles} sin servicio · {driversConCoords} en mapa · 🟢 sin servicio · 🟠 asignado · 🔵 en curso · ⚪ sin GPS
       </div>
 
       <div

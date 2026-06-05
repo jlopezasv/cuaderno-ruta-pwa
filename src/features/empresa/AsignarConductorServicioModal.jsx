@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { asignarConductorEnServicioCreado } from "../../domain/fleet/servicioCreateFlow.js";
 import {
   fetchServicioConductorIds,
@@ -22,8 +23,26 @@ const EMPRESA_UI = {
   redSoft: "#fef2f2",
 };
 
-/** Por encima de Leaflet (.leaflet-pane ~400–700) y controles del mapa beta. */
+const OVERLAY_Z_INDEX = 9999;
 const MODAL_Z_INDEX = 10000;
+const MODAL_BODY_CLASS = "cuaderno-asignar-conductor-modal-open";
+
+const MODAL_LEAFLET_LOCK_CSS = `
+body.${MODAL_BODY_CLASS} .leaflet-container,
+body.${MODAL_BODY_CLASS} .leaflet-pane,
+body.${MODAL_BODY_CLASS} .leaflet-top,
+body.${MODAL_BODY_CLASS} .leaflet-bottom,
+body.${MODAL_BODY_CLASS} .leaflet-control {
+  z-index: 1 !important;
+}
+body.${MODAL_BODY_CLASS} .leaflet-container {
+  pointer-events: none !important;
+}
+body.${MODAL_BODY_CLASS} .planificador-mapa-beta-map,
+body.${MODAL_BODY_CLASS} .planificador-mapa-beta-root {
+  z-index: 0 !important;
+}
+`;
 
 function useModalLayout() {
   const [isMobile, setIsMobile] = useState(
@@ -54,15 +73,11 @@ function useModalLayout() {
     position: "fixed",
     inset: 0,
     background: "rgba(15, 23, 42, 0.55)",
-    zIndex: MODAL_Z_INDEX,
-    display: "flex",
-    alignItems: isMobile ? "flex-end" : "center",
-    justifyContent: "center",
-    padding: isMobile ? 0 : 16,
+    zIndex: OVERLAY_Z_INDEX,
     pointerEvents: "auto",
   };
 
-  const modalStyle = isMobile
+  const panelStyle = isMobile
     ? {
         position: "fixed",
         left: 0,
@@ -74,22 +89,27 @@ function useModalLayout() {
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        zIndex: MODAL_Z_INDEX + 1,
+        zIndex: MODAL_Z_INDEX,
+        pointerEvents: "auto",
+        boxShadow: "0 -12px 40px rgba(15, 23, 42, 0.28)",
       }
     : {
-        position: "relative",
-        width: "100%",
-        maxWidth: 520,
-        maxHeight: "88vh",
+        position: "fixed",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: "min(520px, calc(100vw - 32px))",
+        maxHeight: "min(88vh, 720px)",
         borderRadius: 16,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
         boxShadow: "0 24px 48px rgba(15, 23, 42, 0.18)",
-        zIndex: MODAL_Z_INDEX + 1,
+        zIndex: MODAL_Z_INDEX,
+        pointerEvents: "auto",
       };
 
-  return { isMobile, overlayStyle, modalStyle };
+  return { isMobile, overlayStyle, panelStyle };
 }
 
 function StatusBadge({ status }) {
@@ -193,7 +213,18 @@ export function AsignarConductorServicioModal({
   const [selected, setSelected] = useState(() => new Set());
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [pendingConfirm, setPendingConfirm] = useState(null);
-  const { overlayStyle, modalStyle } = useModalLayout();
+  const { overlayStyle, panelStyle } = useModalLayout();
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.classList.add(MODAL_BODY_CLASS);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.classList.remove(MODAL_BODY_CLASS);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, []);
 
   const principalId = servicio?.conductor_id || null;
   const isAssignMode = !principalId;
@@ -342,14 +373,30 @@ export function AsignarConductorServicioModal({
   const headerTitle = isAssignMode ? "Asignar conductor" : "Conductores del servicio";
   const busy = saving || loadingExisting;
 
-  return (
-    <div style={overlayStyle} onClick={onClose}>
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <>
+      <style>{MODAL_LEAFLET_LOCK_CSS}</style>
       <div
-        style={{ ...modalStyle, background: EMPRESA_UI.surface }}
+        className="asignar-conductor-modal-overlay"
+        style={overlayStyle}
+        onClick={onClose}
+        role="presentation"
+        aria-hidden="true"
+      />
+      <div
+        className="asignar-conductor-modal-panel"
+        style={{ ...panelStyle, background: EMPRESA_UI.surface }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="asignar-conductor-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ padding: "14px 16px", borderBottom: `1px solid ${EMPRESA_UI.border}` }}>
-          <div style={{ fontSize: 16, fontWeight: 750, color: EMPRESA_UI.tx }}>{headerTitle}</div>
+          <div id="asignar-conductor-modal-title" style={{ fontSize: 16, fontWeight: 750, color: EMPRESA_UI.tx }}>
+            {headerTitle}
+          </div>
           <div style={{ fontSize: 12, color: EMPRESA_UI.muted, marginTop: 6, lineHeight: 1.45 }}>
             Servicio:
             <br />
@@ -477,7 +524,7 @@ export function AsignarConductorServicioModal({
                           color: EMPRESA_UI.muted,
                           textTransform: "uppercase",
                           letterSpacing: "0.04em",
-                          margin: section.id === "disponibles" ? "0 0 10px" : "14px 0 10px",
+                          margin: section.id === "sin_servicio" ? "0 0 10px" : "14px 0 10px",
                         }}
                       >
                         {section.title}
@@ -673,6 +720,7 @@ export function AsignarConductorServicioModal({
           </>
         )}
       </div>
-    </div>
+    </>,
+    document.body,
   );
 }

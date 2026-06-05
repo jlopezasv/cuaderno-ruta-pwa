@@ -1,22 +1,10 @@
 import { formatSpanishAgo } from "../../domain/service/etaFormatter.js";
-import { LIM, fmtDur } from "../../domain/route/routePlanning.js";
-import { hasCriticalAttention } from "./conductorOperationalVisual.js";
+import { hasSinUbicacionReciente, resolveConductorOperationalVisual } from "./conductorOperationalVisual.js";
 import { resolveConductorTelefonoMovil, formatConductorTelefonoDisplay } from "./conductorTelefonoMovil.js";
 
 const TERMINAL_ESTADOS = new Set(["cerrado", "completado", "anulado", "cancelado"]);
-const WEEK_ATTENTION_RATIO = 0.9;
-const UBIC_ATTENTION_STALE_MS = 6 * 60 * 60 * 1000;
 
 export const TOWER_SIN_SERVICIO_MAX = 5;
-export const TOWER_ATENCION_MAX = 5;
-
-export const TOWER_ATTENTION_LABELS = Object.freeze({
-  sin_ubicacion: "Sin ubicación",
-  limite_conduccion: "Límite de conducción",
-  incidencia: "Incidencia abierta",
-  exceso_semanal: "Exceso semanal",
-  gps_sin_actualizar: "GPS sin actualizar",
-});
 
 function isTerminalEstado(estado) {
   return TERMINAL_ESTADOS.has(String(estado || "").toLowerCase());
@@ -56,56 +44,11 @@ function serviciosOperativosConductor(servicios, userId) {
   );
 }
 
-function ubicAttentionFlags(ubic, nowMs) {
-  if (!ubic || ubic.missing || ubic.fetchError) {
-    return { sinUbicacion: true, gpsStale: false };
-  }
-  if (ubic.recent === false) {
-    const ts = ubic.updatedAt || ubic.ts;
-    if (!ts) return { sinUbicacion: true, gpsStale: false };
-    const diff = Math.max(0, nowMs - new Date(ts).getTime());
-    return {
-      sinUbicacion: true,
-      gpsStale: diff >= UBIC_ATTENTION_STALE_MS,
-    };
-  }
-  return { sinUbicacion: false, gpsStale: false };
-}
-
-function buildAttentionSignals({ norma, ubic, serviciosOperativos, incidenciasByServicioId, nowMs }) {
-  const signals = [];
-  if (norma && Number(norma.canDrive) <= 0) {
-    signals.push({ code: "limite_conduccion", label: TOWER_ATTENTION_LABELS.limite_conduccion });
-  }
-  const tieneIncidencia = (serviciosOperativos || []).some(
-    (s) => servicioIncidenciasCount(s, incidenciasByServicioId) > 0,
-  );
-  if (tieneIncidencia) {
-    signals.push({ code: "incidencia", label: TOWER_ATTENTION_LABELS.incidencia });
-  }
-  const week = Number(norma?.weekDrive) || 0;
-  if (week >= LIM.WEEK * WEEK_ATTENTION_RATIO) {
-    signals.push({
-      code: "exceso_semanal",
-      label: TOWER_ATTENTION_LABELS.exceso_semanal,
-      detail: `${fmtDur(week)} / ${fmtDur(LIM.WEEK)}`,
-    });
-  }
-  const { sinUbicacion, gpsStale } = ubicAttentionFlags(ubic, nowMs);
-  if (gpsStale) {
-    signals.push({ code: "gps_sin_actualizar", label: TOWER_ATTENTION_LABELS.gps_sin_actualizar });
-  } else if (sinUbicacion) {
-    signals.push({ code: "sin_ubicacion", label: TOWER_ATTENTION_LABELS.sin_ubicacion });
-  }
-  return signals;
-}
-
+/** Clasificación operativa por carga/servicio (no normativa de conducción). */
 export function classifyConductorTowerState({
   conductor,
   servicios,
   ubicacion,
-  incidenciasByServicioId,
-  nowMs = Date.now(),
 }) {
   if (!conductor?.user_id) return null;
   const uid = conductor.user_id;
@@ -113,13 +56,6 @@ export function classifyConductorTowerState({
   const conServicioActivo = operativos.some((s) => s.estado === "en_curso");
   const conProximoServicio = operativos.some((s) => s.estado === "asignado");
   const sinServicio = !conServicioActivo && !conProximoServicio;
-  const attentionSignals = buildAttentionSignals({
-    norma: conductor.norma,
-    ubic: ubicacion,
-    serviciosOperativos: operativos,
-    incidenciasByServicioId,
-    nowMs,
-  });
 
   return {
     uid,
@@ -129,9 +65,7 @@ export function classifyConductorTowerState({
     sinServicio,
     conServicioActivo,
     conProximoServicio,
-    needsAttention: attentionSignals.length > 0,
-    attentionReason: attentionSignals[0]?.label || null,
-    attentionSignals,
+    sinUbicacionReciente: sinServicio && hasSinUbicacionReciente(ubicacion),
   };
 }
 
@@ -162,6 +96,7 @@ function buildTowerPersonRow(classified, conductorByUid, ubicacionByUid, formatL
   const source = conductorByUid?.[classified.uid];
   const ubic = ubicacionByUid?.[classified.uid];
   const ubicLine = formatConductorTowerUbicLine(ubic, formatLugar, nowMs);
+  const visual = resolveConductorOperationalVisual(classified, ubic);
   return {
     uid: classified.uid,
     conductorId: classified.conductorId,
@@ -170,9 +105,8 @@ function buildTowerPersonRow(classified, conductorByUid, ubicacionByUid, formatL
     telefono: formatConductorTelefonoDisplay(classified.telefono || resolveConductorTelefonoMovil(source)),
     updatedLabel: ubicLine.updatedLabel,
     ubicRecent: ubicLine.ubicRecent,
-    reason: hasCriticalAttention(classified)
-      ? classified.attentionReason || classified.attentionSignals?.[0]?.label || "Requiere revisión"
-      : null,
+    statusDot: visual.dot,
+    statusLabel: visual.label,
   };
 }
 
@@ -193,35 +127,35 @@ export function buildEmpresaDashboardTowerState({
       conductor: c,
       servicios,
       ubicacion: ubicacionByUid?.[c.user_id],
-      incidenciasByServicioId,
-      nowMs,
     }),
   );
 
-  const sinServicio = classified.filter((c) => c.sinServicio);
+  const sinServicio = classified.filter((c) => c.sinServicio && !c.sinUbicacionReciente);
+  const sinUbicacionReciente = classified.filter((c) => c.sinUbicacionReciente);
   const conServicioActivo = classified.filter((c) => c.conServicioActivo);
   const conProximoServicio = classified.filter((c) => c.conProximoServicio);
-  const atencion = classified.filter((c) => hasCriticalAttention(c));
 
-  const sinServicioList = sinServicio
+  const sinServicioList = classified
+    .filter((c) => c.sinServicio)
     .map((c) => buildTowerPersonRow(c, conductorByUid, ubicacionByUid, formatLugar, nowMs))
-    .sort((a, b) => (a.ubicRecent === b.ubicRecent ? 0 : a.ubicRecent ? -1 : 1))
+    .sort((a, b) => {
+      const aGreen = a.statusDot === "🟢";
+      const bGreen = b.statusDot === "🟢";
+      if (aGreen !== bGreen) return aGreen ? -1 : 1;
+      if (a.ubicRecent !== b.ubicRecent) return a.ubicRecent ? -1 : 1;
+      return a.nombre.localeCompare(b.nombre, "es", { sensitivity: "base" });
+    })
     .slice(0, TOWER_SIN_SERVICIO_MAX);
-
-  const atencionList = atencion
-    .map((c) => buildTowerPersonRow(c, conductorByUid, ubicacionByUid, formatLugar, nowMs))
-    .slice(0, TOWER_ATENCION_MAX);
 
   return {
     servicios: serviciosResumen,
     conductores: {
       total: linked.length,
       sinServicio: sinServicio.length,
-      conServicioActivo: conServicioActivo.length,
       conProximoServicio: conProximoServicio.length,
-      atencion: atencion.length,
+      conServicioActivo: conServicioActivo.length,
+      sinUbicacionReciente: sinUbicacionReciente.length,
     },
     sinServicioList,
-    atencionList,
   };
 }

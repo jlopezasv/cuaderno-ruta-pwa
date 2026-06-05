@@ -1,30 +1,19 @@
 /**
  * Estado operativo visual del conductor (mapa, asignación, torre).
- * Disponible = sin servicio asignado (no confundir con "puede conducir").
+ * Solo carga/servicio y ubicación — no normativa de conducción.
  */
 
 export const CONDUCTOR_VISUAL = Object.freeze({
   disponible: {
     key: "disponible",
-    label: "Disponible",
+    label: "Sin servicio",
     dot: "🟢",
     color: "#15803d",
     bg: "#dcfce7",
     border: "#86efac",
     mapColor: "#16a34d",
     sortTier: 0,
-    assignSection: "disponibles",
-  },
-  sin_ubic: {
-    key: "sin_ubic",
-    label: "Sin ubicación reciente",
-    dot: "⚪",
-    color: "#64748b",
-    bg: "#f1f5f9",
-    border: "#cbd5e1",
-    mapColor: "#64748b",
-    sortTier: 0,
-    assignSection: "disponibles",
+    assignSection: "sin_servicio",
   },
   proximo_servicio: {
     key: "proximo_servicio",
@@ -35,45 +24,38 @@ export const CONDUCTOR_VISUAL = Object.freeze({
     border: "#fdba74",
     mapColor: "#ea580c",
     sortTier: 1,
-    assignSection: "ocupados",
+    assignSection: "proximo_servicio",
   },
   en_servicio: {
     key: "en_servicio",
-    label: "En servicio",
+    label: "En curso",
     dot: "🔵",
     color: "#1d4ed8",
     bg: "#dbeafe",
     border: "#93c5fd",
     mapColor: "#2563eb",
     sortTier: 2,
-    assignSection: "ocupados",
+    assignSection: "en_servicio",
   },
-  atencion: {
-    key: "atencion",
-    label: "Atención",
-    dot: "🔴",
-    color: "#b91c1c",
-    bg: "#fee2e2",
-    border: "#fca5a5",
-    mapColor: "#dc2626",
+  sin_ubic: {
+    key: "sin_ubic",
+    label: "Sin ubicación reciente",
+    dot: "⚪",
+    color: "#64748b",
+    bg: "#f1f5f9",
+    border: "#cbd5e1",
+    mapColor: "#64748b",
     sortTier: 3,
-    assignSection: "atencion",
+    assignSection: "sin_ubic",
   },
 });
 
 export const ASIGNAR_CONDUCTOR_SECTIONS = Object.freeze([
-  { id: "disponibles", title: "Disponibles para asignar" },
-  { id: "ocupados", title: "Con servicio asignado" },
-  { id: "atencion", title: "Atención" },
+  { id: "sin_servicio", title: "Sin servicio" },
+  { id: "proximo_servicio", title: "Con servicio asignado" },
+  { id: "en_servicio", title: "En curso" },
+  { id: "sin_ubic", title: "Sin ubicación reciente" },
 ]);
-
-/** Atención crítica (incidencia, límites, GPS muy antiguo). Sin ubicación simple → gris. */
-export function hasCriticalAttention(classified) {
-  if (!classified?.needsAttention) return false;
-  const signals = classified.attentionSignals || [];
-  if (!signals.length) return true;
-  return signals.some((s) => s.code !== "sin_ubicacion");
-}
 
 export function hasSinUbicacionReciente(ubic) {
   return !ubic || ubic.missing || ubic.fetchError || ubic.recent === false;
@@ -86,19 +68,12 @@ export function hasSinUbicacionReciente(ubic) {
 export function resolveConductorOperationalVisual(classified, ubic) {
   if (!classified) return CONDUCTOR_VISUAL.disponible;
 
-  if (classified.conServicioActivo) {
-    if (hasCriticalAttention(classified)) return CONDUCTOR_VISUAL.atencion;
-    return CONDUCTOR_VISUAL.en_servicio;
-  }
-  if (classified.conProximoServicio) {
-    if (hasCriticalAttention(classified)) return CONDUCTOR_VISUAL.atencion;
-    return CONDUCTOR_VISUAL.proximo_servicio;
-  }
-  if (hasCriticalAttention(classified)) return CONDUCTOR_VISUAL.atencion;
+  if (classified.conServicioActivo) return CONDUCTOR_VISUAL.en_servicio;
+  if (classified.conProximoServicio) return CONDUCTOR_VISUAL.proximo_servicio;
   if (hasSinUbicacionReciente(ubic)) return CONDUCTOR_VISUAL.sin_ubic;
   return CONDUCTOR_VISUAL.disponible;
 }
 
 export function isConductorDisponibleParaAsignar(visual) {
-  return visual?.assignSection === "disponibles";
+  return visual?.assignSection === "sin_servicio" || visual?.assignSection === "sin_ubic";
 }
