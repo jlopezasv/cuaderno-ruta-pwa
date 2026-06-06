@@ -16,6 +16,8 @@ function normalizeCapabilities(caps = {}) {
     admin: !!caps.admin,
     accountType: caps.accountType ?? null,
     empresaStatus: caps.empresaStatus ?? null,
+    officeUser: caps.officeUser ?? null,
+    bootstrapError: caps.bootstrapError ?? null,
     features,
   };
 }

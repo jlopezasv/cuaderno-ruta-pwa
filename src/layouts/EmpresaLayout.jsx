@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
-import { EMPRESA_TABS } from "../navigation/empresaTabs";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
 import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
 import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
+import { bootstrapErrorMessage } from "../auth/officeBootstrap.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 import { EMPRESA_PAGE_SHELL_CSS } from "../ui/empresaPageShell.js";
+import { isDemoApp } from "../config/appEnvironment.js";
+import {
+  getDefaultEmpresaTab,
+  getVisibleEmpresaTabs,
+} from "../domain/empresa/officeUserFilters.js";
+import { EmpresaUsuariosOficinaPanel } from "../features/empresa/EmpresaUsuariosOficinaPanel.jsx";
 
 export default function EmpresaLayout({
   PROF0,
@@ -21,6 +27,7 @@ export default function EmpresaLayout({
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
   const [toast, setToast] = useState("");
+  const [empresaId, setEmpresaId] = useState(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
 
   useEffect(() => {
@@ -78,12 +85,31 @@ export default function EmpresaLayout({
       .catch(() => setLoaded(true));
   }, []);
 
-  const visibleTabs = EMPRESA_TABS;
+  const authSession = getStoredAuthSession(getUserId());
+  const capabilities = authSession?.capabilities || null;
+  const bootstrapError = capabilities?.bootstrapError || null;
+  const visibleTabs = getVisibleEmpresaTabs(capabilities);
+
+  useEffect(() => {
+    const uid = getUserId();
+    if (!uid) return;
+    const session = getStoredAuthSession(uid);
+    const fromOffice = session?.capabilities?.officeUser?.empresaId;
+    if (fromOffice) {
+      setEmpresaId(fromOffice);
+      return;
+    }
+    sbSelect("empresas", `owner_id=eq.${uid}`)
+      .then((rows) => setEmpresaId(rows[0]?.id || null))
+      .catch(() => setEmpresaId(null));
+  }, []);
 
   useEffect(() => {
     if (!visibleTabs.length) return;
-    if (!visibleTabs.some((t) => t.id === tab)) setTab(visibleTabs[0].id);
-  }, [tab, visibleTabs]);
+    if (!visibleTabs.some((t) => t.id === tab)) {
+      setTab(getDefaultEmpresaTab(capabilities));
+    }
+  }, [tab, visibleTabs, capabilities]);
 
   function onSave(p) {
     const uid = getUserId();
@@ -113,14 +139,38 @@ export default function EmpresaLayout({
       .catch(() => {});
   }
 
-  const authSession = getStoredAuthSession(getUserId());
   const showModeSwitch = isHybridSession(authSession);
-  if (!loaded)
+
+  if (!loaded) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f1f5f9" }}>
         <div style={{ fontSize: 14, color: "#64748B" }}>Cargando...</div>
       </div>
     );
+  }
+
+  if (isDemoApp() && bootstrapError) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f1f5f9", padding: 24 }}>
+        <div style={{ maxWidth: 420, background: "#fff", border: "1px solid #dbe4ee", borderRadius: 16, padding: 28, textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>Acceso no disponible</div>
+          <div style={{ fontSize: 14, color: "#64748b", lineHeight: 1.6, marginBottom: 20 }}>
+            {bootstrapErrorMessage(bootstrapError)}
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              await sbSignOut();
+              window.location.reload();
+            }}
+            style={{ background: "#b91c1c", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const bg = UI_TOKENS.surfaceApp,
     card = UI_TOKENS.surface,
@@ -276,6 +326,14 @@ export default function EmpresaLayout({
             <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
             <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
             <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
+            {isDemoApp() && empresaId && (
+              <EmpresaUsuariosOficinaPanel
+                empresaId={empresaId}
+                getUserId={getUserId}
+                sbSelect={sbSelect}
+                showToast={showToast}
+              />
+            )}
           </div>
         )}
       </div>

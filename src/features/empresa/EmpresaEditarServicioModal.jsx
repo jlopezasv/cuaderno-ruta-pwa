@@ -16,6 +16,9 @@ import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
+import { isDemoApp } from "../../config/appEnvironment.js";
+import { canViewAllServices } from "../../domain/empresa/officeUserFilters.js";
+import { officeUserRoleLabel } from "../../domain/empresa/empresaOfficeUsers.js";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -47,12 +50,18 @@ const EMPRESA_UI = {
 export function EmpresaEditarServicioModal({
   servicio,
   conductores = [],
+  officeResponsables = [],
+  officeUser = null,
   userId = null,
   onClose,
   onApplied,
   onNotifyAssignment,
 }) {
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
+  const canEditResponsable =
+    isDemoApp() &&
+    officeResponsables.length > 0 &&
+    (officeUser?.rol === "jefe_flota" || canViewAllServices(officeUser));
   const wide = mode === "wide";
 
   const [stops, setStops] = useState([
@@ -66,6 +75,7 @@ export function EmpresaEditarServicioModal({
   const [refCliente, setRefCliente] = useState("");
   const [adminNotas, setAdminNotas] = useState("");
   const [conductorSel, setConductorSel] = useState("");
+  const [responsableSel, setResponsableSel] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -79,6 +89,7 @@ export function EmpresaEditarServicioModal({
     setRefCliente(String(servicio.referencia_cliente ?? "").trim());
     setAdminNotas(String(getServicioOperacionMeta(servicio).admin_notas ?? "").trim());
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
+    setResponsableSel(servicio.responsable_user_id ? servicio.responsable_user_id : "");
     setError("");
   }, [servicio]);
 
@@ -246,6 +257,15 @@ export function EmpresaEditarServicioModal({
         pushAudit("admin_notas", prevAdm, adm1);
       }
 
+      if (canEditResponsable) {
+        const r0 = servicio.responsable_user_id || null;
+        const r1 = responsableSel || null;
+        if (r1 !== r0) {
+          patch.responsable_user_id = r1;
+          pushAudit("responsable_user_id", r0, r1);
+        }
+      }
+
       if (Object.keys(patch).length) {
         const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
           method: "PATCH",
@@ -315,6 +335,8 @@ export function EmpresaEditarServicioModal({
     refCliente,
     adminNotas,
     conductorSel,
+    responsableSel,
+    canEditResponsable,
     saving,
     userId,
     onApplied,
@@ -379,6 +401,24 @@ export function EmpresaEditarServicioModal({
             Cliente (comercial)
             <input value={cliente} onChange={(e) => setCliente(e.target.value)} style={inputStyle} placeholder="Ej. Mercadona" />
           </label>
+
+          {canEditResponsable && (
+            <label style={labelStyle}>
+              Responsable
+              <select
+                value={responsableSel}
+                onChange={(e) => setResponsableSel(e.target.value)}
+                style={{ ...inputStyle, cursor: "pointer" }}
+              >
+                <option value="">Sin responsable</option>
+                {officeResponsables.map((r) => (
+                  <option key={r.userId} value={r.userId}>
+                    {r.nombre || r.email || "Usuario"} · {officeUserRoleLabel(r.rol)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {wide ? (
             <>

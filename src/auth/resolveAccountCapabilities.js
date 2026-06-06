@@ -1,17 +1,28 @@
 import { isPlatformAdminUid } from "../config/adminUsers.js";
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
+import { ACCOUNT_TYPES, parseProfileAccount } from "./accountModel.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
+import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
 import {
   buildSessionCapabilities,
   deriveFeatureFlags,
   deriveShellCapabilities,
   isHybridCapabilities,
-  parseProfileAccount,
 } from "./accountModel.js";
+import {
+  BOOTSTRAP_ERRORS,
+  fetchOfficeUserContextRpc,
+} from "./officeBootstrap.js";
 
 export { isHybridCapabilities as isHybridAccount };
 
-export async function resolveAccountCapabilities(uid, sbSelect) {
+/**
+ * @param {object} [prefetched]
+ * @param {object|null} [prefetched.profile]
+ * @param {object|null} [prefetched.officeUser]
+ * @param {boolean} [prefetched.hasFleetLink]
+ */
+export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {}) {
   if (!uid) {
     return {
       conductor: false,
@@ -19,22 +30,59 @@ export async function resolveAccountCapabilities(uid, sbSelect) {
       admin: false,
       accountType: null,
       empresaStatus: null,
+      officeUser: null,
+      bootstrapError: null,
       features: {},
     };
   }
 
-  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
-  const profile = profiles[0] || null;
-  const account = parseProfileAccount(profile);
+  const profile =
+    prefetched.profile !== undefined
+      ? prefetched.profile
+      : (await sbSelect("profiles", `id=eq.${uid}`).catch(() => []))[0] || null;
 
-  const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
-  const hasFleetLink = rels.length > 0;
+  const account = parseProfileAccount(profile);
+  const isDemo = isDemoApp();
+
+  let officeUser =
+    prefetched.officeUser !== undefined ? prefetched.officeUser : null;
+  if (isDemo && prefetched.officeUser === undefined) {
+    officeUser = await fetchOfficeUserContextRpc();
+  }
+
+  let hasFleetLink = prefetched.hasFleetLink;
+  if (hasFleetLink === undefined) {
+    const needsFleetCheck =
+      account.accountType !== ACCOUNT_TYPES.EMPRESA ||
+      account.canDrive ||
+      !officeUser?.activo;
+    if (needsFleetCheck) {
+      const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+      hasFleetLink = rels.length > 0;
+    } else {
+      hasFleetLink = false;
+    }
+  }
 
   const shells = deriveShellCapabilities(account, {
     hasFleetLink,
-    isDemo: isDemoApp(),
+    isDemo,
     isProduction: isProductionApp(),
   });
+
+  if (isDemo && officeUser?.activo) {
+    shells.empresa = true;
+    if (officeUser.rol === "administrativo") {
+      shells.conductor = false;
+    }
+  }
+
+  let bootstrapError = null;
+  if (isDemo && !profile) {
+    bootstrapError = BOOTSTRAP_ERRORS.NO_PROFILE;
+  } else if (isDemo && officeUser && !officeUser.activo) {
+    bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
+  }
 
   const admin = isPlatformAdminUid(uid);
 
@@ -43,7 +91,9 @@ export async function resolveAccountCapabilities(uid, sbSelect) {
     shells,
     admin,
     activeMode: "conductor",
-    features: deriveFeatureFlags(account, "conductor"),
+    officeUser,
+    bootstrapError,
+    features: deriveFeatureFlags(account, "conductor", { isDemo, officeUser }),
   });
 }
 
@@ -60,7 +110,35 @@ export function resolveActiveMode(capabilities, cachedMode = null) {
 }
 
 export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
-  const base = await resolveAccountCapabilities(uid, sbSelect);
+  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
+  const profile = profiles[0] || null;
+
+  let officeUser = null;
+  if (isDemoApp()) {
+    officeUser = await fetchOfficeUserContextRpc();
+  }
+
+  let hasFleetLink;
+  const account = parseProfileAccount(profile);
+  const needsFleetCheck =
+    !isDemoApp() ||
+    account.accountType !== ACCOUNT_TYPES.EMPRESA ||
+    account.canDrive ||
+    !officeUser?.activo;
+
+  if (needsFleetCheck) {
+    const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+    hasFleetLink = rels.length > 0;
+  } else {
+    hasFleetLink = false;
+  }
+
+  const base = await resolveAccountCapabilities(uid, sbSelect, {
+    profile,
+    officeUser,
+    hasFleetLink,
+  });
+
   const cached = options.preferMode ?? getStoredAuthSession(uid)?.activeMode ?? null;
   let activeMode = resolveActiveMode(base, cached);
 
@@ -71,16 +149,18 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
     activeMode = "empresa";
   }
 
-  const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
-  const account = parseProfileAccount(profiles[0] || null);
-  const features = deriveFeatureFlags(account, activeMode);
+  if (isDemoApp() && activeMode === "empresa" && !base.empresa && !base.bootstrapError) {
+    base.bootstrapError = BOOTSTRAP_ERRORS.NO_EMPRESA_SHELL;
+  }
 
-  const capabilities = {
-    ...base,
-    features,
-  };
+  const features = deriveFeatureFlags(account, activeMode, {
+    isDemo: isDemoApp(),
+    officeUser: base.officeUser || null,
+  });
+
+  const capabilities = { ...base, features };
 
   persistAuthSession({ uid, activeMode, capabilities });
 
-  return { capabilities, activeMode, account };
+  return { capabilities, activeMode, account, officeUser: base.officeUser || null };
 }
