@@ -93,31 +93,37 @@ export function deriveShellCapabilities(account, ctx = {}) {
  * @param {{ accountType: string, canDrive: boolean, empresaStatus: string|null }} account
  * @param {"conductor"|"empresa"} activeMode
  */
-export function deriveFeatureFlags(account, activeMode = "conductor") {
+export function deriveFeatureFlags(account, activeMode = "conductor", ctx = {}) {
   const inEmpresaShell = activeMode === "empresa";
   const isAutonomoPro = account.accountType === ACCOUNT_TYPES.AUTONOMO_PRO;
   const isEmpresaAccount = account.accountType === ACCOUNT_TYPES.EMPRESA;
+  const isDemo = ctx.isDemo ?? isDemoApp();
+  const officeUser = ctx.officeUser || null;
+  const canManageOfficeUsers =
+    inEmpresaShell &&
+    (isEmpresaAccount || (isDemo && officeUser?.rol === "jefe_flota" && officeUser?.activo !== false));
 
   return {
     [FEATURE_KEYS.CAN_CREATE_SERVICES]: !inEmpresaShell && isAutonomoPro,
     [FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS]: !inEmpresaShell && isAutonomoPro,
     [FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE]: !inEmpresaShell && isAutonomoPro,
-    [FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS]: inEmpresaShell && isEmpresaAccount,
-    [FEATURE_KEYS.CAN_MANAGE_USERS]: inEmpresaShell && isEmpresaAccount,
-    [FEATURE_KEYS.CAN_ASSIGN_DRIVERS]: inEmpresaShell && isEmpresaAccount,
-    [FEATURE_KEYS.CAN_VIEW_REPORTS]: inEmpresaShell && isEmpresaAccount,
-    [FEATURE_KEYS.CAN_VIEW_CLIENTS]: inEmpresaShell && isEmpresaAccount,
+    [FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS]: inEmpresaShell && (isEmpresaAccount || !!officeUser),
+    [FEATURE_KEYS.CAN_MANAGE_USERS]: canManageOfficeUsers,
+    [FEATURE_KEYS.CAN_ASSIGN_DRIVERS]: inEmpresaShell && (isEmpresaAccount || !!officeUser),
+    [FEATURE_KEYS.CAN_VIEW_REPORTS]: inEmpresaShell && (isEmpresaAccount || !!officeUser),
+    [FEATURE_KEYS.CAN_VIEW_CLIENTS]: inEmpresaShell && (isEmpresaAccount || !!officeUser),
   };
 }
 
-export function buildSessionCapabilities({ account, shells, admin, activeMode, features }) {
+export function buildSessionCapabilities({ account, shells, admin, activeMode, features, officeUser }) {
   return {
     conductor: !!shells.conductor,
     empresa: !!shells.empresa,
     admin: !!admin,
     accountType: account.accountType,
     empresaStatus: account.empresaStatus,
-    features: features || deriveFeatureFlags(account, activeMode),
+    officeUser: officeUser || null,
+    features: features || deriveFeatureFlags(account, activeMode, { officeUser }),
   };
 }
 

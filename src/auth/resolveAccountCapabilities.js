@@ -1,6 +1,7 @@
 import { isPlatformAdminUid } from "../config/adminUsers.js";
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
+import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
 import {
   buildSessionCapabilities,
   deriveFeatureFlags,
@@ -30,11 +31,24 @@ export async function resolveAccountCapabilities(uid, sbSelect) {
   const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
   const hasFleetLink = rels.length > 0;
 
+  const isDemo = isDemoApp();
   const shells = deriveShellCapabilities(account, {
     hasFleetLink,
-    isDemo: isDemoApp(),
+    isDemo,
     isProduction: isProductionApp(),
   });
+
+  let officeUser = null;
+  if (isDemo) {
+    const officeRows = await sbSelect(
+      "empresa_usuarios",
+      `user_id=eq.${uid}&activo=eq.true&limit=1`,
+    ).catch(() => []);
+    officeUser = buildOfficeUserCapabilities(officeRows[0] || null);
+    if (officeUser?.activo) {
+      shells.empresa = true;
+    }
+  }
 
   const admin = isPlatformAdminUid(uid);
 
@@ -43,7 +57,8 @@ export async function resolveAccountCapabilities(uid, sbSelect) {
     shells,
     admin,
     activeMode: "conductor",
-    features: deriveFeatureFlags(account, "conductor"),
+    officeUser,
+    features: deriveFeatureFlags(account, "conductor", { isDemo, officeUser }),
   });
 }
 
@@ -73,7 +88,10 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
 
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const account = parseProfileAccount(profiles[0] || null);
-  const features = deriveFeatureFlags(account, activeMode);
+  const features = deriveFeatureFlags(account, activeMode, {
+    isDemo: isDemoApp(),
+    officeUser: base.officeUser || null,
+  });
 
   const capabilities = {
     ...base,

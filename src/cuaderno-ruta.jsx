@@ -180,6 +180,7 @@ import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServic
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { AsignarConductorServicioModal } from "./features/empresa/AsignarConductorServicioModal.jsx";
 import { EmpresaPlanificadorPanel } from "./features/empresa/EmpresaPlanificadorPanel.jsx";
+import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
   fetchIncidenciasExpedientePayload,
@@ -12967,11 +12968,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return;
       }
       const isEmpresaAccount=perfilesSelf[0]?.tipo_cuenta===ACCOUNT_TYPES.EMPRESA;
-      const emps=isEmpresaAccount?await sbSelect("empresas",`owner_id=eq.${uid}`):[];
-      if(emps.length&&isEmpresaAccount){
-        setEmpresa(emps[0]);setModo("jefe");
+      const empResolved=await resolveEmpresaRecordForUser(uid,sbSelect);
+      if(empResolved){
+        setEmpresa(empResolved);setModo("jefe");
         onRoleChange?.("jefe");
-        await loadConductores(emps[0].id);
+        await loadConductores(empResolved.id);
         return;
       }
       const relsAll=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
@@ -18082,8 +18083,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     const uid=getUserId();if(!uid)return;
     async function cargar(){
       try{
-        const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-        const emp=emps[0];
+        const emp=await resolveEmpresaRecordForUser(uid,sbSelect);
         if(!emp?.id){setLoading(false);return;}
         setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);

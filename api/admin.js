@@ -2,6 +2,7 @@
 // Gestiona emails transaccionales (Brevo) y archivado lógico de perfiles (service_role).
 
 import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
+import { isDemoApp } from "./lib/appEnvironment.js";
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
 
@@ -172,6 +173,50 @@ async function authAdminDeleteUser(userId) {
     },
   );
   return r.ok || r.status === 404;
+}
+
+const DEMO_OFFICE_USER_PASSWORD = "DemoCuaderno2026!";
+
+async function authAdminCreateUser({ email, password, nombre }) {
+  const r = await fetch(`${sbServer().url}/auth/v1/admin/users`, {
+    method: "POST",
+    headers: { ...srRestHeaders(true), Prefer: "return=representation" },
+    body: JSON.stringify({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { nombre: nombre || "" },
+    }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return { ok: false, status: r.status, error: data?.msg || data?.message || "Auth create failed" };
+  }
+  return { ok: true, user: data };
+}
+
+async function restUpsert(pathWithQuery, body) {
+  const r = await fetch(`${sbServer().url}/rest/v1/${pathWithQuery}`, {
+    method: "POST",
+    headers: {
+      ...srRestHeaders(true),
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => null);
+  return { ok: r.ok, status: r.status, data, detail: data };
+}
+
+async function callerCanManageEmpresaUsuarios(callerUid, empresaId) {
+  const emps = await restSelect(
+    `empresas?id=eq.${encodeURIComponent(empresaId)}&select=id,owner_id`,
+  );
+  if (emps[0]?.owner_id === callerUid) return true;
+  const rows = await restSelect(
+    `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresaId)}&user_id=eq.${encodeURIComponent(callerUid)}&activo=eq.true&select=rol`,
+  );
+  return rows[0]?.rol === "jefe_flota";
 }
 
 /**
@@ -584,6 +629,118 @@ export default async function handler(req, res) {
       });
     }
     return res.json({ ok: true, ...pr });
+  }
+
+  // ── DEMO: crear usuario oficina (sin email) ──
+  if (action === "create_office_user_demo") {
+    if (!isDemoApp()) {
+      return res.status(403).json({
+        ok: false,
+        error: "Solo disponible en entorno DEMO",
+        code: "DEMO_ONLY",
+      });
+    }
+    const {
+      caller_uid,
+      empresa_id,
+      nombre: nombreOficina,
+      email: emailOficina,
+      rol = "trafico",
+    } = req.body || {};
+    const rolNorm = ["jefe_flota", "trafico", "administrativo"].includes(rol)
+      ? rol
+      : "trafico";
+    if (
+      !caller_uid ||
+      !empresa_id ||
+      !nombreOficina?.trim() ||
+      !emailOficina?.trim() ||
+      !UUID_RE.test(caller_uid) ||
+      !UUID_RE.test(empresa_id)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "caller_uid, empresa_id, nombre y email obligatorios",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    if (!sbServer().serviceRoleKey) {
+      return res.status(503).json({
+        ok: false,
+        error: "Servidor sin service_role",
+        code: "ADMIN_MISCONFIGURED",
+      });
+    }
+    const allowed = await callerCanManageEmpresaUsuarios(caller_uid, empresa_id);
+    if (!allowed) {
+      return res.status(403).json({
+        ok: false,
+        error: "No autorizado para gestionar usuarios de esta empresa",
+        code: "OFFICE_USER_FORBIDDEN",
+      });
+    }
+    const email = String(emailOficina).trim().toLowerCase();
+    const nombre = String(nombreOficina).trim();
+    const created = await authAdminCreateUser({
+      email,
+      password: DEMO_OFFICE_USER_PASSWORD,
+      nombre,
+    });
+    if (!created.ok) {
+      return res.status(created.status || 500).json({
+        ok: false,
+        error: created.error || "No se pudo crear el usuario",
+        code: "AUTH_CREATE_FAILED",
+      });
+    }
+    const userId = created.user?.id;
+    if (!userId) {
+      return res.status(500).json({
+        ok: false,
+        error: "Auth sin user id",
+        code: "AUTH_CREATE_FAILED",
+      });
+    }
+    const prof = await restUpsert("profiles", {
+      id: userId,
+      nombre,
+      tipo_cuenta: "conductor",
+      can_drive: false,
+      updated_at: new Date().toISOString(),
+    });
+    if (!prof.ok) {
+      await authAdminDeleteUser(userId);
+      return res.status(500).json({
+        ok: false,
+        error: "No se pudo crear el perfil",
+        code: "PROFILE_UPSERT_FAILED",
+      });
+    }
+    const link = await restUpsert("empresa_usuarios", {
+      empresa_id,
+      user_id: userId,
+      nombre,
+      email,
+      rol: rolNorm,
+      puede_ver_todos: false,
+      activo: true,
+    });
+    if (!link.ok) {
+      await authAdminDeleteUser(userId);
+      return res.status(500).json({
+        ok: false,
+        error: "No se pudo vincular usuario a la empresa",
+        code: "OFFICE_LINK_FAILED",
+      });
+    }
+    const row = Array.isArray(link.data) ? link.data[0] : link.data;
+    return res.json({
+      ok: true,
+      user_id: userId,
+      email,
+      password: DEMO_OFFICE_USER_PASSWORD,
+      empresa_usuario: row,
+    });
   }
 
   if (

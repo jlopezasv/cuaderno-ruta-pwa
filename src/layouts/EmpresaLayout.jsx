@@ -4,6 +4,9 @@ import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
 import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
 import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
+import { isDemoApp } from "../config/appEnvironment.js";
+import { resolveEmpresaIdForUser } from "../domain/empresa/empresaOfficeContext.js";
+import { EmpresaUsuariosOficinaPanel } from "../features/empresa/EmpresaUsuariosOficinaPanel.jsx";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 import { EMPRESA_PAGE_SHELL_CSS } from "../ui/empresaPageShell.js";
 
@@ -20,6 +23,7 @@ export default function EmpresaLayout({
   const [prof, setProf] = useState(PROF0);
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
+  const [empresaId, setEmpresaId] = useState(null);
   const [toast, setToast] = useState("");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
 
@@ -72,6 +76,10 @@ export default function EmpresaLayout({
             lang: p.lang || "es",
             canDrive: !!p.can_drive,
           }));
+        }
+        if (isDemoApp()) {
+          const empId = await resolveEmpresaIdForUser(uid, sbSelect);
+          setEmpresaId(empId);
         }
         setLoaded(true);
       })
@@ -276,6 +284,14 @@ export default function EmpresaLayout({
             <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
             <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
             <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
+            {isDemoApp() && empresaId && (
+              <EmpresaUsuariosOficinaPanel
+                empresaId={empresaId}
+                getUserId={getUserId}
+                sbSelect={sbSelect}
+                showToast={showToast}
+              />
+            )}
           </div>
         )}
       </div>
