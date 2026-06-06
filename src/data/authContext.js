@@ -7,6 +7,20 @@ export function normalizeActiveMode(mode) {
   return mode === "empresa" ? "empresa" : "conductor";
 }
 
+function normalizeOfficeUser(raw) {
+  if (!raw || typeof raw !== "object" || !raw.empresaId) return null;
+  return {
+    id: raw.id ?? null,
+    empresaId: raw.empresaId,
+    userId: raw.userId ?? null,
+    nombre: raw.nombre || "",
+    email: raw.email || "",
+    rol: raw.rol || "trafico",
+    puedeVerTodos: !!raw.puedeVerTodos,
+    activo: raw.activo !== false,
+  };
+}
+
 function normalizeCapabilities(caps = {}) {
   const features =
     caps.features && typeof caps.features === "object" ? { ...caps.features } : {};
@@ -16,7 +30,7 @@ function normalizeCapabilities(caps = {}) {
     admin: !!caps.admin,
     accountType: caps.accountType ?? null,
     empresaStatus: caps.empresaStatus ?? null,
-    officeUser: caps.officeUser ?? null,
+    officeUser: normalizeOfficeUser(caps.officeUser),
     bootstrapError: caps.bootstrapError ?? null,
     features,
   };

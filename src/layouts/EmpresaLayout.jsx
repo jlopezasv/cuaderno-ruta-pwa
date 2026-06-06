@@ -26,8 +26,8 @@ export default function EmpresaLayout({
   const [prof, setProf] = useState(PROF0);
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
-  const [toast, setToast] = useState("");
   const [empresaId, setEmpresaId] = useState(null);
+  const [toast, setToast] = useState("");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
 
   useEffect(() => {

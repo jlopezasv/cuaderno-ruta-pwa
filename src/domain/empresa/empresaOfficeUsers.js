@@ -9,6 +9,7 @@ export const OFFICE_USER_ROLE_LABELS = Object.freeze({
   administrativo: "Administrativo",
 });
 
+/** Roles elegibles como responsable de servicio. */
 export const OFFICE_RESPONSABLE_ROLES = Object.freeze(["jefe_flota", "trafico"]);
 
 export function normalizeOfficeUserRol(raw) {
@@ -46,6 +47,16 @@ export async function fetchEmpresaOfficeUsers(sbSelect, empresaId) {
   return (Array.isArray(rows) ? rows : []).map(buildOfficeUserRow).filter(Boolean);
 }
 
+export async function fetchActiveOfficeUserByUid(sbSelect, uid) {
+  if (!uid || !isDemoApp()) return null;
+  const rows = await sbSelect(
+    "empresa_usuarios",
+    `user_id=eq.${uid}&activo=eq.true&limit=1`,
+  ).catch(() => []);
+  return buildOfficeUserRow(rows[0] || null);
+}
+
+/** Usuarios activos elegibles como responsable_user_id (jefe_flota + tráfico). */
 export async function fetchEmpresaOfficeResponsables(sbSelect, empresaId) {
   const users = await fetchEmpresaOfficeUsers(sbSelect, empresaId);
   return users.filter((u) => u.activo && OFFICE_RESPONSABLE_ROLES.includes(u.rol));
@@ -72,6 +83,10 @@ export async function patchEmpresaOfficeUser(id, patch) {
   }
   const data = await res.json();
   return buildOfficeUserRow(Array.isArray(data) ? data[0] : data);
+}
+
+export function updateEmpresaOfficeUserRol(id, rol) {
+  return patchEmpresaOfficeUser(id, { rol });
 }
 
 export function setEmpresaOfficeUserActivo(id, activo) {

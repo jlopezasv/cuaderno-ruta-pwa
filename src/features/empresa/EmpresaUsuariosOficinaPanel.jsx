@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { DEMO_LOGIN_HINT } from "../../config/appEnvironment.js";
 import {

@@ -3,6 +3,7 @@
 
 import { isDemoApp } from "./lib/appEnvironment.js";
 import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
+import { isDemoApp } from "./lib/appEnvironment.js";
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
 
@@ -678,10 +679,12 @@ export default async function handler(req, res) {
         code: "ADMIN_FORBIDDEN",
       });
     }
+    const emailNorm = String(email).trim().toLowerCase();
+    const nombreNorm = String(nombre).trim();
     const created = await authAdminCreateUser({
-      email: email.trim(),
+      email: emailNorm,
       password: DEMO_OFFICE_USER_PASSWORD,
-      nombre: nombre.trim(),
+      nombre: nombreNorm,
     });
     if (!created.ok) {
       return res.status(502).json({
@@ -700,7 +703,7 @@ export default async function handler(req, res) {
     }
     const profUpsert = await restUpsert("profiles", {
       id: newUid,
-      nombre: nombre.trim(),
+      nombre: nombreNorm,
       tipo_cuenta: "empresa",
       can_drive: false,
       empresa_status: "approved",
@@ -717,8 +720,8 @@ export default async function handler(req, res) {
     const euUpsert = await restUpsert("empresa_usuarios", {
       empresa_id,
       user_id: newUid,
-      nombre: nombre.trim(),
-      email: email.trim(),
+      nombre: nombreNorm,
+      email: emailNorm,
       rol: normalizedRol,
       activo: true,
       puede_ver_todos: false,
@@ -732,10 +735,13 @@ export default async function handler(req, res) {
         detail: euUpsert.detail,
       });
     }
+    const row = Array.isArray(euUpsert.data) ? euUpsert.data[0] : euUpsert.data;
     return res.json({
       ok: true,
       user_id: newUid,
+      email: emailNorm,
       password: DEMO_OFFICE_USER_PASSWORD,
+      empresa_usuario: row,
     });
   }
 
