@@ -81,15 +81,17 @@ import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import {
-  canPickOfficeServicioResponsable,
   filterServiciosForOfficeUser,
   getDefaultOfficeServiciosVista,
   OFFICE_SERVICIOS_VISTA,
 } from "./domain/empresa/officeUserFilters.js";
 import {
+  buildOfficeResponsablesByUserId,
   fetchEmpresaOfficeResponsablesCached,
-  officeUserRoleLabel,
+  officeResponsableDisplayName,
+  validateOfficeResponsableOnCreate,
 } from "./domain/empresa/empresaOfficeUsers.js";
+import { OfficeResponsableServicioField } from "./features/empresa/OfficeResponsableServicioField.jsx";
 import { OfficeServiciosVistaSelector } from "./features/empresa/OfficeServiciosVistaSelector.jsx";
 import {
   ACCOUNT_TYPES,
@@ -12209,7 +12211,6 @@ function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,war
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,officeResponsables=[],onClose,onCreado}){
   const sinConductor=!conductorId;
   const officeUser=getOfficeUserFromSession();
-  const canPickResponsable=isDemoApp()&&officeResponsables.length>0&&canPickOfficeServicioResponsable(officeUser);
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
@@ -12227,6 +12228,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
   const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
   const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
+  const responsableFieldProps={officeUser,officeResponsables,value:responsableId,onChange:setResponsableId,lblStyle:lbl,fieldStyle:inp,surfaceSoft:bg,border:EMPRESA_UI.border};
   const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309"};
   const desktopModalStyle=isMobile?modalStyle:{
     position:"relative",
@@ -12276,6 +12278,10 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
     if(!origenRuta||!destinoRuta){setError("Indica ciudad y país en las paradas de carga y descarga");return;}
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan ciudad / localidad");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
+    if(isDemoApp()){
+      const respErr=validateOfficeResponsableOnCreate({officeUser,responsableId,officeResponsables});
+      if(respErr){setError(respErr);return;}
+    }
     setSaving(true);setError("");
     try{
       logServiceCreate("SERVICE_CREATE_START",{
@@ -12415,29 +12421,12 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
 
         <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:isMobile?"12px 16px":"10px 16px",minHeight:0}}>
 
-          <div style={{marginBottom:10}}>
-            <div style={lbl}>Cliente</div>
-            <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona" style={inp}/>
-          </div>
-          {isDemoApp()&&officeResponsables.length>0&&(
-            <div style={{marginBottom:8}}>
-              <div style={lbl}>Responsable del servicio</div>
-              {canPickResponsable?(
-                <select value={responsableId} onChange={e=>setResponsableId(e.target.value)} style={{...inp,cursor:"pointer"}}>
-                  {officeResponsables.map((r)=>(
-                    <option key={r.userId} value={r.userId}>
-                      {r.nombre||r.email||"Usuario"} · {officeUserRoleLabel(r.rol)}
-                    </option>
-                  ))}
-                </select>
-              ):(
-                <div style={{fontSize:12,fontWeight:650,color:"#334155",padding:"7px 9px",background:EMPRESA_UI.surfaceSoft,borderRadius:8,border:`1px solid ${EMPRESA_UI.border}`}}>
-                  {officeResponsables.find((r)=>r.userId===responsableId)?.nombre||"Tú"}
-                </div>
-              )}
-            </div>
-          )}
           <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"6px 8px",marginBottom:8}}>
+            <div>
+              <div style={lbl}>Cliente</div>
+              <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona" style={inp}/>
+            </div>
+            <OfficeResponsableServicioField {...responsableFieldProps}/>
             <div>
               <div style={lbl}>Ref. servicio</div>
               <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441" style={inp}/>
@@ -13941,6 +13930,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     return m;
   },[conductores]);
 
+  const officeResponsablesByUid=useMemo(
+    ()=>buildOfficeResponsablesByUserId(officeResponsables),
+    [officeResponsables],
+  );
+  const nombreResponsable=useCallback(
+    (uid)=>officeResponsableDisplayName(uid,officeResponsablesByUid),
+    [officeResponsablesByUid],
+  );
+
   const actualizarServicioUbicacionLigeraRef=useRef(actualizarServicioUbicacionLigera);
   actualizarServicioUbicacionLigeraRef.current=actualizarServicioUbicacionLigera;
   const abrirAnularServicioRef=useRef(abrirAnularServicio);
@@ -13987,6 +13985,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   },[]);
 
   function openNuevoViaje(){
+    if(isDemoApp()&&officeUserPanel?.rol==="administrativo"){
+      showToast("No tienes permiso para crear servicios");
+      return;
+    }
     const list=conductores.filter(c=>c.user_id);
     logServiceCreate("SERVICE_CREATE_START",{
       source:"PanelEmpresa.openNuevoViaje",
@@ -14019,9 +14021,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   },[]);
 
   const handleEditarServicioId=useCallback((servicioId)=>{
+    if(isDemoApp()&&officeUserPanel?.rol==="administrativo"){
+      showToast("No tienes permiso para editar servicios");
+      return;
+    }
     const sv=flotaServiciosRef.current.find((s)=>s.id===servicioId);
     if(sv)setEditarServicioModal(sv);
-  },[]);
+  },[officeUserPanel?.rol,showToast]);
 
   async function crearEmpresa(nombre,cif){
     const uid=getUserId();if(!uid)return;
@@ -14567,6 +14573,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   conductoresByUid={conductoresByUid}
                   asignadosByServicioId={asignadosByServicioId}
                   nombreConductor={nombreConductor}
+                  nombreResponsable={nombreResponsable}
                   onRefreshServicioId={handleRefreshServicioId}
                   onAnularServicioId={handleAnularServicioId}
                   onAsignarConductorServicioId={handleAsignarConductorServicioId}

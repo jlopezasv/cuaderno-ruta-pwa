@@ -76,6 +76,7 @@ function EmpresaFlotaServicioCardImpl({
   normaC,
   conductor,
   nombreConductor,
+  responsableLine = null,
   operationalMeta,
   lastActivity,
   attention,
@@ -333,6 +334,23 @@ function EmpresaFlotaServicioCardImpl({
               }}
             >
               {conductorLine}
+            </div>
+          ) : null}
+
+          {responsableLine ? (
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: UI.muted,
+                marginTop: conductorLine || asignadosCount > 1 ? 3 : 4,
+                lineHeight: 1.3,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {responsableLine}
             </div>
           ) : null}
 
@@ -834,6 +852,7 @@ function EmpresaFlotaServicioCardImpl({
                     ? "Sin asignar"
                     : nombreConductor(servicio.conductor_id)}
               </span>
+              {responsableLine ? <span>{responsableLine}</span> : null}
               <span>Paradas · {progressLabel}</span>
               <span>
                 Próxima: <strong style={{ color: tx }}>{nextStop?.nombre || "—"}</strong>

@@ -72,6 +72,53 @@ export function invalidateEmpresaOfficeResponsablesCache(empresaId = null) {
   }
 }
 
+export function buildOfficeResponsablesByUserId(users) {
+  const map = {};
+  for (const u of Array.isArray(users) ? users : []) {
+    if (u?.userId) map[u.userId] = u;
+  }
+  return map;
+}
+
+export function officeResponsableDisplayName(userId, usersOrMap) {
+  if (!userId) return null;
+  const map = Array.isArray(usersOrMap)
+    ? buildOfficeResponsablesByUserId(usersOrMap)
+    : usersOrMap || {};
+  const u = map[userId];
+  return u?.nombre?.trim() || u?.email?.trim() || null;
+}
+
+/** Etiqueta de listado: «Responsable · Nombre» o «Sin responsable». */
+export function officeResponsableServicioLine(servicio, usersOrMapOrResolver) {
+  const uid = servicio?.responsable_user_id;
+  if (!uid) return "Responsable · Sin responsable";
+  const name =
+    typeof usersOrMapOrResolver === "function"
+      ? usersOrMapOrResolver(uid)
+      : officeResponsableDisplayName(uid, usersOrMapOrResolver);
+  return name ? `Responsable · ${name}` : "Responsable · Sin responsable";
+}
+
+/** Validación al crear servicio con responsable DEMO. */
+export function validateOfficeResponsableOnCreate({ officeUser, responsableId, officeResponsables }) {
+  if (!isDemoApp()) return null;
+  if (!officeResponsables?.length) {
+    return "No hay usuarios de oficina activos como responsable. Contacta con el jefe de flota.";
+  }
+  const rol = String(officeUser?.rol || "").toLowerCase();
+  if (rol === "administrativo") return "No tienes permiso para crear servicios.";
+  if (rol === "trafico" && !officeUser?.puedeVerTodos) {
+    const uid = officeUser?.userId;
+    if (!responsableId || responsableId !== uid) return "El responsable debe ser tu usuario de tráfico.";
+    return null;
+  }
+  if (rol === "trafico" && officeUser?.puedeVerTodos && !responsableId) {
+    return "Selecciona un responsable del servicio.";
+  }
+  return null;
+}
+
 /** Una sola consulta por empresa y sesión (reutilizada entre panel, dashboard y modales). */
 export async function fetchEmpresaOfficeResponsablesCached(sbSelect, empresaId) {
   if (!empresaId || !isDemoApp()) return [];

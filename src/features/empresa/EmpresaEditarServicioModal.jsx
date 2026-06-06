@@ -18,7 +18,8 @@ import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from ".
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
-import { officeUserRoleLabel } from "../../domain/empresa/empresaOfficeUsers.js";
+import { validateOfficeResponsableOnCreate } from "../../domain/empresa/empresaOfficeUsers.js";
+import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField.jsx";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -171,6 +172,22 @@ export function EmpresaEditarServicioModal({
     };
 
     try {
+      if (isDemoApp()) {
+        if (officeUser?.rol === "administrativo") {
+          setError("No tienes permiso para editar servicios.");
+          return;
+        }
+        const respErr = validateOfficeResponsableOnCreate({
+          officeUser,
+          responsableId: responsableSel,
+          officeResponsables,
+        });
+        if (respErr) {
+          setError(respErr);
+          return;
+        }
+      }
+
       if (wide) {
         const { origen: origenRuta, destino: destinoRuta } = routeTextFromStops(stops);
         if (!origenRuta || !destinoRuta) {
@@ -400,43 +417,34 @@ export function EmpresaEditarServicioModal({
         </div>
 
         <div style={{ padding: "12px 16px", overflowY: "auto", flex: 1 }}>
-          <label style={labelStyle}>
-            Cliente (comercial)
-            <input value={cliente} onChange={(e) => setCliente(e.target.value)} style={inputStyle} placeholder="Ej. Mercadona" />
-          </label>
-
-          {isDemoApp() && officeResponsables.length > 0 && (
-            <label style={labelStyle}>
-              Responsable del servicio
-              {canEditResponsable ? (
-                <select
-                  value={responsableSel}
-                  onChange={(e) => setResponsableSel(e.target.value)}
-                  style={{ ...inputStyle, cursor: "pointer" }}
-                >
-                  <option value="">Sin responsable</option>
-                  {officeResponsables.map((r) => (
-                    <option key={r.userId} value={r.userId}>
-                      {r.nombre || r.email || "Usuario"} · {officeUserRoleLabel(r.rol)}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <div
-                  style={{
-                    ...inputStyle,
-                    background: EMPRESA_UI.surfaceSoft,
-                    fontWeight: 650,
-                    cursor: "default",
-                  }}
-                >
-                  {officeResponsables.find((r) => r.userId === responsableSel)?.nombre ||
-                    officeResponsables.find((r) => r.userId === responsableSel)?.email ||
-                    "Tú"}
-                </div>
-              )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "10px 12px",
+              marginBottom: 12,
+            }}
+          >
+            <label style={{ ...labelStyle, marginBottom: 0 }}>
+              Cliente (comercial)
+              <input
+                value={cliente}
+                onChange={(e) => setCliente(e.target.value)}
+                style={inputStyle}
+                placeholder="Ej. Mercadona"
+              />
             </label>
-          )}
+            <OfficeResponsableServicioField
+              officeUser={officeUser}
+              officeResponsables={officeResponsables}
+              value={responsableSel}
+              onChange={setResponsableSel}
+              lblStyle={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, marginBottom: 4, display: "block" }}
+              fieldStyle={inputStyle}
+              surfaceSoft={EMPRESA_UI.surfaceSoft}
+              border={EMPRESA_UI.border}
+            />
+          </div>
 
           {wide ? (
             <>
