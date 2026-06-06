@@ -17996,7 +17996,7 @@ function EvidenciasStop(props) {
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
 const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,onRecalculateOperationalRoute=null,canCreateServices=false,useOperationalLite=false}){
-  const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,participacion,marcarLlegado,marcarCompletado,iniciarServicio,cerrarExpediente,finalizarParticipacion,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,participacion,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,cerrarExpediente,finalizarParticipacion,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const originServicios=useMemo(()=>[servicio,siguienteServicio].filter(Boolean),[servicio?.id,siguienteServicio?.id]);
   const empresaById=useEmpresaOriginLookup(originServicios);
   const[creando,setCreando]=useState(false);
