@@ -18239,7 +18239,12 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     async function cargar(){
       try{
         const officeUser=getOfficeUserFromSession(uid);
-        const emp=await resolveEmpresaRecordForUser(uid,sbSelect,officeUser);
+        let emp=null;
+        if(isDemoApp()&&officeUser?.activo&&officeUser.empresaId){
+          emp={id:officeUser.empresaId,nombre:officeUser.empresaNombre||"Empresa"};
+        }else{
+          emp=await resolveEmpresaRecordForUser(uid,sbSelect,officeUser);
+        }
         if(!emp?.id){setLoading(false);return;}
         setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);

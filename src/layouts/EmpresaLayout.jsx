@@ -27,6 +27,9 @@ export default function EmpresaLayout({
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
   const [empresaId, setEmpresaId] = useState(null);
+  const [capabilities, setCapabilities] = useState(
+    () => getStoredAuthSession(getUserId())?.capabilities || null,
+  );
   const [toast, setToast] = useState("");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
 
@@ -41,23 +44,34 @@ export default function EmpresaLayout({
     setTimeout(() => setToast(""), 3000);
   };
 
-  // Cargar perfil + gate de acceso empresa
+  // Cargar perfil + revalidar capacidades empresa (sesión en caché puede estar incompleta)
   useEffect(() => {
     const uid = getUserId();
     if (!uid) {
       setLoaded(true);
       return;
     }
-    const session = getStoredAuthSession(uid);
-    if (session && !session.capabilities?.empresa) {
-      if (session.capabilities?.conductor) {
-        switchActiveMode(uid, "conductor");
-        window.location.reload();
+    let cancelled = false;
+
+    async function load() {
+      let session = getStoredAuthSession(uid);
+      if (!session?.capabilities?.empresa) {
+        try {
+          await bootstrapAuthSession(uid, sbSelect);
+          session = getStoredAuthSession(uid);
+        } catch (_) {}
+        if (!session?.capabilities?.empresa && session?.capabilities?.conductor) {
+          switchActiveMode(uid, "conductor");
+          window.location.reload();
+          return;
+        }
       }
-      return;
-    }
-    sbSelect("profiles", `id=eq.${uid}`)
-      .then(async (rows) => {
+      if (cancelled) return;
+      if (session?.capabilities) setCapabilities(session.capabilities);
+
+      try {
+        const rows = await sbSelect("profiles", `id=eq.${uid}`);
+        if (cancelled) return;
         if (rows.length) {
           const p = rows[0];
           if (p.is_archived) {
@@ -80,13 +94,17 @@ export default function EmpresaLayout({
             canDrive: !!p.can_drive,
           }));
         }
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
+      } catch (_) {}
+      if (!cancelled) setLoaded(true);
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const authSession = getStoredAuthSession(getUserId());
-  const capabilities = authSession?.capabilities || null;
   const bootstrapError = capabilities?.bootstrapError || null;
   const visibleTabs = getVisibleEmpresaTabs(capabilities);
 
@@ -341,7 +359,7 @@ export default function EmpresaLayout({
       {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)" }}>
-          {visibleTabs.filter((t) => t.id !== "config").map((t) => {
+          {visibleTabs.map((t) => {
             const active = tab === t.id;
             return (
               <button

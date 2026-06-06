@@ -1,5 +1,6 @@
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { EMPRESA_TABS } from "../../navigation/empresaTabs.js";
+import { normalizeOfficeUserRol } from "./empresaOfficeUsers.js";
 
 export const OFFICE_SERVICIOS_VISTA = Object.freeze({
   MIS: "mis",
@@ -101,16 +102,24 @@ export function getVisibleEmpresaTabs(capabilities) {
   const office = capabilities?.officeUser;
   if (!office?.activo) return EMPRESA_TABS;
 
-  switch (office.rol) {
+  const rol = normalizeOfficeUserRol(office.rol);
+  let tabs;
+  switch (rol) {
     case "jefe_flota":
-      return [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.config].filter(Boolean);
+      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.planificador, TAB.config];
+      break;
     case "trafico":
-      return [TAB.dashboard, TAB.servicios, TAB.documentos].filter(Boolean);
+      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos];
+      break;
     case "administrativo":
-      return [TAB.documentos].filter(Boolean);
+      tabs = [TAB.documentos];
+      break;
     default:
-      return [TAB.documentos].filter(Boolean);
+      tabs = [TAB.documentos];
+      break;
   }
+  const visible = tabs.filter(Boolean);
+  return visible.length ? visible : EMPRESA_TABS;
 }
 
 export function getDefaultEmpresaTab(capabilities) {

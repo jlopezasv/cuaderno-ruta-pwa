@@ -8,15 +8,18 @@ export function normalizeActiveMode(mode) {
 }
 
 function normalizeOfficeUser(raw) {
-  if (!raw || typeof raw !== "object" || !raw.empresaId) return null;
+  if (!raw || typeof raw !== "object") return null;
+  const empresaId = raw.empresaId || raw.empresa_id || null;
+  if (!empresaId) return null;
   return {
     id: raw.id ?? null,
-    empresaId: raw.empresaId,
-    userId: raw.userId ?? null,
+    empresaId,
+    empresaNombre: raw.empresaNombre || raw.empresa_nombre || "",
+    userId: raw.userId ?? raw.user_id ?? null,
     nombre: raw.nombre || "",
     email: raw.email || "",
     rol: raw.rol || "trafico",
-    puedeVerTodos: !!raw.puedeVerTodos,
+    puedeVerTodos: !!raw.puedeVerTodos || !!raw.puede_ver_todos,
     activo: raw.activo !== false,
   };
 }
