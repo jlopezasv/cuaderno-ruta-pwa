@@ -4,7 +4,8 @@ export function ModeSwitchButton({ uid, targetMode, compact = false, dark = fals
   if (!uid || !targetMode) return null;
 
   const isConductor = targetMode === "conductor";
-  const label = isConductor ? "Modo conductor" : "Modo empresa";
+  const label = isConductor ? "Modo conductor" : "Panel empresa";
+  const shortLabel = isConductor ? "Conductor" : "Empresa";
   const icon = isConductor ? "◉" : "◇";
 
   function handleClick() {
@@ -38,7 +39,7 @@ export function ModeSwitchButton({ uid, targetMode, compact = false, dark = fals
       }}
     >
       <span style={{ fontSize: compact ? 13 : 14, lineHeight: 1 }}>{icon}</span>
-      {!compact && <span>{label}</span>}
+      <span>{compact ? shortLabel : label}</span>
     </button>
   );
 }

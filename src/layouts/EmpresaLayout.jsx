@@ -236,13 +236,23 @@ export default function EmpresaLayout({
             boxShadow: "0 1px 2px rgba(15,23,42,.05)",
             boxSizing: "border-box",
             width: "100%",
-            overflowX: "hidden",
+            overflow: "visible",
           }}
         >
           <div style={{ padding: "10px 0", marginRight: 12, flexShrink: 0 }}>
             <BrandHeader panelLabel="Panel Empresa" nameLabel={prof.nombre || "Empresa"} titleColor={tx} subColor={su} />
           </div>
-          <div style={{ display: "flex", flex: 1, gap: 0, minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
+          <div
+            style={{
+              display: "flex",
+              flex: "1 1 120px",
+              gap: 0,
+              minWidth: 120,
+              overflowX: "auto",
+              overflowY: "hidden",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
             {visibleTabs.map((t) => (
               <button
                 key={t.id}
@@ -299,30 +309,75 @@ export default function EmpresaLayout({
         </div>
       )}
 
-      {/* ── MOBILE HEADER ── */}
+      {/* ── MOBILE HEADER + PESTAÑAS (visibles bajo la cabecera) ── */}
       {isMobile && (
-        <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
-          <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
-          <div style={{ display: "flex", gap: 8 }}>
-            {showModeSwitch && (
-              <ModeSwitchButton uid={getUserId()} targetMode="conductor" compact />
-            )}
-            <button
-              onClick={async () => {
-                await sbSignOut();
-                window.location.reload();
-              }}
-              style={{ background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.22)", borderRadius: 10, padding: "5px 10px", fontSize: 12, fontWeight: 700, color: "#B91C1C", cursor: "pointer" }}
-            >
-              Salir
-            </button>
+        <>
+          <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
+            <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
+            <div style={{ display: "flex", gap: 8 }}>
+              {showModeSwitch && (
+                <ModeSwitchButton uid={getUserId()} targetMode="conductor" compact />
+              )}
+              <button
+                onClick={async () => {
+                  await sbSignOut();
+                  window.location.reload();
+                }}
+                style={{ background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.22)", borderRadius: 10, padding: "5px 10px", fontSize: 12, fontWeight: 700, color: "#B91C1C", cursor: "pointer" }}
+              >
+                Salir
+              </button>
+            </div>
           </div>
-        </div>
+          <div
+            style={{
+              background: card,
+              borderBottom: `1px solid ${border}`,
+              display: "flex",
+              gap: 0,
+              overflowX: "auto",
+              WebkitOverflowScrolling: "touch",
+              position: "sticky",
+              top: 52,
+              zIndex: 99,
+              boxShadow: "0 1px 2px rgba(15,23,42,.04)",
+            }}
+          >
+            {visibleTabs.map((t) => {
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  style={{
+                    flexShrink: 0,
+                    background: active ? accentHover : "transparent",
+                    border: "none",
+                    borderBottom: `2px solid ${active ? accent : "transparent"}`,
+                    padding: "10px 14px 8px",
+                    fontSize: 12,
+                    fontWeight: active ? 700 : 600,
+                    color: active ? tabActive : tabIdle,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ fontSize: 14, color: active ? accent : "#94a3b8" }}>{t.icon}</span>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {/* ── CONTENIDO ── */}
       <style>{EMPRESA_PAGE_SHELL_CSS}</style>
-      <div style={{ flex: 1, minHeight: 0, paddingBottom: isMobile ? 64 : 0, width: "100%" }}>
+      <div style={{ flex: 1, minHeight: 0, paddingBottom: isMobile ? 72 : 0, width: "100%" }}>
         {/* DASHBOARD */}
         {tab === "dashboard" && <EmpresaDashboard prof={prof} showToast={showToast} onTabChange={setTab} />}
 
@@ -358,7 +413,7 @@ export default function EmpresaLayout({
 
       {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)" }}>
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: card, borderTop: `1px solid ${border}`, display: "flex", zIndex: 100, boxShadow: "0 -1px 2px rgba(15,23,42,.05)", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
           {visibleTabs.map((t) => {
             const active = tab === t.id;
             return (
