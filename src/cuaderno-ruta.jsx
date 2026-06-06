@@ -13015,7 +13015,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   },[officeUserPanel?.userId,officeUserPanel?.rol,officeUserPanel?.puedeVerTodos,officeUserPanel?.activo]);
 
   useEffect(()=>{
-    if(!empresa?.id||!isDemoApp()){
+    const tenantId=officeUserPanel?.empresaId||empresa?.id||null;
+    if(!tenantId||!isDemoApp()){
       setOfficeResponsables([]);
       return;
     }
@@ -13027,11 +13028,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       officeServiciosVista===OFFICE_SERVICIOS_VISTA.POR_RESPONSABLE;
     if(!needResponsables)return;
     let cancelled=false;
-    fetchEmpresaOfficeResponsablesCached(sbSelect,empresa.id)
+    fetchEmpresaOfficeResponsablesCached(sbSelect,tenantId,officeUserPanel)
       .then((rows)=>{if(!cancelled)setOfficeResponsables(rows);})
       .catch(()=>{if(!cancelled)setOfficeResponsables([]);});
     return()=>{cancelled=true;};
-  },[empresa?.id,flotaTab,asignarModal,editarServicioModal,pickConductorViaje,officeServiciosVista]);
+  },[empresa?.id,officeUserPanel?.empresaId,officeUserPanel?.userId,flotaTab,asignarModal,editarServicioModal,pickConductorViaje,officeServiciosVista]);
 
   useEffect(()=>{init();},[]);
 
@@ -15153,7 +15154,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <AsignarServicioModal
           conductorId={asignarModal.id}
           conductorNombre={asignarModal.nombre}
-          empresaId={empresa?.id||null}
+          empresaId={officeUserPanel?.empresaId||empresa?.id||null}
           officeResponsables={officeResponsables}
           onClose={()=>setAsignarModal(null)}
           onCreado={(merged)=>{
@@ -18278,8 +18279,9 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           fetchIncidenciasResumenByEmpresa(emp.id).catch(()=>[]),
         ]);
         setServiciosRaw(Array.isArray(svs)?svs:[]);
-        if(isDemoApp()&&officeUser?.rol==="jefe_flota"&&emp.id){
-          fetchEmpresaOfficeResponsablesCached(sbSelect,emp.id)
+        if(isDemoApp()&&emp.id){
+          const dashOffice=getOfficeUserFromSession(uid);
+          fetchEmpresaOfficeResponsablesCached(sbSelect,emp.id,dashOffice)
             .then(setOfficeResponsablesDash)
             .catch(()=>setOfficeResponsablesDash([]));
         }

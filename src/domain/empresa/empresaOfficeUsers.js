@@ -56,10 +56,93 @@ export async function fetchActiveOfficeUserByUid(sbSelect, uid) {
   return buildOfficeUserRow(rows[0] || null);
 }
 
-/** Usuarios activos elegibles como responsable_user_id (jefe_flota + tráfico). */
-export async function fetchEmpresaOfficeResponsables(sbSelect, empresaId) {
-  const users = await fetchEmpresaOfficeUsers(sbSelect, empresaId);
-  return users.filter((u) => u.activo && OFFICE_RESPONSABLE_ROLES.includes(u.rol));
+/** empresa_id del tenant para responsables: prioriza officeUser, no owner_id. */
+export function resolveOfficeResponsablesEmpresaId(empresaId, officeUser = null) {
+  const fromOffice = officeUser?.empresaId || officeUser?.empresa_id || null;
+  return fromOffice || empresaId || null;
+}
+
+function logOfficeResponsablesDemo(phase, payload) {
+  if (!isDemoApp()) return;
+  console.warn("[DEMO officeResponsables]", phase, payload);
+}
+
+function officeUserAsResponsableCandidate(officeUser) {
+  if (!officeUser?.activo || !officeUser?.userId) return null;
+  const rol = normalizeOfficeUserRol(officeUser.rol);
+  if (!OFFICE_RESPONSABLE_ROLES.includes(rol)) return null;
+  return {
+    id: officeUser.id ?? null,
+    empresaId: officeUser.empresaId ?? officeUser.empresa_id ?? null,
+    userId: officeUser.userId,
+    nombre: officeUser.nombre || "",
+    email: officeUser.email || "",
+    rol,
+    puedeVerTodos: !!officeUser.puedeVerTodos,
+    activo: true,
+  };
+}
+
+function mergeOfficeResponsablesWithSession(list, officeUser) {
+  const out = Array.isArray(list) ? [...list] : [];
+  const sessionRow = officeUserAsResponsableCandidate(officeUser);
+  if (sessionRow && !out.some((u) => u.userId === sessionRow.userId)) {
+    out.unshift(sessionRow);
+  }
+  return out.filter((u) => u.activo && OFFICE_RESPONSABLE_ROLES.includes(u.rol));
+}
+
+/**
+ * Usuarios activos elegibles como responsable (jefe_flota + trafico).
+ * Filtro en PostgREST: empresa_id, activo=true, rol in (jefe_flota, trafico).
+ */
+export async function fetchEmpresaOfficeResponsables(_sbSelect, empresaId, officeUser = null) {
+  const tenantId = resolveOfficeResponsablesEmpresaId(empresaId, officeUser);
+  if (!tenantId || !isDemoApp()) {
+    logOfficeResponsablesDemo("skip", {
+      empresaIdArg: empresaId ?? null,
+      officeEmpresaId: officeUser?.empresaId ?? null,
+    });
+    return mergeOfficeResponsablesWithSession([], officeUser);
+  }
+
+  const filter = [
+    `empresa_id=eq.${tenantId}`,
+    "activo=eq.true",
+    "rol=in.(jefe_flota,trafico)",
+    "select=id,user_id,nombre,email,rol,activo,empresa_id",
+    "order=nombre.asc",
+  ].join("&");
+
+  let rows = [];
+  let fetchError = null;
+  try {
+    const res = await sbFetch(`/rest/v1/empresa_usuarios?${filter}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      fetchError = {
+        status: res.status,
+        message: body?.message || body?.hint || body?.details || res.statusText,
+      };
+    } else {
+      rows = await res.json().catch(() => []);
+    }
+  } catch (e) {
+    fetchError = { message: e?.message || String(e) };
+  }
+
+  const built = (Array.isArray(rows) ? rows : []).map(buildOfficeUserRow).filter(Boolean);
+  const merged = mergeOfficeResponsablesWithSession(built, officeUser);
+
+  logOfficeResponsablesDemo("loaded", {
+    empresaId: tenantId,
+    rawCount: Array.isArray(rows) ? rows.length : 0,
+    responsablesCount: merged.length,
+    roles: merged.map((u) => u.rol),
+    error: fetchError,
+  });
+
+  return merged;
 }
 
 const responsablesCache = { empresaId: null, data: null, inflight: null };
@@ -120,23 +203,34 @@ export function validateOfficeResponsableOnCreate({ officeUser, responsableId, o
 }
 
 /** Una sola consulta por empresa y sesión (reutilizada entre panel, dashboard y modales). */
-export async function fetchEmpresaOfficeResponsablesCached(sbSelect, empresaId) {
-  if (!empresaId || !isDemoApp()) return [];
-  if (responsablesCache.empresaId === empresaId && responsablesCache.data) {
+export async function fetchEmpresaOfficeResponsablesCached(
+  sbSelect,
+  empresaId,
+  officeUser = null,
+  { force = false } = {},
+) {
+  const tenantId = resolveOfficeResponsablesEmpresaId(empresaId, officeUser);
+  if (!tenantId || !isDemoApp()) return [];
+
+  if (!force && responsablesCache.empresaId === tenantId && responsablesCache.data?.length) {
     return responsablesCache.data;
   }
-  if (responsablesCache.empresaId === empresaId && responsablesCache.inflight) {
+  if (!force && responsablesCache.empresaId === tenantId && responsablesCache.inflight) {
     return responsablesCache.inflight;
   }
-  responsablesCache.empresaId = empresaId;
-  responsablesCache.inflight = fetchEmpresaOfficeResponsables(sbSelect, empresaId)
+
+  responsablesCache.empresaId = tenantId;
+  responsablesCache.inflight = fetchEmpresaOfficeResponsables(sbSelect, tenantId, officeUser)
     .then((rows) => {
-      responsablesCache.data = rows;
       responsablesCache.inflight = null;
+      if (rows.length > 0) responsablesCache.data = rows;
+      else responsablesCache.data = null;
       return rows;
     })
     .catch((err) => {
       responsablesCache.inflight = null;
+      responsablesCache.data = null;
+      logOfficeResponsablesDemo("cache_error", { empresaId: tenantId, message: err?.message });
       throw err;
     });
   return responsablesCache.inflight;
