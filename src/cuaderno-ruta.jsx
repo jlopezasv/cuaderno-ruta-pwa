@@ -81,13 +81,16 @@ import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import {
-  canViewAllServices,
+  canPickOfficeServicioResponsable,
   filterServiciosForOfficeUser,
+  getDefaultOfficeServiciosVista,
+  OFFICE_SERVICIOS_VISTA,
 } from "./domain/empresa/officeUserFilters.js";
 import {
-  fetchEmpresaOfficeResponsables,
+  fetchEmpresaOfficeResponsablesCached,
   officeUserRoleLabel,
 } from "./domain/empresa/empresaOfficeUsers.js";
+import { OfficeServiciosVistaSelector } from "./features/empresa/OfficeServiciosVistaSelector.jsx";
 import {
   ACCOUNT_TYPES,
   FEATURE_KEYS,
@@ -12206,9 +12209,7 @@ function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,war
 function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,officeResponsables=[],onClose,onCreado}){
   const sinConductor=!conductorId;
   const officeUser=getOfficeUserFromSession();
-  const canPickResponsable=isDemoApp()&&officeResponsables.length>0&&(
-    officeUser?.rol==="jefe_flota"||canViewAllServices(officeUser)
-  );
+  const canPickResponsable=isDemoApp()&&officeResponsables.length>0&&canPickOfficeServicioResponsable(officeUser);
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
@@ -12348,7 +12349,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       return;
     }
     const uid=getUserId?.()||null;
-    if(officeUser?.rol==="trafico"&&!canViewAllServices(officeUser)){
+    if(officeUser?.rol==="trafico"&&!officeUser?.puedeVerTodos){
       setResponsableId(officeUser.userId||uid||"");
       return;
     }
@@ -12420,7 +12421,7 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
           </div>
           {isDemoApp()&&officeResponsables.length>0&&(
             <div style={{marginBottom:8}}>
-              <div style={lbl}>Responsable</div>
+              <div style={lbl}>Responsable del servicio</div>
               {canPickResponsable?(
                 <select value={responsableId} onChange={e=>setResponsableId(e.target.value)} style={{...inp,cursor:"pointer"}}>
                   {officeResponsables.map((r)=>(
@@ -12738,6 +12739,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[asignadosTick,setAsignadosTick]=useState(0);
   const[editarServicioModal,setEditarServicioModal]=useState(null);
   const[officeResponsables,setOfficeResponsables]=useState([]);
+  const officeUserPanel=getOfficeUserFromSession(getUserId?.());
+  const[officeServiciosVista,setOfficeServiciosVista]=useState(()=>getDefaultOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
+  const[officeResponsableFiltro,setOfficeResponsableFiltro]=useState("");
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
   const[addForm,setAddForm]=useState({nombre:"",matricula:"",email:""});
@@ -13016,14 +13020,29 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   useEffect(()=>{setDocsPage(1);},[filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView]);
 
   useEffect(()=>{
+    if(!officeUserPanel?.activo)setOfficeServiciosVista(OFFICE_SERVICIOS_VISTA.TODOS);
+    else setOfficeServiciosVista(getDefaultOfficeServiciosVista(officeUserPanel));
+    setOfficeResponsableFiltro("");
+  },[officeUserPanel?.userId,officeUserPanel?.rol,officeUserPanel?.puedeVerTodos,officeUserPanel?.activo]);
+
+  useEffect(()=>{
     if(!empresa?.id||!isDemoApp()){
       setOfficeResponsables([]);
       return;
     }
-    fetchEmpresaOfficeResponsables(sbSelect,empresa.id)
-      .then(setOfficeResponsables)
-      .catch(()=>setOfficeResponsables([]));
-  },[empresa?.id]);
+    const needResponsables=
+      flotaTab==="servicios"||
+      !!asignarModal||
+      !!editarServicioModal||
+      pickConductorViaje||
+      officeServiciosVista===OFFICE_SERVICIOS_VISTA.POR_RESPONSABLE;
+    if(!needResponsables)return;
+    let cancelled=false;
+    fetchEmpresaOfficeResponsablesCached(sbSelect,empresa.id)
+      .then((rows)=>{if(!cancelled)setOfficeResponsables(rows);})
+      .catch(()=>{if(!cancelled)setOfficeResponsables([]);});
+    return()=>{cancelled=true;};
+  },[empresa?.id,flotaTab,asignarModal,editarServicioModal,pickConductorViaje,officeServiciosVista]);
 
   useEffect(()=>{init();},[]);
 
@@ -13039,6 +13058,23 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return;
       }
       const officeUser=getOfficeUserFromSession(uid);
+      if(isDemoApp()&&officeUser?.activo){
+        if(!officeUser.empresaId){
+          setModo("office_sin_empresa");
+          setLoading(false);
+          return;
+        }
+        setEmpresa({id:officeUser.empresaId,nombre:officeUser.empresaNombre||"Empresa"});
+        setModo("jefe");
+        onRoleChange?.("jefe");
+        const rolOficina=String(officeUser.rol||"").toLowerCase();
+        if(rolOficina!=="administrativo"){
+          await loadConductores(officeUser.empresaId);
+        }else{
+          setLoading(false);
+        }
+        return;
+      }
       const emp=await resolveEmpresaRecordForUser(uid,sbSelect,officeUser);
       if(emp?.id){
         setEmpresa(emp);setModo("jefe");
@@ -13274,11 +13310,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     try{
       const uids=await resolveFlotaConductorUids();
       const svsRaw=await fetchFlotaServiciosForEmpresa(sbFetch,empresa.id,uids);
-      let svsArr=(Array.isArray(svsRaw)?svsRaw:[]).map(normalizarServicioEmpresa);
-      const officeUser=getOfficeUserFromSession(getUserId());
-      if(isDemoApp()&&officeUser?.activo){
-        svsArr=filterServiciosForOfficeUser(svsArr,officeUser,getUserId());
-      }
+      const svsArr=(Array.isArray(svsRaw)?svsRaw:[]).map(normalizarServicioEmpresa);
       setFlotaServicios(prev=>mergeFlotaServicios(prev,svsArr));
       const enCurso=svsArr.filter(s=>s.estado==="en_curso");
       const sample=enCurso[0]||svsArr[0]||null;
@@ -13329,11 +13361,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     try{
       const uids=await resolveFlotaConductorUids();
       const svsMerged=await fetchFlotaServiciosForEmpresa(sbFetch,empresa.id,uids);
-      let svsArr=(Array.isArray(svsMerged)?svsMerged:[]).map(normalizarServicioEmpresa);
-      const officeUser=getOfficeUserFromSession(getUserId());
-      if(isDemoApp()&&officeUser?.activo){
-        svsArr=filterServiciosForOfficeUser(svsArr,officeUser,getUserId());
-      }
+      const svsArr=(Array.isArray(svsMerged)?svsMerged:[]).map(normalizarServicioEmpresa);
       setFlotaServicios(prev=>mergeFlotaServicios(prev,svsArr));
       const stopIds=servicioIdsForLightStopsRefresh(svsArr,serviciosListaRef.current);
       const ubicUids=[...new Set(svsArr.filter(s=>SERVICIO_ESTADOS_ACTIVOS.includes(s.estado)).map(s=>conductorUidOperativoServicio(s)).filter(Boolean))];
@@ -13493,9 +13521,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     [archivedExpedienteIds,flotaStops,flotaEvs,flotaIncidenciasResumen],
   );
 
+  const officeServiciosOperativa=useMemo(
+    ()=>filterServiciosForOfficeUser(flotaServicios,officeUserPanel,getUserId?.(),{
+      vista:officeServiciosVista,
+      responsableFiltroId:officeResponsableFiltro||null,
+    }),
+    [flotaServicios,officeUserPanel,officeServiciosVista,officeResponsableFiltro],
+  );
+
   const serviciosListaOperativa=useMemo(()=>{
     const list=filterServiciosForEmpresaVistaTab(
-      flotaServicios.map((sv)=>({
+      officeServiciosOperativa.map((sv)=>({
         ...sv,
         incidencias_total:Number(flotaIncidenciasResumen?.[sv.id]?.total_incidencias||0),
         incidencias_fotos_total:Number(flotaIncidenciasResumen?.[sv.id]?.total_fotos||0),
@@ -13515,7 +13551,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       :list;
     filtered.sort((a,b)=>(flotaActivityTsById[b.id]||0)-(flotaActivityTsById[a.id]||0));
     return filtered;
-  },[flotaServicios,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores,flotaIncidenciasResumen]);
+  },[officeServiciosOperativa,serviciosVistaTab,empresaVistaTabCtx,flotaActivityTsById,serviciosBusqueda,flotaStops,conductores,flotaIncidenciasResumen]);
 
   useEffect(()=>{setServiciosPage(1);},[serviciosVistaTab,flotaServicios.length,serviciosBusqueda]);
 
@@ -14035,6 +14071,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   if(loading)return<div style={{padding:40,textAlign:"center",color:su}}>⏳ Cargando...</div>;
 
+  if(modo==="office_sin_empresa")return(
+    <div style={{padding:"40px 20px",textAlign:"center",background:bg,minHeight:"100vh"}}>
+      <div style={{fontSize:16,fontWeight:700,color:tx,marginBottom:8}}>Usuario de oficina sin empresa asociada</div>
+      <div style={{fontSize:14,color:su}}>Contacta con el administrador de tu empresa.</div>
+    </div>
+  );
+
   // Usuario registrado como empresa pero sin empresa creada todavía
   if(modo==="crear_empresa")return(
     <div style={{padding:"20px 16px 80px",background:bg,minHeight:"100vh"}}>
@@ -14453,6 +14496,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   </button>
                 </div>
                 <div style={{height:1,background:EMPRESA_UI.border,margin:"0 0 12px"}}/>
+                <OfficeServiciosVistaSelector
+                  officeUser={officeUserPanel}
+                  vista={officeServiciosVista}
+                  onVistaChange={setOfficeServiciosVista}
+                  responsableFiltroId={officeResponsableFiltro}
+                  onResponsableFiltroChange={setOfficeResponsableFiltro}
+                  officeResponsables={officeResponsables}
+                  ui={EMPRESA_UI}
+                />
                 <input
                   type="search"
                   value={serviciosBusqueda}
@@ -18142,13 +18194,25 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 function EmpresaDashboard({prof,showToast,onTabChange}){
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
-  const[servicios,setServicios]=useState([]);
+  const[serviciosRaw,setServiciosRaw]=useState([]);
   const[incidenciasResumen,setIncidenciasResumen]=useState({});
   const[ubicacionDashByUid,setUbicacionDashByUid]=useState({});
   const[loading,setLoading]=useState(true);
+  const[officeResponsablesDash,setOfficeResponsablesDash]=useState([]);
+  const officeUserDash=getOfficeUserFromSession(getUserId?.());
+  const[officeServiciosVistaDash,setOfficeServiciosVistaDash]=useState(()=>getDefaultOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
+  const[officeResponsableFiltroDash,setOfficeResponsableFiltroDash]=useState("");
   const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
   const su=EMPRESA_UI.muted;
+
+  const servicios=useMemo(
+    ()=>filterServiciosForOfficeUser(serviciosRaw,officeUserDash,getUserId?.(),{
+      vista:officeServiciosVistaDash,
+      responsableFiltroId:officeResponsableFiltroDash||null,
+    }),
+    [serviciosRaw,officeUserDash,officeServiciosVistaDash,officeResponsableFiltroDash],
+  );
 
   const tower=useMemo(
     ()=>buildEmpresaDashboardTowerState({
@@ -18206,11 +18270,12 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           uids.length?fetchFlotaServiciosForEmpresa(sbFetch,emp.id,uids):Promise.resolve([]),
           fetchIncidenciasResumenByEmpresa(emp.id).catch(()=>[]),
         ]);
-        let svsList=Array.isArray(svs)?svs:[];
-        if(isDemoApp()&&officeUser?.activo){
-          svsList=filterServiciosForOfficeUser(svsList,officeUser,uid);
+        setServiciosRaw(Array.isArray(svs)?svs:[]);
+        if(isDemoApp()&&officeUser?.rol==="jefe_flota"&&emp.id){
+          fetchEmpresaOfficeResponsablesCached(sbSelect,emp.id)
+            .then(setOfficeResponsablesDash)
+            .catch(()=>setOfficeResponsablesDash([]));
         }
-        setServicios(svsList);
         const incMap={};
         for(const row of Array.isArray(incRows)?incRows:[]){
           if(row?.servicio_id)incMap[row.servicio_id]=row;
@@ -18279,6 +18344,17 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 
   return(
     <div className="empresa-page-shell">
+      <div style={{padding:"8px 12px 0",maxWidth:960,margin:"0 auto"}}>
+        <OfficeServiciosVistaSelector
+          officeUser={officeUserDash}
+          vista={officeServiciosVistaDash}
+          onVistaChange={setOfficeServiciosVistaDash}
+          responsableFiltroId={officeResponsableFiltroDash}
+          onResponsableFiltroChange={setOfficeResponsableFiltroDash}
+          officeResponsables={officeResponsablesDash}
+          ui={EMPRESA_UI}
+        />
+      </div>
       <EmpresaDashboardTower
         tower={tower}
         ui={EMPRESA_UI}

@@ -17,7 +17,7 @@ import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js"
 import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 import { isDemoApp } from "../../config/appEnvironment.js";
-import { canViewAllServices } from "../../domain/empresa/officeUserFilters.js";
+import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
 import { officeUserRoleLabel } from "../../domain/empresa/empresaOfficeUsers.js";
 
 function p2(n) {
@@ -59,9 +59,11 @@ export function EmpresaEditarServicioModal({
 }) {
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
   const canEditResponsable =
-    isDemoApp() &&
-    officeResponsables.length > 0 &&
-    (officeUser?.rol === "jefe_flota" || canViewAllServices(officeUser));
+    isDemoApp() && officeResponsables.length > 0 && canPickOfficeServicioResponsable(officeUser);
+  const responsableLockedUid =
+    isDemoApp() && officeUser?.rol === "trafico" && !officeUser?.puedeVerTodos
+      ? officeUser.userId || userId
+      : null;
   const wide = mode === "wide";
 
   const [stops, setStops] = useState([
@@ -89,9 +91,10 @@ export function EmpresaEditarServicioModal({
     setRefCliente(String(servicio.referencia_cliente ?? "").trim());
     setAdminNotas(String(getServicioOperacionMeta(servicio).admin_notas ?? "").trim());
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
-    setResponsableSel(servicio.responsable_user_id ? servicio.responsable_user_id : "");
+    const resp = servicio.responsable_user_id ? servicio.responsable_user_id : "";
+    setResponsableSel(responsableLockedUid || resp);
     setError("");
-  }, [servicio]);
+  }, [servicio, responsableLockedUid]);
 
   useEffect(() => {
     if (!servicio?.id || !wide) return;
@@ -402,21 +405,36 @@ export function EmpresaEditarServicioModal({
             <input value={cliente} onChange={(e) => setCliente(e.target.value)} style={inputStyle} placeholder="Ej. Mercadona" />
           </label>
 
-          {canEditResponsable && (
+          {isDemoApp() && officeResponsables.length > 0 && (
             <label style={labelStyle}>
-              Responsable
-              <select
-                value={responsableSel}
-                onChange={(e) => setResponsableSel(e.target.value)}
-                style={{ ...inputStyle, cursor: "pointer" }}
-              >
-                <option value="">Sin responsable</option>
-                {officeResponsables.map((r) => (
-                  <option key={r.userId} value={r.userId}>
-                    {r.nombre || r.email || "Usuario"} · {officeUserRoleLabel(r.rol)}
-                  </option>
-                ))}
-              </select>
+              Responsable del servicio
+              {canEditResponsable ? (
+                <select
+                  value={responsableSel}
+                  onChange={(e) => setResponsableSel(e.target.value)}
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                >
+                  <option value="">Sin responsable</option>
+                  {officeResponsables.map((r) => (
+                    <option key={r.userId} value={r.userId}>
+                      {r.nombre || r.email || "Usuario"} · {officeUserRoleLabel(r.rol)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div
+                  style={{
+                    ...inputStyle,
+                    background: EMPRESA_UI.surfaceSoft,
+                    fontWeight: 650,
+                    cursor: "default",
+                  }}
+                >
+                  {officeResponsables.find((r) => r.userId === responsableSel)?.nombre ||
+                    officeResponsables.find((r) => r.userId === responsableSel)?.email ||
+                    "Tú"}
+                </div>
+              )}
             </label>
           )}
 

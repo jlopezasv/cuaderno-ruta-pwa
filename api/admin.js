@@ -742,7 +742,6 @@ export default async function handler(req, res) {
       nombre: nombreNorm,
       tipo_cuenta: "empresa",
       can_drive: false,
-      empresa_status: "approved",
     });
     if (!profUpsert.ok) {
       await authAdminDeleteUser(newUid);

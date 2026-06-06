@@ -62,6 +62,39 @@ export async function fetchEmpresaOfficeResponsables(sbSelect, empresaId) {
   return users.filter((u) => u.activo && OFFICE_RESPONSABLE_ROLES.includes(u.rol));
 }
 
+const responsablesCache = { empresaId: null, data: null, inflight: null };
+
+export function invalidateEmpresaOfficeResponsablesCache(empresaId = null) {
+  if (empresaId == null || responsablesCache.empresaId === empresaId) {
+    responsablesCache.empresaId = null;
+    responsablesCache.data = null;
+    responsablesCache.inflight = null;
+  }
+}
+
+/** Una sola consulta por empresa y sesión (reutilizada entre panel, dashboard y modales). */
+export async function fetchEmpresaOfficeResponsablesCached(sbSelect, empresaId) {
+  if (!empresaId || !isDemoApp()) return [];
+  if (responsablesCache.empresaId === empresaId && responsablesCache.data) {
+    return responsablesCache.data;
+  }
+  if (responsablesCache.empresaId === empresaId && responsablesCache.inflight) {
+    return responsablesCache.inflight;
+  }
+  responsablesCache.empresaId = empresaId;
+  responsablesCache.inflight = fetchEmpresaOfficeResponsables(sbSelect, empresaId)
+    .then((rows) => {
+      responsablesCache.data = rows;
+      responsablesCache.inflight = null;
+      return rows;
+    })
+    .catch((err) => {
+      responsablesCache.inflight = null;
+      throw err;
+    });
+  return responsablesCache.inflight;
+}
+
 export async function patchEmpresaOfficeUser(id, patch) {
   if (!id) throw new Error("Falta id de usuario oficina");
   const body = {};

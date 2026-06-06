@@ -1,6 +1,12 @@
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { EMPRESA_TABS } from "../../navigation/empresaTabs.js";
 
+export const OFFICE_SERVICIOS_VISTA = Object.freeze({
+  MIS: "mis",
+  TODOS: "todos",
+  POR_RESPONSABLE: "por_responsable",
+});
+
 /** @param {{ rol?: string, puedeVerTodos?: boolean, activo?: boolean }|null} officeUser */
 export function canViewAllServices(officeUser) {
   if (!officeUser?.activo) return false;
@@ -10,17 +16,80 @@ export function canViewAllServices(officeUser) {
   return false;
 }
 
-/** Filtra servicios según rol oficina. Legacy sin responsable solo visible si canViewAll. */
-export function filterServiciosForOfficeUser(servicios, officeUser, uid) {
+/** Vista operativa por defecto según rol oficina DEMO. */
+export function getDefaultOfficeServiciosVista(officeUser) {
+  if (!officeUser?.activo) return OFFICE_SERVICIOS_VISTA.TODOS;
+  const rol = String(officeUser.rol || "").toLowerCase();
+  if (rol === "jefe_flota") return OFFICE_SERVICIOS_VISTA.TODOS;
+  if (rol === "trafico") return OFFICE_SERVICIOS_VISTA.MIS;
+  return OFFICE_SERVICIOS_VISTA.TODOS;
+}
+
+/** Opciones del selector «Ver: …» (vacío = sin selector). */
+export function getOfficeServiciosVistaOptions(officeUser) {
+  if (!isDemoApp() || !officeUser?.activo) return [];
+  const rol = String(officeUser.rol || "").toLowerCase();
+  if (rol === "jefe_flota") {
+    return [
+      { id: OFFICE_SERVICIOS_VISTA.TODOS, label: "Todos los servicios" },
+      { id: OFFICE_SERVICIOS_VISTA.MIS, label: "Mis servicios" },
+      { id: OFFICE_SERVICIOS_VISTA.POR_RESPONSABLE, label: "Por responsable" },
+    ];
+  }
+  if (rol === "trafico" && officeUser.puedeVerTodos) {
+    return [
+      { id: OFFICE_SERVICIOS_VISTA.MIS, label: "Mis servicios" },
+      { id: OFFICE_SERVICIOS_VISTA.TODOS, label: "Todos los servicios" },
+    ];
+  }
+  return [];
+}
+
+export function shouldShowOfficeServiciosVistaSelector(officeUser) {
+  return getOfficeServiciosVistaOptions(officeUser).length > 0;
+}
+
+/** Puede elegir responsable al crear/editar servicio. */
+export function canPickOfficeServicioResponsable(officeUser) {
+  if (!isDemoApp() || !officeUser?.activo) return false;
+  const rol = String(officeUser.rol || "").toLowerCase();
+  return rol === "jefe_flota" || (rol === "trafico" && !!officeUser.puedeVerTodos);
+}
+
+/**
+ * Filtra servicios según rol oficina y vista operativa.
+ * @param {{ forDocumentos?: boolean, vista?: string, responsableFiltroId?: string|null }} [options]
+ */
+export function filterServiciosForOfficeUser(servicios, officeUser, uid, options = {}) {
   const list = Array.isArray(servicios) ? servicios : [];
   if (!isDemoApp() || !officeUser?.activo) return list;
-  if (canViewAllServices(officeUser)) return list;
+
+  if (options.forDocumentos) {
+    const rol = String(officeUser.rol || "").toLowerCase();
+    if (rol === "administrativo") return list;
+    return list;
+  }
+
   const rol = String(officeUser.rol || "").toLowerCase();
   if (rol === "administrativo") return [];
-  if (rol === "trafico") {
-    const userId = uid || officeUser.userId;
+
+  const vista = options.vista || getDefaultOfficeServiciosVista(officeUser);
+  const userId = uid || officeUser.userId;
+
+  if (vista === OFFICE_SERVICIOS_VISTA.TODOS) {
+    return list;
+  }
+
+  if (vista === OFFICE_SERVICIOS_VISTA.MIS) {
     return list.filter((s) => s?.responsable_user_id && s.responsable_user_id === userId);
   }
+
+  if (vista === OFFICE_SERVICIOS_VISTA.POR_RESPONSABLE) {
+    const fid = options.responsableFiltroId;
+    if (!fid) return [];
+    return list.filter((s) => s?.responsable_user_id && s.responsable_user_id === fid);
+  }
+
   return list;
 }
 
