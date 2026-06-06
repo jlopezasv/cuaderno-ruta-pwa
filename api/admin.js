@@ -3,7 +3,6 @@
 
 import { isDemoApp } from "./lib/appEnvironment.js";
 import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
-import { isDemoApp } from "./lib/appEnvironment.js";
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
 
@@ -177,6 +176,21 @@ async function authAdminDeleteUser(userId) {
 }
 
 const DEMO_OFFICE_USER_PASSWORD = "DemoCuaderno2026!";
+
+function supabaseErrorMessage(detail) {
+  if (!detail) return null;
+  if (typeof detail === "string") return detail;
+  return detail.message || detail.msg || detail.error || detail.hint || null;
+}
+
+/** Logging seguro solo en entorno DEMO (sin contraseñas ni tokens). */
+function demoOfficeUserLog(event, fields = {}) {
+  if (!isDemoApp()) return;
+  console.info("[admin:create_office_user_demo]", event, {
+    action: "create_office_user_demo",
+    ...fields,
+  });
+}
 
 async function authAdminCreateUser({ email, password, nombre }) {
   const r = await fetch(`${sbServer().url}/auth/v1/admin/users`, {
@@ -681,20 +695,42 @@ export default async function handler(req, res) {
     }
     const emailNorm = String(email).trim().toLowerCase();
     const nombreNorm = String(nombre).trim();
+    demoOfficeUserLog("start", {
+      rol: normalizedRol,
+      empresa_id,
+      email: emailNorm,
+    });
     const created = await authAdminCreateUser({
       email: emailNorm,
       password: DEMO_OFFICE_USER_PASSWORD,
       nombre: nombreNorm,
     });
     if (!created.ok) {
+      const errMsg = created.error || "No se pudo crear el usuario en Auth";
+      demoOfficeUserLog("auth_create_failed", {
+        rol: normalizedRol,
+        empresa_id,
+        email: emailNorm,
+        message: errMsg,
+        code: "ADMIN_AUTH_CREATE_FAILED",
+        details: { status: created.status },
+      });
       return res.status(502).json({
         ok: false,
-        error: created.error || "No se pudo crear el usuario en Auth",
+        error: errMsg,
         code: "ADMIN_AUTH_CREATE_FAILED",
+        details: { status: created.status },
       });
     }
     const newUid = created.user?.id;
     if (!newUid || !UUID_RE.test(newUid)) {
+      demoOfficeUserLog("auth_missing_uid", {
+        rol: normalizedRol,
+        empresa_id,
+        email: emailNorm,
+        message: "Auth no devolvió user id",
+        code: "ADMIN_AUTH_CREATE_FAILED",
+      });
       return res.status(502).json({
         ok: false,
         error: "Auth no devolvió user id",
@@ -710,11 +746,20 @@ export default async function handler(req, res) {
     });
     if (!profUpsert.ok) {
       await authAdminDeleteUser(newUid);
+      const errMsg = supabaseErrorMessage(profUpsert.detail) || "No se pudo crear el perfil";
+      demoOfficeUserLog("profile_upsert_failed", {
+        rol: normalizedRol,
+        empresa_id,
+        email: emailNorm,
+        message: errMsg,
+        code: "ADMIN_SUPABASE_ERROR",
+        details: profUpsert.detail,
+      });
       return res.status(502).json({
         ok: false,
-        error: "No se pudo crear el perfil",
+        error: errMsg,
         code: "ADMIN_SUPABASE_ERROR",
-        detail: profUpsert.detail,
+        details: profUpsert.detail,
       });
     }
     const euUpsert = await restUpsert("empresa_usuarios", {
@@ -728,14 +773,30 @@ export default async function handler(req, res) {
     });
     if (!euUpsert.ok) {
       await authAdminDeleteUser(newUid);
+      const errMsg =
+        supabaseErrorMessage(euUpsert.detail) || "No se pudo vincular usuario a la empresa";
+      demoOfficeUserLog("empresa_usuario_upsert_failed", {
+        rol: normalizedRol,
+        empresa_id,
+        email: emailNorm,
+        message: errMsg,
+        code: "ADMIN_SUPABASE_ERROR",
+        details: euUpsert.detail,
+      });
       return res.status(502).json({
         ok: false,
-        error: "No se pudo vincular usuario a la empresa",
+        error: errMsg,
         code: "ADMIN_SUPABASE_ERROR",
-        detail: euUpsert.detail,
+        details: euUpsert.detail,
       });
     }
     const row = Array.isArray(euUpsert.data) ? euUpsert.data[0] : euUpsert.data;
+    demoOfficeUserLog("success", {
+      rol: normalizedRol,
+      empresa_id,
+      email: emailNorm,
+      user_id: newUid,
+    });
     return res.json({
       ok: true,
       user_id: newUid,
