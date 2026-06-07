@@ -109,6 +109,7 @@ export function PlanificadorMapaBeta({
   formatLugar = null,
   onBuscarConductor,
   dark = false,
+  compactLayout = true,
 }) {
   const mapDivRef = useRef(null);
   const mapRef = useRef(null);
@@ -270,42 +271,53 @@ export function PlanificadorMapaBeta({
 
   return (
     <div
-      className="planificador-mapa-beta-root"
+      className={
+        compactLayout
+          ? "planificador-mapa-beta-root planificador-mapa-beta-root--compact"
+          : "planificador-mapa-beta-root"
+      }
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minHeight: 420,
+        gap: compactLayout ? 4 : 10,
+        minHeight: compactLayout ? 0 : 420,
+        flex: compactLayout ? 1 : undefined,
         position: "relative",
         zIndex: 0,
         isolation: "isolate",
       }}
     >
       <div
+        className={compactLayout ? "planificador-mapa-beta-banner--compact" : undefined}
         style={{
-          fontSize: 11,
+          fontSize: compactLayout ? 10 : 11,
           color: su,
           lineHeight: 1.45,
           background: dark ? "#172033" : "#eff6ff",
           border: `1px solid ${dark ? "#334155" : "#bfdbfe"}`,
-          borderRadius: 10,
-          padding: "8px 10px",
+          borderRadius: compactLayout ? 8 : 10,
+          padding: compactLayout ? "2px 6px" : "8px 10px",
         }}
       >
-        Vista beta · {cargas.length} carga{cargas.length !== 1 ? "s" : ""} sin conductor ·{" "}
-        {driversDisponibles} sin servicio · {driversConCoords} en mapa · 🟢 sin servicio · 🟠 asignado · 🔵 en curso · ⚪ sin GPS
+        {`${cargas.length} carga${cargas.length !== 1 ? "s" : ""} sin conductor · ${driversDisponibles} sin servicio · ${driversConCoords} en mapa · 🟢 sin servicio · 🟠 asignado · 🔵 en curso · ⚪ sin GPS`}
       </div>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(220px, 300px) 1fr",
-          gap: 10,
-          minHeight: 380,
+          gridTemplateColumns: compactLayout ? "minmax(180px, 280px) 1fr" : "minmax(220px, 300px) 1fr",
+          gap: compactLayout ? 6 : 10,
+          minHeight: compactLayout ? 0 : 380,
+          flex: compactLayout ? 1 : undefined,
         }}
-        className="planificador-mapa-beta-layout"
+        className={
+          compactLayout
+            ? "planificador-mapa-beta-layout planificador-mapa-beta-layout--compact"
+            : "planificador-mapa-beta-layout"
+        }
       >
         <aside
+          className={compactLayout ? "planificador-mapa-beta-aside--compact" : undefined}
           style={{
             background: card,
             border: `1px solid ${border}`,
@@ -313,7 +325,7 @@ export function PlanificadorMapaBeta({
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
-            maxHeight: 480,
+            maxHeight: compactLayout ? undefined : 480,
           }}
         >
           <div
@@ -402,13 +414,31 @@ export function PlanificadorMapaBeta({
           </div>
         </aside>
 
-        <div className="planificador-mapa-beta-map" style={{ position: "relative", minHeight: 320 }}>
+        <div
+          className={
+            compactLayout
+              ? "planificador-mapa-beta-map planificador-mapa-beta-map--compact"
+              : "planificador-mapa-beta-map"
+          }
+          style={{
+            position: "relative",
+            minHeight: compactLayout ? 0 : 320,
+            flex: compactLayout ? 1 : undefined,
+            display: compactLayout ? "flex" : undefined,
+            flexDirection: compactLayout ? "column" : undefined,
+          }}
+        >
           <div
             ref={mapDivRef}
-            className="planificador-mapa-beta-map-host"
+            className={
+              compactLayout
+                ? "planificador-mapa-beta-map-host planificador-mapa-beta-map-host--compact"
+                : "planificador-mapa-beta-map-host"
+            }
             style={{
               height: "100%",
-              minHeight: 320,
+              minHeight: compactLayout ? 0 : 320,
+              flex: compactLayout ? 1 : undefined,
               borderRadius: 12,
               border: `1px solid ${border}`,
               background: "#dde8f0",

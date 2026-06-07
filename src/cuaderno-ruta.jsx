@@ -91,12 +91,21 @@ import {
   invalidateEmpresaConductoresCache,
 } from "./domain/empresa/empresaFlotaLists.js";
 import {
+  buildConductorJoinStateFromEmpresa,
+  clearPendingEquipoVinculoStorage,
+  fetchActiveConductorEmpresaRows,
+  joinOrReactivateConductorEmpresa,
+  joinStateToCampoEmpresaEstado,
+  joinStateToRelEstado,
+  lookupEmpresasByVinculoCode,
+  refreshFleetJoinClientState,
+  resolveConductorEmpresaJoinState,
+} from "./domain/empresa/conductorEmpresaLink.js";
+import {
   diagAfterConductorEmpresaJoin,
-  diagFetchEmpresasByVinculoCode,
   diagLogConductoresListResult,
   diagLogJoinCodigoNoExiste,
   logDemoEquipoJoin,
-  postgrestEqText,
 } from "./domain/empresa/conductorEmpresaJoinDiag.js";
 import {
   buildOfficeResponsablesByUserId,
@@ -2306,7 +2315,7 @@ function AppInner(){
       if(uidRol){
         const detectarRol=async(intento=0)=>{
           try{
-            const rels=await sbSelect("conductor_empresa",`user_id=eq.${uidRol}&activo=eq.true`);
+            const rels=await fetchActiveConductorEmpresaRows(uidRol);
             if(rels.length){setRolEmpresa("conductor");return;}
             setRolEmpresa(null);
           }catch(e){
@@ -3469,7 +3478,7 @@ function AppInner(){
           </div>
         )}
         {tab==="admin"&&isAdmin&&<AdminPanel dark={dark}/>}
-        {tab==="perfil"&&<ProfView prof={prof} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast}/>}
+        {tab==="perfil"&&<ProfView prof={prof} authUid={user} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast} onFleetJoinSuccess={()=>{setRolEmpresa("conductor");setTab("servicio");showToast("Equipo activo ✓","#22C55E");}}/>}
         {tab==="ruta"&&<MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>}
         {tab==="docs"&&(
           <div>
@@ -7660,7 +7669,7 @@ function CambiarPassword({embedded=false}){
   );
 }
 
-function ProfView({prof,onSave,norma,db,showToast}){
+function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
   const[p,setP]=useState(prof);const[saved,setSaved]=useState(false);
   useEffect(()=>setP(prof),[prof]);
   function save(){onSave(p);setSaved(true);setTimeout(()=>setSaved(false),2000);}
@@ -7798,7 +7807,7 @@ function ProfView({prof,onSave,norma,db,showToast}){
         </div>
 
         {/* Campo empresa — conductor se vincula con código */}
-        <CampoEmpresa prof={p}/>
+        <CampoEmpresa prof={p} authUid={authUid} onFleetJoinSuccess={onFleetJoinSuccess}/>
       </div>
 
       {norma.totalDebt>0&&<div style={{background:"#FFF7ED",border:"2px solid #FED7AA",borderRadius:11,padding:"12px",marginBottom:12}}>
@@ -7919,25 +7928,10 @@ async function humanizeConductorEmpresaJoinError(res){
 async function fetchEmpresasByVinculoCode(raw){
   const cod=normalizeEmpresaVinculoCode(raw);
   if(!cod){
-    logDemoEquipoJoin("codigo_vacio",{raw});
+    if(isDemoApp()) logDemoEquipoJoin("codigo_vacio",{raw});
     return[];
   }
-  const eqText=postgrestEqText(cod);
-  logDemoEquipoJoin("fetch_inicio",{
-    isDemoApp:isDemoApp(),
-    codigo:{raw,normalizado:cod,valorEnviadoEnEq:eqText},
-    ruta:isDemoApp()?"diagFetchEmpresasByVinculoCode":"sbSelect_prod",
-  });
-  if(isDemoApp()){
-    return diagFetchEmpresasByVinculoCode(cod);
-  }
-  let emps=await sbSelect("empresas",`codigo_equipo=eq.${eqText}`);
-  if(emps?.length)return emps;
-  emps=await sbSelect("empresas",`codigo_corto=eq.${eqText}`);
-  if(emps?.length)return emps;
-  const uuidRe=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if(uuidRe.test(cod)&&cod.length===36)return sbSelect("empresas",`id=eq.${cod}`);
-  return[];
+  return lookupEmpresasByVinculoCode(cod);
 }
 function EmpresaPerfilBlock({tipoCuentaProp=null}){
   const[tipoCuenta,setTipoCuenta]=useState(tipoCuentaProp);
@@ -8134,7 +8128,37 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
 }
 
 
-function CampoEmpresa({prof}){
+async function applyFleetJoinSuccessAfterCode({
+  uid,
+  emp,
+  joinResult,
+  setEstado,
+  setCodigo,
+  setPreview,
+  setMsg,
+  onFleetJoinSuccess,
+}) {
+  clearPendingEquipoVinculoStorage();
+  const refreshed = await refreshFleetJoinClientState(uid, {
+    empresa: emp,
+    joinRel: joinResult.rel,
+  });
+  await bootstrapAuthSession(uid, sbSelect, {
+    prefetched: { hasFleetLink: true },
+    preferMode: "conductor",
+  }).catch(() => {});
+  const mapped =
+    refreshed.mapped?.id
+      ? refreshed.mapped
+      : joinStateToCampoEmpresaEstado(buildConductorJoinStateFromEmpresa(emp, joinResult.rel));
+  setEstado(mapped);
+  setCodigo("");
+  setPreview(null);
+  setMsg(joinResult.outcome === "already_joined" ? joinResult.message : "");
+  onFleetJoinSuccess?.(refreshed);
+}
+
+function CampoEmpresa({prof,authUid,onFleetJoinSuccess}){
   const[estado,setEstado]=useState(null);
   const[codigo,setCodigo]=useState("");
   const[loading,setLoading]=useState(false);
@@ -8142,6 +8166,23 @@ function CampoEmpresa({prof}){
   const[preview,setPreview]=useState(null);
   const[previewLoading,setPreviewLoading]=useState(false);
   const debRef=useRef(null);
+
+  const reloadJoin=useCallback(async()=>{
+    setEstado(null);
+    try{
+      let state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      if(state.kind==="none"){
+        await new Promise(r=>setTimeout(r,400));
+        state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      }
+      const mapped=joinStateToCampoEmpresaEstado(state);
+      setEstado(mapped);
+      return {state,mapped};
+    }catch{
+      setEstado(false);
+      return {state:{kind:"none"},mapped:false};
+    }
+  },[authUid]);
 
   useEffect(()=>{
     const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
@@ -8151,21 +8192,13 @@ function CampoEmpresa({prof}){
     }
   },[]);
 
+  useEffect(()=>{reloadJoin();},[reloadJoin]);
+
   useEffect(()=>{
-    const uid=getUserId();
-    if(!uid){setEstado(false);return;}
-    sbSelect("empresas",`owner_id=eq.${uid}`)
-      .then(emps=>{
-        if(emps.length){setEstado({esJefe:true});return null;}
-        return sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-      })
-      .then(rels=>{
-        if(!rels)return;
-        if(rels.length)setEstado({id:rels[0].empresa_id,nombre:rels[0].nombre||"Empresa"});
-        else setEstado(false);
-      })
-      .catch(()=>setEstado(false));
-  },[]);
+    const onVis=()=>{if(document.visibilityState==="visible")reloadJoin();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>document.removeEventListener("visibilitychange",onVis);
+  },[reloadJoin]);
 
   useEffect(()=>{
     if(estado?.esJefe||estado?.id)return;
@@ -8182,7 +8215,7 @@ function CampoEmpresa({prof}){
   },[codigo,estado]);
 
   async function vincular(){
-    const uid=getUserId();
+    const uid=getAuthUid()||getUserId();
     if(!uid){setMsg("Inicia sesión para continuar");return;}
     if(!codigo.trim()){setMsg("Escribe el código de equipo");return;}
     setLoading(true);setMsg("");
@@ -8206,26 +8239,34 @@ function CampoEmpresa({prof}){
         matricula:prof.matricula||"",
         activo:true,
       };
-      const res=await sbFetch("/rest/v1/conductor_empresa",{
-        method:"POST",
-        headers:{"Prefer":"return=representation"},
-        body:JSON.stringify(joinPayload),
+      const joinResult=await joinOrReactivateConductorEmpresa({
+        uid,
+        empresaId:emp.id,
+        nombre:joinPayload.nombre,
+        matricula:joinPayload.matricula,
+        rol:joinPayload.rol,
       });
-      await diagAfterConductorEmpresaJoin(res,{
+      await diagAfterConductorEmpresaJoin(joinResult.res||{ok:false,status:0},{
         codigoRaw:codigo,
         codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
         uid,
         emp,
-        payload:joinPayload,
+        payload:{...joinPayload,outcome:joinResult.outcome},
         source:"CampoEmpresa.vincular",
       });
-      if(res.ok){
-        setEstado({id:emp.id,nombre:emp.nombre});
-        setMsg("");
-        setCodigo("");
-        setPreview(null);
+      if(joinResult.ok){
+        await applyFleetJoinSuccessAfterCode({
+          uid,
+          emp,
+          joinResult,
+          setEstado,
+          setCodigo,
+          setPreview,
+          setMsg,
+          onFleetJoinSuccess,
+        });
       } else {
-        setMsg(await humanizeConductorEmpresaJoinError(res));
+        setMsg(joinResult.res?await humanizeConductorEmpresaJoinError(joinResult.res):"No se ha podido completar. Inténtalo en un momento.");
       }
     }catch{
       setMsg("No se ha podido completar. Inténtalo en un momento.");
@@ -8234,11 +8275,16 @@ function CampoEmpresa({prof}){
   }
 
   async function desvincular(){
-    const uid=getUserId();
+    const uid=getAuthUid()||getUserId();
     if(!uid||!estado?.id)return;
     try{
       await sbFetch(`/rest/v1/conductor_empresa?user_id=eq.${uid}&empresa_id=eq.${estado.id}`,{method:"DELETE"});
-      setEstado(false);setCodigo("");setMsg("");setPreview(null);
+      clearPendingEquipoVinculoStorage();
+      setEstado(false);
+      setCodigo("");
+      setMsg("");
+      setPreview(null);
+      await bootstrapAuthSession(uid,sbSelect).catch(()=>{});
     }catch{setMsg("No se pudo salir del equipo. Inténtalo de nuevo.");}
   }
 
@@ -13146,14 +13192,19 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         await loadConductores(emp.id);
         return;
       }
+      const relsAll=await fetchActiveConductorEmpresaRows(uid);
+      if(relsAll.length){
+        setModo("conductor");
+        onRoleChange?.("conductor");
+        setLoading(false);
+        return;
+      }
       const isEmpresaAccount=perfilesSelf[0]?.tipo_cuenta===ACCOUNT_TYPES.EMPRESA;
-      const relsAll=await sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
       if(isEmpresaAccount){
         setModo("crear_empresa");
         setLoading(false);
         return;
       }
-      if(relsAll.length){setModo("conductor");onRoleChange?.("conductor");setLoading(false);return;}
       setModo(null);
     }catch(_){}
     setLoading(false);
@@ -13595,9 +13646,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const officeServiciosOperativa=useMemo(
     ()=>filterServiciosForOfficeUser(flotaServicios,officeUserPanel,getUserId?.(),{
       vista:officeServiciosVista,
-      responsableFiltroId:officeResponsableFiltro||null,
     }),
-    [flotaServicios,officeUserPanel,officeServiciosVista,officeResponsableFiltro],
+    [flotaServicios,officeUserPanel,officeServiciosVista],
+  );
+
+  const officeServiciosDocumentos=useMemo(
+    ()=>filterServiciosForOfficeUser(flotaServicios,officeUserPanel,getUserId?.(),{
+      vista:officeServiciosVista,
+      forDocumentos:true,
+    }),
+    [flotaServicios,officeUserPanel,officeServiciosVista],
   );
 
   const serviciosListaOperativa=useMemo(()=>{
@@ -13638,7 +13696,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const documentosFiltrados=useMemo(()=>{
     const lower=(v)=>String(v||"").toLowerCase();
     const serviceDate=(sv)=>sv.fecha_inicio||sv.created_at||sv.generatedAt||"";
-    return flotaServicios.filter(sv=>{
+    return officeServiciosDocumentos.filter(sv=>{
       const isArchived=archivedExpedienteIds.has(sv.id);
       if(docsArchiveView==="activos"&&isArchived)return false;
       if(docsArchiveView==="archivados"&&!isArchived)return false;
@@ -13666,7 +13724,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       return true;
     }).sort((a,b)=>new Date(serviceDate(b))-new Date(serviceDate(a)));
   },[
-    flotaServicios,
+    officeServiciosDocumentos,
     archivedExpedienteIds,
     docsArchiveView,
     filtConductor,
@@ -14722,6 +14780,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
       {flotaTab==="planificador"&&(
         isPlanificadorMapaBetaEnabled()?(
+          <>
           <EmpresaPlanificadorPanel
             dark={dark}
             routePlanner={<EmpresaPlanificadorRuta dark={dark}/>}
@@ -14735,6 +14794,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               onBuscarConductor:handleAsignarConductorServicioId,
             }}
           />
+          </>
         ):(
           <EmpresaPlanificadorRuta dark={dark}/>
         )
@@ -14881,8 +14941,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       {[
                         ["Km reales / plan",expedientePreview.header.km!=null?`${expedientePreview.header.km} km`:"—"],
                         ["Conducción",expedientePreview.metrics.conduccion],
-                        ["Espera carga",expedientePreview.metrics.esperaCarga],
-                        ["Espera descarga",expedientePreview.metrics.esperaDescarga],
                         [expedientePreview.header.etaResumenTitulo || "ETA inicial", expedientePreview.header.eta],
                         ["Incidencias",String(expedientePreview.metrics.incidencias??0)],
                         ["Fotos incidencias",String(expedientePreview.metrics.fotosIncidencia??0)],
@@ -14924,7 +14982,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             </div>
           )}
           {flotaLoading?<div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando expedientes…</div>
-          :flotaServicios.length===0?(<div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>▤</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>Sin expedientes todavía</div></div>)
+          :documentosFiltrados.length===0?(<div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center"}}><div style={{fontSize:40,marginBottom:12}}>▤</div><div style={{fontSize:15,fontWeight:700,color:tx,marginBottom:6}}>{flotaServicios.length===0?"Sin expedientes todavía":"Ningún servicio visible con el filtro actual"}</div></div>)
           :(
             <>
               {/* Filtros */}
@@ -15402,7 +15460,7 @@ function FlotaMap({conductores}){
   return <div ref={divRef} style={{height:280,background:"#dde8f0"}}/>;
 }
 
-function SetupConductorPerfil({prof,dark}){
+function SetupConductorPerfil({prof,dark,authUid}){
   const[rel,setRel]=useState(null);
   const[codigo,setCodigo]=useState("");
   const[loading,setLoading]=useState(false);
@@ -15412,25 +15470,29 @@ function SetupConductorPerfil({prof,dark}){
   const debRef=useRef(null);
   const showToast=(m)=>{setToast(m);setTimeout(()=>setToast(""),3200);};
 
+  const reloadJoin=useCallback(async()=>{
+    setRel(null);
+    try{
+      let state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      if(state.kind==="none"){
+        await new Promise(r=>setTimeout(r,400));
+        state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      }
+      const mapped=joinStateToRelEstado(state);
+      setRel(mapped);
+      return {state,mapped};
+    }catch{
+      setRel(false);
+      return {state:{kind:"none"},mapped:false};
+    }
+  },[authUid]);
+
   useEffect(()=>{
     const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
     if(p){setCodigo(p);sessionStorage.removeItem("cuaderno_pending_equipo_vinculo");}
   },[]);
 
-  useEffect(()=>{
-    const uid=getUserId();
-    if(!uid)return;
-    sbSelect("empresas",`owner_id=eq.${uid}`)
-      .then(emps=>{
-        if(emps.length){setRel({esJefe:true,nombre:emps[0].nombre});return null;}
-        return sbSelect("conductor_empresa",`user_id=eq.${uid}&activo=eq.true`);
-      })
-      .then(rels=>{
-        if(!rels)return;
-        if(rels.length)setRel({esJefe:false,nombre:rels[0].nombre||"Empresa"});
-      })
-      .catch(()=>{});
-  },[]);
+  useEffect(()=>{reloadJoin();},[reloadJoin]);
 
   useEffect(()=>{
     if(rel?.esJefe)return;
@@ -15448,7 +15510,7 @@ function SetupConductorPerfil({prof,dark}){
   },[codigo,rel]);
 
   async function unirse(){
-    const uid=getUserId();
+    const uid=getAuthUid()||getUserId();
     if(!uid){showToast("Inicia sesión para continuar");return;}
     if(!codigo.trim()){showToast("Escribe el código de equipo");return;}
     setLoading(true);
@@ -15465,26 +15527,33 @@ function SetupConductorPerfil({prof,dark}){
       }
       const emp=emps[0];
       const joinPayload={user_id:uid,empresa_id:emp.id,rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||"",activo:true};
-      const res=await sbFetch("/rest/v1/conductor_empresa",{
-        method:"POST",
-        headers:{"Prefer":"return=representation"},
-        body:JSON.stringify(joinPayload),
+      const joinResult=await joinOrReactivateConductorEmpresa({
+        uid,
+        empresaId:emp.id,
+        nombre:joinPayload.nombre,
+        matricula:joinPayload.matricula,
+        rol:joinPayload.rol,
       });
-      await diagAfterConductorEmpresaJoin(res,{
+      await diagAfterConductorEmpresaJoin(joinResult.res||{ok:false,status:0},{
         codigoRaw:codigo,
         codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
         uid,
         emp,
-        payload:joinPayload,
+        payload:{...joinPayload,outcome:joinResult.outcome},
         source:"SetupConductorPerfil.unirse",
       });
-      if(res.ok){
-        setRel({esJefe:false,nombre:emp.nombre});
+      if(joinResult.ok){
+        clearPendingEquipoVinculoStorage();
+        const {mapped}=await reloadJoin();
+        if(!mapped?.nombre){
+          setRel(joinStateToRelEstado(buildConductorJoinStateFromEmpresa(emp,joinResult.rel)));
+        }
+        await bootstrapAuthSession(uid,sbSelect).catch(()=>{});
         setCodigo("");
         setPreview(null);
-        showToast("Listo. Ya formas parte del equipo.");
+        showToast(joinResult.outcome==="already_joined"?joinResult.message:"Listo. Ya formas parte del equipo.");
       } else {
-        showToast(await humanizeConductorEmpresaJoinError(res));
+        showToast(joinResult.res?await humanizeConductorEmpresaJoinError(joinResult.res):"No se ha podido completar. Inténtalo en un momento.");
       }
     }catch{
       showToast("No se ha podido completar. Inténtalo en un momento.");
@@ -15493,6 +15562,9 @@ function SetupConductorPerfil({prof,dark}){
   }
 
   if(rel?.esJefe)return null;
+  if(rel===null)return(
+    <div style={{marginTop:16,fontSize:13,color:dark?"#94a3b8":"#78716c"}}>Comprobando equipo…</div>
+  );
 
   const card=dark?"#1e293b":"#fff";
   const line=dark?"#334155":"#e7e5e4";
@@ -15595,7 +15667,8 @@ function SetupJefe({onCreate,dark}){
   );
 }
 
-function SetupConductor({prof,dark,onJoined}){
+function SetupConductor({prof,dark,onJoined,authUid}){
+  const[joined,setJoined]=useState(null);
   const[codigo,setCodigo]=useState("");
   const[loading,setLoading]=useState(false);
   const[msg,setMsg]=useState("");
@@ -15607,10 +15680,39 @@ function SetupConductor({prof,dark,onJoined}){
   const sub=dark?"#94A3B8":"#64748B";
   const line=dark?"#334155":"#e7e5e4";
 
+  const reloadJoin=useCallback(async()=>{
+    setJoined(null);
+    try{
+      let state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      if(state.kind==="none"){
+        await new Promise(r=>setTimeout(r,400));
+        state=await resolveConductorEmpresaJoinState(authUid||getUserId());
+      }
+      const rel=joinStateToRelEstado(state);
+      if(rel?.esJefe)setJoined({esJefe:true,nombre:rel.nombre});
+      else if(rel)setJoined({esJefe:false,nombre:rel.nombre});
+      else setJoined(false);
+      return {state,rel};
+    }catch{
+      setJoined(false);
+      return {state:{kind:"none"},rel:false};
+    }
+  },[authUid]);
+
   useEffect(()=>{
     const p=sessionStorage.getItem("cuaderno_pending_equipo_vinculo");
     if(p){setCodigo(p);sessionStorage.removeItem("cuaderno_pending_equipo_vinculo");}
   },[]);
+
+  const joinedNotifiedRef=useRef(false);
+  useEffect(()=>{reloadJoin();},[reloadJoin]);
+
+  useEffect(()=>{
+    if(joined&&!joined.esJefe&&onJoined&&!joinedNotifiedRef.current){
+      joinedNotifiedRef.current=true;
+      onJoined();
+    }
+  },[joined,onJoined]);
 
   useEffect(()=>{
     const raw=codigo.trim();
@@ -15626,7 +15728,7 @@ function SetupConductor({prof,dark,onJoined}){
   },[codigo]);
 
   async function unirse(){
-    const uid=getUserId();
+    const uid=getAuthUid()||getUserId();
     if(!uid){setMsg("Inicia sesión para continuar");return;}
     if(!codigo.trim()){setMsg("Escribe el código de equipo");return;}
     setLoading(true);setMsg("");
@@ -15650,30 +15752,55 @@ function SetupConductor({prof,dark,onJoined}){
         matricula:prof?.matricula||"",
         activo:true,
       };
-      const res=await sbFetch("/rest/v1/conductor_empresa",{
-        method:"POST",
-        headers:{"Prefer":"return=representation"},
-        body:JSON.stringify(joinPayload),
+      const joinResult=await joinOrReactivateConductorEmpresa({
+        uid,
+        empresaId:emp.id,
+        nombre:joinPayload.nombre,
+        matricula:joinPayload.matricula,
+        rol:joinPayload.rol,
       });
-      await diagAfterConductorEmpresaJoin(res,{
+      await diagAfterConductorEmpresaJoin(joinResult.res||{ok:false,status:0},{
         codigoRaw:codigo,
         codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
         uid,
         emp,
-        payload:joinPayload,
+        payload:{...joinPayload,outcome:joinResult.outcome},
         source:"SetupConductor.unirse",
       });
-      if(res.ok){
+      if(joinResult.ok){
+        clearPendingEquipoVinculoStorage();
+        const {rel}=await reloadJoin();
+        if(!rel)setJoined({esJefe:false,nombre:emp.nombre||"Empresa"});
+        await bootstrapAuthSession(uid,sbSelect).catch(()=>{});
         setCodigo("");
         setPreview(null);
+        if(joinResult.outcome==="already_joined")setMsg(joinResult.message);
         onJoined?.();
       }else{
-        setMsg(await humanizeConductorEmpresaJoinError(res));
+        setMsg(joinResult.res?await humanizeConductorEmpresaJoinError(joinResult.res):"No se ha podido completar. Inténtalo en un momento.");
       }
     }catch{
       setMsg("No se ha podido completar. Inténtalo en un momento.");
     }
     setLoading(false);
+  }
+
+  if(joined?.esJefe)return null;
+  if(joined===null){
+    return(
+      <div style={{background:cardBg,borderRadius:16,padding:"16px",border:`1px solid ${line}`,fontSize:13,color:sub}}>
+        Comprobando equipo…
+      </div>
+    );
+  }
+  if(joined&&!joined.esJefe){
+    return(
+      <div style={{background:cardBg,borderRadius:16,padding:"16px",boxShadow:"0 8px 28px rgba(15,23,42,.08)",border:`1px solid ${line}`}}>
+        <div style={{fontSize:10,fontWeight:800,color:sub,letterSpacing:1.3,marginBottom:8}}>EQUIPO</div>
+        <div style={{fontSize:15,fontWeight:800,color:"#15803d",marginBottom:4}}>✅ {joined.nombre}</div>
+        <div style={{fontSize:13,color:sub,lineHeight:1.5}}>Ya estás vinculado a esta flota.</div>
+      </div>
+    );
   }
 
   return(
@@ -18347,10 +18474,14 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const servicios=useMemo(
     ()=>filterServiciosForOfficeUser(serviciosRaw,officeUserDash,getUserId?.(),{
       vista:officeServiciosVistaDash,
-      responsableFiltroId:officeResponsableFiltroDash||null,
     }),
-    [serviciosRaw,officeUserDash,officeServiciosVistaDash,officeResponsableFiltroDash],
+    [serviciosRaw,officeUserDash,officeServiciosVistaDash],
   );
+
+  useEffect(()=>{
+    if(!officeUserDash?.activo)setOfficeServiciosVistaDash(OFFICE_SERVICIOS_VISTA.TODOS);
+    else setOfficeServiciosVistaDash(getDefaultOfficeServiciosVista(officeUserDash));
+  },[officeUserDash?.userId,officeUserDash?.rol,officeUserDash?.puedeVerTodos,officeUserDash?.activo]);
 
   const tower=useMemo(
     ()=>buildEmpresaDashboardTowerState({

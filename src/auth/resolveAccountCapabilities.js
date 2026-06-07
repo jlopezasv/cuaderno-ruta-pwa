@@ -2,7 +2,9 @@ import { isPlatformAdminUid } from "../config/adminUsers.js";
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
 import { ACCOUNT_TYPES, parseProfileAccount } from "./accountModel.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
+import { fetchActiveConductorEmpresaRows } from "../domain/empresa/conductorEmpresaLink.js";
 import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
+import { ensureAuthAccessToken } from "../data/supabaseClient.js";
 import {
   buildSessionCapabilities,
   deriveFeatureFlags,
@@ -57,7 +59,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
       account.canDrive ||
       !officeUser?.activo;
     if (needsFleetCheck) {
-      const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+      const rels = await fetchActiveConductorEmpresaRows(uid).catch(() => []);
       hasFleetLink = rels.length > 0;
     } else {
       hasFleetLink = false;
@@ -110,6 +112,7 @@ export function resolveActiveMode(capabilities, cachedMode = null) {
 }
 
 export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
+  await ensureAuthAccessToken();
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const profile = profiles[0] || null;
 
@@ -126,8 +129,11 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
     account.canDrive ||
     !officeUser?.activo;
 
-  if (needsFleetCheck) {
-    const rels = await sbSelect("conductor_empresa", `user_id=eq.${uid}&activo=eq.true`).catch(() => []);
+  const prefetched = options.prefetched || {};
+  if (prefetched.hasFleetLink !== undefined) {
+    hasFleetLink = !!prefetched.hasFleetLink;
+  } else if (needsFleetCheck) {
+    const rels = await fetchActiveConductorEmpresaRows(uid).catch(() => []);
     hasFleetLink = rels.length > 0;
   } else {
     hasFleetLink = false;

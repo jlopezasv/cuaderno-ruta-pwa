@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && vercel --prod",
+    "deploy:prod:sql": "node scripts/apply-prod-release-mail.mjs",
     "deploy:demo": "node scripts/deploy-demo-documentos-empresa.mjs",
     "deploy:demo:sql": "node scripts/apply-sql-file.mjs supabase/migrations/20260531140000_servicio_documentos_empresa_demo.sql",
     "deploy:demo:office-users": "node scripts/apply-empresa-usuarios-demo.mjs",

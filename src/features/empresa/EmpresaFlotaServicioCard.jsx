@@ -652,12 +652,6 @@ function EmpresaFlotaServicioCardImpl({
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.entradaMuelleMs)}</span>
                       </div>
                       <div>
-                        <span style={{ color: "#94A3B8" }}>Tiempo espera · </span>
-                        <span style={{ color: "#F59E0B", fontWeight: 700 }}>
-                          {row.esperaAntesOperacionMin != null ? fmtDur(row.esperaAntesOperacionMin) : "—"}
-                        </span>
-                      </div>
-                      <div>
                         <span style={{ color: "#94A3B8" }}>Salida muelle · </span>
                         <span style={{ color: tx, fontWeight: 600 }}>{fmtClockMs(row.salidaMuelleMs)}</span>
                       </div>

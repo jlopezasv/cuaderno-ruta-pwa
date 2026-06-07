@@ -1,5 +1,13 @@
 import { isDemoApp } from "../../config/appEnvironment.js";
-import { SB_URL, sbFetch } from "../../data/supabaseClient.js";
+import {
+  getAuthUid,
+  getSessionAuthDiagnostics,
+  getUserId,
+  SB_KEY,
+  SB_URL,
+  sbFetch,
+} from "../../data/supabaseClient.js";
+import { resolveAuthenticatedAccessToken } from "../../data/sbSession.js";
 
 export function logDemoEquipoJoin(phase, payload) {
   if (!isDemoApp()) return;
@@ -40,6 +48,59 @@ export function postgrestEqText(value) {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** Marcador de build — visible en consola para confirmar bundle desplegado. */
+export const DEMO_EQUIPO_JOIN_AUTH_LOG_REV = "rpc-v1";
+
+/** Misma resolución de Bearer que sbFetch (JWT usuario vs anon key). Solo DEMO. */
+async function snapshotDemoEquipoJoinAuth() {
+  const diagnostics = getSessionAuthDiagnostics();
+  const resolvedBearer = await resolveAuthenticatedAccessToken(SB_URL, SB_KEY);
+  const authorizationBearerUserJwt = !!(
+    resolvedBearer && resolvedBearer !== SB_KEY
+  );
+  return {
+    supabaseUrl: SB_URL,
+    sessionExists: diagnostics.hasSessionRecord,
+    userId: getUserId(),
+    authUid: getAuthUid(),
+    accessTokenExists: diagnostics.hasAccessToken,
+    accessTokenUsable: diagnostics.isUsableAccessToken,
+    authorizationHeaderPresent: true,
+    authorizationBearerUserJwt,
+    authorizationBearerAnonKey: !authorizationBearerUserJwt,
+    jwtRole: diagnostics.jwtRole,
+    jwtSub: diagnostics.jwtSub,
+    sessionUserId: diagnostics.sessionUserId,
+    jwtExpired: diagnostics.jwtExpired,
+    wouldSendAnonKey: diagnostics.wouldSendAnonKey,
+    diagnosticoAuth:
+      !diagnostics.hasSessionRecord || !authorizationBearerUserJwt
+        ? "sin_sesion_authenticated — auth.uid() será NULL en RLS"
+        : "sesion_authenticated_ok",
+  };
+}
+
+/**
+ * Log plano ANTES del lookup — punto de entrada fetchEmpresasByVinculoCode (solo DEMO).
+ * @returns {Promise<Record<string, unknown>|null>}
+ */
+export async function logDemoEquipoJoinAuthContext(cod) {
+  if (!isDemoApp()) return null;
+  const snap = await snapshotDemoEquipoJoinAuth();
+  const payload = {
+    logRev: DEMO_EQUIPO_JOIN_AUTH_LOG_REV,
+    codigo: cod,
+    supabaseUrl: snap.supabaseUrl,
+    sessionExists: snap.sessionExists,
+    userId: snap.userId,
+    authUid: snap.authUid,
+    accessTokenExists: snap.accessTokenExists,
+    authorizationBearerUserJwt: snap.authorizationBearerUserJwt,
+  };
+  console.warn("[DEMO equipo-join] auth_context", payload);
+  return snap;
+}
+
 export function extractSupabaseErrorBody(body, httpStatus) {
   if (!body || typeof body !== "object") {
     return { message: `HTTP ${httpStatus}`, code: null, details: null, hint: null };
@@ -53,91 +114,78 @@ export function extractSupabaseErrorBody(body, httpStatus) {
 }
 
 /**
- * SELECT empresas por código (misma lógica que fetchEmpresasByVinculoCode) con trazas DEMO.
+ * Lookup empresa por código en DEMO vía RPC SECURITY DEFINER (sin RLS directa en empresas).
  */
-export async function diagFetchEmpresasByVinculoCode(cod) {
-  const eqText = postgrestEqText(cod);
-  const attempts = [
-    { columna: "codigo_equipo", filter: `codigo_equipo=eq.${eqText}` },
-    { columna: "codigo_corto", filter: `codigo_corto=eq.${eqText}` },
-  ];
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuidRe.test(cod) && cod.length === 36) {
-    attempts.push({ columna: "id", filter: `id=eq.${cod}` });
+export async function diagFetchEmpresasByVinculoCode(cod, authSnapshot = null) {
+  const auth =
+    authSnapshot && typeof authSnapshot === "object"
+      ? authSnapshot
+      : await snapshotDemoEquipoJoinAuth();
+
+  const rpcPath = "/rest/v1/rpc/lookup_empresa_por_codigo";
+  const res = await sbFetch(rpcPath, {
+    method: "POST",
+    body: JSON.stringify({ p_codigo: cod }),
+  });
+  let responseJson = null;
+  let responseText = null;
+  try {
+    responseText = await res.clone().text();
+    responseJson = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responseJson = responseText;
+  }
+  const rows = res.ok && Array.isArray(responseJson) ? responseJson : [];
+  const diagnostico = classifyEmpresaLookup(res, rows);
+  const empresa = rows[0]
+    ? {
+        empresa_id: rows[0].id,
+        nombre: rows[0].nombre,
+        codigo_equipo: rows[0].codigo_equipo,
+        codigo_corto: rows[0].codigo_corto,
+      }
+    : null;
+
+  logDemoEquipoJoin("lookup_rpc", {
+    auth,
+    codigo: { normalizado: cod, p_codigo: cod },
+    query: {
+      path: rpcPath,
+      fullUrl: `${SB_URL}${rpcPath}`,
+      metodo: "POST",
+      funcion: "lookup_empresa_por_codigo",
+    },
+    response: {
+      status: res.status,
+      httpStatus: res.status,
+      ok: res.ok,
+      statusText: res.statusText,
+    },
+    responseJson,
+    error: res.ok ? null : extractSupabaseErrorBody(responseJson, res.status),
+    diagnostico,
+    rowCount: rows.length,
+    empresa,
+  });
+
+  if (rows.length) {
+    logDemoEquipoJoin("lookup_ok", { codigo: cod, via: "rpc", empresa });
+    return rows;
   }
 
-  const attemptSummaries = [];
-
-  for (const { columna, filter } of attempts) {
-    const queryPath = `/rest/v1/empresas?${filter}&select=id,nombre,codigo_equipo,codigo_corto`;
-    const res = await sbFetch(queryPath);
-    let responseJson = null;
-    let responseText = null;
-    try {
-      responseText = await res.clone().text();
-      responseJson = responseText ? JSON.parse(responseText) : null;
-    } catch {
-      responseJson = responseText;
-    }
-    const rows = res.ok && Array.isArray(responseJson) ? responseJson : [];
-    const eqFragment = filter.split("&")[0] || filter;
-    const diagnostico = classifyEmpresaLookup(res, rows);
-
-    const payload = {
-      codigo: {
-        normalizado: cod,
-        valorEnviadoEnEq: eqText,
-        eqLiteral: eqFragment,
-        urlUsaComillas: eqFragment.includes('eq."') || eqFragment.includes('eq.%22'),
-        urlSinComillas: eqFragment.includes("eq.") && !eqFragment.includes('eq."'),
-      },
-      columna,
-      query: {
-        path: queryPath,
-        fullUrl: `${SB_URL}${queryPath}`,
-        filter,
-        metodo: "GET",
-      },
-      response: {
-        httpStatus: res.status,
-        ok: res.ok,
-        statusText: res.statusText,
-      },
-      responseJson,
-      error: res.ok ? null : extractSupabaseErrorBody(responseJson, res.status),
-      diagnostico,
-      rowCount: rows.length,
-      empresa: rows[0]
-        ? {
-            empresa_id: rows[0].id,
-            nombre: rows[0].nombre,
-            codigo_equipo: rows[0].codigo_equipo,
-            codigo_corto: rows[0].codigo_corto,
-          }
-        : null,
-    };
-
-    logDemoEquipoJoin("lookup", payload);
-    attemptSummaries.push({ columna, ...diagnostico, httpStatus: res.status });
-
-    if (rows.length) {
-      logDemoEquipoJoin("lookup_ok", { codigo: cod, columna, empresa: payload.empresa });
-      return rows;
-    }
-  }
-
-  const soloRls =
-    attemptSummaries.length > 0 &&
-    attemptSummaries.every(
-      (a) => a.resultado === "cero_filas" && a.httpStatus === 200,
-    );
+  const sinAuth = !auth.sessionExists || !auth.authorizationBearerUserJwt;
   logDemoEquipoJoin("lookup_agotado", {
     codigo: cod,
-    intentos: attemptSummaries,
-    veredicto: soloRls
-      ? "RLS_probable (HTTP 200 + 0 filas en todos los intentos)"
-      : "revisar intentos (error_http o sin sesión)",
-    nota: "Ningún intento devolvió filas — ver logs lookup anteriores",
+    auth,
+    via: "rpc",
+    veredicto: sinAuth
+      ? "sin_sesion_authenticated — RPC requiere JWT"
+      : res.ok
+        ? "rpc_sin_match — código no encontrado en empresas"
+        : "error_http_rpc",
+    nota: sinAuth
+      ? "sessionExists=false o Authorization Bearer sin JWT usuario"
+      : "lookup_empresa_por_codigo devolvió []",
   });
   return [];
 }

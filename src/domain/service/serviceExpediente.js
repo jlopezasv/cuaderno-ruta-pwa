@@ -1195,8 +1195,6 @@ export async function makeServiceExpedientePdfBlob(expediente) {
   const resumen = [
     ["Km reales / plan", expediente.header.km != null ? `${expediente.header.km} km` : "—"],
     ["Conduccion", expediente.metrics.conduccion],
-    ["Espera carga", expediente.metrics.esperaCarga],
-    ["Espera descarga", expediente.metrics.esperaDescarga],
     [expediente.header.etaResumenTitulo || "ETA inicial", expediente.header.eta],
     ["CMR", String(expediente.metrics.cmr)],
     ["Incidencias", String(expediente.metrics.incidencias ?? 0)],

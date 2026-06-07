@@ -3,7 +3,7 @@
  * `isDemoApp()` queda solo para seguridad Supabase, credenciales demo y hints de login.
  */
 
-/** Planificador empresa: mapa operativo beta + pestaña mapa/ruta. */
+/** Planificador empresa: mapa operativo + pestaña mapa/ruta. */
 export function isPlanificadorMapaBetaEnabled() {
   return true;
 }
