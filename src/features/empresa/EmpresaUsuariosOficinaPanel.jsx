@@ -3,27 +3,19 @@ import { isDemoApp } from "../../config/appEnvironment.js";
 import { DEMO_LOGIN_HINT } from "../../config/appEnvironment.js";
 import {
   OFFICE_USER_ROLES,
+  buildOfficeUserRow,
   canManageEmpresaOfficeUsers,
   createEmpresaOfficeUserDemo,
   fetchEmpresaOfficeUsers,
+  invalidateEmpresaOfficeUsersCache,
+  mergeOfficeUserLists,
   officeUserRoleLabel,
   patchEmpresaOfficeUser,
   setEmpresaOfficeUserActivo,
-  setEmpresaOfficeUserPuedeVerTodos,
   validateJefeFlotaGuard,
 } from "../../domain/empresa/empresaOfficeUsers.js";
 import { getStoredAuthSession } from "../../data/authContext.js";
-
-const UI = {
-  border: "#dbe4ee",
-  surface: "#ffffff",
-  surfaceSoft: "#f8fafc",
-  tx: "#0f172a",
-  muted: "#64748b",
-  accent: "#2563eb",
-  green: "#15803d",
-  red: "#b91c1c",
-};
+import { ConfigCard, CONFIG_UI, configBtnPrimary, configBtnSecondary } from "./empresaConfigCards.jsx";
 
 function Toggle({ on, onChange, disabled }) {
   return (
@@ -36,7 +28,7 @@ function Toggle({ on, onChange, disabled }) {
         height: 22,
         borderRadius: 11,
         border: "none",
-        background: on ? UI.accent : "#cbd5e1",
+        background: on ? "#2563eb" : "#cbd5e1",
         position: "relative",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.5 : 1,
@@ -65,6 +57,7 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
   const [puedeVerTodos, setPuedeVerTodos] = useState(!!initial?.puedeVerTodos);
   const [activo, setActivo] = useState(initial?.activo !== false);
   const isAdd = mode === "add";
+  const isAdministrativo = rol === "administrativo";
 
   useEffect(() => {
     setNombre(initial?.nombre || "");
@@ -73,6 +66,10 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
     setPuedeVerTodos(!!initial?.puedeVerTodos);
     setActivo(initial?.activo !== false);
   }, [initial, mode]);
+
+  useEffect(() => {
+    if (rol === "administrativo") setPuedeVerTodos(false);
+  }, [rol]);
 
   return (
     <div
@@ -90,7 +87,7 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
     >
       <div
         style={{
-          background: UI.surface,
+          background: CONFIG_UI.surface,
           borderRadius: 14,
           padding: 20,
           width: "min(100%, 420px)",
@@ -98,25 +95,20 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 17, fontWeight: 700, color: UI.tx, marginBottom: 4 }}>
-          {isAdd ? "Añadir usuario demo" : "Editar usuario"}
+        <div style={{ fontSize: 17, fontWeight: 700, color: CONFIG_UI.tx, marginBottom: 4 }}>
+          {isAdd ? "Añadir usuario" : "Editar usuario"}
         </div>
-        <div style={{ fontSize: 12, color: UI.muted, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginBottom: 16 }}>
           {isAdd
-            ? `Se creará con contraseña demo: ${DEMO_LOGIN_HINT.password}`
+            ? `Contraseña demo: ${DEMO_LOGIN_HINT.password}`
             : "Cambios en rol, visibilidad y estado"}
         </div>
 
         {isAdd && (
           <>
-            <label style={{ fontSize: 11, fontWeight: 700, color: UI.muted }}>Nombre</label>
-            <input
-              value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
-              style={inpStyle}
-              placeholder="Nombre"
-            />
-            <label style={{ fontSize: 11, fontWeight: 700, color: UI.muted }}>Email</label>
+            <label style={labelStyle}>Nombre</label>
+            <input value={nombre} onChange={(e) => setNombre(e.target.value)} style={inpStyle} placeholder="Nombre" />
+            <label style={labelStyle}>Email</label>
             <input
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -127,7 +119,7 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
           </>
         )}
 
-        <label style={{ fontSize: 11, fontWeight: 700, color: UI.muted }}>Rol</label>
+        <label style={labelStyle}>Rol</label>
         <select value={rol} onChange={(e) => setRol(e.target.value)} style={inpStyle}>
           {OFFICE_USER_ROLES.map((r) => (
             <option key={r} value={r}>
@@ -136,24 +128,24 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
           ))}
         </select>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "12px 0" }}>
-          <span style={{ fontSize: 13, color: UI.tx }}>Puede ver todos los servicios</span>
-          <Toggle on={puedeVerTodos} onChange={setPuedeVerTodos} />
-        </div>
+        {!isAdministrativo ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "12px 0" }}>
+            <span style={{ fontSize: 13, color: CONFIG_UI.tx }}>Puede ver todos los servicios</span>
+            <Toggle on={puedeVerTodos} onChange={setPuedeVerTodos} />
+          </div>
+        ) : null}
 
         {!isAdd && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, color: UI.tx }}>Activo</span>
+            <span style={{ fontSize: 13, color: CONFIG_UI.tx }}>Activo</span>
             <Toggle on={activo} onChange={setActivo} />
           </div>
         )}
 
-        {error && (
-          <div style={{ fontSize: 12, color: UI.red, marginBottom: 10 }}>{error}</div>
-        )}
+        {error ? <div style={{ fontSize: 12, color: CONFIG_UI.red, marginBottom: 10 }}>{error}</div> : null}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
-          <button type="button" onClick={onClose} style={btnSecondary}>
+          <button type="button" onClick={onClose} style={configBtnSecondary()}>
             Cancelar
           </button>
           <button
@@ -162,11 +154,11 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
             onClick={() =>
               onSave(
                 isAdd
-                  ? { nombre, email, rol, puedeVerTodos }
-                  : { rol, puedeVerTodos, activo },
+                  ? { nombre, email, rol, puedeVerTodos: isAdministrativo ? false : puedeVerTodos }
+                  : { rol, puedeVerTodos: isAdministrativo ? false : puedeVerTodos, activo },
               )
             }
-            style={btnPrimary}
+            style={{ ...configBtnPrimary(saving), width: "auto" }}
           >
             {saving ? "Guardando…" : isAdd ? "Crear" : "Guardar"}
           </button>
@@ -176,34 +168,94 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
   );
 }
 
+function UserCard({ user, canManage, onEdit, onDeactivate, showToast }) {
+  const isAdmin = user.rol === "administrativo";
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${CONFIG_UI.border}`,
+        borderRadius: 12,
+        padding: "12px 14px",
+        background: CONFIG_UI.surfaceSoft,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 750, color: CONFIG_UI.tx }}>{user.nombre || "—"}</div>
+          <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginTop: 2, wordBreak: "break-all" }}>
+            {user.email || "—"}
+          </div>
+        </div>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            padding: "3px 8px",
+            borderRadius: 999,
+            background: user.activo ? "#dcfce7" : "#f1f5f9",
+            color: user.activo ? CONFIG_UI.green : CONFIG_UI.muted,
+            flexShrink: 0,
+          }}
+        >
+          {user.activo ? "Activo" : "Inactivo"}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "6px 10px",
+          marginTop: 10,
+          fontSize: 12,
+          color: CONFIG_UI.muted,
+        }}
+      >
+        <div>
+          <span style={{ fontWeight: 700 }}>Rol: </span>
+          {officeUserRoleLabel(user.rol)}
+        </div>
+        <div>
+          <span style={{ fontWeight: 700 }}>Ver todos: </span>
+          {isAdmin ? "No aplica" : user.puedeVerTodos ? "Sí" : "No"}
+        </div>
+      </div>
+
+      {canManage ? (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button type="button" onClick={() => onEdit(user)} style={{ ...configBtnSecondary(), flex: 1 }}>
+            Editar
+          </button>
+          {user.activo ? (
+            <button
+              type="button"
+              onClick={() => onDeactivate(user)}
+              style={{
+                ...configBtnSecondary(),
+                flex: 1,
+                color: CONFIG_UI.red,
+                borderColor: "#fecaca",
+              }}
+            >
+              Desactivar
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const labelStyle = { fontSize: 11, fontWeight: 700, color: CONFIG_UI.muted, display: "block" };
 const inpStyle = {
   width: "100%",
   boxSizing: "border-box",
   marginBottom: 10,
   padding: "10px 12px",
   borderRadius: 9,
-  border: `1px solid ${UI.border}`,
+  border: `1px solid ${CONFIG_UI.border}`,
   fontSize: 14,
-};
-
-const btnPrimary = {
-  background: UI.accent,
-  color: "#fff",
-  border: "none",
-  borderRadius: 9,
-  padding: "9px 16px",
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const btnSecondary = {
-  background: UI.surfaceSoft,
-  color: UI.tx,
-  border: `1px solid ${UI.border}`,
-  borderRadius: 9,
-  padding: "9px 16px",
-  fontWeight: 600,
-  cursor: "pointer",
 };
 
 export function EmpresaUsuariosOficinaPanel({
@@ -211,6 +263,8 @@ export function EmpresaUsuariosOficinaPanel({
   getUserId,
   sbSelect,
   showToast,
+  variant = "legacy",
+  span2 = false,
 }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -229,10 +283,10 @@ export function EmpresaUsuariosOficinaPanel({
     }
     setLoading(true);
     try {
-      const rows = await fetchEmpresaOfficeUsers(sbSelect, empresaId);
-      setUsers(rows);
+      const rows = await fetchEmpresaOfficeUsers(sbSelect, empresaId, { force: true });
+      setUsers((prev) => (rows.length > 0 ? rows : prev));
     } catch {
-      setUsers([]);
+      /* mantener lista previa si falla RLS/red */
     }
     setLoading(false);
   }, [empresaId, sbSelect]);
@@ -254,11 +308,34 @@ export function EmpresaUsuariosOficinaPanel({
         rol: form.rol,
         callerUid: getUserId(),
       });
-      showToast?.(
-        `Usuario creado. Email: ${form.email} · Contraseña: ${result.demoPassword}`,
-      );
+      invalidateEmpresaOfficeUsersCache(empresaId);
+      const eu = result.empresa_usuario || {};
+      const puedeVer = form.rol === "administrativo" ? false : !!form.puedeVerTodos;
+      let row =
+        buildOfficeUserRow(eu) ||
+        buildOfficeUserRow({
+          id: eu.id || null,
+          empresa_id: empresaId,
+          user_id: result.user_id || eu.user_id,
+          nombre: form.nombre.trim(),
+          email: form.email.trim(),
+          rol: form.rol,
+          puede_ver_todos: puedeVer,
+          activo: eu.activo !== false,
+        });
+      if (row?.id && puedeVer && form.rol === "trafico") {
+        await patchEmpresaOfficeUser(row.id, { puede_ver_todos: true });
+        row = { ...row, puedeVerTodos: true };
+      } else if (row) {
+        row = { ...row, puedeVerTodos: puedeVer };
+      }
+      if (row) {
+        setUsers((prev) => mergeOfficeUserLists([row], prev));
+      }
+      showToast?.(`Usuario creado. Email: ${form.email} · Contraseña: ${result.demoPassword}`);
       setModal(null);
-      await reload();
+      const fresh = await fetchEmpresaOfficeUsers(sbSelect, empresaId, { force: true });
+      setUsers((prev) => mergeOfficeUserLists(fresh, row ? mergeOfficeUserLists([row], prev) : prev));
     } catch (e) {
       setModalError(e.message || "Error al crear");
     }
@@ -272,7 +349,7 @@ export function EmpresaUsuariosOficinaPanel({
     try {
       const patch = {
         rol: form.rol,
-        puede_ver_todos: form.puedeVerTodos,
+        puede_ver_todos: form.rol === "administrativo" ? false : form.puedeVerTodos,
         activo: form.activo,
       };
       const guardMsg = validateJefeFlotaGuard(users, modal.user.id, patch);
@@ -282,116 +359,88 @@ export function EmpresaUsuariosOficinaPanel({
         return;
       }
       await patchEmpresaOfficeUser(modal.user.id, patch);
+      invalidateEmpresaOfficeUsersCache(empresaId);
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === modal.user.id
+            ? {
+                ...u,
+                rol: form.rol,
+                puedeVerTodos: form.rol === "administrativo" ? false : form.puedeVerTodos,
+                activo: form.activo,
+              }
+            : u,
+        ),
+      );
       showToast?.("Usuario actualizado");
       setModal(null);
-      await reload();
     } catch (e) {
       setModalError(e.message || "Error al guardar");
     }
     setSaving(false);
   }
 
-  return (
-    <div style={{ marginTop: 28, paddingTop: 24, borderTop: `1px solid ${UI.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: UI.tx }}>Usuarios de oficina</div>
-          <div style={{ fontSize: 12, color: UI.muted, marginTop: 2 }}>
-            Solo DEMO · gestión básica de roles
-          </div>
-        </div>
-        {canManage && (
+  function handleDeactivate(user) {
+    const guardMsg = validateJefeFlotaGuard(users, user.id, { activo: false });
+    if (guardMsg) {
+      showToast?.(guardMsg);
+      return;
+    }
+    setEmpresaOfficeUserActivo(user.id, false)
+      .then(() => {
+        invalidateEmpresaOfficeUsersCache(empresaId);
+        setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, activo: false } : u)));
+        showToast?.("Usuario desactivado");
+      })
+      .catch((e) => showToast?.(e.message));
+  }
+
+  const body = (
+    <>
+      {canManage ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
           <button
             type="button"
             onClick={() => {
               setModalError("");
               setModal({ mode: "add" });
             }}
-            style={btnPrimary}
+            style={{ ...configBtnPrimary(), width: "auto" }}
           >
-            + Añadir usuario demo
+            + Añadir usuario
           </button>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       {loading ? (
-        <div style={{ fontSize: 13, color: UI.muted }}>Cargando usuarios…</div>
+        <div style={{ fontSize: 13, color: CONFIG_UI.muted }}>Cargando usuarios…</div>
       ) : users.length === 0 ? (
-        <div style={{ fontSize: 13, color: UI.muted }}>No hay usuarios de oficina registrados.</div>
+        <div style={{ fontSize: 13, color: CONFIG_UI.muted }}>No hay usuarios de oficina registrados.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: "left", color: UI.muted, fontSize: 11 }}>
-                <th style={thStyle}>Nombre</th>
-                <th style={thStyle}>Email</th>
-                <th style={thStyle}>Rol</th>
-                <th style={thStyle}>Ver todos</th>
-                <th style={thStyle}>Activo</th>
-                {canManage && <th style={thStyle} />}
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id} style={{ borderTop: `1px solid ${UI.border}` }}>
-                  <td style={tdStyle}>{u.nombre || "—"}</td>
-                  <td style={tdStyle}>{u.email || "—"}</td>
-                  <td style={tdStyle}>{officeUserRoleLabel(u.rol)}</td>
-                  <td style={tdStyle}>
-                    {canManage ? (
-                      <Toggle
-                        on={u.puedeVerTodos}
-                        onChange={(v) =>
-                          setEmpresaOfficeUserPuedeVerTodos(u.id, v)
-                            .then(reload)
-                            .catch((e) => showToast?.(e.message))
-                        }
-                      />
-                    ) : u.puedeVerTodos ? "Sí" : "No"}
-                  </td>
-                  <td style={tdStyle}>
-                    {canManage ? (
-                      <Toggle
-                        on={u.activo}
-                        onChange={(v) => {
-                          const guardMsg = validateJefeFlotaGuard(users, u.id, { activo: v });
-                          if (guardMsg) {
-                            showToast?.(guardMsg);
-                            return;
-                          }
-                          setEmpresaOfficeUserActivo(u.id, v)
-                            .then(reload)
-                            .catch((e) => showToast?.(e.message));
-                        }}
-                      />
-                    ) : u.activo ? "Sí" : "No"}
-                  </td>
-                  {canManage && (
-                    <td style={tdStyle}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setModalError("");
-                          setModal({ mode: "edit", user: u });
-                        }}
-                        style={{
-                          ...btnSecondary,
-                          padding: "5px 10px",
-                          fontSize: 12,
-                        }}
-                      >
-                        Editar
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {users.map((u) => (
+            <UserCard
+              key={u.id || u.userId}
+              user={u}
+              canManage={canManage}
+              onEdit={(user) => {
+                setModalError("");
+                setModal({ mode: "edit", user });
+              }}
+              onDeactivate={handleDeactivate}
+              showToast={showToast}
+            />
+          ))}
         </div>
       )}
 
-      {modal && (
+      {modal ? (
         <UserFormModal
           mode={modal.mode}
           initial={modal.user}
@@ -400,10 +449,26 @@ export function EmpresaUsuariosOficinaPanel({
           onClose={() => setModal(null)}
           onSave={modal.mode === "add" ? handleCreate : handleEdit}
         />
-      )}
+      ) : null}
+    </>
+  );
+
+  if (variant === "card") {
+    return (
+      <ConfigCard
+        title="Usuarios de oficina"
+        description="Gestión de accesos para tráfico, administración y jefe de flota."
+        span2={span2}
+      >
+        {body}
+      </ConfigCard>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 28, paddingTop: 24, borderTop: `1px solid ${CONFIG_UI.border}` }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: CONFIG_UI.tx, marginBottom: 14 }}>Usuarios de oficina</div>
+      {body}
     </div>
   );
 }
-
-const thStyle = { padding: "8px 6px", fontWeight: 700 };
-const tdStyle = { padding: "10px 6px", color: UI.tx, verticalAlign: "middle" };

@@ -4,10 +4,12 @@ import { buildOfficeUserRow } from "./empresaOfficeUsers.js";
 export function buildOfficeUserCapabilities(row) {
   const built = buildOfficeUserRow(row);
   if (!built) return null;
+  const codigoEquipo = String(row?.codigo_equipo || row?.codigoEquipo || "").trim();
   return {
     id: built.id,
     empresaId: built.empresaId,
     empresaNombre: row?.empresa_nombre || row?.empresaNombre || "",
+    codigoEquipo: codigoEquipo || null,
     userId: built.userId,
     nombre: built.nombre,
     email: built.email,

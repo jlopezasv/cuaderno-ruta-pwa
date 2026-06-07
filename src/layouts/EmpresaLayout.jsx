@@ -8,12 +8,15 @@ import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 import { EMPRESA_PAGE_SHELL_CSS } from "../ui/empresaPageShell.js";
 import { isDemoApp } from "../config/appEnvironment.js";
 import {
+  canAccessEmpresaConfigTab,
   getDefaultEmpresaTab,
   getVisibleEmpresaTabs,
 } from "../domain/empresa/officeUserFilters.js";
-import { EmpresaUsuariosOficinaPanel } from "../features/empresa/EmpresaUsuariosOficinaPanel.jsx";
-import { EmpresaCodigoEquipoConfig } from "../features/empresa/EmpresaCodigoEquipoConfig.jsx";
-import { fetchEmpresaRecordById } from "../domain/empresa/empresaRecordCache.js";
+import { EmpresaConfigDashboard } from "../features/empresa/EmpresaConfigDashboard.jsx";
+import {
+  enrichEmpresaRecordFromOffice,
+  fetchEmpresaRecordById,
+} from "../domain/empresa/empresaRecordCache.js";
 
 export default function EmpresaLayout({
   PROF0,
@@ -24,6 +27,8 @@ export default function EmpresaLayout({
   EmpresaDashboard,
   EmpresaPanelSeccion,
   ProfView,
+  ConfigPassword,
+  ConfigDangerZone,
 }) {
   const [prof, setProf] = useState(PROF0);
   const [tab, setTab] = useState("servicios");
@@ -132,7 +137,9 @@ export default function EmpresaLayout({
     }
     let cancelled = false;
     fetchEmpresaRecordById(sbSelect, empresaId).then((row) => {
-      if (!cancelled) setEmpresaRecord(row);
+      if (cancelled) return;
+      const session = getStoredAuthSession(getUserId());
+      setEmpresaRecord(enrichEmpresaRecordFromOffice(row, session?.capabilities?.officeUser));
     });
     return () => {
       cancelled = true;
@@ -412,29 +419,34 @@ export default function EmpresaLayout({
 
         {/* CONFIGURACIÓN */}
         {tab === "config" && canUseConfig && (
-          <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
-            <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
-            <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
-            {isDemoApp() && empresaId && (
-              <EmpresaCodigoEquipoConfig
-                empresaId={empresaId}
-                initialEmpresa={empresaRecord}
-                sbSelect={sbSelect}
-                showToast={showToast}
-              />
-            )}
-            {capabilities?.accountType === "empresa" && (
-              <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
-            )}
-            {isDemoApp() && empresaId && (
-              <EmpresaUsuariosOficinaPanel
-                empresaId={empresaId}
-                getUserId={getUserId}
-                sbSelect={sbSelect}
-                showToast={showToast}
-              />
-            )}
-          </div>
+          isDemoApp() ? (
+            canAccessEmpresaConfigTab(capabilities) ? (
+            <EmpresaConfigDashboard
+              empresaId={empresaId}
+              empresaRecord={empresaRecord}
+              prof={prof}
+              capabilities={capabilities}
+              officeUser={capabilities?.officeUser || null}
+              sbSelect={sbSelect}
+              sbUpsert={sbUpsert}
+              getUserId={getUserId}
+              onSave={onSave}
+              showToast={showToast}
+              ConfigPassword={ConfigPassword}
+              ConfigDangerZone={ConfigDangerZone}
+              tx={tx}
+              su={su}
+            />
+            ) : null
+          ) : (
+            <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
+              <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
+              <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
+              {capabilities?.accountType === "empresa" && (
+                <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
+              )}
+            </div>
+          )
         )}
       </div>
 

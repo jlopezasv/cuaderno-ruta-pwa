@@ -19,6 +19,7 @@ export async function fetchOfficeUserContextRpc() {
     nombre: row.nombre,
     empresa_id: row.empresa_id,
     empresa_nombre: row.empresa_nombre,
+    codigo_equipo: row.codigo_equipo,
     rol: row.rol,
     puede_ver_todos: row.puede_ver_todos,
     activo: row.activo,

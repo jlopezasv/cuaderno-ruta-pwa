@@ -38,14 +38,68 @@ export function buildOfficeUserRow(row) {
   };
 }
 
-export async function fetchEmpresaOfficeUsers(sbSelect, empresaId) {
-  if (!empresaId || !isDemoApp()) return [];
-  const rows = await sbSelect(
-    "empresa_usuarios",
-    `empresa_id=eq.${empresaId}&order=created_at.asc`,
-  ).catch(() => []);
-  return (Array.isArray(rows) ? rows : []).map(buildOfficeUserRow).filter(Boolean);
+const officeUsersCache = { empresaId: null, data: null, inflight: null };
+
+export function invalidateEmpresaOfficeUsersCache(empresaId = null) {
+  if (empresaId == null || officeUsersCache.empresaId === empresaId) {
+    officeUsersCache.empresaId = null;
+    officeUsersCache.data = null;
+    officeUsersCache.inflight = null;
+  }
 }
+
+function mergeOfficeUserLists(fresh, fallback = []) {
+  const map = new Map();
+  for (const u of fallback) {
+    const k = u?.id || u?.userId;
+    if (k) map.set(String(k), u);
+  }
+  for (const u of fresh) {
+    const k = u?.id || u?.userId;
+    if (k) map.set(String(k), u);
+  }
+  return [...map.values()];
+}
+
+/** Lista usuarios oficina de la empresa (jefe_flota vía RLS eu_sel / eu_sel_peer_demo). */
+export async function fetchEmpresaOfficeUsers(_sbSelect, empresaId, { force = false } = {}) {
+  if (!empresaId || !isDemoApp()) return [];
+
+  if (!force && officeUsersCache.empresaId === empresaId && officeUsersCache.data) {
+    return officeUsersCache.data;
+  }
+  if (!force && officeUsersCache.empresaId === empresaId && officeUsersCache.inflight) {
+    return officeUsersCache.inflight;
+  }
+
+  officeUsersCache.empresaId = empresaId;
+  officeUsersCache.inflight = (async () => {
+    const filter = [
+      `empresa_id=eq.${encodeURIComponent(empresaId)}`,
+      "select=id,empresa_id,user_id,nombre,email,rol,puede_ver_todos,activo,created_at",
+      "order=created_at.asc",
+    ].join("&");
+    const res = await sbFetch(`/rest/v1/empresa_usuarios?${filter}`);
+    if (!res.ok) {
+      if (isDemoApp()) {
+        console.warn("[DEMO officeUsers] GET empresa_usuarios", res.status);
+      }
+      return [];
+    }
+    const rows = await res.json().catch(() => []);
+    const built = (Array.isArray(rows) ? rows : []).map(buildOfficeUserRow).filter(Boolean);
+    if (built.length > 0) officeUsersCache.data = built;
+    return built;
+  })()
+    .catch(() => [])
+    .finally(() => {
+      officeUsersCache.inflight = null;
+    });
+
+  return officeUsersCache.inflight;
+}
+
+export { mergeOfficeUserLists };
 
 export async function fetchActiveOfficeUserByUid(sbSelect, uid) {
   if (!uid || !isDemoApp()) return null;
@@ -302,7 +356,10 @@ export async function createEmpresaOfficeUserDemo({ empresaId, nombre, email, ro
 export function canManageEmpresaOfficeUsers(capabilities) {
   if (!isDemoApp() || !capabilities?.empresa) return false;
   if (capabilities.accountType === "empresa") return true;
-  return capabilities.officeUser?.rol === "jefe_flota" && capabilities.officeUser?.activo !== false;
+  return (
+    normalizeOfficeUserRol(capabilities.officeUser?.rol) === "jefe_flota" &&
+    capabilities.officeUser?.activo !== false
+  );
 }
 
 /** Impide dejar la empresa sin ningún jefe_flota activo. */

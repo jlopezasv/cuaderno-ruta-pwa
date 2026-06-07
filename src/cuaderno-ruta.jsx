@@ -7508,7 +7508,7 @@ function BiweekView({db,norma,prof}){
   );
 }
 
-function BorrarTodo({db,prof,showToast}){
+function BorrarTodo({db,prof,showToast,embedded=false}){
   const[paso,setPaso]=useState(0); // 0=normal, 1=confirmar, 2=escribir
   const[texto,setTexto]=useState("");
   const[loading,setLoading]=useState(false);
@@ -7554,8 +7554,8 @@ function BorrarTodo({db,prof,showToast}){
   }
 
   return(
-    <div style={{marginTop:20,borderTop:"2px solid #FEE2E2",paddingTop:16}}>
-      <div style={{fontSize:11,color:"#DC2626",fontWeight:700,letterSpacing:.5,marginBottom:10}}>⚠️ ZONA PELIGROSA</div>
+    <div style={embedded?{}:{marginTop:20,borderTop:"2px solid #FEE2E2",paddingTop:16}}>
+      {!embedded&&<div style={{fontSize:11,color:"#DC2626",fontWeight:700,letterSpacing:.5,marginBottom:10}}>⚠️ ZONA PELIGROSA</div>}
       {/* Backup primero */}
       <button onClick={exportarBackup}
         style={{width:"100%",background:"#F0FDF4",color:"#166534",border:"1.5px solid #BBF7D0",borderRadius:11,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8}}>
@@ -7597,7 +7597,7 @@ function BorrarTodo({db,prof,showToast}){
   );
 }
 
-function CambiarPassword(){
+function CambiarPassword({embedded=false}){
   const[open,setOpen]=useState(false);
   const[pass1,setPass1]=useState("");
   const[pass2,setPass2]=useState("");
@@ -7629,14 +7629,14 @@ function CambiarPassword(){
   const inS={width:"100%",background:"#F8FAFC",border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:"#0F172A",outline:"none",marginBottom:10};
 
   return(
-    <div style={{marginTop:14,borderTop:"1px solid #E2E8F0",paddingTop:14}}>
+    <div style={embedded?{}:{marginTop:14,borderTop:"1px solid #E2E8F0",paddingTop:14}}>
       {!open?(
         <button onClick={()=>setOpen(true)} style={{width:"100%",background:"#F8FAFC",color:"#334155",border:"1.5px solid #E2E8F0",borderRadius:11,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
-          🔑 Cambiar contraseña
+          {embedded?"Cambiar contraseña":"🔑 Cambiar contraseña"}
         </button>
       ):(
         <div>
-          <div style={{fontSize:13,fontWeight:700,color:"#0F172A",marginBottom:10}}>🔑 CAMBIAR CONTRASEÑA</div>
+          {!embedded&&<div style={{fontSize:13,fontWeight:700,color:"#0F172A",marginBottom:10}}>🔑 CAMBIAR CONTRASEÑA</div>}
           <input type="password" value={pass1} onChange={e=>setPass1(e.target.value)} placeholder="Nueva contraseña (mín. 6 caracteres)" style={inS}/>
           <input type="password" value={pass2} onChange={e=>setPass2(e.target.value)} placeholder="Repite la contraseña" style={inS}/>
           {msg&&<div style={{fontSize:13,color:msg.startsWith("✅")?"#166534":"#DC2626",marginBottom:10}}>{msg}</div>}
@@ -18504,6 +18504,6 @@ export default function App(){
     });
   }
 
-  if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView}/></ErrorBoundary>;
+  if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView} ConfigPassword={CambiarPassword} ConfigDangerZone={BorrarTodo}/></ErrorBoundary>;
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }

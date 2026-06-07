@@ -5,44 +5,42 @@ import {
   getEmpresaEquipoCodeStrict,
   isEmpresaCodigoTemporal,
 } from "../../domain/empresa/empresaCodigoEquipo.js";
-import { fetchEmpresaRecordById } from "../../domain/empresa/empresaRecordCache.js";
-
-const UI = {
-  border: "#dbe4ee",
-  surface: "#ffffff",
-  muted: "#64748b",
-  tx: "#0f172a",
-  accent: "#c2410c",
-  warn: "#b45309",
-};
+import {
+  enrichEmpresaRecordFromOffice,
+  fetchEmpresaRecordById,
+} from "../../domain/empresa/empresaRecordCache.js";
+import { ConfigCard, CONFIG_UI, configBtnSecondary } from "./empresaConfigCards.jsx";
 
 /**
- * Bloque «Código de empresa» — solo Configuración (DEMO panel empresa).
- * @param {string} empresaId
- * @param {object|null} [initialEmpresa] — fila empresas ya cargada (evita consulta extra)
- * @param {Function} sbSelect
- * @param {Function} [showToast]
+ * Bloque «Código de empresa» — solo Configuración (DEMO).
+ * Campo canónico: empresas.codigo_equipo (fallback codigo_corto).
  */
 export function EmpresaCodigoEquipoConfig({
   empresaId,
   initialEmpresa = null,
+  empresaNombreFallback = "",
+  officeUser = null,
+  variant = "legacy",
   sbSelect,
   showToast,
 }) {
-  const [empresa, setEmpresa] = useState(initialEmpresa);
-  const [loading, setLoading] = useState(!initialEmpresa?.id);
+  const [empresa, setEmpresa] = useState(() =>
+    enrichEmpresaRecordFromOffice(initialEmpresa, officeUser),
+  );
+  const [loading, setLoading] = useState(!initialEmpresa?.id && !!empresaId);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pollExhausted, setPollExhausted] = useState(false);
 
   useEffect(() => {
-    if (initialEmpresa?.id && initialEmpresa.id === empresaId) {
-      setEmpresa(initialEmpresa);
+    const enriched = enrichEmpresaRecordFromOffice(initialEmpresa, officeUser);
+    if (enriched?.id && enriched.id === empresaId) {
+      setEmpresa(enriched);
       setLoading(false);
       return;
     }
     if (!empresaId || !sbSelect) {
-      setEmpresa(null);
+      setEmpresa(enrichEmpresaRecordFromOffice(null, officeUser));
       setLoading(false);
       return;
     }
@@ -51,24 +49,34 @@ export function EmpresaCodigoEquipoConfig({
     fetchEmpresaRecordById(sbSelect, empresaId)
       .then((row) => {
         if (!cancelled) {
-          setEmpresa(row);
+          setEmpresa(
+            enrichEmpresaRecordFromOffice(row, officeUser) || {
+              id: empresaId,
+              nombre: empresaNombreFallback || "Empresa",
+            },
+          );
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setEmpresa(null);
+          setEmpresa(
+            enrichEmpresaRecordFromOffice(null, officeUser) || {
+              id: empresaId,
+              nombre: empresaNombreFallback || "Empresa",
+            },
+          );
           setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [empresaId, initialEmpresa?.id, sbSelect]);
+  }, [empresaId, initialEmpresa, officeUser, empresaNombreFallback, sbSelect]);
 
   const codigoStrict = empresa ? getEmpresaEquipoCodeStrict(empresa) : "";
   const codigoDisplay = empresa ? getEmpresaCodigoEquipoDisplay(empresa) : "";
-  const generando = !!empresa?.id && !codigoStrict && !pollExhausted;
+  const generando = !!empresa?.id && !codigoStrict && !pollExhausted && !officeUser?.codigoEquipo;
   const sinCodigoReal = !!empresa?.id && !codigoStrict && pollExhausted;
   const codigoUsable = codigoStrict || (codigoDisplay && !isEmpresaCodigoTemporal(codigoDisplay) ? codigoDisplay : "");
 
@@ -84,14 +92,15 @@ export function EmpresaCodigoEquipoConfig({
         return;
       }
       fetchEmpresaRecordById(sbSelect, empresa.id, { force: true }).then((row) => {
-        if (row && getEmpresaEquipoCodeStrict(row)) {
-          setEmpresa(row);
+        const merged = enrichEmpresaRecordFromOffice(row, officeUser);
+        if (merged && getEmpresaEquipoCodeStrict(merged)) {
+          setEmpresa(merged);
           setPollExhausted(false);
         }
       });
     }, 650);
     return () => clearInterval(timer);
-  }, [empresa?.id, codigoStrict, sbSelect]);
+  }, [empresa?.id, codigoStrict, sbSelect, officeUser]);
 
   function toast(msg) {
     showToast?.(msg);
@@ -110,24 +119,6 @@ export function EmpresaCodigoEquipoConfig({
       .catch(() => toast("No se pudo copiar"));
   }
 
-  async function compartirCodigo() {
-    const code = codigoStrict || codigoDisplay;
-    if (!code) return;
-    const url = buildEquipoDeepLink(code);
-    const title = `Únete a ${empresa?.nombre || "nuestra empresa"}`;
-    const text = `Código de empresa: ${code}`;
-    try {
-      if (navigator.share) {
-        await navigator.share({ title, text, url });
-      } else {
-        await navigator.clipboard.writeText(`${text}\n${url}`);
-        toast("Enlace copiado para compartir");
-      }
-    } catch {
-      /* cancelado */
-    }
-  }
-
   function enviarWhatsApp() {
     const code = codigoStrict || codigoDisplay;
     if (!code) return;
@@ -136,48 +127,18 @@ export function EmpresaCodigoEquipoConfig({
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
   }
 
-  if (loading) {
-    return (
-      <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${UI.border}` }}>
-        <div style={{ fontSize: 13, color: UI.muted }}>Cargando código de empresa…</div>
-      </div>
-    );
-  }
+  if (!empresaId) return null;
 
-  if (!empresaId || !empresa) {
-    return (
-      <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${UI.border}` }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: UI.tx, marginBottom: 8 }}>Código de empresa</div>
-        <div
-          style={{
-            background: "#fee2e2",
-            border: "1px solid #fecaca",
-            borderRadius: 12,
-            padding: "14px 16px",
-            fontSize: 13,
-            color: "#b91c1c",
-            fontWeight: 600,
-          }}
-        >
-          No se pudo cargar la empresa. Cierra sesión e inténtalo de nuevo.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${UI.border}` }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: UI.tx, marginBottom: 4 }}>Código de empresa</div>
-      <div style={{ fontSize: 12, color: UI.muted, marginBottom: 14, lineHeight: 1.45 }}>
-        Los conductores usan este código en su perfil para vincularse a {empresa.nombre || "tu empresa"}.
-      </div>
-
+  const inner = loading ? (
+    <div style={{ fontSize: 13, color: CONFIG_UI.muted }}>Cargando código…</div>
+  ) : (
+    <>
       <div
         style={{
-          background: UI.surface,
-          borderRadius: 14,
-          padding: "16px 14px",
-          border: `1px solid ${UI.border}`,
+          background: CONFIG_UI.surfaceSoft,
+          borderRadius: 12,
+          padding: "14px 12px",
+          border: `1px solid ${CONFIG_UI.border}`,
           marginBottom: 12,
         }}
       >
@@ -192,17 +153,17 @@ export function EmpresaCodigoEquipoConfig({
                 animation: "empresa-codigo-pulse 1s ease-in-out infinite",
               }}
             />
-            <span style={{ fontSize: 15, fontWeight: 700, color: UI.muted }}>Generando código…</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: CONFIG_UI.muted }}>Generando código…</span>
           </div>
         ) : sinCodigoReal ? (
-          <div style={{ fontSize: 14, fontWeight: 650, color: UI.warn }}>Empresa sin código asignado</div>
+          <div style={{ fontSize: 14, fontWeight: 650, color: CONFIG_UI.warn }}>Empresa sin código asignado</div>
         ) : (
           <div
             style={{
               fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-              fontSize: 26,
+              fontSize: 24,
               fontWeight: 800,
-              color: UI.accent,
+              color: CONFIG_UI.accent,
               letterSpacing: 1,
               lineHeight: 1.1,
             }}
@@ -219,7 +180,7 @@ export function EmpresaCodigoEquipoConfig({
           disabled={generando || !codigoUsable}
           style={btnStyle(generando || !codigoUsable)}
         >
-          {copied ? "Copiado ✓" : "Copiar código"}
+          {copied ? "Copiado ✓" : "Copiar"}
         </button>
         <button
           type="button"
@@ -227,7 +188,7 @@ export function EmpresaCodigoEquipoConfig({
           disabled={generando || !codigoUsable}
           style={btnStyle(generando || !codigoUsable)}
         >
-          Enviar código
+          Enviar
         </button>
         <button
           type="button"
@@ -235,51 +196,55 @@ export function EmpresaCodigoEquipoConfig({
           disabled={generando || !codigoUsable}
           style={{
             ...btnStyle(generando || !codigoUsable),
-            background: generando || !codigoUsable ? "#e2e8f0" : "#0f172a",
+            background: generando || !codigoUsable ? "#e2e8f0" : CONFIG_UI.tx,
             color: generando || !codigoUsable ? "#94a3b8" : "#fff",
             border: "none",
           }}
         >
-          Ver QR
+          QR
         </button>
       </div>
-
-      <button
-        type="button"
-        onClick={compartirCodigo}
-        disabled={generando || !codigoUsable}
-        style={{
-          ...btnStyle(generando || !codigoUsable),
-          width: "100%",
-          marginTop: 8,
-        }}
-      >
-        Compartir enlace de invitación
-      </button>
 
       {inviteOpen && codigoUsable && (
         <EquipoInvitacionModal
           onClose={() => setInviteOpen(false)}
-          equipoNombre={empresa.nombre}
+          equipoNombre={empresa?.nombre}
           equipoCode={codigoStrict || codigoDisplay}
           linkUrl={buildEquipoDeepLink(codigoStrict || codigoDisplay)}
         />
       )}
 
       <style>{`@keyframes empresa-codigo-pulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.15)}}`}</style>
+    </>
+  );
+
+  if (variant === "card") {
+    return (
+      <ConfigCard
+        title="Código de empresa"
+        description={`Los conductores usan este código para vincularse a ${empresa?.nombre || empresaNombreFallback || "tu empresa"}.`}
+      >
+        {inner}
+      </ConfigCard>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 24, borderTop: `1px solid ${CONFIG_UI.border}` }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: CONFIG_UI.tx, marginBottom: 4 }}>Código de empresa</div>
+      {inner}
     </div>
   );
 }
 
 function btnStyle(disabled) {
   return {
-    borderRadius: 12,
-    padding: "12px 8px",
+    ...configBtnSecondary(),
+    padding: "11px 8px",
     fontSize: 12,
     fontWeight: 750,
-    border: `1px solid ${UI.border}`,
     background: disabled ? "#f1f5f9" : "#fff",
-    color: disabled ? "#94a3b8" : UI.tx,
+    color: disabled ? "#94a3b8" : CONFIG_UI.tx,
     cursor: disabled ? "default" : "pointer",
   };
 }

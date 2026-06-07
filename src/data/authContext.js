@@ -11,10 +11,12 @@ function normalizeOfficeUser(raw) {
   if (!raw || typeof raw !== "object") return null;
   const empresaId = raw.empresaId || raw.empresa_id || null;
   if (!empresaId) return null;
+  const codigoEquipo = String(raw.codigoEquipo || raw.codigo_equipo || "").trim();
   return {
     id: raw.id ?? null,
     empresaId,
     empresaNombre: raw.empresaNombre || raw.empresa_nombre || "",
+    codigoEquipo: codigoEquipo || null,
     userId: raw.userId ?? raw.user_id ?? null,
     nombre: raw.nombre || "",
     email: raw.email || "",

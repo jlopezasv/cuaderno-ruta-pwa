@@ -1,6 +1,6 @@
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { EMPRESA_TABS } from "../../navigation/empresaTabs.js";
-import { normalizeOfficeUserRol } from "./empresaOfficeUsers.js";
+import { canManageEmpresaOfficeUsers, normalizeOfficeUserRol } from "./empresaOfficeUsers.js";
 
 export const OFFICE_SERVICIOS_VISTA = Object.freeze({
   MIS: "mis",
@@ -106,7 +106,12 @@ const TAB = Object.fromEntries(EMPRESA_TABS.map((t) => [t.id, t]));
 export function getVisibleEmpresaTabs(capabilities) {
   if (!isDemoApp()) return EMPRESA_TABS;
   const office = capabilities?.officeUser;
-  if (!office?.activo) return EMPRESA_TABS;
+  if (!office?.activo) {
+    if (isDemoApp()) {
+      return EMPRESA_TABS.filter((t) => t.id !== "config");
+    }
+    return EMPRESA_TABS;
+  }
 
   const rol = normalizeOfficeUserRol(office.rol);
   let tabs;
@@ -115,10 +120,10 @@ export function getVisibleEmpresaTabs(capabilities) {
       tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.planificador, TAB.config];
       break;
     case "trafico":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos, TAB.config];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos];
       break;
     case "administrativo":
-      tabs = [TAB.documentos, TAB.config];
+      tabs = [TAB.documentos];
       break;
     default:
       tabs = [TAB.documentos];
@@ -136,4 +141,27 @@ export function getDefaultEmpresaTab(capabilities) {
 export function officeUserCanAccessServicios(officeUser) {
   if (!isDemoApp() || !officeUser?.activo) return true;
   return officeUser.rol !== "administrativo";
+}
+
+/** Owner puede editar perfil de empresa en Config DEMO. */
+export function canEditEmpresaConfigPerfil(capabilities) {
+  return capabilities?.accountType === "empresa";
+}
+
+/** Tarjeta perfil visible para owner y usuarios oficina activos. */
+export function canViewEmpresaConfigPerfil(capabilities) {
+  if (!isDemoApp()) return capabilities?.accountType === "empresa";
+  if (capabilities?.officeUser?.activo) return true;
+  return capabilities?.accountType === "empresa";
+}
+
+export function canViewEmpresaConfigUsuarios(capabilities) {
+  return canManageEmpresaOfficeUsers(capabilities);
+}
+
+/** DEMO: pestaña Configuración solo para jefe_flota activo. */
+export function canAccessEmpresaConfigTab(capabilities) {
+  if (!isDemoApp()) return true;
+  const office = capabilities?.officeUser;
+  return office?.activo && normalizeOfficeUserRol(office.rol) === "jefe_flota";
 }
