@@ -91,6 +91,14 @@ import {
   invalidateEmpresaConductoresCache,
 } from "./domain/empresa/empresaFlotaLists.js";
 import {
+  diagAfterConductorEmpresaJoin,
+  diagFetchEmpresasByVinculoCode,
+  diagLogConductoresListResult,
+  diagLogJoinCodigoNoExiste,
+  logDemoEquipoJoin,
+  postgrestEqText,
+} from "./domain/empresa/conductorEmpresaJoinDiag.js";
+import {
   buildOfficeResponsablesByUserId,
   fetchEmpresaOfficeResponsablesCached,
   officeResponsableDisplayName,
@@ -7910,14 +7918,25 @@ async function humanizeConductorEmpresaJoinError(res){
 }
 async function fetchEmpresasByVinculoCode(raw){
   const cod=normalizeEmpresaVinculoCode(raw);
-  if(!cod)return[];
-  const enc=encodeURIComponent(cod);
-  let emps=await sbSelect("empresas",`codigo_equipo=eq.${enc}`);
+  if(!cod){
+    logDemoEquipoJoin("codigo_vacio",{raw});
+    return[];
+  }
+  const eqText=postgrestEqText(cod);
+  logDemoEquipoJoin("fetch_inicio",{
+    isDemoApp:isDemoApp(),
+    codigo:{raw,normalizado:cod,valorEnviadoEnEq:eqText},
+    ruta:isDemoApp()?"diagFetchEmpresasByVinculoCode":"sbSelect_prod",
+  });
+  if(isDemoApp()){
+    return diagFetchEmpresasByVinculoCode(cod);
+  }
+  let emps=await sbSelect("empresas",`codigo_equipo=eq.${eqText}`);
   if(emps?.length)return emps;
-  emps=await sbSelect("empresas",`codigo_corto=eq.${enc}`);
+  emps=await sbSelect("empresas",`codigo_corto=eq.${eqText}`);
   if(emps?.length)return emps;
   const uuidRe=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if(uuidRe.test(cod)&&cod.length===36)return sbSelect("empresas",`id=eq.${encodeURIComponent(cod)}`);
+  if(uuidRe.test(cod)&&cod.length===36)return sbSelect("empresas",`id=eq.${cod}`);
   return[];
 }
 function EmpresaPerfilBlock({tipoCuentaProp=null}){
@@ -8169,19 +8188,36 @@ function CampoEmpresa({prof}){
     setLoading(true);setMsg("");
     try{
       const emps=await fetchEmpresasByVinculoCode(codigo);
-      if(!emps.length){setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;}
+      if(!emps.length){
+        diagLogJoinCodigoNoExiste({
+          codigoRaw:codigo,
+          codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+          source:"CampoEmpresa.vincular",
+          emps,
+        });
+        setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;
+      }
       const emp=emps[0];
+      const joinPayload={
+        user_id:uid,
+        empresa_id:emp.id,
+        rol:"conductor",
+        nombre:prof.nombre||"Conductor",
+        matricula:prof.matricula||"",
+        activo:true,
+      };
       const res=await sbFetch("/rest/v1/conductor_empresa",{
         method:"POST",
         headers:{"Prefer":"return=representation"},
-        body:JSON.stringify({
-          user_id:uid,
-          empresa_id:emp.id,
-          rol:"conductor",
-          nombre:prof.nombre||"Conductor",
-          matricula:prof.matricula||"",
-          activo:true
-        })
+        body:JSON.stringify(joinPayload),
+      });
+      await diagAfterConductorEmpresaJoin(res,{
+        codigoRaw:codigo,
+        codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+        uid,
+        emp,
+        payload:joinPayload,
+        source:"CampoEmpresa.vincular",
       });
       if(res.ok){
         setEstado({id:emp.id,nombre:emp.nombre});
@@ -13147,7 +13183,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           };
         }catch(_){return{...r,norma:null,entries:[],telefono_movil:r.telefono_movil||"",telefono:""};}
       }));
-      setConductores(conds.filter(Boolean));
+      const visible=conds.filter(Boolean);
+      diagLogConductoresListResult(empId,{
+        rawRels:rels,
+        afterProfileFilter:visible,
+        fetchMeta:{fromCache:"fetchEmpresaConductoresCached"},
+        source:"EmpresaFlota.loadConductores",
+      });
+      setConductores(visible);
     }catch(_){}
     setLoading(false);
   }
@@ -15411,12 +15454,29 @@ function SetupConductorPerfil({prof,dark}){
     setLoading(true);
     try{
       const emps=await fetchEmpresasByVinculoCode(codigo);
-      if(!emps.length){showToast("Ese código no existe");setLoading(false);return;}
+      if(!emps.length){
+        diagLogJoinCodigoNoExiste({
+          codigoRaw:codigo,
+          codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+          source:"SetupConductorPerfil.unirse",
+          emps,
+        });
+        showToast("Ese código no existe");setLoading(false);return;
+      }
       const emp=emps[0];
+      const joinPayload={user_id:uid,empresa_id:emp.id,rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||"",activo:true};
       const res=await sbFetch("/rest/v1/conductor_empresa",{
         method:"POST",
         headers:{"Prefer":"return=representation"},
-        body:JSON.stringify({user_id:uid,empresa_id:emp.id,rol:"conductor",nombre:prof.nombre||"Conductor",matricula:prof.matricula||"",activo:true})
+        body:JSON.stringify(joinPayload),
+      });
+      await diagAfterConductorEmpresaJoin(res,{
+        codigoRaw:codigo,
+        codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+        uid,
+        emp,
+        payload:joinPayload,
+        source:"SetupConductorPerfil.unirse",
       });
       if(res.ok){
         setRel({esJefe:false,nombre:emp.nombre});
@@ -15572,19 +15632,36 @@ function SetupConductor({prof,dark,onJoined}){
     setLoading(true);setMsg("");
     try{
       const emps=await fetchEmpresasByVinculoCode(codigo);
-      if(!emps.length){setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;}
+      if(!emps.length){
+        diagLogJoinCodigoNoExiste({
+          codigoRaw:codigo,
+          codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+          source:"SetupConductor.unirse",
+          emps,
+        });
+        setMsg("Ese código no existe. Revísalo con tu jefe.");setLoading(false);return;
+      }
       const emp=emps[0];
+      const joinPayload={
+        user_id:uid,
+        empresa_id:emp.id,
+        rol:"conductor",
+        nombre:prof?.nombre||"Conductor",
+        matricula:prof?.matricula||"",
+        activo:true,
+      };
       const res=await sbFetch("/rest/v1/conductor_empresa",{
         method:"POST",
         headers:{"Prefer":"return=representation"},
-        body:JSON.stringify({
-          user_id:uid,
-          empresa_id:emp.id,
-          rol:"conductor",
-          nombre:prof?.nombre||"Conductor",
-          matricula:prof?.matricula||"",
-          activo:true,
-        }),
+        body:JSON.stringify(joinPayload),
+      });
+      await diagAfterConductorEmpresaJoin(res,{
+        codigoRaw:codigo,
+        codigoNormalizado:normalizeEmpresaVinculoCode(codigo),
+        uid,
+        emp,
+        payload:joinPayload,
+        source:"SetupConductor.unirse",
       });
       if(res.ok){
         setCodigo("");

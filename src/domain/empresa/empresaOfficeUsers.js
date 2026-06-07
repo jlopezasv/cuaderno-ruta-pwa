@@ -61,12 +61,51 @@ function mergeOfficeUserLists(fresh, fallback = []) {
   return [...map.values()];
 }
 
-/** Lista usuarios oficina de la empresa (jefe_flota vía RLS eu_sel / eu_sel_peer_demo). */
+/** PostgREST error body → campos legibles (DEMO diagnóstico). */
+function extractSupabaseError(body, httpStatus) {
+  if (!body || typeof body !== "object") {
+    return {
+      message: `HTTP ${httpStatus} al leer empresa_usuarios`,
+      code: null,
+      details: null,
+      hint: null,
+    };
+  }
+  return {
+    message: body.message || null,
+    code: body.code || null,
+    details: body.details || null,
+    hint: body.hint || null,
+  };
+}
+
+function formatSupabaseError(err) {
+  return [err?.message, err?.code, err?.details, err?.hint].filter(Boolean).join(" · ");
+}
+
+function sortOfficeUsersByCreatedAt(users) {
+  return [...users].sort((a, b) => {
+    const ta = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return ta - tb;
+  });
+}
+
+/** Query REST empresa_usuarios (mismo patrón que sbSelect: filtros en querystring, sin order). */
+function buildEmpresaOfficeUsersListFilter(empresaId) {
+  return `empresa_id=eq.${empresaId}&select=id,empresa_id,user_id,nombre,email,rol,puede_ver_todos,activo,created_at`;
+}
+
+/**
+ * Lista usuarios oficina de la empresa (jefe_flota vía RLS eu_sel / eu_sel_peer_demo).
+ * DEMO: devuelve { users, error, debug } para diagnóstico en UI.
+ */
 export async function fetchEmpresaOfficeUsers(_sbSelect, empresaId, { force = false } = {}) {
-  if (!empresaId || !isDemoApp()) return [];
+  const empty = { users: [], error: null, debug: null };
+  if (!empresaId || !isDemoApp()) return empty;
 
   if (!force && officeUsersCache.empresaId === empresaId && officeUsersCache.data) {
-    return officeUsersCache.data;
+    return { users: officeUsersCache.data, error: null, debug: { cached: true, empresaId } };
   }
   if (!force && officeUsersCache.empresaId === empresaId && officeUsersCache.inflight) {
     return officeUsersCache.inflight;
@@ -74,29 +113,69 @@ export async function fetchEmpresaOfficeUsers(_sbSelect, empresaId, { force = fa
 
   officeUsersCache.empresaId = empresaId;
   officeUsersCache.inflight = (async () => {
-    const filter = [
-      `empresa_id=eq.${encodeURIComponent(empresaId)}`,
-      "select=id,empresa_id,user_id,nombre,email,rol,puede_ver_todos,activo,created_at",
-      "order=created_at.asc",
-    ].join("&");
-    const res = await sbFetch(`/rest/v1/empresa_usuarios?${filter}`);
-    if (!res.ok) {
-      if (isDemoApp()) {
-        console.warn("[DEMO officeUsers] GET empresa_usuarios", res.status);
-      }
-      return [];
+    const filter = buildEmpresaOfficeUsersListFilter(empresaId);
+    const url = `/rest/v1/empresa_usuarios?${filter}`;
+    const res = await sbFetch(url);
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
     }
-    const rows = await res.json().catch(() => []);
-    const built = (Array.isArray(rows) ? rows : []).map(buildOfficeUserRow).filter(Boolean);
+    const rawRows = res.ok && Array.isArray(body) ? body : [];
+    const built = sortOfficeUsersByCreatedAt(rawRows.map(buildOfficeUserRow).filter(Boolean));
+    const dropped = rawRows.length - built.length;
+    const supabaseError = !res.ok ? extractSupabaseError(body, res.status) : null;
+
+    const debug = {
+      empresaId,
+      filter,
+      httpStatus: res.status,
+      rawCount: rawRows.length,
+      builtCount: built.length,
+      droppedWithoutUserId: dropped,
+      supabaseError,
+      supabaseBody: !res.ok ? body : null,
+    };
+
+    if (!res.ok) {
+      const errMsg = formatSupabaseError(supabaseError) || `HTTP ${res.status} al leer empresa_usuarios`;
+      if (isDemoApp()) console.warn("[DEMO officeUsers] GET falló", debug, body);
+      return { users: [], error: errMsg, debug };
+    }
+
+    if (rawRows.length === 0) {
+      const errMsg = `RLS/consulta OK pero 0 filas para empresa_id=${empresaId}`;
+      if (isDemoApp()) console.warn("[DEMO officeUsers] lista vacía", debug);
+      return { users: [], error: errMsg, debug };
+    }
+
+    if (built.length === 0 && rawRows.length > 0) {
+      const errMsg = `${rawRows.length} fila(s) sin user_id válido (revisar empresa_usuarios.user_id)`;
+      if (isDemoApp()) console.warn("[DEMO officeUsers] filas descartadas", debug);
+      return { users: [], error: errMsg, debug };
+    }
+
     if (built.length > 0) officeUsersCache.data = built;
-    return built;
+    if (isDemoApp()) console.warn("[DEMO officeUsers] OK", debug);
+    return { users: built, error: null, debug };
   })()
-    .catch(() => [])
+    .catch((e) => ({
+      users: [],
+      error: e?.message || String(e),
+      debug: { empresaId, fetchError: true },
+    }))
     .finally(() => {
       officeUsersCache.inflight = null;
     });
 
   return officeUsersCache.inflight;
+}
+
+/** empresaId efectivo: prop del layout o sesión officeUser. */
+export function resolveEmpresaOfficeUsersTenantId(empresaIdProp, officeUser = null) {
+  const fromOffice = officeUser?.empresaId || officeUser?.empresa_id || null;
+  return empresaIdProp || fromOffice || null;
 }
 
 export { mergeOfficeUserLists };

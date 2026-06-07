@@ -68,11 +68,12 @@ export function EmpresaConfigDashboard({
           />
         ) : null}
 
-        {showUsuarios && empresaId ? (
+        {showUsuarios ? (
           <EmpresaUsuariosOficinaPanel
             variant="card"
             span2
             empresaId={empresaId}
+            officeUser={officeUser}
             getUserId={getUserId}
             sbSelect={sbSelect}
             showToast={showToast}

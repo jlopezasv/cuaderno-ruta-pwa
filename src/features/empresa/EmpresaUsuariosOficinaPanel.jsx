@@ -9,6 +9,7 @@ import {
   fetchEmpresaOfficeUsers,
   invalidateEmpresaOfficeUsersCache,
   mergeOfficeUserLists,
+  resolveEmpresaOfficeUsersTenantId,
   officeUserRoleLabel,
   patchEmpresaOfficeUser,
   setEmpresaOfficeUserActivo,
@@ -260,6 +261,7 @@ const inpStyle = {
 
 export function EmpresaUsuariosOficinaPanel({
   empresaId,
+  officeUser = null,
   getUserId,
   sbSelect,
   showToast,
@@ -271,25 +273,86 @@ export function EmpresaUsuariosOficinaPanel({
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState("");
+  const [loadError, setLoadError] = useState(null);
+  const [loadDebug, setLoadDebug] = useState(null);
 
-  const caps = getStoredAuthSession(getUserId())?.capabilities;
+  const uid = getUserId?.() || null;
+  const caps = getStoredAuthSession(uid)?.capabilities;
+  const sessionOffice = caps?.officeUser || officeUser || null;
+  const tenantEmpresaId = resolveEmpresaOfficeUsersTenantId(empresaId, sessionOffice);
   const canManage = canManageEmpresaOfficeUsers(caps);
 
   const reload = useCallback(async () => {
-    if (!empresaId) {
-      setUsers([]);
+    if (!tenantEmpresaId) {
       setLoading(false);
+      setLoadError("Sin empresaId (esperando sesión de oficina)");
+      setLoadDebug(
+        isDemoApp()
+          ? JSON.stringify(
+              {
+                empresaIdProp: empresaId || null,
+                officeUserEmpresaId: sessionOffice?.empresaId || null,
+                uid,
+                rol: sessionOffice?.rol || null,
+              },
+              null,
+              2,
+            )
+          : null,
+      );
+      if (isDemoApp()) {
+        console.warn("[DEMO officeUsers] sin tenantEmpresaId", {
+          empresaIdProp: empresaId,
+          officeUserEmpresaId: sessionOffice?.empresaId,
+          uid,
+          rol: sessionOffice?.rol,
+        });
+      }
       return;
     }
     setLoading(true);
     try {
-      const rows = await fetchEmpresaOfficeUsers(sbSelect, empresaId, { force: true });
-      setUsers((prev) => (rows.length > 0 ? rows : prev));
-    } catch {
-      /* mantener lista previa si falla RLS/red */
+      const result = await fetchEmpresaOfficeUsers(sbSelect, tenantEmpresaId, { force: true });
+      const rows = result?.users || [];
+      if (isDemoApp()) {
+        console.warn("[DEMO officeUsers] panel reload", {
+          tenantEmpresaId,
+          uid,
+          rol: sessionOffice?.rol || caps?.officeUser?.rol,
+          rawCount: result?.debug?.rawCount,
+          builtCount: result?.debug?.builtCount,
+          httpStatus: result?.debug?.httpStatus,
+          error: result?.error,
+        });
+      }
+      const httpOk = result?.debug?.httpStatus === 200;
+      if (httpOk && rows.length > 0) {
+        setUsers(rows);
+        setLoadError(null);
+        setLoadDebug(null);
+      } else {
+        setLoadError(result?.error || "No se pudieron cargar usuarios de oficina");
+        setLoadDebug(
+          isDemoApp()
+            ? JSON.stringify(
+                {
+                  tenantEmpresaId,
+                  uid,
+                  rol: sessionOffice?.rol || null,
+                  ...result?.debug,
+                },
+                null,
+                2,
+              )
+            : null,
+        );
+      }
+    } catch (e) {
+      setLoadError("No se pudieron cargar usuarios de oficina");
+      setLoadDebug(isDemoApp() ? e?.message || String(e) : null);
     }
     setLoading(false);
-  }, [empresaId, sbSelect]);
+  }, [tenantEmpresaId, empresaId, sessionOffice?.empresaId, sessionOffice?.rol, uid, sbSelect, caps?.officeUser?.rol]);
 
   useEffect(() => {
     reload();
@@ -301,21 +364,22 @@ export function EmpresaUsuariosOficinaPanel({
     setSaving(true);
     setModalError("");
     try {
+      if (!tenantEmpresaId) throw new Error("Sin empresaId para crear usuario");
       const result = await createEmpresaOfficeUserDemo({
-        empresaId,
+        empresaId: tenantEmpresaId,
         nombre: form.nombre,
         email: form.email,
         rol: form.rol,
-        callerUid: getUserId(),
+        callerUid: uid,
       });
-      invalidateEmpresaOfficeUsersCache(empresaId);
+      invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
       const eu = result.empresa_usuario || {};
       const puedeVer = form.rol === "administrativo" ? false : !!form.puedeVerTodos;
       let row =
         buildOfficeUserRow(eu) ||
         buildOfficeUserRow({
           id: eu.id || null,
-          empresa_id: empresaId,
+          empresa_id: tenantEmpresaId,
           user_id: result.user_id || eu.user_id,
           nombre: form.nombre.trim(),
           email: form.email.trim(),
@@ -334,8 +398,13 @@ export function EmpresaUsuariosOficinaPanel({
       }
       showToast?.(`Usuario creado. Email: ${form.email} · Contraseña: ${result.demoPassword}`);
       setModal(null);
-      const fresh = await fetchEmpresaOfficeUsers(sbSelect, empresaId, { force: true });
+      const freshResult = await fetchEmpresaOfficeUsers(sbSelect, tenantEmpresaId, { force: true });
+      const fresh = freshResult?.users || [];
       setUsers((prev) => mergeOfficeUserLists(fresh, row ? mergeOfficeUserLists([row], prev) : prev));
+      if (fresh.length > 0) {
+        setLoadError(null);
+        setLoadDebug(null);
+      }
     } catch (e) {
       setModalError(e.message || "Error al crear");
     }
@@ -359,7 +428,7 @@ export function EmpresaUsuariosOficinaPanel({
         return;
       }
       await patchEmpresaOfficeUser(modal.user.id, patch);
-      invalidateEmpresaOfficeUsersCache(empresaId);
+      invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
       setUsers((prev) =>
         prev.map((u) =>
           u.id === modal.user.id
@@ -388,7 +457,7 @@ export function EmpresaUsuariosOficinaPanel({
     }
     setEmpresaOfficeUserActivo(user.id, false)
       .then(() => {
-        invalidateEmpresaOfficeUsersCache(empresaId);
+        invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
         setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, activo: false } : u)));
         showToast?.("Usuario desactivado");
       })
@@ -412,11 +481,41 @@ export function EmpresaUsuariosOficinaPanel({
         </div>
       ) : null}
 
+      {loadError ? (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 10,
+            padding: "12px 14px",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, color: CONFIG_UI.red }}>
+            No se pudieron cargar usuarios de oficina
+          </div>
+          {isDemoApp() && loadDebug ? (
+            <pre
+              style={{
+                marginTop: 8,
+                fontSize: 10,
+                color: "#7f1d1d",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                lineHeight: 1.4,
+              }}
+            >
+              {loadDebug}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+
       {loading ? (
         <div style={{ fontSize: 13, color: CONFIG_UI.muted }}>Cargando usuarios…</div>
-      ) : users.length === 0 ? (
+      ) : users.length === 0 && !loadError ? (
         <div style={{ fontSize: 13, color: CONFIG_UI.muted }}>No hay usuarios de oficina registrados.</div>
-      ) : (
+      ) : users.length > 0 ? (
         <div
           style={{
             display: "grid",
@@ -438,7 +537,7 @@ export function EmpresaUsuariosOficinaPanel({
             />
           ))}
         </div>
-      )}
+      ) : null}
 
       {modal ? (
         <UserFormModal

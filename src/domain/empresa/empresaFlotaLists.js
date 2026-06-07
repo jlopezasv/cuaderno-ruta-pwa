@@ -1,5 +1,6 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
+import { extractSupabaseErrorBody, logDemoEquipoJoin } from "./conductorEmpresaJoinDiag.js";
 
 const conductoresCache = { empresaId: null, data: null, inflight: null };
 
@@ -23,17 +24,31 @@ export async function fetchEmpresaConductoresLite(empresaId) {
   let fetchError = null;
   try {
     const res = await sbFetch(`/rest/v1/conductor_empresa?${filter}`);
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
+      const supabaseError = extractSupabaseErrorBody(body, res.status);
       fetchError = {
         status: res.status,
-        message: body?.message || body?.hint || res.statusText,
+        ...supabaseError,
       };
+      logDemoEquipoJoin("conductores_fetch_error", {
+        empresaId,
+        filter,
+        httpStatus: res.status,
+        supabaseError,
+        supabaseBody: body,
+      });
     } else {
-      rows = await res.json().catch(() => []);
+      rows = Array.isArray(body) ? body : [];
     }
   } catch (e) {
     fetchError = { message: e?.message || String(e) };
+    logDemoEquipoJoin("conductores_fetch_exception", { empresaId, filter, message: fetchError.message });
   }
 
   const rels = (Array.isArray(rows) ? rows : []).filter((r) => r?.user_id);
@@ -60,9 +75,19 @@ export async function fetchEmpresaConductoresLite(empresaId) {
   const list = enriched.filter(Boolean);
   logConductoresDemo("loaded", {
     empresaId,
+    filter,
     rawCount: Array.isArray(rows) ? rows.length : 0,
     conductoresCount: list.length,
+    ocultosPerfilArchivado: Math.max(0, rels.length - list.length),
+    userIds: list.map((c) => c.user_id).filter(Boolean),
     error: fetchError,
+  });
+  logDemoEquipoJoin("conductores_fetch_ok", {
+    empresaId,
+    filter,
+    rawConductorEmpresaCount: Array.isArray(rows) ? rows.length : 0,
+    trasEnriquecerPerfilCount: list.length,
+    filas: list.map((c) => ({ id: c.id, user_id: c.user_id, nombre: c.nombre, activo: c.activo })),
   });
   return list;
 }

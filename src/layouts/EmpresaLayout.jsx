@@ -120,7 +120,8 @@ export default function EmpresaLayout({
     const uid = getUserId();
     if (!uid) return;
     const session = getStoredAuthSession(uid);
-    const fromOffice = session?.capabilities?.officeUser?.empresaId;
+    const fromOffice =
+      capabilities?.officeUser?.empresaId || session?.capabilities?.officeUser?.empresaId;
     if (fromOffice) {
       setEmpresaId(fromOffice);
       return;
@@ -128,7 +129,7 @@ export default function EmpresaLayout({
     sbSelect("empresas", `owner_id=eq.${uid}&select=id`)
       .then((rows) => setEmpresaId(rows[0]?.id || null))
       .catch(() => setEmpresaId(null));
-  }, []);
+  }, [capabilities?.officeUser?.empresaId]);
 
   useEffect(() => {
     if (!empresaId) {
