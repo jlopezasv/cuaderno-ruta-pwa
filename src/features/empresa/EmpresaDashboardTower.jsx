@@ -142,12 +142,6 @@ export function EmpresaDashboardTower({ tower, ui, onTabChange, empresaCodigo })
               {conductores.total === 0
                 ? "Sin conductores vinculados"
                 : "Ningún conductor sin servicio asignado"}
-              {empresaCodigo && conductores.total === 0 && (
-                <div style={{ marginTop: 8, fontSize: 11 }}>
-                  Código equipo:{" "}
-                  <span style={{ fontFamily: "monospace", color: ui.tx }}>{empresaCodigo}</span>
-                </div>
-              )}
             </div>
           ) : (
             sinServicioList.map((c) => <TowerPersonCard key={c.uid} person={c} />)

@@ -12,6 +12,8 @@ import {
   getVisibleEmpresaTabs,
 } from "../domain/empresa/officeUserFilters.js";
 import { EmpresaUsuariosOficinaPanel } from "../features/empresa/EmpresaUsuariosOficinaPanel.jsx";
+import { EmpresaCodigoEquipoConfig } from "../features/empresa/EmpresaCodigoEquipoConfig.jsx";
+import { fetchEmpresaRecordById } from "../domain/empresa/empresaRecordCache.js";
 
 export default function EmpresaLayout({
   PROF0,
@@ -27,6 +29,7 @@ export default function EmpresaLayout({
   const [tab, setTab] = useState("servicios");
   const [loaded, setLoaded] = useState(false);
   const [empresaId, setEmpresaId] = useState(null);
+  const [empresaRecord, setEmpresaRecord] = useState(null);
   const [capabilities, setCapabilities] = useState(
     () => getStoredAuthSession(getUserId())?.capabilities || null,
   );
@@ -117,10 +120,24 @@ export default function EmpresaLayout({
       setEmpresaId(fromOffice);
       return;
     }
-    sbSelect("empresas", `owner_id=eq.${uid}`)
+    sbSelect("empresas", `owner_id=eq.${uid}&select=id`)
       .then((rows) => setEmpresaId(rows[0]?.id || null))
       .catch(() => setEmpresaId(null));
   }, []);
+
+  useEffect(() => {
+    if (!empresaId) {
+      setEmpresaRecord(null);
+      return;
+    }
+    let cancelled = false;
+    fetchEmpresaRecordById(sbSelect, empresaId).then((row) => {
+      if (!cancelled) setEmpresaRecord(row);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [empresaId]);
 
   useEffect(() => {
     if (!visibleTabs.length) return;
@@ -398,7 +415,17 @@ export default function EmpresaLayout({
           <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
             <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
             <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
-            <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
+            {isDemoApp() && empresaId && (
+              <EmpresaCodigoEquipoConfig
+                empresaId={empresaId}
+                initialEmpresa={empresaRecord}
+                sbSelect={sbSelect}
+                showToast={showToast}
+              />
+            )}
+            {capabilities?.accountType === "empresa" && (
+              <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
+            )}
             {isDemoApp() && empresaId && (
               <EmpresaUsuariosOficinaPanel
                 empresaId={empresaId}

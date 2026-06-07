@@ -212,7 +212,12 @@ export async function fetchEmpresaOfficeResponsablesCached(
   const tenantId = resolveOfficeResponsablesEmpresaId(empresaId, officeUser);
   if (!tenantId || !isDemoApp()) return [];
 
-  if (!force && responsablesCache.empresaId === tenantId && responsablesCache.data?.length) {
+  if (
+    !force &&
+    responsablesCache.empresaId === tenantId &&
+    Array.isArray(responsablesCache.data) &&
+    responsablesCache.data.length > 0
+  ) {
     return responsablesCache.data;
   }
   if (!force && responsablesCache.empresaId === tenantId && responsablesCache.inflight) {

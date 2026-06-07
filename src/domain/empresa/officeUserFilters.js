@@ -74,8 +74,14 @@ export function filterServiciosForOfficeUser(servicios, officeUser, uid, options
   const rol = String(officeUser.rol || "").toLowerCase();
   if (rol === "administrativo") return [];
 
-  const vista = options.vista || getDefaultOfficeServiciosVista(officeUser);
   const userId = uid || officeUser.userId;
+
+  // Tráfico sin puede_ver_todos: siempre solo sus servicios (sin selector en UI).
+  if (rol === "trafico" && !officeUser.puedeVerTodos) {
+    return list.filter((s) => s?.responsable_user_id && s.responsable_user_id === userId);
+  }
+
+  const vista = options.vista || getDefaultOfficeServiciosVista(officeUser);
 
   if (vista === OFFICE_SERVICIOS_VISTA.TODOS) {
     return list;
@@ -109,10 +115,10 @@ export function getVisibleEmpresaTabs(capabilities) {
       tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.planificador, TAB.config];
       break;
     case "trafico":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos, TAB.config];
       break;
     case "administrativo":
-      tabs = [TAB.documentos];
+      tabs = [TAB.documentos, TAB.config];
       break;
     default:
       tabs = [TAB.documentos];

@@ -80,11 +80,16 @@ import {
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
+import { resolveCurrentEmpresaRecord } from "./domain/empresa/empresaRecordCache.js";
 import {
   filterServiciosForOfficeUser,
   getDefaultOfficeServiciosVista,
   OFFICE_SERVICIOS_VISTA,
 } from "./domain/empresa/officeUserFilters.js";
+import {
+  fetchEmpresaConductoresCached,
+  invalidateEmpresaConductoresCache,
+} from "./domain/empresa/empresaFlotaLists.js";
 import {
   buildOfficeResponsablesByUserId,
   fetchEmpresaOfficeResponsablesCached,
@@ -12208,9 +12213,17 @@ function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,war
   );
 }
 
-function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=null,officeResponsables=[],onClose,onCreado}){
-  const sinConductor=!conductorId;
+function AsignarServicioModal({
+  conductorId=null,
+  conductorNombre=null,
+  conductores=[],
+  empresaId=null,
+  officeResponsables=[],
+  onClose,
+  onCreado,
+}){
   const officeUser=getOfficeUserFromSession();
+  const[conductorSelId,setConductorSelId]=useState(conductorId||"");
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
@@ -12230,6 +12243,16 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
   const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
   const responsableFieldProps={officeUser,officeResponsables,value:responsableId,onChange:setResponsableId,lblStyle:lbl,fieldStyle:inp,surfaceSoft:bg,border:EMPRESA_UI.border};
   const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309"};
+  const conductoresFlota=useMemo(
+    ()=>(Array.isArray(conductores)?conductores:[]).filter((c)=>c?.user_id),
+    [conductores],
+  );
+  const conductorSelNombre=useMemo(()=>{
+    if(!conductorSelId)return null;
+    const hit=conductoresFlota.find((c)=>c.user_id===conductorSelId);
+    return hit?.nombre||conductorNombre||"Conductor";
+  },[conductorSelId,conductoresFlota,conductorNombre]);
+  const sinConductor=!conductorSelId;
   const desktopModalStyle=isMobile?modalStyle:{
     position:"relative",
     width:"min(95vw, 1200px)",
@@ -12315,8 +12338,8 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         assignResult=await asignarConductorEnServicioCreado({
           servicioId:sv.id,
           servicio:sv,
-          conductorId,
-          conductorNombre:conductorNombre||"Conductor",
+          conductorId:conductorSelId,
+          conductorNombre:conductorSelNombre||"Conductor",
           origen:origenRuta,
           destino:destinoRuta,
           fechaInicio:new Date(fechaInicio).toISOString(),
@@ -12332,8 +12355,8 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
         logTag:"AsignarServicioModal",
       });
       if(!sinConductor){
-        void sendAssignmentPush({conductorId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
-        onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorId));
+        void sendAssignmentPush({conductorId:conductorSelId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
+        onCreado(mergeServicioTrasAsignacion(sv,assignResult,conductorSelId));
         return;
       }
       onCreado(sv);
@@ -12361,7 +12384,11 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
     }
     const preferred=officeResponsables.find((r)=>r.userId===(officeUser?.userId||uid))||officeResponsables[0];
     setResponsableId(preferred?.userId||"");
-  },[empresaId,officeResponsables,officeUser?.userId,officeUser?.rol]);
+  },[empresaId,officeResponsables,officeUser?.userId,officeUser?.rol,officeUser?.puedeVerTodos]);
+
+  useEffect(()=>{
+    setConductorSelId(conductorId||"");
+  },[conductorId]);
 
   useEffect(()=>{
     logServiceCreate("SERVICE_CREATE_START",{
@@ -12369,7 +12396,8 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
       empresaIdProp:empresaId,
       empresaIdPropIsNull:empresaId==null,
       conductorIdProp:conductorId??null,
-      sinConductor,
+      conductoresCount:conductoresFlota.length,
+      responsablesCount:officeResponsables.length,
     });
   },[]);
 
@@ -12442,15 +12470,23 @@ function AsignarServicioModal({conductorId=null,conductorNombre=null,empresaId=n
             </div>
             <div>
               <div style={lbl}>Conductor</div>
-              {sinConductor?(
-                <div style={{fontSize:12,fontWeight:650,color:"#3730a3",padding:"7px 9px",background:"#eef2ff",borderRadius:8,border:"1px solid #c7d2fe",lineHeight:1.3}}>
-                  Sin conductor asignado
+              <select
+                value={conductorSelId||""}
+                onChange={(e)=>setConductorSelId(e.target.value)}
+                style={{...inp,cursor:"pointer"}}
+              >
+                <option value="">Sin conductor asignado</option>
+                {conductoresFlota.map((c)=>(
+                  <option key={c.user_id} value={c.user_id}>
+                    {c.nombre||"Conductor"}{c.matricula?` · ${c.matricula}`:""}
+                  </option>
+                ))}
+              </select>
+              {conductoresFlota.length===0?(
+                <div style={{fontSize:11,color:"#b45309",marginTop:4,lineHeight:1.35}}>
+                  No hay conductores activos en la flota. Invítalos desde la pestaña Conductores.
                 </div>
-              ):(
-                <div style={{fontSize:12,fontWeight:650,color:"#1e3a8a",padding:"7px 9px",background:EMPRESA_UI.accentSoft,borderRadius:8,border:"1px solid #93c5fd",lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                  {conductorNombre||"Conductor"}
-                </div>
-              )}
+              ):null}
             </div>
           </div>
 
@@ -13020,19 +13056,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       setOfficeResponsables([]);
       return;
     }
-    const needResponsables=
-      flotaTab==="servicios"||
-      !!asignarModal||
-      !!editarServicioModal||
-      pickConductorViaje||
-      officeServiciosVista===OFFICE_SERVICIOS_VISTA.POR_RESPONSABLE;
-    if(!needResponsables)return;
     let cancelled=false;
-    fetchEmpresaOfficeResponsablesCached(sbSelect,tenantId,officeUserPanel)
-      .then((rows)=>{if(!cancelled)setOfficeResponsables(rows);})
-      .catch(()=>{if(!cancelled)setOfficeResponsables([]);});
+    Promise.all([
+      fetchEmpresaOfficeResponsablesCached(sbSelect,tenantId,officeUserPanel)
+        .catch(()=>[]),
+      fetchEmpresaConductoresCached(tenantId).catch(()=>[]),
+    ]).then(([respRows,condRows])=>{
+      if(cancelled)return;
+      setOfficeResponsables(Array.isArray(respRows)?respRows:[]);
+      if(Array.isArray(condRows)&&condRows.length){
+        setConductores((prev)=>(prev.length?prev:condRows));
+      }
+    });
     return()=>{cancelled=true;};
-  },[empresa?.id,officeUserPanel?.empresaId,officeUserPanel?.userId,flotaTab,asignarModal,editarServicioModal,pickConductorViaje,officeServiciosVista]);
+  },[empresa?.id,officeUserPanel?.empresaId,officeUserPanel?.userId,officeUserPanel?.rol]);
 
   useEffect(()=>{init();},[]);
 
@@ -13054,7 +13091,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           setLoading(false);
           return;
         }
-        setEmpresa({id:officeUser.empresaId,nombre:officeUser.empresaNombre||"Empresa"});
+        const empOffice=await resolveCurrentEmpresaRecord(sbSelect,uid,officeUser);
+        setEmpresa(empOffice||{id:officeUser.empresaId,nombre:officeUser.empresaNombre||"Empresa"});
         setModo("jefe");
         onRoleChange?.("jefe");
         const rolOficina=String(officeUser.rol||"").toLowerCase();
@@ -13087,7 +13125,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   async function loadConductores(empId){
     try{
-      const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${empId}&activo=eq.true`);
+      const rels=await fetchEmpresaConductoresCached(empId);
       const conds=await Promise.all(rels.map(async r=>{
         if(!r.user_id)return{...r,norma:null,entries:[],pendiente:true};
         try{
@@ -13391,7 +13429,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   loadFlotaRef.current=loadFlotaServicios;
 
   useEffect(()=>{
-    if(!empresa?.id||modo!=="jefe")return undefined;
+    if(isDemoApp()||!empresa?.id||modo!=="jefe")return undefined;
     if(getEmpresaEquipoCodeStrict(empresa))return undefined;
     let n=0;
     const timer=setInterval(()=>{
@@ -13990,16 +14028,28 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       showToast("No tienes permiso para crear servicios");
       return;
     }
-    const list=conductores.filter(c=>c.user_id);
+    const tenantId=officeUserPanel?.empresaId||empresa?.id||null;
+    const list=conductores.filter((c)=>c.user_id);
     logServiceCreate("SERVICE_CREATE_START",{
       source:"PanelEmpresa.openNuevoViaje",
       empresaState:empresa?{id:empresa.id,nombre:empresa.nombre}:null,
-      empresaId:empresa?.id??null,
+      empresaId:tenantId,
       conductoresActivos:list.length,
+      responsablesActivos:officeResponsables.length,
       authUid:getUserId?.()||null,
     });
-    if(!list.length){setAsignarModal({id:null,nombre:null});return;}
-    setPickConductorViaje(true);
+    if(isDemoApp()&&tenantId){
+      void Promise.all([
+        fetchEmpresaOfficeResponsablesCached(sbSelect,tenantId,officeUserPanel,{force:true})
+          .then(setOfficeResponsables)
+          .catch(()=>{}),
+        fetchEmpresaConductoresCached(tenantId,{force:true})
+          .then((rows)=>{if(rows?.length)setConductores(rows);})
+          .catch(()=>{}),
+      ]);
+    }
+    setPickConductorViaje(false);
+    setAsignarModal({id:null,nombre:null});
   }
 
   useEffect(()=>{
@@ -14062,6 +14112,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       const data=await res.json();
       if(!res.ok){showToast("❌ "+(data.error||"Error al invitar"));setAddLoading(false);return;}
       setAddForm({nombre:"",matricula:"",email:""});setAddOpen(false);
+      invalidateEmpresaConductoresCache(empresa.id);
       await loadConductores(empresa.id);
       showToast(`✅ Invitación enviada a ${addForm.email}`);
     }catch(e){showToast("❌ "+e.message);}
@@ -14259,7 +14310,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         </div>
       )}
 
-      {inviteEquipoOpen&&empresa&&(
+      {!isDemoApp()&&inviteEquipoOpen&&empresa&&(
         <EquipoInvitacionModal
           onClose={()=>setInviteEquipoOpen(false)}
           equipoNombre={empresa.nombre}
@@ -14268,13 +14319,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {/* Identidad empresa + código de equipo */}
+      {/* Identidad empresa (sin código en DEMO — solo en Configuración) */}
       <EmpresaIdentityBarCompact
         empresaNombre={empresa?.nombre}
         empresaCif={empresa?.cif}
         serviciosEnRuta={serviciosEnRuta}
         codigoEquipoShow={codigoEquipoShow}
         generandoCodigoEquipo={generandoCodigoEquipo}
+        hideEquipoCode={isDemoApp()}
         tx={tx}
         su={su}
         accent={EMPRESA_UI.accent}
@@ -15154,6 +15206,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <AsignarServicioModal
           conductorId={asignarModal.id}
           conductorNombre={asignarModal.nombre}
+          conductores={conductores}
           empresaId={officeUserPanel?.empresaId||empresa?.id||null}
           officeResponsables={officeResponsables}
           onClose={()=>setAsignarModal(null)}
@@ -18240,11 +18293,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
       try{
         const officeUser=getOfficeUserFromSession(uid);
         let emp=null;
-        if(isDemoApp()&&officeUser?.activo&&officeUser.empresaId){
-          emp={id:officeUser.empresaId,nombre:officeUser.empresaNombre||"Empresa"};
-        }else{
-          emp=await resolveEmpresaRecordForUser(uid,sbSelect,officeUser);
-        }
+        emp=await resolveCurrentEmpresaRecord(sbSelect,uid,officeUser);
         if(!emp?.id){setLoading(false);return;}
         setEmpresa(emp);
         const rels=await sbSelect("conductor_empresa",`empresa_id=eq.${emp.id}&activo=eq.true`);
@@ -18373,7 +18422,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         tower={tower}
         ui={EMPRESA_UI}
         onTabChange={onTabChange}
-        empresaCodigo={empresa?getEmpresaCodigoEquipoDisplay(empresa):null}
+        empresaCodigo={isDemoApp()?null:(empresa?getEmpresaCodigoEquipoDisplay(empresa):null)}
       />
     </div>
   );

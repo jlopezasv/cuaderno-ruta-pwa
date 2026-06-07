@@ -60,6 +60,7 @@ export function EmpresaIdentityBarCompact({
   serviciosEnRuta,
   codigoEquipoShow,
   generandoCodigoEquipo,
+  hideEquipoCode = false,
   onCopy,
   onShare,
   onQrInvite,
@@ -89,52 +90,56 @@ export function EmpresaIdentityBarCompact({
           {" "}
           · <strong style={{ color: accent }}>{serviciosEnRuta}</strong> en ruta
         </span>
-        <span style={{ color: su }}>
-          {" "}
-          · Equipo:{" "}
-          <span
+        {!hideEquipoCode ? (
+          <span style={{ color: su }}>
+            {" "}
+            · Equipo:{" "}
+            <span
+              style={{
+                fontFamily: "ui-monospace, monospace",
+                fontWeight: 750,
+                color: tx,
+                letterSpacing: 0.3,
+              }}
+            >
+              {generandoCodigoEquipo ? "…" : codigoEquipoShow || "—"}
+            </span>
+          </span>
+        ) : null}
+      </div>
+      {!hideEquipoCode ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
+          <button
+            type="button"
+            disabled={generandoCodigoEquipo || !codigoEquipoShow}
+            onClick={onCopy}
+            style={equipoBtnStyle(surfaceSoft, border, tx, generandoCodigoEquipo)}
+          >
+            Copiar
+          </button>
+          <button
+            type="button"
+            disabled={generandoCodigoEquipo || !codigoEquipoShow}
+            onClick={onShare}
+            style={equipoBtnStyle(surfaceSoft, border, tx, generandoCodigoEquipo)}
+          >
+            Compartir
+          </button>
+          <button
+            type="button"
+            disabled={generandoCodigoEquipo || !codigoEquipoShow}
+            onClick={onQrInvite}
             style={{
-              fontFamily: "ui-monospace, monospace",
-              fontWeight: 750,
-              color: tx,
-              letterSpacing: 0.3,
+              ...equipoBtnStyle("#0f172a", "none", "#fff", generandoCodigoEquipo),
+              border: "none",
+              background: generandoCodigoEquipo ? "#94a3b8" : "#0f172a",
+              color: "#fff",
             }}
           >
-            {generandoCodigoEquipo ? "…" : codigoEquipoShow || "—"}
-          </span>
-        </span>
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={generandoCodigoEquipo || !codigoEquipoShow}
-          onClick={onCopy}
-          style={equipoBtnStyle(surfaceSoft, border, tx, generandoCodigoEquipo)}
-        >
-          Copiar
-        </button>
-        <button
-          type="button"
-          disabled={generandoCodigoEquipo || !codigoEquipoShow}
-          onClick={onShare}
-          style={equipoBtnStyle(surfaceSoft, border, tx, generandoCodigoEquipo)}
-        >
-          Compartir
-        </button>
-        <button
-          type="button"
-          disabled={generandoCodigoEquipo || !codigoEquipoShow}
-          onClick={onQrInvite}
-          style={{
-            ...equipoBtnStyle("#0f172a", "none", "#fff", generandoCodigoEquipo),
-            border: "none",
-            background: generandoCodigoEquipo ? "#94a3b8" : "#0f172a",
-            color: "#fff",
-          }}
-        >
-          QR invitar
-        </button>
-      </div>
+            QR invitar
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

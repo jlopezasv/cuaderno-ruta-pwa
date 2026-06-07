@@ -29,14 +29,17 @@ export async function resolveEmpresaIdForUser(uid, sbSelect, officeUser = null) 
 export async function resolveEmpresaRecordForUser(uid, sbSelect, officeUser = null) {
   if (!uid) return null;
 
+  if (isDemoApp() && officeUser?.empresaId) {
+    const emps = await sbSelect("empresas", `id=eq.${officeUser.empresaId}`).catch(() => []);
+    if (emps[0]) return emps[0];
+  }
+
   const ownerRows = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
   if (ownerRows[0]) return ownerRows[0];
 
   if (!isDemoApp()) return null;
 
-  const link = officeUser?.empresaId
-    ? { empresa_id: officeUser.empresaId }
-    : (await sbSelect("empresa_usuarios", `user_id=eq.${uid}&activo=eq.true&limit=1`).catch(() => []))[0];
+  const link = (await sbSelect("empresa_usuarios", `user_id=eq.${uid}&activo=eq.true&limit=1`).catch(() => []))[0];
 
   const empresaId = link?.empresa_id;
   if (!empresaId) return null;
