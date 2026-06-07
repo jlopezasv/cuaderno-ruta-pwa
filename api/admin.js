@@ -10,7 +10,7 @@ function sbServer() {
   return getSupabaseServerEnv();
 }
 
-const DEFAULT_ADMIN_UIDS = "ca5dd314-2e37-4f08-86d7-09103cb8e510";
+const DEFAULT_ADMIN_UIDS = "4b63a6e5-2e02-44e7-af61-b169583f40f5";
 const ADMIN_PANEL_USER_IDS = (process.env.ADMIN_PANEL_USER_IDS || DEFAULT_ADMIN_UIDS)
   .split(",")
   .map((s) => s.trim())
@@ -175,7 +175,9 @@ async function authAdminDeleteUser(userId) {
   return r.ok || r.status === 404;
 }
 
-const DEMO_OFFICE_USER_PASSWORD = "DemoCuaderno2026!";
+/** Contraseña temporal usuarios oficina (prod fase inicial + DEMO). */
+const OFFICE_USER_TEMP_PASSWORD = "DemoCuaderno2026!";
+const DEMO_OFFICE_USER_PASSWORD = OFFICE_USER_TEMP_PASSWORD;
 
 function supabaseErrorMessage(detail) {
   if (!detail) return null;
@@ -208,6 +210,66 @@ async function authAdminCreateUser({ email, password, nombre }) {
     return { ok: false, status: r.status, error: data?.msg || data?.message || "Auth create failed" };
   }
   return { ok: true, user: data };
+}
+
+async function authAdminGetUserByEmail(email) {
+  const filter = encodeURIComponent(`email.eq.${email}`);
+  const r = await fetch(
+    `${sbServer().url}/auth/v1/admin/users?page=1&per_page=1&filter=${filter}`,
+    { headers: srRestHeaders(false) },
+  );
+  const data = await r.json().catch(() => ({}));
+  const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
+  return users[0] || null;
+}
+
+async function authAdminSetUserPassword(userId, password) {
+  const r = await fetch(
+    `${sbServer().url}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    {
+      method: "PUT",
+      headers: srRestHeaders(true),
+      body: JSON.stringify({ password }),
+    },
+  );
+  return r.ok;
+}
+
+/** Crea Auth si no existe; si existe, reutiliza uid y fija contraseña temporal. */
+async function resolveOfficeUserAuthAccount({ email, nombre }) {
+  const existing = await authAdminGetUserByEmail(email);
+  if (existing?.id && UUID_RE.test(existing.id)) {
+    await authAdminSetUserPassword(existing.id, OFFICE_USER_TEMP_PASSWORD);
+    return {
+      ok: true,
+      userId: existing.id,
+      authCreated: false,
+      tempPassword: OFFICE_USER_TEMP_PASSWORD,
+    };
+  }
+
+  const created = await authAdminCreateUser({
+    email,
+    password: OFFICE_USER_TEMP_PASSWORD,
+    nombre,
+  });
+  if (!created.ok) {
+    return {
+      ok: false,
+      status: created.status,
+      error: created.error || "No se pudo crear el usuario en Auth",
+    };
+  }
+  const uid = created.user?.id;
+  if (!uid || !UUID_RE.test(uid)) {
+    return { ok: false, error: "Auth no devolvió user id" };
+  }
+  return {
+    ok: true,
+    userId: uid,
+    authCreated: true,
+    tempPassword: OFFICE_USER_TEMP_PASSWORD,
+  };
 }
 
 async function restUpsert(pathWithQuery, body) {
@@ -646,15 +708,8 @@ export default async function handler(req, res) {
     return res.json({ ok: true, ...pr });
   }
 
-  // ── Crear usuario oficina DEMO (service_role; solo entorno demo) ──
-  if (action === "create_office_user_demo") {
-    if (!isDemoApp()) {
-      return res.status(403).json({
-        ok: false,
-        error: "Solo disponible en entorno DEMO",
-        code: "DEMO_ONLY",
-      });
-    }
+  // ── Crear usuario oficina (service_role; jefe_flota / owner) ──
+  if (action === "create_office_user_demo" || action === "create_office_user") {
     if (!sbServer().serviceRoleKey) {
       return res.status(503).json({
         ok: false,
@@ -700,43 +755,30 @@ export default async function handler(req, res) {
       empresa_id,
       email: emailNorm,
     });
-    const created = await authAdminCreateUser({
+
+    const authResolved = await resolveOfficeUserAuthAccount({
       email: emailNorm,
-      password: DEMO_OFFICE_USER_PASSWORD,
       nombre: nombreNorm,
     });
-    if (!created.ok) {
-      const errMsg = created.error || "No se pudo crear el usuario en Auth";
+    if (!authResolved.ok) {
+      const errMsg = authResolved.error || "No se pudo crear el usuario en Auth";
       demoOfficeUserLog("auth_create_failed", {
         rol: normalizedRol,
         empresa_id,
         email: emailNorm,
         message: errMsg,
         code: "ADMIN_AUTH_CREATE_FAILED",
-        details: { status: created.status },
+        details: { status: authResolved.status },
       });
       return res.status(502).json({
         ok: false,
         error: errMsg,
         code: "ADMIN_AUTH_CREATE_FAILED",
-        details: { status: created.status },
+        details: { status: authResolved.status },
       });
     }
-    const newUid = created.user?.id;
-    if (!newUid || !UUID_RE.test(newUid)) {
-      demoOfficeUserLog("auth_missing_uid", {
-        rol: normalizedRol,
-        empresa_id,
-        email: emailNorm,
-        message: "Auth no devolvió user id",
-        code: "ADMIN_AUTH_CREATE_FAILED",
-      });
-      return res.status(502).json({
-        ok: false,
-        error: "Auth no devolvió user id",
-        code: "ADMIN_AUTH_CREATE_FAILED",
-      });
-    }
+
+    const newUid = authResolved.userId;
     const profUpsert = await restUpsert("profiles", {
       id: newUid,
       nombre: nombreNorm,
@@ -744,7 +786,7 @@ export default async function handler(req, res) {
       can_drive: false,
     });
     if (!profUpsert.ok) {
-      await authAdminDeleteUser(newUid);
+      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
       const errMsg = supabaseErrorMessage(profUpsert.detail) || "No se pudo crear el perfil";
       demoOfficeUserLog("profile_upsert_failed", {
         rol: normalizedRol,
@@ -771,7 +813,7 @@ export default async function handler(req, res) {
       puede_ver_todos: false,
     });
     if (!euUpsert.ok) {
-      await authAdminDeleteUser(newUid);
+      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
       const errMsg =
         supabaseErrorMessage(euUpsert.detail) || "No se pudo vincular usuario a la empresa";
       demoOfficeUserLog("empresa_usuario_upsert_failed", {
@@ -796,11 +838,14 @@ export default async function handler(req, res) {
       email: emailNorm,
       user_id: newUid,
     });
+
+    const tempPassword = authResolved.tempPassword || OFFICE_USER_TEMP_PASSWORD;
     return res.json({
       ok: true,
       user_id: newUid,
       email: emailNorm,
-      password: DEMO_OFFICE_USER_PASSWORD,
+      password: tempPassword,
+      message: `Usuario creado con contraseña temporal: ${tempPassword}`,
       empresa_usuario: row,
     });
   }

@@ -1,4 +1,5 @@
-import { isPlatformAdminUid } from "../config/adminUsers.js";
+import { isSuperadminUser } from "../config/superadminUsers.js";
+import { getSession } from "../data/supabaseClient.js";
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
 import { ACCOUNT_TYPES, parseProfileAccount } from "./accountModel.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
@@ -48,7 +49,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
 
   let officeUser =
     prefetched.officeUser !== undefined ? prefetched.officeUser : null;
-  if (isDemo && prefetched.officeUser === undefined) {
+  if (prefetched.officeUser === undefined) {
     officeUser = await fetchOfficeUserContextRpc();
   }
 
@@ -72,7 +73,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     isProduction: isProductionApp(),
   });
 
-  if (isDemo && officeUser?.activo) {
+  if (officeUser?.activo) {
     shells.empresa = true;
     if (officeUser.rol === "administrativo") {
       shells.conductor = false;
@@ -80,13 +81,13 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
   }
 
   let bootstrapError = null;
-  if (isDemo && !profile) {
+  if (!profile) {
     bootstrapError = BOOTSTRAP_ERRORS.NO_PROFILE;
-  } else if (isDemo && officeUser && !officeUser.activo) {
+  } else if (officeUser && !officeUser.activo) {
     bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
   }
 
-  const admin = isPlatformAdminUid(uid);
+  const admin = isSuperadminUser(uid, getSession()?.user?.email);
 
   return buildSessionCapabilities({
     account,
@@ -116,15 +117,11 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const profile = profiles[0] || null;
 
-  let officeUser = null;
-  if (isDemoApp()) {
-    officeUser = await fetchOfficeUserContextRpc();
-  }
+  const officeUser = await fetchOfficeUserContextRpc();
 
   let hasFleetLink;
   const account = parseProfileAccount(profile);
   const needsFleetCheck =
-    !isDemoApp() ||
     account.accountType !== ACCOUNT_TYPES.EMPRESA ||
     account.canDrive ||
     !officeUser?.activo;
@@ -155,7 +152,7 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
     activeMode = "empresa";
   }
 
-  if (isDemoApp() && activeMode === "empresa" && !base.empresa && !base.bootstrapError) {
+  if (activeMode === "empresa" && !base.empresa && !base.bootstrapError) {
     base.bootstrapError = BOOTSTRAP_ERRORS.NO_EMPRESA_SHELL;
   }
 

@@ -12,6 +12,6 @@ export function getConductorTabs({ isAdmin, T }) {
 
   return [
     ...conductorCoreTabs,
-    { id: "admin", icon: "◆", label: "ADMIN" },
+    { id: "admin", icon: "◆", label: "PROPIETARIO" },
   ];
 }

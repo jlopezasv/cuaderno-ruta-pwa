@@ -1,4 +1,4 @@
-const DEFAULT_ADMIN_UIDS = "ca5dd314-2e37-4f08-86d7-09103cb8e510";
+const DEFAULT_ADMIN_UIDS = "4b63a6e5-2e02-44e7-af61-b169583f40f5";
 
 export function getAdminPanelUserIds() {
   const raw = (import.meta.env.VITE_ADMIN_PANEL_USER_IDS || DEFAULT_ADMIN_UIDS).trim();

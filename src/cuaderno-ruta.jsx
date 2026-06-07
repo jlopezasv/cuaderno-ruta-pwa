@@ -85,7 +85,14 @@ import {
   filterServiciosForOfficeUser,
   getDefaultOfficeServiciosVista,
   OFFICE_SERVICIOS_VISTA,
+  soloMisServiciosFromVista,
+  vistaFromSoloMisServicios,
 } from "./domain/empresa/officeUserFilters.js";
+import {
+  clearStoredOfficeServiciosVista,
+  readStoredOfficeServiciosVista,
+  writeStoredOfficeServiciosVista,
+} from "./domain/empresa/officeServiciosVistaStorage.js";
 import {
   fetchEmpresaConductoresCached,
   invalidateEmpresaConductoresCache,
@@ -108,13 +115,24 @@ import {
   logDemoEquipoJoin,
 } from "./domain/empresa/conductorEmpresaJoinDiag.js";
 import {
+  buildDemoResponsableServicioPayload,
+  formatDemoServicioCreateError,
+  resolveDemoResponsableIdForCreate,
+  shouldDemoRetryServicioCreateWithoutResponsable,
+  stripDemoServicioResponsableFields,
+  validateDemoOfficeResponsableOnCreate,
+} from "./domain/empresa/demoServicioCreateResponsable.js";
+import {
   buildOfficeResponsablesByUserId,
+  buildResponsableServicioPayload,
   fetchEmpresaOfficeResponsablesCached,
   officeResponsableDisplayName,
   validateOfficeResponsableOnCreate,
 } from "./domain/empresa/empresaOfficeUsers.js";
 import { OfficeResponsableServicioField } from "./features/empresa/OfficeResponsableServicioField.jsx";
 import { OfficeServiciosVistaSelector } from "./features/empresa/OfficeServiciosVistaSelector.jsx";
+import { OfficeSoloMisServiciosToggle } from "./features/empresa/OfficeSoloMisServiciosToggle.jsx";
+import { EMPRESA_OPERATIVA_HEADER_CSS } from "./features/empresa/empresaOperativaHeader.css.js";
 import {
   ACCOUNT_TYPES,
   FEATURE_KEYS,
@@ -123,6 +141,7 @@ import {
   registrationProfilePayload,
 } from "./auth/accountModel.js";
 import { isPlatformAdminUid } from "./config/adminUsers.js";
+import { SuperadminPanel } from "./features/superadmin/SuperadminPanel.jsx";
 import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
 import { EmpresaPendingScreen } from "./ui/EmpresaPendingScreen.jsx";
 import { getPushClientContext, initFcmPush } from "./data/fcmPush";
@@ -3477,7 +3496,7 @@ function AppInner(){
             {resumenTab==="historial"&&<HistorialView db={db} norma={norma} prof={prof} allSorted={allSorted} dayMap={dayMap} days={days} srch={srch} searchQ={searchQ} setSearchQ={setSearchQ} openEdit={openEdit} deleteEntry={deleteEntry}/>}
           </div>
         )}
-        {tab==="admin"&&isAdmin&&<AdminPanel dark={dark}/>}
+        {tab==="admin"&&isAdmin&&<SuperadminPanel/>}
         {tab==="perfil"&&<ProfView prof={prof} authUid={user} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast} onFleetJoinSuccess={()=>{setRolEmpresa("conductor");setTab("servicio");showToast("Equipo activo ✓","#22C55E");}}/>}
         {tab==="ruta"&&<MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>}
         {tab==="docs"&&(
@@ -12039,12 +12058,14 @@ async function crearServicioConIdentidad({
     Object.keys(identityMeta).length || Object.keys(placesPatch).length
       ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch })
       : referenciaBase;
+  const officeUserForInsert = getOfficeUserFromSession(authUid);
   const insertCtx = await resolveServicioInsertContext({
     ownershipMode,
     empresaIdProp: basePayload.empresa_id,
     conductorIdProp: basePayload.conductor_id,
     estado: basePayload.estado,
     uid: uidProp || authUid,
+    officeEmpresaId: officeUserForInsert?.empresaId || officeUserForInsert?.empresa_id || null,
   });
   const { empresa_id: empresaId, conductor_id: conductorId, estado: resolvedEstado } = insertCtx;
   const autonomoProInsert = isAutonomoProOwnershipMode(ownershipMode);
@@ -12076,6 +12097,9 @@ async function crearServicioConIdentidad({
     fecha_inicio: basePayload.fecha_inicio || null,
     ...(basePayload.responsable_user_id
       ? { responsable_user_id: basePayload.responsable_user_id }
+      : {}),
+    ...(isDemoApp() && basePayload.responsable_nombre
+      ? { responsable_nombre: basePayload.responsable_nombre }
       : {}),
   };
   const payload = corePayload;
@@ -12114,31 +12138,70 @@ async function crearServicioConIdentidad({
     throw new Error(msg);
   }
 
-  let res;
-  try{
-    res=await sbFetch("/rest/v1/servicios", {
+  async function postServicioBody(body) {
+    return sbFetch("/rest/v1/servicios", {
       method: "POST",
       headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(corePayload),
+      body: JSON.stringify(body),
     });
-  }catch(error){
-    logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL",{error:String(error?.message||error)});
+  }
+
+  async function fetchDemoInsertRlsDebug(empresaId) {
+    if (!isDemoApp() || !empresaId) return null;
+    try {
+      const dbgRes = await sbFetch("/rest/v1/rpc/debug_servicio_insert_rls_context", {
+        method: "POST",
+        body: JSON.stringify({
+          p_empresa_id: empresaId,
+          p_conductor_id: null,
+        }),
+      });
+      if (!dbgRes.ok) return null;
+      return await dbgRes.json().catch(() => null);
+    } catch {
+      return null;
+    }
+  }
+
+  let res;
+  let postBody = corePayload;
+  let errText = "";
+  try {
+    res = await postServicioBody(postBody);
+    if (!res.ok) {
+      errText = await res.text().catch(() => "");
+      if (isDemoApp() && shouldDemoRetryServicioCreateWithoutResponsable(res.status, errText)) {
+        postBody = stripDemoServicioResponsableFields(corePayload);
+        logServiceCreate("SERVICE_CREATE_PAYLOAD", {
+          endpoint: "POST /rest/v1/servicios",
+          attempt: "demo_retry_sin_responsable",
+          body: postBody,
+        });
+        res = await postServicioBody(postBody);
+        if (!res.ok) errText = await res.text().catch(() => "");
+      }
+    }
+  } catch (error) {
+    logServiceCreate("SERVICE_CREATE_RESPONSE_FAIL", { error: String(error?.message || error) });
     throw error;
   }
 
   if (res.ok) {
     let row = null;
-    if (servicioId) {
+    if (!postBody.id) {
+      const data = await res.json().catch(() => []);
+      row = Array.isArray(data) ? data[0] : data;
+    } else {
       const getRes = await sbFetch(
-        `/rest/v1/servicios?id=eq.${servicioId}&select=id,empresa_id,conductor_id,estado,origen,destino,referencia,fecha_inicio,created_at`,
+        `/rest/v1/servicios?id=eq.${postBody.id}&select=id,empresa_id,conductor_id,estado,origen,destino,referencia,fecha_inicio,created_at`,
       );
       if (getRes.ok) {
         const rows = await getRes.json().catch(() => []);
         row = Array.isArray(rows) ? rows[0] : rows;
       }
       if (!row?.id) {
-        devWarn("[SERVICE_CREATE] INSERT ok pero SELECT vacío — fila sintética", { servicioId });
-        row = { id: servicioId, ...corePayload };
+        devWarn("[SERVICE_CREATE] INSERT ok pero SELECT vacío — fila sintética", { servicioId: postBody.id });
+        row = { id: postBody.id, ...postBody };
       }
     }
     const result = row ? [row] : [];
@@ -12159,7 +12222,7 @@ async function crearServicioConIdentidad({
     return result;
   }
 
-  const errText = await res.text().catch(() => "");
+  if (!errText) errText = await res.text().catch(() => "");
   let errJson = null;
   try {
     errJson = JSON.parse(errText);
@@ -12170,17 +12233,49 @@ async function crearServicioConIdentidad({
     throw new Error("Sesión no válida. Cierra sesión y vuelve a entrar.");
   }
   if (errCode === "42501") {
+    const rlsDebug = await fetchDemoInsertRlsDebug(postBody.empresa_id);
+    const dbgHint = rlsDebug
+      ? ` · can_insert=${rlsDebug.user_can_insert_servicio} office_planned=${rlsDebug.office_user_can_insert_planned_servicio} can_access_empresa=${rlsDebug.user_can_access_empresa} office_peer=${rlsDebug.user_is_active_office_peer} insert_policies=${rlsDebug.insert_policies?.length ?? "?"}` +
+        (Array.isArray(rlsDebug.empresa_usuarios_visible_invoker) &&
+        rlsDebug.empresa_usuarios_visible_invoker.length === 0
+          ? " · sin fila empresa_usuarios visible"
+          : "")
+      : "";
     const err = new Error(
       `RLS 42501 en "${parsedErr.table || "servicios"}" [POST servicios]. ` +
-        `conductor_id=${corePayload.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}. ` +
-        `${parsedErr.message || errText}`,
+        `conductor_id=${postBody.conductor_id ?? "null"}, auth.uid=${authUid ?? "null"}, empresa_id=${postBody.empresa_id ?? "null"}. ` +
+        `${parsedErr.message || errText}${dbgHint}`,
     );
     err.stepId = "POST servicios";
     err.pgTable = parsedErr.table || "servicios";
     err.pgCode = "42501";
+    err.raw = errText;
+    if (rlsDebug) err.rlsDebug = rlsDebug;
     throw err;
   }
-  await assertPostgrestOk(res, "POST servicios", "servicios");
+  const table = parsedErr.table || "servicios";
+  const failMsg =
+    parsedErr.code === "42501"
+      ? `RLS 42501 en "${table}" [POST servicios]: ${parsedErr.message || errText}`
+      : `HTTP ${res.status} en "${table}" [POST servicios]: ${parsedErr.message || errText || res.status}`;
+  const failErr = new Error(
+    isDemoApp()
+      ? [
+          failMsg,
+          parsedErr.code ? `code: ${parsedErr.code}` : "",
+          parsedErr.details ? `details: ${parsedErr.details}` : "",
+          parsedErr.hint ? `hint: ${parsedErr.hint}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : failMsg,
+  );
+  failErr.stepId = "POST servicios";
+  failErr.httpStatus = res.status;
+  failErr.pgCode = parsedErr.code;
+  failErr.pgTable = table;
+  failErr.raw = errText;
+  throw failErr;
 }
 
 async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servicioId}){
@@ -12383,8 +12478,17 @@ function AsignarServicioModal({
     if(!origenRuta||!destinoRuta){setError("Indica ciudad y país en las paradas de carga y descarga");return;}
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan ciudad / localidad");return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
-    if(isDemoApp()){
-      const respErr=validateOfficeResponsableOnCreate({officeUser,responsableId,officeResponsables});
+    const authUidModal=getUserId?.()||null;
+    const effectiveResponsableId=isDemoApp()
+      ?resolveDemoResponsableIdForCreate({officeUser,responsableId,authUid:authUidModal})
+      :responsableId;
+    const shouldValidateResponsable=isDemoApp()
+      ?!!(officeUser?.activo||officeResponsables.length||effectiveResponsableId)
+      :!!(officeUser?.activo||officeResponsables.length);
+    if(shouldValidateResponsable){
+      const respErr=isDemoApp()
+        ?validateDemoOfficeResponsableOnCreate({officeUser,responsableId:effectiveResponsableId,officeResponsables})
+        :validateOfficeResponsableOnCreate({officeUser,responsableId:effectiveResponsableId,officeResponsables});
       if(respErr){setError(respErr);return;}
     }
     setSaving(true);setError("");
@@ -12395,9 +12499,13 @@ function AsignarServicioModal({
         empresaIdProp:empresaId,
         empresaIdPropType:empresaId==null?"null":typeof empresaId,
         conductorIdProp:conductorId??null,
-        authUid:getUserId?.()||null,
+        authUid:authUidModal,
+        effectiveResponsableId:effectiveResponsableId||null,
+        isDemo:isDemoApp(),
       });
-      const responsablePayload=isDemoApp()&&responsableId?{responsable_user_id:responsableId}:{};
+      const responsablePayload=isDemoApp()
+        ?buildDemoResponsableServicioPayload(effectiveResponsableId,officeResponsables)
+        :buildResponsableServicioPayload(effectiveResponsableId,officeResponsables);
       const srData=await crearServicioConIdentidad({
         _debugSource:"AsignarServicioModal",
         ownershipMode:SERVICIO_OWNERSHIP.FLEET_EMPRESA,
@@ -12449,24 +12557,36 @@ function AsignarServicioModal({
         empresaIdProp:empresaId,
         sinConductor,
       });
-      setError("Error: "+e.message);
+      setError(isDemoApp()?formatDemoServicioCreateError(e):`Error: ${e.message}`);
     }
     finally{setSaving(false);}
   }
 
   useEffect(()=>{
-    if(!isDemoApp()||!officeResponsables.length){
+    const uid=getUserId?.()||null;
+    if(isDemoApp()&&officeUser?.activo){
+      const rol=String(officeUser.rol||"").toLowerCase();
+      if(rol==="trafico"&&!officeUser?.puedeVerTodos){
+        setResponsableId(officeUser.userId||uid||"");
+        return;
+      }
+      if(rol==="jefe_flota"||rol==="trafico"){
+        const preferred=officeResponsables.find((r)=>r.userId===(officeUser?.userId||uid))||officeResponsables[0];
+        setResponsableId(preferred?.userId||officeUser.userId||uid||"");
+        return;
+      }
+    }
+    if(!officeResponsables.length){
       setResponsableId("");
       return;
     }
-    const uid=getUserId?.()||null;
     if(officeUser?.rol==="trafico"&&!officeUser?.puedeVerTodos){
       setResponsableId(officeUser.userId||uid||"");
       return;
     }
     const preferred=officeResponsables.find((r)=>r.userId===(officeUser?.userId||uid))||officeResponsables[0];
     setResponsableId(preferred?.userId||"");
-  },[empresaId,officeResponsables,officeUser?.userId,officeUser?.rol,officeUser?.puedeVerTodos]);
+  },[empresaId,officeResponsables,officeUser?.userId,officeUser?.rol,officeUser?.puedeVerTodos,officeUser?.activo]);
 
   useEffect(()=>{
     setConductorSelId(conductorId||"");
@@ -12847,7 +12967,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[editarServicioModal,setEditarServicioModal]=useState(null);
   const[officeResponsables,setOfficeResponsables]=useState([]);
   const officeUserPanel=getOfficeUserFromSession(getUserId?.());
-  const[officeServiciosVista,setOfficeServiciosVista]=useState(()=>getDefaultOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
+  const[officeServiciosVista,setOfficeServiciosVista]=useState(()=>readStoredOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
   const[officeResponsableFiltro,setOfficeResponsableFiltro]=useState("");
   const[addOpen,setAddOpen]=useState(false);
   const[addLoading,setAddLoading]=useState(false);
@@ -13127,14 +13247,24 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   useEffect(()=>{setDocsPage(1);},[filtConductor,filtFecha,filtRef,filtCliente,filtMatricula,filtEstado,filtIncidencias,docsSearch,docsArchiveView]);
 
   useEffect(()=>{
-    if(!officeUserPanel?.activo)setOfficeServiciosVista(OFFICE_SERVICIOS_VISTA.TODOS);
-    else setOfficeServiciosVista(getDefaultOfficeServiciosVista(officeUserPanel));
+    if(!officeUserPanel?.activo){
+      setOfficeServiciosVista(OFFICE_SERVICIOS_VISTA.TODOS);
+      clearStoredOfficeServiciosVista();
+    }else{
+      setOfficeServiciosVista(readStoredOfficeServiciosVista(officeUserPanel));
+    }
     setOfficeResponsableFiltro("");
   },[officeUserPanel?.userId,officeUserPanel?.rol,officeUserPanel?.puedeVerTodos,officeUserPanel?.activo]);
 
+  const handleOfficeSoloMisChange=useCallback((checked)=>{
+    const vista=vistaFromSoloMisServicios(checked);
+    setOfficeServiciosVista(vista);
+    writeStoredOfficeServiciosVista(vista);
+  },[]);
+
   useEffect(()=>{
     const tenantId=officeUserPanel?.empresaId||empresa?.id||null;
-    if(!tenantId||!isDemoApp()){
+    if(!tenantId){
       setOfficeResponsables([]);
       return;
     }
@@ -13167,7 +13297,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         return;
       }
       const officeUser=getOfficeUserFromSession(uid);
-      if(isDemoApp()&&officeUser?.activo){
+      if(officeUser?.activo){
         if(!officeUser.empresaId){
           setModo("office_sin_empresa");
           setLoading(false);
@@ -13523,7 +13653,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   loadFlotaRef.current=loadFlotaServicios;
 
   useEffect(()=>{
-    if(isDemoApp()||!empresa?.id||modo!=="jefe")return undefined;
+    if(!empresa?.id||modo!=="jefe")return undefined;
     if(getEmpresaEquipoCodeStrict(empresa))return undefined;
     let n=0;
     const timer=setInterval(()=>{
@@ -13567,6 +13697,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     if(!empresa?.id||modo!=="jefe"||!flotaServicios.length)return;
     const needsAllStops=
       flotaTab==="documentos"||
+      flotaTab==="planificador"||
       (flotaTab==="servicios"&&["todos","completados","asignados","sin_asignar","anulados","archivados"].includes(serviciosVistaTab));
     if(!needsAllStops)return;
     const missing=flotaServicios.map((s)=>s.id).filter((id)=>id&&!flotaStopsFetchedIdsRef.current.has(id));
@@ -13646,8 +13777,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const officeServiciosOperativa=useMemo(
     ()=>filterServiciosForOfficeUser(flotaServicios,officeUserPanel,getUserId?.(),{
       vista:officeServiciosVista,
+      responsableFiltroId:officeResponsableFiltro,
     }),
-    [flotaServicios,officeUserPanel,officeServiciosVista],
+    [flotaServicios,officeUserPanel,officeServiciosVista,officeResponsableFiltro],
   );
 
   const officeServiciosDocumentos=useMemo(
@@ -14125,7 +14257,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   },[]);
 
   function openNuevoViaje(){
-    if(isDemoApp()&&officeUserPanel?.rol==="administrativo"){
+    if(officeUserPanel?.rol==="administrativo"){
       showToast("No tienes permiso para crear servicios");
       return;
     }
@@ -14139,7 +14271,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       responsablesActivos:officeResponsables.length,
       authUid:getUserId?.()||null,
     });
-    if(isDemoApp()&&tenantId){
+    if(tenantId){
       void Promise.all([
         fetchEmpresaOfficeResponsablesCached(sbSelect,tenantId,officeUserPanel,{force:true})
           .then(setOfficeResponsables)
@@ -14173,7 +14305,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   },[]);
 
   const handleEditarServicioId=useCallback((servicioId)=>{
-    if(isDemoApp()&&officeUserPanel?.rol==="administrativo"){
+    if(officeUserPanel?.rol==="administrativo"){
       showToast("No tienes permiso para editar servicios");
       return;
     }
@@ -14420,14 +14552,24 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {/* Identidad empresa (sin código en DEMO — solo en Configuración) */}
+      <style>{EMPRESA_OPERATIVA_HEADER_CSS}</style>
       <EmpresaIdentityBarCompact
+        operativaHeader={!!officeUserPanel?.activo}
         empresaNombre={empresa?.nombre}
         empresaCif={empresa?.cif}
         serviciosEnRuta={serviciosEnRuta}
         codigoEquipoShow={codigoEquipoShow}
         generandoCodigoEquipo={generandoCodigoEquipo}
         hideEquipoCode={isDemoApp()}
+        headerRight={
+          <OfficeSoloMisServiciosToggle
+            officeUser={officeUserPanel}
+            checked={soloMisServiciosFromVista(officeServiciosVista)}
+            onChange={handleOfficeSoloMisChange}
+            ui={EMPRESA_UI}
+            variant="inline"
+          />
+        }
         tx={tx}
         su={su}
         accent={EMPRESA_UI.accent}
@@ -14659,7 +14801,10 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 <OfficeServiciosVistaSelector
                   officeUser={officeUserPanel}
                   vista={officeServiciosVista}
-                  onVistaChange={setOfficeServiciosVista}
+                  onVistaChange={(v)=>{
+                    setOfficeServiciosVista(v);
+                    if(v===OFFICE_SERVICIOS_VISTA.MIS||v===OFFICE_SERVICIOS_VISTA.TODOS)writeStoredOfficeServiciosVista(v);
+                  }}
                   responsableFiltroId={officeResponsableFiltro}
                   onResponsableFiltroChange={setOfficeResponsableFiltro}
                   officeResponsables={officeResponsables}
@@ -14785,7 +14930,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             dark={dark}
             routePlanner={<EmpresaPlanificadorRuta dark={dark}/>}
             mapProps={{
-              servicios:flotaServicios,
+              servicios:officeUserPanel?.activo?officeServiciosOperativa:flotaServicios,
               flotaStops,
               conductores,
               ubicacionConductorByUid,
@@ -18465,7 +18610,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const[loading,setLoading]=useState(true);
   const[officeResponsablesDash,setOfficeResponsablesDash]=useState([]);
   const officeUserDash=getOfficeUserFromSession(getUserId?.());
-  const[officeServiciosVistaDash,setOfficeServiciosVistaDash]=useState(()=>getDefaultOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
+  const[officeServiciosVistaDash,setOfficeServiciosVistaDash]=useState(()=>readStoredOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
   const[officeResponsableFiltroDash,setOfficeResponsableFiltroDash]=useState("");
   const etaVisualClockMs=useEtaVisualClockMs();
   const ubicacionDashLabelCacheRef=useRef(new Map());
@@ -18474,14 +18619,25 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   const servicios=useMemo(
     ()=>filterServiciosForOfficeUser(serviciosRaw,officeUserDash,getUserId?.(),{
       vista:officeServiciosVistaDash,
+      responsableFiltroId:officeResponsableFiltroDash,
     }),
-    [serviciosRaw,officeUserDash,officeServiciosVistaDash],
+    [serviciosRaw,officeUserDash,officeServiciosVistaDash,officeResponsableFiltroDash],
   );
 
   useEffect(()=>{
-    if(!officeUserDash?.activo)setOfficeServiciosVistaDash(OFFICE_SERVICIOS_VISTA.TODOS);
-    else setOfficeServiciosVistaDash(getDefaultOfficeServiciosVista(officeUserDash));
+    if(!officeUserDash?.activo){
+      setOfficeServiciosVistaDash(OFFICE_SERVICIOS_VISTA.TODOS);
+      clearStoredOfficeServiciosVista();
+    }else{
+      setOfficeServiciosVistaDash(readStoredOfficeServiciosVista(officeUserDash));
+    }
   },[officeUserDash?.userId,officeUserDash?.rol,officeUserDash?.puedeVerTodos,officeUserDash?.activo]);
+
+  const handleOfficeSoloMisDashChange=useCallback((checked)=>{
+    const vista=vistaFromSoloMisServicios(checked);
+    setOfficeServiciosVistaDash(vista);
+    writeStoredOfficeServiciosVista(vista);
+  },[]);
 
   const tower=useMemo(
     ()=>buildEmpresaDashboardTowerState({
@@ -18541,7 +18697,7 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           fetchIncidenciasResumenByEmpresa(emp.id).catch(()=>[]),
         ]);
         setServiciosRaw(Array.isArray(svs)?svs:[]);
-        if(isDemoApp()&&emp.id){
+        if(emp.id){
           const dashOffice=getOfficeUserFromSession(uid);
           fetchEmpresaOfficeResponsablesCached(sbSelect,emp.id,dashOffice)
             .then(setOfficeResponsablesDash)
@@ -18615,11 +18771,41 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
 
   return(
     <div className="empresa-page-shell">
-      <div style={{padding:"8px 12px 0",maxWidth:960,margin:"0 auto"}}>
+      <style>{EMPRESA_OPERATIVA_HEADER_CSS}</style>
+      <EmpresaIdentityBarCompact
+        operativaHeader={!!officeUserDash?.activo}
+        empresaNombre={empresa?.nombre}
+        empresaCif={empresa?.cif}
+        serviciosEnRuta={servicios.filter((s)=>s.estado==="en_curso").length}
+        codigoEquipoShow={empresa?getEmpresaCodigoEquipoDisplay(empresa):""}
+        generandoCodigoEquipo={!!empresa&&!getEmpresaEquipoCodeStrict(empresa)}
+        hideEquipoCode={isDemoApp()}
+        headerRight={
+          <OfficeSoloMisServiciosToggle
+            officeUser={officeUserDash}
+            checked={soloMisServiciosFromVista(officeServiciosVistaDash)}
+            onChange={handleOfficeSoloMisDashChange}
+            ui={EMPRESA_UI}
+            variant="inline"
+          />
+        }
+        tx={EMPRESA_UI.tx}
+        su={su}
+        accent={EMPRESA_UI.accent}
+        surfaceSoft={EMPRESA_UI.surfaceSoft}
+        border={EMPRESA_UI.border}
+        onCopy={()=>{}}
+        onShare={()=>{}}
+        onQrInvite={()=>{}}
+      />
+      <div style={{padding:"4px 12px 0",maxWidth:960,margin:"0 auto"}}>
         <OfficeServiciosVistaSelector
           officeUser={officeUserDash}
           vista={officeServiciosVistaDash}
-          onVistaChange={setOfficeServiciosVistaDash}
+          onVistaChange={(v)=>{
+            setOfficeServiciosVistaDash(v);
+            if(v===OFFICE_SERVICIOS_VISTA.MIS||v===OFFICE_SERVICIOS_VISTA.TODOS)writeStoredOfficeServiciosVista(v);
+          }}
           responsableFiltroId={officeResponsableFiltroDash}
           onResponsableFiltroChange={setOfficeResponsableFiltroDash}
           officeResponsables={officeResponsablesDash}
