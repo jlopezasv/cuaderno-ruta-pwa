@@ -35,7 +35,9 @@ export const BOOTSTRAP_ERRORS = Object.freeze({
 export function bootstrapErrorMessage(code) {
   switch (code) {
     case BOOTSTRAP_ERRORS.NO_PROFILE:
-      return "No se encontró tu perfil. Contacta con administración.";
+      return isDemoApp()
+        ? "No se encontró tu perfil. Si el registro falló a medias, borra el usuario en Supabase Auth o regístrate con otro email."
+        : "No se encontró tu perfil. Contacta con administración.";
     case BOOTSTRAP_ERRORS.NO_EMPRESA_SHELL:
       return "No tienes acceso al panel de empresa. Verifica tu cuenta de oficina.";
     case BOOTSTRAP_ERRORS.OFFICE_INACTIVE:

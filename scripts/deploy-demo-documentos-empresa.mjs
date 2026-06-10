@@ -42,10 +42,8 @@ if (!skipSql) {
 
 if (!skipVercel) {
   run("npm", ["run", "build"]);
-  const vercelArgs = ["vercel", "deploy", "--prod", "--yes"];
-  if (process.env.VERCEL_PROJECT) {
-    vercelArgs.push("--project", process.env.VERCEL_PROJECT);
-  }
+  const demoProject = process.env.VERCEL_DEMO_PROJECT || process.env.VERCEL_PROJECT || "cuaderno-demo-ab";
+  const vercelArgs = ["vercel", "deploy", "--prod", "--yes", "--project", demoProject];
   const r = spawnSync("npx", vercelArgs, {
     stdio: "inherit",
     cwd: root,

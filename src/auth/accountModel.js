@@ -52,7 +52,8 @@ export function parseProfileAccount(profile) {
   const accountType = normalizeAccountType(profile?.tipo_cuenta);
   let empresaStatus = profile?.empresa_status ?? null;
   if (accountType === ACCOUNT_TYPES.EMPRESA && !empresaStatus) {
-    empresaStatus = EMPRESA_STATUS.PENDING;
+    // Demo: columna empresa_status puede no existir en Supabase demo (sin migración PRODUCT-1).
+    empresaStatus = isDemoApp() ? EMPRESA_STATUS.APPROVED : EMPRESA_STATUS.PENDING;
   }
   if (accountType !== ACCOUNT_TYPES.EMPRESA) {
     empresaStatus = null;
@@ -158,8 +159,22 @@ export function isEmpresaPendingBlocked(account, shells) {
   );
 }
 
+/** Valida y normaliza móvil en alta (mín. 9 dígitos). */
+export function normalizeRegistrationPhone(raw) {
+  const trimmed = String(raw || "").trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length < 9) {
+    return { ok: false, value: "", error: "Introduce un teléfono móvil válido (mín. 9 dígitos)" };
+  }
+  return { ok: true, value: trimmed, error: null };
+}
+
 export function registrationProfilePayload(tipoCuenta) {
   const tipo = normalizeAccountType(tipoCuenta);
+  // Demo: solo columnas base — can_drive / empresa_status pueden no existir en el proyecto Supabase demo.
+  if (isDemoApp()) {
+    return { tipo_cuenta: tipo };
+  }
   const body = {
     tipo_cuenta: tipo,
     can_drive: false,

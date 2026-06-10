@@ -24,7 +24,7 @@ import {
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
 } from "./data/session";
-import { isDemoApp, isPublicRegistrationAllowed, DEMO_LOGIN_HINT } from "./config/appEnvironment.js";
+import { isDemoApp, isPublicRegistrationAllowed } from "./config/appEnvironment.js";
 import { isPlanificadorMapaBetaEnabled } from "./config/productFeatures.js";
 import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
 import {
@@ -87,7 +87,14 @@ import {
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
-import { resolveCurrentEmpresaRecord } from "./domain/empresa/empresaRecordCache.js";
+import {
+  invalidateEmpresaRecordCache,
+  resolveCurrentEmpresaRecord,
+} from "./domain/empresa/empresaRecordCache.js";
+import {
+  buildEmpresaCodigoCortoSeed,
+  notifyEmpresaTenantChanged,
+} from "./domain/empresa/empresaCodigoEquipo.js";
 import {
   filterServiciosForOfficeUser,
   getDefaultOfficeServiciosVista,
@@ -145,6 +152,7 @@ import {
   FEATURE_KEYS,
   hasFeature,
   isEmpresaPendingBlocked,
+  normalizeRegistrationPhone,
   registrationProfilePayload,
 } from "./auth/accountModel.js";
 import { isPlatformAdminUid } from "./config/adminUsers.js";
@@ -495,6 +503,7 @@ function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [tipo, setTipo] = useState("");
   const [nombre, setNombre] = useState("");
+  const [telefono, setTelefono] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
@@ -530,6 +539,8 @@ function AuthScreen({ onAuth }) {
     if (mode === "register") {
       if (!allowRegister) { setError("Registro desactivado en este entorno"); return; }
       if (!nombre.trim()) { setError("El nombre es obligatorio"); return; }
+      const phoneCheck = normalizeRegistrationPhone(telefono);
+      if (!phoneCheck.ok) { setError(phoneCheck.error); return; }
       if (!tipo) { setError("Elige tu tipo de cuenta: Conductor, Autónomo PRO o Empresa"); return; }
       if (!pwdOk) { setError("La contraseña no cumple los requisitos"); return; }
       if (password !== password2) { setError("Las contraseñas no coinciden"); return; }
@@ -537,7 +548,11 @@ function AuthScreen({ onAuth }) {
     setLoading(true);
     try {
       if (mode === "register") {
-        await sbSignUp(email.trim(), password);
+        const phoneCheck = normalizeRegistrationPhone(telefono);
+        await sbSignUp(email.trim(), password, {
+          nombre: nombre.trim(),
+          telefono: phoneCheck.value,
+        });
         await sbSignIn(email.trim(), password);
         const uid = getUserId();
         if (!uid) {
@@ -551,6 +566,7 @@ function AuthScreen({ onAuth }) {
           body: JSON.stringify({
             id: uid,
             nombre: nombre.trim(),
+            telefono: phoneCheck.value,
             ...registrationProfilePayload(tipo),
           }),
         });
@@ -559,8 +575,9 @@ function AuthScreen({ onAuth }) {
           if (isDemoDevUnlocked()) {
             demoDevError("profiles POST", profRes.status, profErr);
           }
+          await sbSignOut();
           throw new Error(
-            `No se pudo crear el perfil (HTTP ${profRes.status}). ${isDemoDevUnlocked() ? profErr.slice(0, 120) : ""}`.trim(),
+            `No se pudo crear el perfil (HTTP ${profRes.status}). ${isDemoDevUnlocked() ? profErr.slice(0, 120) : "Prueba otro email o revisa la configuración de Supabase demo."}`.trim(),
           );
         }
         await fetch("/api/admin", {
@@ -600,7 +617,7 @@ function AuthScreen({ onAuth }) {
       if (isDemoDevUnlocked()) {
         demoDevError("AuthScreen catch", { mode, message: e?.message, error: e });
       }
-      setError(mode === "login" ? "Email o contraseña incorrectos" : e.message);
+      setError(e?.message || (mode === "login" ? "Email o contraseña incorrectos" : "Error al registrarse"));
     } finally { setLoading(false); }
   }
 
@@ -608,26 +625,14 @@ function AuthScreen({ onAuth }) {
     <div style={{ minHeight:"100vh", background:"#0F172A", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"20px", fontFamily:"Outfit, sans-serif" }}>
       <BrandMark size={64} rounded={16} />
       <div style={{ fontSize:24, fontWeight:800, color:"#F1F5F9", marginTop:12, marginBottom:4, letterSpacing:.4 }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
-      <div style={{ fontSize:13, color:"#94A3B8", marginBottom:demoMode?12:32 }}>El copiloto del transportista · EU 561/2006</div>
-
-      {demoMode?(
-        <div style={{ width:"100%", maxWidth:390, background:STATE_TONES.info.bg, border:`1.5px solid ${STATE_TONES.info.border}`, borderRadius:12, padding:"12px 14px", marginBottom:16 }}>
-          <div style={{ fontSize:12, fontWeight:800, color:STATE_TONES.info.fg, marginBottom:6 }}>Entorno demo aislado</div>
-          <div style={{ fontSize:11, color:"#334155", lineHeight:1.5 }}>
-            Empresa: <strong>{DEMO_LOGIN_HINT.empresa}</strong><br/>
-            Autónomo PRO: <strong>{DEMO_LOGIN_HINT.autonomoPro}</strong><br/>
-            Conductor: <strong>{DEMO_LOGIN_HINT.conductor}</strong><br/>
-            Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong>
-          </div>
-        </div>
-      ):null}
+      <div style={{ fontSize:13, color:"#94A3B8", marginBottom:32 }}>El copiloto del transportista · EU 561/2006</div>
 
       <div style={{ width:"100%", maxWidth:390, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 10px 36px rgba(2,6,23,.45)", border:"1px solid #334155" }}>
 
         {mode !== "forgot" && allowRegister && (
           <div style={{ display:"flex", background:"#0F172A", borderRadius:10, padding:4, marginBottom:24 }}>
             {[["login","Iniciar sesión"],["register","Crear cuenta"]].map(([m,l])=>(
-              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setPassword("");setPassword2("");}}
+              <button key={m} onClick={()=>{setMode(m);setError("");setOk("");setTipo("");setNombre("");setTelefono("");setPassword("");setPassword2("");}}
                 style={{ flex:1, background:mode===m?UI_TOKENS.brand:"transparent", color:mode===m?"#0F172A":"#94A3B8", border:"none", borderRadius:8, padding:"9px", fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"Outfit, sans-serif" }}>
                 {l}
               </button>
@@ -672,6 +677,17 @@ function AuthScreen({ onAuth }) {
             </div>
             <input type="text" value={nombre} onChange={e=>setNombre(e.target.value)}
               placeholder={tipo==="empresa" ? "Transportes García S.L." : "Juan García López"}
+              style={iStyle}/>
+          </div>
+        )}
+
+        {/* Teléfono móvil */}
+        {mode === "register" && (
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:12, color:"#64748B", fontWeight:700, marginBottom:6, fontFamily:"sans-serif" }}>TELÉFONO MÓVIL *</div>
+            <input type="tel" value={telefono} onChange={e=>setTelefono(e.target.value)}
+              placeholder="600 123 456"
+              autoComplete="tel"
               style={iStyle}/>
           </div>
         )}
@@ -8018,7 +8034,7 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
     if(!nombre.trim()){setMsg("Escribe el nombre de la empresa");return;}
     setCreando(true);setMsg("");
     const uid=getUserId();
-    const codigo=nombre.trim().slice(0,3).toUpperCase().replace(/\s/g,"")+Math.floor(1000+Math.random()*9000);
+    const codigo=buildEmpresaCodigoCortoSeed(nombre);
     try{
       const res=await sbFetch("/rest/v1/empresas",{
         method:"POST",
@@ -8029,7 +8045,12 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
       if(isDemoDevUnlocked()&&!res.ok)demoDevError("empresas POST (perfil)",res.status,text);
       if(res.ok){
         const emps=await sbSelect("empresas",`owner_id=eq.${uid}`);
-        if(emps.length){setEmpresa(emps[0]);setMsg("Listo. Ya puedes invitar a tu equipo.");}
+        if(emps.length){
+          setEmpresa(emps[0]);
+          invalidateEmpresaRecordCache(emps[0].id);
+          notifyEmpresaTenantChanged(emps[0].id);
+          setMsg("Listo. Ya puedes invitar a tu equipo.");
+        }
         else{setMsg("Empresa creada. Recargando…");setTimeout(()=>window.location.reload(),900);}
       } else {
         setMsg("No se pudo crear la empresa. Revisa el nombre e inténtalo de nuevo.");
@@ -14325,8 +14346,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
   async function crearEmpresa(nombre,cif){
     const uid=getUserId();if(!uid)return;
+    const codigo=buildEmpresaCodigoCortoSeed(nombre);
     try{
-      const res=await sbFetch("/rest/v1/empresas",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({nombre,cif:cif||null,owner_id:uid})});
+      const res=await sbFetch("/rest/v1/empresas",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({nombre,cif:cif||null,owner_id:uid,codigo_corto:codigo,activa:true})});
       if(!res.ok){
         const errText=await res.text().catch(()=>"");
         if(isDemoDevUnlocked())demoDevError("empresas POST (panel)",res.status,errText);
@@ -14338,6 +14360,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       if(emp?.id){
         const again=await sbSelect("empresas",`id=eq.${emp.id}`);
         if(again?.length)emp=again[0];
+        invalidateEmpresaRecordCache(emp.id);
+        notifyEmpresaTenantChanged(emp.id);
       }
       setEmpresa(emp);setModo("jefe");setConductores([]);
       showToast("Empresa creada ✓");

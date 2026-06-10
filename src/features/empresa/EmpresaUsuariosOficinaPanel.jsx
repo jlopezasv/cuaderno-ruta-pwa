@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { isDemoApp } from "../../config/appEnvironment.js";
-import { DEMO_LOGIN_HINT } from "../../config/appEnvironment.js";
+import { DEMO_LOGIN_HINT, isDemoApp } from "../../config/appEnvironment.js";
 import {
   OFFICE_USER_ROLES,
   buildOfficeUserRow,
@@ -17,6 +16,46 @@ import {
 } from "../../domain/empresa/empresaOfficeUsers.js";
 import { getStoredAuthSession } from "../../data/authContext.js";
 import { ConfigCard, CONFIG_UI, configBtnPrimary, configBtnSecondary } from "./empresaConfigCards.jsx";
+
+function DemoOfficePasswordPill({ label = "Contraseña temporal (demo)" }) {
+  if (!isDemoApp()) return null;
+  const password = DEMO_LOGIN_HINT.password;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 14,
+        padding: "10px 12px",
+        borderRadius: 10,
+        background: "#fff7ed",
+        border: "1px solid #fed7aa",
+      }}
+    >
+      <span style={{ fontSize: 12, fontWeight: 700, color: CONFIG_UI.muted }}>{label}</span>
+      <span
+        style={{
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontSize: 14,
+          fontWeight: 800,
+          color: CONFIG_UI.accent,
+          background: "#fff",
+          border: "1px solid #fdba74",
+          borderRadius: 999,
+          padding: "5px 12px",
+          letterSpacing: 0.3,
+        }}
+      >
+        {password}
+      </span>
+      <span style={{ fontSize: 11, color: CONFIG_UI.muted, lineHeight: 1.4, flex: "1 1 140px" }}>
+        Compártela manualmente con tu equipo de oficina.
+      </span>
+    </div>
+  );
+}
 
 function Toggle({ on, onChange, disabled }) {
   return (
@@ -99,9 +138,12 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
         <div style={{ fontSize: 17, fontWeight: 700, color: CONFIG_UI.tx, marginBottom: 4 }}>
           {isAdd ? "Añadir usuario" : "Editar usuario"}
         </div>
-        <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginBottom: 16 }}>
+        {isAdd && isDemoApp() ? <DemoOfficePasswordPill /> : null}
+        <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginBottom: 16, lineHeight: 1.45 }}>
           {isAdd
-            ? `Contraseña temporal: ${DEMO_LOGIN_HINT.password}`
+            ? isDemoApp()
+              ? "Entrega la contraseña de la pastilla al nuevo usuario de forma manual."
+              : "Se enviarán las instrucciones de acceso al usuario."
             : "Cambios en rol, visibilidad y estado"}
         </div>
 
@@ -164,6 +206,115 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
             {saving ? "Guardando…" : isAdd ? "Crear" : "Guardar"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function OfficeUserCredentialsModal({ nombre, email, password, onClose, showToast }) {
+  const [copied, setCopied] = useState(null);
+
+  function copyText(text, label) {
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(label);
+        showToast?.(`${label} copiado ✓`);
+        setTimeout(() => setCopied(null), 2200);
+      })
+      .catch(() => showToast?.("No se pudo copiar"));
+  }
+
+  const credBlock = `Email: ${email}\nContraseña: ${password}`;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,.5)",
+        zIndex: 9100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: CONFIG_UI.surface,
+          borderRadius: 14,
+          padding: 22,
+          width: "min(100%, 440px)",
+          boxShadow: "0 20px 48px rgba(15,23,42,.22)",
+          border: `1px solid ${CONFIG_UI.border}`,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 18, fontWeight: 800, color: CONFIG_UI.tx, marginBottom: 6 }}>
+          Usuario creado
+        </div>
+        <div style={{ fontSize: 13, color: CONFIG_UI.muted, marginBottom: 18, lineHeight: 1.5 }}>
+          Comparte estas credenciales con <strong style={{ color: CONFIG_UI.tx }}>{nombre}</strong> de forma
+          manual (demo). No se envía email automático.
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: CONFIG_UI.muted, marginBottom: 5 }}>EMAIL</div>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 650,
+              color: CONFIG_UI.tx,
+              wordBreak: "break-all",
+              background: CONFIG_UI.surfaceSoft,
+              borderRadius: 10,
+              padding: "10px 12px",
+              border: `1px solid ${CONFIG_UI.border}`,
+            }}
+          >
+            {email}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: CONFIG_UI.muted, marginBottom: 5 }}>
+            CONTRASEÑA TEMPORAL
+          </div>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+              fontSize: 20,
+              fontWeight: 800,
+              color: CONFIG_UI.accent,
+              letterSpacing: 0.5,
+              background: "#fff7ed",
+              borderRadius: 10,
+              padding: "12px 14px",
+              border: "1px solid #fed7aa",
+            }}
+          >
+            {password}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={() => copyText(password, "Contraseña")}
+            style={configBtnSecondary()}
+          >
+            {copied === "Contraseña" ? "Copiada ✓" : "Copiar contraseña"}
+          </button>
+          <button type="button" onClick={() => copyText(credBlock, "Credenciales")} style={configBtnSecondary()}>
+            {copied === "Credenciales" ? "Copiadas ✓" : "Copiar todo"}
+          </button>
+        </div>
+
+        <button type="button" onClick={onClose} style={{ ...configBtnPrimary(false), width: "100%" }}>
+          Entendido
+        </button>
       </div>
     </div>
   );
@@ -271,11 +422,11 @@ export function EmpresaUsuariosOficinaPanel({
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+  const [createdCredentials, setCreatedCredentials] = useState(null);
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [loadDebug, setLoadDebug] = useState(null);
-
   const uid = getUserId?.() || null;
   const caps = getStoredAuthSession(uid)?.capabilities;
   const sessionOffice = caps?.officeUser || officeUser || null;
@@ -285,7 +436,7 @@ export function EmpresaUsuariosOficinaPanel({
   const reload = useCallback(async () => {
     if (!tenantEmpresaId) {
       setLoading(false);
-      setLoadError("Sin empresaId (esperando sesión de oficina)");
+      setLoadError("Sin empresa vinculada. Si acabas de crearla, abre Config de nuevo o recarga la página.");
       setLoadDebug(
         isDemoApp()
           ? JSON.stringify(
@@ -396,11 +547,17 @@ export function EmpresaUsuariosOficinaPanel({
       if (row) {
         setUsers((prev) => mergeOfficeUserLists([row], prev));
       }
-      showToast?.(
-        result.message ||
-          `Usuario creado con contraseña temporal: ${result.tempPassword || DEMO_LOGIN_HINT.password}`,
-      );
+      const passwordUsed = result.password || result.tempPassword || DEMO_LOGIN_HINT.password;
       setModal(null);
+      if (isDemoApp()) {
+        setCreatedCredentials({
+          nombre: form.nombre.trim(),
+          email: form.email.trim(),
+          password: passwordUsed,
+        });
+      } else {
+        showToast?.(result.message || "Usuario creado");
+      }
       const freshResult = await fetchEmpresaOfficeUsers(sbSelect, tenantEmpresaId, { force: true });
       const fresh = freshResult?.users || [];
       setUsers((prev) => mergeOfficeUserLists(fresh, row ? mergeOfficeUserLists([row], prev) : prev));
@@ -469,6 +626,8 @@ export function EmpresaUsuariosOficinaPanel({
 
   const body = (
     <>
+      {canManage && isDemoApp() ? <DemoOfficePasswordPill /> : null}
+
       {canManage ? (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
           <button
@@ -550,6 +709,16 @@ export function EmpresaUsuariosOficinaPanel({
           error={modalError}
           onClose={() => setModal(null)}
           onSave={modal.mode === "add" ? handleCreate : handleEdit}
+        />
+      ) : null}
+
+      {isDemoApp() && createdCredentials ? (
+        <OfficeUserCredentialsModal
+          nombre={createdCredentials.nombre}
+          email={createdCredentials.email}
+          password={createdCredentials.password}
+          onClose={() => setCreatedCredentials(null)}
+          showToast={showToast}
         />
       ) : null}
     </>

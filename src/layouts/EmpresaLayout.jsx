@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
 import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
@@ -14,6 +14,7 @@ import {
 } from "../domain/empresa/officeUserFilters.js";
 import { EmpresaConfigDashboard } from "../features/empresa/EmpresaConfigDashboard.jsx";
 import { EmpresaEstadisticasPanel } from "../features/empresa/EmpresaEstadisticasPanel.jsx";
+import { resolveEmpresaRecordForUser } from "../domain/empresa/empresaOfficeContext.js";
 import {
   enrichEmpresaRecordFromOffice,
   fetchEmpresaRecordById,
@@ -117,20 +118,44 @@ export default function EmpresaLayout({
   const bootstrapError = capabilities?.bootstrapError || null;
   const visibleTabs = getVisibleEmpresaTabs(capabilities);
 
-  useEffect(() => {
+  const refreshEmpresaTenant = useCallback(async () => {
     const uid = getUserId();
-    if (!uid) return;
-    const session = getStoredAuthSession(uid);
-    const fromOffice =
-      capabilities?.officeUser?.empresaId || session?.capabilities?.officeUser?.empresaId;
-    if (fromOffice) {
-      setEmpresaId(fromOffice);
+    if (!uid) {
+      setEmpresaId(null);
       return;
     }
-    sbSelect("empresas", `owner_id=eq.${uid}&select=id`)
-      .then((rows) => setEmpresaId(rows[0]?.id || null))
-      .catch(() => setEmpresaId(null));
-  }, [capabilities?.officeUser?.empresaId]);
+    const session = getStoredAuthSession(uid);
+    const officeUser = capabilities?.officeUser || session?.capabilities?.officeUser || null;
+    if (officeUser?.empresaId) {
+      setEmpresaId(officeUser.empresaId);
+      return;
+    }
+    try {
+      const emp = await resolveEmpresaRecordForUser(uid, sbSelect, officeUser);
+      setEmpresaId(emp?.id || null);
+    } catch {
+      setEmpresaId(null);
+    }
+  }, [capabilities?.officeUser, getUserId, sbSelect]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    void refreshEmpresaTenant();
+  }, [loaded, refreshEmpresaTenant]);
+
+  useEffect(() => {
+    if (tab === "config") void refreshEmpresaTenant();
+  }, [tab, refreshEmpresaTenant]);
+
+  useEffect(() => {
+    const handler = (ev) => {
+      const id = ev?.detail?.empresaId;
+      if (id) setEmpresaId(id);
+      else void refreshEmpresaTenant();
+    };
+    window.addEventListener("empresa-tenant-changed", handler);
+    return () => window.removeEventListener("empresa-tenant-changed", handler);
+  }, [refreshEmpresaTenant]);
 
   useEffect(() => {
     if (!empresaId) {

@@ -23,6 +23,7 @@ import {
   paginateRows,
   sortEstadisticasTable,
 } from "../../domain/empresa/empresaEstadisticasModel.js";
+import { DemoProductionOnlyBanner } from "./DemoProductionOnlyBanner.jsx";
 
 const card = UI_TOKENS.surface;
 const border = UI_TOKENS.border;
@@ -312,6 +313,7 @@ export function EmpresaEstadisticasPanel({ empresaId, capabilities, getUserId, s
 
   return (
     <div className={EMPRESA_PAGE_SHELL_CLASS}>
+      <DemoProductionOnlyBanner message="Disponible en versión de producción" />
       <div style={{ marginBottom: 18 }}>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 750, color: tx }}>Estadísticas operativas</h1>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: su }}>

@@ -32,6 +32,7 @@ import {
   toggleAccionCompletada,
   toggleArray,
 } from "../../domain/empresa/agendaComercialModel.js";
+import { DemoProductionOnlyBanner } from "./DemoProductionOnlyBanner.jsx";
 
 const card = UI_TOKENS.surface;
 const border = UI_TOKENS.border;
@@ -275,6 +276,7 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
 
   return (
     <div style={{ marginTop: 8 }}>
+      <DemoProductionOnlyBanner message="CRM disponible en versión de producción" />
       {sqlBanner}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flex: "1 1 200px" }}>Agenda comercial</h2>

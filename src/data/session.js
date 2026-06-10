@@ -26,7 +26,7 @@ function assertAuthTargetSafe(context) {
 
 function authErrorMessage(d, fallback) {
 
-  return (
+  const raw =
 
     d?.error_description ||
 
@@ -36,15 +36,21 @@ function authErrorMessage(d, fallback) {
 
     (typeof d?.error === "string" ? d.error : null) ||
 
-    fallback
+    fallback;
 
-  );
+  if (typeof raw === "string" && /email not confirmed/i.test(raw)) {
+
+    return "Debes confirmar el email. En demo: Supabase → Auth → desactiva «Confirm email».";
+
+  }
+
+  return raw;
 
 }
 
 
 
-export async function signUp(email, password) {
+export async function signUp(email, password, options = {}) {
 
   assertAuthTargetSafe("auth:signup");
 
@@ -70,6 +76,12 @@ export async function signUp(email, password) {
 
   }
 
+  const signupBody = { email, password };
+  const meta = {};
+  if (options.nombre) meta.nombre = options.nombre;
+  if (options.telefono) meta.telefono = options.telefono;
+  if (Object.keys(meta).length) signupBody.data = meta;
+
 
 
   const res = await fetch(signupUrl, {
@@ -78,7 +90,7 @@ export async function signUp(email, password) {
 
     headers: { "Content-Type": "application/json", apikey: SB_KEY },
 
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(signupBody),
 
   });
 

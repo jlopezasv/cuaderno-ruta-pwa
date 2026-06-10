@@ -1,5 +1,21 @@
 /** Código de vinculación de conductores (empresas.codigo_equipo / codigo_corto). */
 
+/** Semilla cliente para codigo_corto cuando no hay trigger en Supabase demo. */
+export function buildEmpresaCodigoCortoSeed(nombre = "") {
+  const prefix =
+    String(nombre || "EQ")
+      .trim()
+      .slice(0, 3)
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "") || "EQ";
+  return `${prefix}${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+export function notifyEmpresaTenantChanged(empresaId = null) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("empresa-tenant-changed", { detail: { empresaId } }));
+}
+
 export function normalizeEmpresaVinculoCode(raw) {
   return String(raw || "")
     .trim()
