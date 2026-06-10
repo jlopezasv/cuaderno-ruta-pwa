@@ -1,12 +1,12 @@
 // api/superadmin.js — Panel propietario (solo superadmin, service_role)
 
-import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
-import { requireSuperadmin } from "./lib/superadminAuth.js";
+import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
+import { requireSuperadmin } from "./_lib/superadminAuth.js";
 import {
   normalizeServicioAdminRow,
   stripServicioOperacionDisplay,
-} from "./lib/servicioDisplay.js";
-import { buildPanelQuery } from "./lib/panelQuery.js";
+} from "./_lib/servicioDisplay.js";
+import { buildPanelQuery } from "./_lib/panelQuery.js";
 
 const OFFICE_USER_TEMP_PASSWORD = "DemoCuaderno2026!";
 const UUID_RE =

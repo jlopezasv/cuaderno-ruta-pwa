@@ -4,12 +4,12 @@
  * Con RESEND_API_KEY: Resend real.
  */
 
-import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
+import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
 import {
   guardDemoCannotUseProduction,
   guardDemoCannotUseProductionInString,
-} from "./lib/demoSafety.js";
-import { isDemoApp } from "./lib/appEnvironment.js";
+} from "./_lib/demoSafety.js";
+import { isDemoApp } from "./_lib/appEnvironment.js";
 
 const SIM_OK_MSG =
   "Simulación completada correctamente. No se ha enviado ningún correo real.";

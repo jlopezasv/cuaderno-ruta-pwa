@@ -1,7 +1,7 @@
 import { GoogleAuth } from "google-auth-library";
 import { createClient } from "@supabase/supabase-js";
-import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
-import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
+import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
+import { guardDemoCannotUseProduction } from "./_lib/demoSafety.js";
 
 function pushSendLog(...args) {
   console.log("[push-send]", ...args);

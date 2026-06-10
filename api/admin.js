@@ -1,8 +1,8 @@
 // api/admin.js — Vercel Serverless Function
 // Gestiona emails transaccionales (Brevo) y archivado lógico de perfiles (service_role).
 
-import { isDemoApp } from "./lib/appEnvironment.js";
-import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
+import { isDemoApp } from "./_lib/appEnvironment.js";
+import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
 

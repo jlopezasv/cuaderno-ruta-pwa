@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
-import { getSupabaseServerEnv } from './lib/supabaseEnv.js';
-import { guardDemoCannotUseProduction } from './lib/demoSafety.js';
+import { getSupabaseServerEnv } from './_lib/supabaseEnv.js';
+import { guardDemoCannotUseProduction } from './_lib/demoSafety.js';
 
 const PRICE_MONTHLY = 'price_1TNpMxC03Kg4wBdS3eqhhVsg';
 const PRICE_ANNUAL  = 'price_1TNpNyC03Kg4wBdSHfAUkSeB';
