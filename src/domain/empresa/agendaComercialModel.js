@@ -3,7 +3,7 @@ import { AGENDA_VISTAS, estadoComercialLabel, tipoAccionLabel } from "./agendaCo
 import { AGENDA_CONTEXT, getAgendaContextConfig } from "./agendaComercialContext.js";
 
 const PROSPECTO_COLS_TENANT =
-  "id,tenant_empresa_id,nombre,cif,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,ultima_nota,created_at,updated_at";
+  "id,tenant_empresa_id,nombre,persona_contacto,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,acuerdos_compromisos,precio_orientativo,ultima_nota,created_at,updated_at";
 
 const CONTACTO_COLS_TENANT =
   "id,prospecto_id,tenant_empresa_id,nombre,cargo,telefono,email,whatsapp,observaciones,es_principal,created_at";
@@ -12,7 +12,7 @@ const ACCION_COLS_TENANT =
   "id,prospecto_id,tenant_empresa_id,tipo,fecha_hora,contacto_nombre,resultado,proxima_accion,notas,completada,created_at";
 
 const PROSPECTO_COLS_ADMIN =
-  "id,nombre,cif,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,ultima_nota,created_at,updated_at";
+  "id,nombre,persona_contacto,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,acuerdos_compromisos,precio_orientativo,ultima_nota,created_at,updated_at";
 
 const CONTACTO_COLS_ADMIN =
   "id,prospecto_id,nombre,cargo,telefono,email,whatsapp,observaciones,es_principal,created_at";
@@ -156,7 +156,7 @@ export function createAgendaComercialApi(contextKey = AGENDA_CONTEXT.EMPRESA_CRM
   async function saveProspecto(tenantEmpresaId, form, existingId = null) {
     const body = {
       nombre: String(form.nombre || "").trim(),
-      cif: form.cif || null,
+      persona_contacto: form.persona_contacto || null,
       direccion: form.direccion || null,
       localidad: form.localidad || null,
       provincia: form.provincia || null,
@@ -170,6 +170,8 @@ export function createAgendaComercialApi(contextKey = AGENDA_CONTEXT.EMPRESA_CRM
       tipos_rutas: form.tipos_rutas || [],
       sistemas_actuales: form.sistemas_actuales || [],
       dolores: form.dolores || [],
+      acuerdos_compromisos: form.acuerdos_compromisos || null,
+      precio_orientativo: form.precio_orientativo || null,
       ultima_nota: form.ultima_nota || null,
       updated_at: new Date().toISOString(),
     };
@@ -349,7 +351,7 @@ export function buildAgendaProspectoRows(bundle, now = new Date()) {
       ...p,
       contactos,
       acciones,
-      contactoPrincipal: principal?.nombre || "—",
+      contactoPrincipal: principal?.nombre || p.persona_contacto || "—",
       telefonoPrincipal: principal?.telefono || p.telefono || "—",
       estadoLabel: estadoComercialLabel(p.estado_comercial),
       proximaCita: proxima,
@@ -446,7 +448,7 @@ export function applyAgendaListFilters(rows, filters = {}, agendaVista = AGENDA_
   if (f.q) {
     const q = norm(f.q);
     list = list.filter((r) => {
-      const blob = [r.nombre, r.localidad, r.contactoPrincipal, r.telefonoPrincipal, r.ultima_nota]
+      const blob = [r.nombre, r.persona_contacto, r.localidad, r.contactoPrincipal, r.telefonoPrincipal, r.ultima_nota]
         .map(norm)
         .join(" ");
       return blob.includes(q);
@@ -493,7 +495,7 @@ export function listAccionesAgenda(rows, agendaVista, now = new Date()) {
 export function emptyProspectoForm() {
   return {
     nombre: "",
-    cif: "",
+    persona_contacto: "",
     direccion: "",
     localidad: "",
     provincia: "",
@@ -507,6 +509,8 @@ export function emptyProspectoForm() {
     tipos_rutas: [],
     sistemas_actuales: [],
     dolores: [],
+    acuerdos_compromisos: "",
+    precio_orientativo: "",
     ultima_nota: "",
   };
 }
@@ -568,7 +572,7 @@ export function prospectoToForm(p) {
   if (!p) return emptyProspectoForm();
   return {
     nombre: p.nombre || "",
-    cif: p.cif || "",
+    persona_contacto: p.persona_contacto || "",
     direccion: p.direccion || "",
     localidad: p.localidad || "",
     provincia: p.provincia || "",
@@ -582,6 +586,8 @@ export function prospectoToForm(p) {
     tipos_rutas: p.tipos_rutas || [],
     sistemas_actuales: p.sistemas_actuales || [],
     dolores: p.dolores || [],
+    acuerdos_compromisos: p.acuerdos_compromisos || "",
+    precio_orientativo: p.precio_orientativo || "",
     ultima_nota: p.ultima_nota || "",
   };
 }

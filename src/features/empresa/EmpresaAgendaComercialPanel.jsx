@@ -45,6 +45,14 @@ const inputStyle = {
   color: tx,
 };
 
+const nombreEmpresaInputStyle = {
+  ...inputStyle,
+  fontSize: 15,
+  padding: "12px 16px",
+  minHeight: 46,
+  lineHeight: 1.45,
+};
+
 const labelStyle = { fontSize: 10, fontWeight: 700, color: su, marginBottom: 4, letterSpacing: 0.3 };
 
 const btn = (primary = false) => ({
@@ -58,9 +66,17 @@ const btn = (primary = false) => ({
   cursor: "pointer",
 });
 
-function Field({ label, children }) {
+function Field({ label, children, fullWidth = false }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 160px", minWidth: 120 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: fullWidth ? "1 1 100%" : "1 1 160px",
+        minWidth: fullWidth ? "100%" : 120,
+        width: fullWidth ? "100%" : undefined,
+      }}
+    >
       <div style={labelStyle}>{label}</div>
       {children}
     </div>
@@ -597,13 +613,36 @@ function ProspectoFormModal({ title, initial, onSave, onClose, saving }) {
 
   return (
     <Modal title={title} onClose={onClose} wide>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        <Field label="Nombre empresa *">
-          <input style={inputStyle} value={form.nombre} onChange={(e) => set("nombre", e.target.value)} />
+      <Field label="Nombre empresa *" fullWidth>
+        <input
+          style={nombreEmpresaInputStyle}
+          value={form.nombre}
+          onChange={(e) => set("nombre", e.target.value)}
+          placeholder="Nombre de la empresa prospecto"
+        />
+      </Field>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
+        <Field label="Persona de contacto">
+          <input
+            style={inputStyle}
+            value={form.persona_contacto}
+            onChange={(e) => set("persona_contacto", e.target.value)}
+            placeholder="Nombre del contacto principal"
+          />
         </Field>
-        <Field label="CIF">
-          <input style={inputStyle} value={form.cif} onChange={(e) => set("cif", e.target.value)} />
+        <Field label="Teléfono">
+          <input style={inputStyle} value={form.telefono} onChange={(e) => set("telefono", e.target.value)} />
         </Field>
+        <Field label="Email">
+          <input
+            type="email"
+            style={inputStyle}
+            value={form.email}
+            onChange={(e) => set("email", e.target.value)}
+          />
+        </Field>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
         <Field label="Dirección">
           <input style={inputStyle} value={form.direccion} onChange={(e) => set("direccion", e.target.value)} />
         </Field>
@@ -612,12 +651,6 @@ function ProspectoFormModal({ title, initial, onSave, onClose, saving }) {
         </Field>
         <Field label="Provincia">
           <input style={inputStyle} value={form.provincia} onChange={(e) => set("provincia", e.target.value)} />
-        </Field>
-        <Field label="Teléfono">
-          <input style={inputStyle} value={form.telefono} onChange={(e) => set("telefono", e.target.value)} />
-        </Field>
-        <Field label="Email">
-          <input style={inputStyle} value={form.email} onChange={(e) => set("email", e.target.value)} />
         </Field>
         <Field label="Web">
           <input style={inputStyle} value={form.web} onChange={(e) => set("web", e.target.value)} />
@@ -660,9 +693,25 @@ function ProspectoFormModal({ title, initial, onSave, onClose, saving }) {
         <div style={labelStyle}>Dolor detectado</div>
         <ChipGroup options={DOLORES_DETECTADOS} selected={form.dolores} onToggle={(v) => toggle("dolores", v)} />
       </div>
-      <Field label="Última nota">
+      <Field label="Acuerdos y compromisos" fullWidth>
         <textarea
-          style={{ ...inputStyle, minHeight: 60, marginTop: 12 }}
+          style={{ ...inputStyle, minHeight: 96, marginTop: 4, padding: "10px 14px" }}
+          value={form.acuerdos_compromisos}
+          onChange={(e) => set("acuerdos_compromisos", e.target.value)}
+          placeholder="Ej: Enviar demo el viernes. Llamar después de vacaciones."
+        />
+      </Field>
+      <Field label="Precio orientativo hablado" fullWidth>
+        <input
+          style={{ ...inputStyle, marginTop: 4 }}
+          value={form.precio_orientativo}
+          onChange={(e) => set("precio_orientativo", e.target.value)}
+          placeholder='Ej: 79€/mes · Pendiente oferta'
+        />
+      </Field>
+      <Field label="Última nota" fullWidth>
+        <textarea
+          style={{ ...inputStyle, minHeight: 60, marginTop: 4 }}
           value={form.ultima_nota}
           onChange={(e) => set("ultima_nota", e.target.value)}
         />
@@ -815,10 +864,20 @@ function FichaModal({
             {[row.direccion, row.localidad, row.provincia].filter(Boolean).join(", ") || "—"}
           </p>
           <p>
+            <strong>Contacto:</strong> {row.persona_contacto || row.contactoPrincipal || "—"}
+          </p>
+          <p>
             Tel: {row.telefono || "—"} · Email: {row.email || "—"}
           </p>
           <p>Web: {row.web || "—"} · Sector: {row.sector || "—"}</p>
-          <p>CIF: {row.cif || "—"}</p>
+          <p>
+            <strong>Precio orientativo:</strong> {row.precio_orientativo || "—"}
+          </p>
+          <p>
+            <strong>Acuerdos y compromisos:</strong>
+            <br />
+            {row.acuerdos_compromisos || "—"}
+          </p>
           <p>
             <strong>Última nota:</strong> {row.ultima_nota || "—"}
           </p>
