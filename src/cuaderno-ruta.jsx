@@ -52,13 +52,6 @@ import {
   CONDUCTOR_NORMA_PILLS_CSS,
 } from "./features/empresa/ConductorNormaMetricPills.jsx";
 import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
-import { EmpresaAgendaComercialPanel } from "./features/empresa/EmpresaAgendaComercialPanel.jsx";
-import {
-  EMPRESA_DASH_VIEW,
-  EmpresaDashboardSubnav,
-  readStoredEmpresaDashView,
-  writeStoredEmpresaDashView,
-} from "./features/empresa/EmpresaDashboardSubnav.jsx";
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
 import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
 import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
@@ -18644,11 +18637,6 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 //  EMPRESA DASHBOARD — pantalla principal empresa
 // ─────────────────────────────────────────────────────────────
 function EmpresaDashboard({prof,showToast,onTabChange}){
-  const[dashView,setDashView]=useState(()=>readStoredEmpresaDashView());
-  const handleDashViewChange=useCallback((next)=>{
-    setDashView(next);
-    writeStoredEmpresaDashView(next);
-  },[]);
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
   const[serviciosRaw,setServiciosRaw]=useState([]);
@@ -18845,10 +18833,9 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
           onQrInvite={()=>{}}
         />
       )}
-      <EmpresaDashboardSubnav view={dashView} onChange={handleDashViewChange} ui={EMPRESA_UI}/>
       {loading?(
         <div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>
-      ):dashView===EMPRESA_DASH_VIEW.OPERATIVA?(
+      ):(
         <>
           <div style={{padding:"4px 12px 0",maxWidth:960,margin:"0 auto"}}>
             <OfficeServiciosVistaSelector
@@ -18871,10 +18858,6 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
             empresaCodigo={isDemoApp()?null:(empresa?getEmpresaCodigoEquipoDisplay(empresa):null)}
           />
         </>
-      ):(
-        <div style={{padding:"8px 12px 0",maxWidth:960,margin:"0 auto"}}>
-          <EmpresaAgendaComercialPanel empresaId={empresa?.id} showToast={showToast}/>
-        </div>
       )}
     </div>
   );

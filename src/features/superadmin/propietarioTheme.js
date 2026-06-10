@@ -49,7 +49,7 @@ export const NAV_ITEMS = [
   { id: "usuarios", label: "Oficina" },
   { id: "servicios", label: "Servicios" },
   { id: "documentos", label: "Documentos" },
-  { id: "agenda_comercial", label: "Agenda Comercial" },
+  { id: "agenda_comercial", label: "Agenda Comercial Axis & Keel" },
   { id: "soporte", label: "Soporte" },
 ];
 
