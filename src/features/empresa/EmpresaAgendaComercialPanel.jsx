@@ -247,22 +247,43 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
     }
   }
 
-  if (!empresaId) return null;
-
-  if (tableMissing) {
+  if (!empresaId) {
     return (
-      <div style={{ padding: 20, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, fontSize: 13 }}>
-        La agenda comercial requiere aplicar la migración SQL{" "}
-        <code>20260701120000_agenda_comercial.sql</code> en Supabase.
+      <div style={{ padding: 24, textAlign: "center", color: su, fontSize: 14 }}>
+        Cargando datos de empresa…
       </div>
     );
   }
 
+  const sqlBanner = tableMissing ? (
+    <div
+      style={{
+        padding: "14px 16px",
+        background: "#fffbeb",
+        border: "1px solid #fde68a",
+        borderRadius: 12,
+        fontSize: 13,
+        marginBottom: 14,
+        lineHeight: 1.5,
+      }}
+    >
+      <strong>Base de datos pendiente.</strong> Aplica la migración{" "}
+      <code>20260701120000_agenda_comercial.sql</code> en Supabase para guardar prospectos. La agenda se muestra en modo
+      solo lectura hasta entonces.
+    </div>
+  ) : null;
+
   return (
     <div style={{ marginTop: 8 }}>
+      {sqlBanner}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flex: "1 1 200px" }}>Agenda comercial</h2>
-        <button type="button" style={btn(true)} onClick={() => setModalEmpresa({ form: emptyProspectoForm() })}>
+        <button
+          type="button"
+          style={btn(true)}
+          disabled={tableMissing}
+          onClick={() => setModalEmpresa({ form: emptyProspectoForm() })}
+        >
           + Nueva empresa
         </button>
       </div>

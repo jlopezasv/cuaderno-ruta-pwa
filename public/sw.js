@@ -1,6 +1,6 @@
 // Service Worker — Cuaderno de Ruta
 // Notificaciones push reales desde el servidor
-const CACHE = 'cuaderno-v5';
+const CACHE = 'cuaderno-v6';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(clients.claim()));

@@ -53,6 +53,12 @@ import {
 } from "./features/empresa/ConductorNormaMetricPills.jsx";
 import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
 import { EmpresaAgendaComercialPanel } from "./features/empresa/EmpresaAgendaComercialPanel.jsx";
+import {
+  EMPRESA_DASH_VIEW,
+  EmpresaDashboardSubnav,
+  readStoredEmpresaDashView,
+  writeStoredEmpresaDashView,
+} from "./features/empresa/EmpresaDashboardSubnav.jsx";
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
 import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
 import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
@@ -18614,7 +18620,11 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 //  EMPRESA DASHBOARD — pantalla principal empresa
 // ─────────────────────────────────────────────────────────────
 function EmpresaDashboard({prof,showToast,onTabChange}){
-  const[dashView,setDashView]=useState("operativa");
+  const[dashView,setDashView]=useState(()=>readStoredEmpresaDashView());
+  const handleDashViewChange=useCallback((next)=>{
+    setDashView(next);
+    writeStoredEmpresaDashView(next);
+  },[]);
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
   const[serviciosRaw,setServiciosRaw]=useState([]);
@@ -18776,8 +18786,6 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
     return()=>clearInterval(id);
   },[empresa?.id,conductores,servicios]);
 
-  if(loading)return<div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>;
-
   if(import.meta.env.DEV){
     devLog("[AUDIT PR-22B] RENDER EmpresaDashboard (cuenta tipo empresa → EmpresaLayout tab dashboard)");
   }
@@ -18785,60 +18793,38 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
   return(
     <div className="empresa-page-shell">
       <style>{EMPRESA_OPERATIVA_HEADER_CSS}</style>
-      <EmpresaIdentityBarCompact
-        operativaHeader={!!officeUserDash?.activo}
-        empresaNombre={empresa?.nombre}
-        empresaCif={empresa?.cif}
-        serviciosEnRuta={servicios.filter((s)=>s.estado==="en_curso").length}
-        codigoEquipoShow={empresa?getEmpresaCodigoEquipoDisplay(empresa):""}
-        generandoCodigoEquipo={!!empresa&&!getEmpresaEquipoCodeStrict(empresa)}
-        hideEquipoCode={isDemoApp()}
-        headerRight={
-          <OfficeSoloMisServiciosToggle
-            officeUser={officeUserDash}
-            checked={soloMisServiciosFromVista(officeServiciosVistaDash)}
-            onChange={handleOfficeSoloMisDashChange}
-            ui={EMPRESA_UI}
-            variant="inline"
-          />
-        }
-        tx={EMPRESA_UI.tx}
-        su={su}
-        accent={EMPRESA_UI.accent}
-        surfaceSoft={EMPRESA_UI.surfaceSoft}
-        border={EMPRESA_UI.border}
-        onCopy={()=>{}}
-        onShare={()=>{}}
-        onQrInvite={()=>{}}
-      />
-      <div style={{padding:"4px 16px 0",maxWidth:960,margin:"0 auto",display:"flex",gap:8,flexWrap:"wrap"}}>
-        {[
-          ["operativa","Operativa"],
-          ["agenda","Agenda Comercial"],
-        ].map(([id,label])=>{
-          const active=dashView===id;
-          return(
-            <button
-              key={id}
-              type="button"
-              onClick={()=>setDashView(id)}
-              style={{
-                background:active?EMPRESA_UI.accentSoft:"transparent",
-                border:`1px solid ${active?EMPRESA_UI.accent:EMPRESA_UI.border}`,
-                borderRadius:10,
-                padding:"8px 16px",
-                fontSize:13,
-                fontWeight:active?700:600,
-                color:active?EMPRESA_UI.accent:EMPRESA_UI.muted,
-                cursor:"pointer",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {dashView==="operativa"?(
+      {!loading&&(
+        <EmpresaIdentityBarCompact
+          operativaHeader={!!officeUserDash?.activo}
+          empresaNombre={empresa?.nombre}
+          empresaCif={empresa?.cif}
+          serviciosEnRuta={servicios.filter((s)=>s.estado==="en_curso").length}
+          codigoEquipoShow={empresa?getEmpresaCodigoEquipoDisplay(empresa):""}
+          generandoCodigoEquipo={!!empresa&&!getEmpresaEquipoCodeStrict(empresa)}
+          hideEquipoCode={isDemoApp()}
+          headerRight={
+            <OfficeSoloMisServiciosToggle
+              officeUser={officeUserDash}
+              checked={soloMisServiciosFromVista(officeServiciosVistaDash)}
+              onChange={handleOfficeSoloMisDashChange}
+              ui={EMPRESA_UI}
+              variant="inline"
+            />
+          }
+          tx={EMPRESA_UI.tx}
+          su={su}
+          accent={EMPRESA_UI.accent}
+          surfaceSoft={EMPRESA_UI.surfaceSoft}
+          border={EMPRESA_UI.border}
+          onCopy={()=>{}}
+          onShare={()=>{}}
+          onQrInvite={()=>{}}
+        />
+      )}
+      <EmpresaDashboardSubnav view={dashView} onChange={handleDashViewChange} ui={EMPRESA_UI}/>
+      {loading?(
+        <div style={{padding:60,textAlign:"center",color:su}}>Cargando...</div>
+      ):dashView===EMPRESA_DASH_VIEW.OPERATIVA?(
         <>
           <div style={{padding:"4px 12px 0",maxWidth:960,margin:"0 auto"}}>
             <OfficeServiciosVistaSelector

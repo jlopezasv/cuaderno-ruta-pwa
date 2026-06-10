@@ -86,20 +86,30 @@ export async function fetchAgendaComercialBundle(tenantEmpresaId) {
     ),
   ]);
 
-  if (pr.status === 404 || cr.status === 404 || ar.status === 404) {
+  async function responseTableMissing(r) {
+    if (r.status === 404) return true;
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      return (
+        /does not exist|agenda_comercial|42P01|relation.*not found|PGRST205/i.test(body) ||
+        r.status === 400
+      );
+    }
+    return false;
+  }
+
+  const [prMissing, crMissing, arMissing] = await Promise.all([
+    responseTableMissing(pr),
+    responseTableMissing(cr),
+    responseTableMissing(ar),
+  ]);
+  if (prMissing || crMissing || arMissing) {
     return { prospectos: [], contactos: [], acciones: [], tableMissing: true };
   }
 
   const prospectos = pr.ok ? await pr.json().catch(() => []) : [];
   const contactos = cr.ok ? await cr.json().catch(() => []) : [];
   const acciones = ar.ok ? await ar.json().catch(() => []) : [];
-
-  if (!pr.ok && !cr.ok && !ar.ok) {
-    const body = await pr.text().catch(() => "");
-    if (body.includes("does not exist") || pr.status === 400) {
-      return { prospectos: [], contactos: [], acciones: [], tableMissing: true };
-    }
-  }
 
   return {
     prospectos: Array.isArray(prospectos) ? prospectos : [],
