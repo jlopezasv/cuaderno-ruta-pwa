@@ -4,6 +4,7 @@ const AUTH_SESSION_KEY = "cuaderno_auth_session_v2";
 const LEGACY_CONTEXT_KEY = "cuaderno_auth_context_v1";
 
 export function normalizeActiveMode(mode) {
+  if (mode === "propietario") return "propietario";
   return mode === "empresa" ? "empresa" : "conductor";
 }
 

@@ -5,7 +5,7 @@ import {
   OFFICE_USER_ROLES,
   buildOfficeUserRow,
   canManageEmpresaOfficeUsers,
-  createEmpresaOfficeUserDemo,
+  createEmpresaOfficeUser,
   fetchEmpresaOfficeUsers,
   invalidateEmpresaOfficeUsersCache,
   mergeOfficeUserLists,
@@ -101,7 +101,7 @@ function UserFormModal({ mode, initial, onClose, onSave, saving, error }) {
         </div>
         <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginBottom: 16 }}>
           {isAdd
-            ? `Contraseña demo: ${DEMO_LOGIN_HINT.password}`
+            ? `Contraseña temporal: ${DEMO_LOGIN_HINT.password}`
             : "Cambios en rol, visibilidad y estado"}
         </div>
 
@@ -358,14 +358,14 @@ export function EmpresaUsuariosOficinaPanel({
     reload();
   }, [reload]);
 
-  if (!isDemoApp()) return null;
+  if (!canManageEmpresaOfficeUsers(caps)) return null;
 
   async function handleCreate(form) {
     setSaving(true);
     setModalError("");
     try {
       if (!tenantEmpresaId) throw new Error("Sin empresaId para crear usuario");
-      const result = await createEmpresaOfficeUserDemo({
+      const result = await createEmpresaOfficeUser({
         empresaId: tenantEmpresaId,
         nombre: form.nombre,
         email: form.email,
@@ -396,7 +396,10 @@ export function EmpresaUsuariosOficinaPanel({
       if (row) {
         setUsers((prev) => mergeOfficeUserLists([row], prev));
       }
-      showToast?.(`Usuario creado. Email: ${form.email} · Contraseña: ${result.demoPassword}`);
+      showToast?.(
+        result.message ||
+          `Usuario creado con contraseña temporal: ${result.tempPassword || DEMO_LOGIN_HINT.password}`,
+      );
       setModal(null);
       const freshResult = await fetchEmpresaOfficeUsers(sbSelect, tenantEmpresaId, { force: true });
       const fresh = freshResult?.users || [];

@@ -104,17 +104,32 @@ export function isFleetTenantServicio(servicio) {
 
  */
 
-export async function resolveFleetEmpresaIdForInsert(empresaIdProp, uid = null) {
+export async function resolveFleetEmpresaIdForInsert(empresaIdProp, uid = null, officeEmpresaId = null) {
 
   const fromProp = normalizeServicioEmpresaId(empresaIdProp);
 
   if (fromProp) return fromProp;
+
+  const fromOffice = normalizeServicioEmpresaId(officeEmpresaId);
+
+  if (fromOffice) return fromOffice;
 
   const authUid = uid || getAuthUid?.();
 
   if (!authUid) return null;
 
   try {
+
+    const officeLink = await sbSelect(
+      "empresa_usuarios",
+      `user_id=eq.${authUid}&activo=eq.true&limit=1`,
+    ).catch(() => []);
+
+    const officeEmp = normalizeServicioEmpresaId(
+      Array.isArray(officeLink) ? officeLink[0]?.empresa_id : officeLink?.empresa_id,
+    );
+
+    if (officeEmp) return officeEmp;
 
     const emps = await sbSelect("empresas", `owner_id=eq.${authUid}`);
 
@@ -160,6 +175,8 @@ export async function resolveServicioInsertContext({
 
   uid = null,
 
+  officeEmpresaId = null,
+
 }) {
 
   const authUid = uid || getAuthUid?.();
@@ -184,7 +201,7 @@ export async function resolveServicioInsertContext({
 
 
 
-  const empresaId = await resolveFleetEmpresaIdForInsert(empresaIdProp, authUid);
+  const empresaId = await resolveFleetEmpresaIdForInsert(empresaIdProp, authUid, officeEmpresaId);
 
   const conductorId = normalizeServicioConductorIdForInsert(conductorIdProp);
 

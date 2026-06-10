@@ -28,7 +28,12 @@ import {
 } from "../documents/operationalDocumentTrace.js";
 import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
-import { appendGeoToDetail, formatOperationalGeoLine, getGeoFromDocMeta } from "./operationalGeo.js";
+import {
+  appendGeoToDetail,
+  formatExpedienteUbicacionLine,
+  formatOperationalGeoLine,
+  getGeoFromDocMeta,
+} from "./operationalGeo.js";
 import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
 import { getExpedienteCierre } from "./expedienteCierre.js";
@@ -242,6 +247,7 @@ function mapIncidenciasOperativasForExpediente(incidenciasExpediente, { enrichEv
       fechaLabel: registradoMs != null ? fmtDateTime(registradoMs) : "—",
       fase_operativa: inc.fase_operativa || null,
       servicio_estado: inc.servicio_estado || null,
+      ubicacion: formatExpedienteUbicacionLine(inc.datos?.geo),
       fotos,
     };
   });
@@ -484,6 +490,7 @@ export function buildServiceExpediente({
     });
   }
   const tripStartedAt = getOperationalTripStartedAt(servicio) || servicio?.fecha_inicio || null;
+  const inicioServicioGeo = serviceMeta?.inicio_servicio_geo || null;
   if (tripStartedAt) {
     timeline.push({
       ts: tripStartedAt,
@@ -491,6 +498,7 @@ export function buildServiceExpediente({
       type: "servicio",
       title: "Servicio iniciado",
       detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
+      ubicacion: formatExpedienteUbicacionLine(inicioServicioGeo),
     });
   }
   const cancellation = serviceMeta?.cancellation || null;
@@ -516,7 +524,8 @@ export function buildServiceExpediente({
         time: stop.entradaHora,
         type: "entrada_muelle",
         title: `Entrada muelle — ${stop.nombre}`,
-        detail: appendGeoToDetail(stop.label, stopMeta.entrada_geo),
+        detail: stop.label,
+        ubicacion: formatExpedienteUbicacionLine(stopMeta.entrada_geo),
         stopId: stop.id,
       });
     }
@@ -526,7 +535,8 @@ export function buildServiceExpediente({
         time: stop.salidaHora,
         type: "salida_muelle",
         title: `${stop.label} finalizada`,
-        detail: appendGeoToDetail(`${stop.nombre} · Espera ${stop.esperaLabel}`, stopMeta.salida_geo),
+        detail: `${stop.nombre} · Espera ${stop.esperaLabel}`,
+        ubicacion: formatExpedienteUbicacionLine(stopMeta.salida_geo),
         stopId: stop.id,
       });
     }
@@ -600,13 +610,14 @@ export function buildServiceExpediente({
       ts: tripStartedAt,
       type: "servicio_iniciado",
       title: "Servicio iniciado",
-      detail: `${servicio.origen || "—"} → ${servicio.destino || "—"}`,
+      detail: appendGeoToDetail(`${servicio.origen || "—"} → ${servicio.destino || "—"}`, inicioServicioGeo),
       servicio,
       origin: "servicio",
-      location: servicio.origen || "",
+      location: formatExpedienteUbicacionLine(inicioServicioGeo),
       metadata: {
         estado: servicio.estado || null,
         source: getOperationalTripStartedAt(servicio) ? "operational_trip_started_at" : "fecha_inicio",
+        geo: inicioServicioGeo || null,
       },
     }));
   }
@@ -1169,6 +1180,7 @@ export async function makeServiceExpedientePdfBlob(expediente) {
     text(ev.title || "Evento", margin + 60, y - 13, 11, "#0f172a");
     y -= 30;
     if (ev.detail) lines(ev.detail, margin + 60, 9, "#475569", 80, 12);
+    if (ev.ubicacion) lines(ev.ubicacion, margin + 60, 8.5, "#64748b", 88, 11);
     if (evidence?.tipo === "cmr" && evidence.datos) {
       const d = evidence.datos;
       const ocr = [

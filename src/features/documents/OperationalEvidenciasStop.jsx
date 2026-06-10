@@ -131,7 +131,7 @@ export function OperationalEvidenciasStop({
 
   async function captureUploadGeo() {
     const point = await tryDriverGeoSnapshot({ timeoutMs: 10000 });
-    return geoFromGpsPoint(point);
+    return geoFromGpsPoint(point) || geoFromGpsPoint(null, { recordUnavailable: true });
   }
 
   async function persistEvidencia(tipo, { url = null, datos = null } = {}) {
@@ -379,12 +379,14 @@ export function OperationalEvidenciasStop({
     setSaving(true);
     setError("");
     try {
+      const incGeo = await captureUploadGeo();
       const savedInc = await createIncidencia({
         servicio: servicio || (servicioId ? { id: servicioId } : null),
         stop,
         titulo,
         descripcion: incDescripcion,
         conductorNombre: conductorName,
+        geo: incGeo,
       });
       const fotos = incFotos.slice(0, 6);
       for (const file of fotos) {

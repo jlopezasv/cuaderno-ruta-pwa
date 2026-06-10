@@ -80,10 +80,10 @@ export function invalidateEmpresaRecordCache(empresaId = null) {
  */
 export async function resolveCurrentEmpresaRecord(sbSelect, uid, officeUser = null) {
   const office = officeUser || null;
-  if (isDemoApp() && office?.empresaId) {
+  if (office?.empresaId) {
     const cached = await fetchEmpresaRecordById(sbSelect, office.empresaId);
     return enrichEmpresaRecordFromOffice(cached, office);
   }
   const row = await resolveEmpresaRecordForUser(uid, sbSelect, office);
-  return isDemoApp() ? enrichEmpresaRecordFromOffice(row, office) : row;
+  return enrichEmpresaRecordFromOffice(row, office);
 }

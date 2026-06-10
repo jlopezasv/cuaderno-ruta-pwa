@@ -39,6 +39,24 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     };
   }
 
+  const sessionEmail = getSession()?.user?.email;
+  if (isSuperadminUser(uid, sessionEmail)) {
+    const profile =
+      prefetched.profile !== undefined
+        ? prefetched.profile
+        : (await sbSelect("profiles", `id=eq.${uid}`).catch(() => []))[0] || null;
+    const account = parseProfileAccount(profile);
+    return buildSessionCapabilities({
+      account,
+      shells: { conductor: false, empresa: false },
+      admin: true,
+      activeMode: "propietario",
+      officeUser: null,
+      bootstrapError: null,
+      features: {},
+    });
+  }
+
   const profile =
     prefetched.profile !== undefined
       ? prefetched.profile
@@ -101,6 +119,8 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
 }
 
 export function resolveActiveMode(capabilities, cachedMode = null) {
+  if (capabilities?.admin) return "propietario";
+
   const mode = cachedMode === "empresa" || cachedMode === "conductor" ? cachedMode : null;
 
   if (capabilities.empresa && capabilities.conductor) {
@@ -114,6 +134,24 @@ export function resolveActiveMode(capabilities, cachedMode = null) {
 
 export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
   await ensureAuthAccessToken();
+
+  if (isSuperadminUser(uid, getSession()?.user?.email)) {
+    const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
+    const profile = profiles[0] || null;
+    const account = parseProfileAccount(profile);
+    const capabilities = buildSessionCapabilities({
+      account,
+      shells: { conductor: false, empresa: false },
+      admin: true,
+      activeMode: "propietario",
+      officeUser: null,
+      bootstrapError: null,
+      features: {},
+    });
+    persistAuthSession({ uid, activeMode: "propietario", capabilities });
+    return { capabilities, activeMode: "propietario", account, officeUser: null };
+  }
+
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const profile = profiles[0] || null;
 

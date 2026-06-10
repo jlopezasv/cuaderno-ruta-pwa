@@ -9,12 +9,16 @@
     "preview": "vite preview",
     "deploy": "vite build && vercel --prod",
     "deploy:prod:sql": "node scripts/apply-prod-release-mail.mjs",
+    "deploy:prod:multiusuario": "node scripts/apply-prod-multiusuario-oficina.mjs",
     "deploy:demo": "node scripts/deploy-demo-documentos-empresa.mjs",
     "deploy:demo:sql": "node scripts/apply-sql-file.mjs supabase/migrations/20260531140000_servicio_documentos_empresa_demo.sql",
     "deploy:demo:office-users": "node scripts/apply-empresa-usuarios-demo.mjs",
     "deploy:demo:office-rls": "node scripts/apply-office-user-servicios-rls-demo.mjs",
     "deploy:demo:office-peer-rls": "node scripts/apply-office-peer-rls-demo.mjs",
+    "deploy:demo:office-insert-servicios": "node scripts/apply-demo-office-insert-servicio-rls.mjs",
+    "deploy:demo:office-planned-insert": "node scripts/apply-demo-office-planned-insert-definitive.mjs",
     "deploy:demo:empresa-codigo": "node scripts/apply-demo-empresa-codigo-fix.mjs",
+    "deploy:demo:agenda-comercial": "node scripts/apply-agenda-comercial-demo.mjs",
     "validate:operativa": "node scripts/validar-sync-operativa.mjs"
   },
   "dependencies": {

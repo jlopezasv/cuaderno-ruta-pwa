@@ -16,9 +16,11 @@ import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
-import { isDemoApp } from "../../config/appEnvironment.js";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
-import { validateOfficeResponsableOnCreate } from "../../domain/empresa/empresaOfficeUsers.js";
+import {
+  buildResponsableServicioPayload,
+  validateOfficeResponsableOnCreate,
+} from "../../domain/empresa/empresaOfficeUsers.js";
 import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField.jsx";
 
 function p2(n) {
@@ -60,9 +62,9 @@ export function EmpresaEditarServicioModal({
 }) {
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
   const canEditResponsable =
-    isDemoApp() && officeResponsables.length > 0 && canPickOfficeServicioResponsable(officeUser);
+    officeResponsables.length > 0 && canPickOfficeServicioResponsable(officeUser);
   const responsableLockedUid =
-    isDemoApp() && officeUser?.rol === "trafico" && !officeUser?.puedeVerTodos
+    officeUser?.rol === "trafico" && !officeUser?.puedeVerTodos
       ? officeUser.userId || userId
       : null;
   const wide = mode === "wide";
@@ -172,7 +174,7 @@ export function EmpresaEditarServicioModal({
     };
 
     try {
-      if (isDemoApp()) {
+      if (officeUser?.activo) {
         if (officeUser?.rol === "administrativo") {
           setError("No tienes permiso para editar servicios.");
           return;
@@ -281,7 +283,7 @@ export function EmpresaEditarServicioModal({
         const r0 = servicio.responsable_user_id || null;
         const r1 = responsableSel || null;
         if (r1 !== r0) {
-          patch.responsable_user_id = r1;
+          Object.assign(patch, buildResponsableServicioPayload(r1, officeResponsables));
           pushAudit("responsable_user_id", r0, r1);
         }
       }

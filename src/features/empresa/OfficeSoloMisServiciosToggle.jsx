@@ -1,6 +1,6 @@
 import { shouldShowSoloMisServiciosToggle } from "../../domain/empresa/officeUserFilters.js";
 
-/** DEMO — tick «Ver solo mis servicios» (jefe_flota y tráfico con puede_ver_todos). */
+/** Tick «Ver solo mis servicios» (jefe_flota y tráfico con puede_ver_todos). */
 export function OfficeSoloMisServiciosToggle({
   officeUser,
   checked = false,

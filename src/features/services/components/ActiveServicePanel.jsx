@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { ServiceEmpresaDocumentsBlock } from "./ServiceEmpresaDocumentsBlock.jsx";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
-import { getCurrentStop } from "../../../domain/service/serviceStops";
+import { resolveExpandedStopId } from "../../../domain/service/serviceStops";
 import {
   buildDriverStopTimesRows,
   primaryMuelleActionLabel,
@@ -1551,7 +1551,7 @@ export function ActiveServicePanel({
   );
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
-  const stopMostrar = getCurrentStop(sortedStops) || sortedStops[0] || null;
+  const expandedStopId = resolveExpandedStopId(sortedStops, servicio);
   const firstCargaStopId = useMemo(() => {
     let seen = 0;
     for (const item of timelineItems) {
@@ -1601,7 +1601,7 @@ export function ActiveServicePanel({
     miParticipacion !== "finalizado" &&
     typeof onFinalizarParticipacion === "function";
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
-  const activeTimelineItem = timelineItems.find((it) => it.stop.id === stopMostrar?.id);
+  const activeTimelineItem = timelineItems.find((it) => it.stop.id === expandedStopId);
 
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
@@ -1777,7 +1777,7 @@ export function ActiveServicePanel({
           <DriverDemoSection title="Recorrido" style={{ padding: 0 }}>
             <DriverRecorridoStops
               items={timelineItems}
-              currentStopId={stopMostrar?.id}
+              currentStopId={expandedStopId}
               firstCargaStopId={firstCargaStopId}
               evidenciasByStop={evidenciasByStop}
               canOperate={canOperateStops}
@@ -2080,7 +2080,7 @@ export function ActiveServicePanel({
           </div>
           <OperationalStops
             items={timelineItems}
-            currentStopId={stopMostrar?.id}
+            currentStopId={expandedStopId}
             firstCargaStopId={firstCargaStopId}
             evidenciasByStop={evidenciasByStop}
             canOperate={canOperateStops}

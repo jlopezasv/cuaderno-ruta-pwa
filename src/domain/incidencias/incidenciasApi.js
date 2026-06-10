@@ -34,6 +34,7 @@ export async function createIncidencia({
   titulo,
   descripcion = "",
   conductorNombre = null,
+  geo = null,
 }) {
   const servicioId = servicio?.id;
   if (!servicioId) throw new Error("Servicio inválido para incidencia");
@@ -65,6 +66,7 @@ export async function createIncidencia({
       destino: servicio?.destino || null,
       stop_nombre: stop?.nombre || null,
       stop_tipo: stop?.tipo || null,
+      ...(geo ? { geo } : {}),
     },
   };
   const r = await sbFetch("/rest/v1/incidencias", {

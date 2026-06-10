@@ -61,6 +61,8 @@ export function EmpresaIdentityBarCompact({
   codigoEquipoShow,
   generandoCodigoEquipo,
   hideEquipoCode = false,
+  headerRight = null,
+  operativaHeader = false,
   onCopy,
   onShare,
   onQrInvite,
@@ -70,20 +72,27 @@ export function EmpresaIdentityBarCompact({
   surfaceSoft,
   border,
 }) {
+  const rootClass = operativaHeader ? "empresa-operativa-header" : undefined;
+  const leftClass = operativaHeader ? "empresa-operativa-header__left" : undefined;
+  const rightClass = operativaHeader ? "empresa-operativa-header__right" : undefined;
   return (
     <div
+      className={rootClass}
       style={{
         background: "#fff",
         borderBottom: `1px solid ${border}`,
-        padding: "8px 14px",
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "8px 10px",
+        padding: operativaHeader ? undefined : "8px 14px",
+        display: operativaHeader ? undefined : "flex",
+        flexWrap: operativaHeader ? undefined : "wrap",
+        alignItems: operativaHeader ? undefined : "center",
+        justifyContent: operativaHeader ? undefined : "space-between",
+        gap: operativaHeader ? undefined : "8px 10px",
       }}
     >
-      <div style={{ flex: "1 1 220px", minWidth: 0, fontSize: 12, color: su, lineHeight: 1.45 }}>
+      <div
+        className={leftClass}
+        style={{ flex: operativaHeader ? undefined : "1 1 220px", minWidth: 0, fontSize: 12, color: su, lineHeight: 1.45 }}
+      >
         <span style={{ fontWeight: 650, color: tx }}>{empresaNombre}</span>
         {empresaCif ? <span> · CIF {empresaCif}</span> : null}
         <span>
@@ -107,7 +116,9 @@ export function EmpresaIdentityBarCompact({
           </span>
         ) : null}
       </div>
-      {!hideEquipoCode ? (
+      {headerRight ? (
+        <div className={rightClass}>{headerRight}</div>
+      ) : !hideEquipoCode ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <button
             type="button"

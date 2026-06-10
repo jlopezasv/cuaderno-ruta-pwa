@@ -10,7 +10,6 @@ import { getAttentionReason, needsAttention } from "../../domain/service/service
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
 import { conductorUidOperativoServicio } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
-import { isDemoApp } from "../../config/appEnvironment.js";
 import { officeResponsableServicioLine } from "../../domain/empresa/empresaOfficeUsers.js";
 
 function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
@@ -194,9 +193,7 @@ function EmpresaFlotaServiciosListImpl({
         const allConductorIds = [...new Set([sv.conductor_id, ...asgIds].filter(Boolean))];
         const asignadosCount = allConductorIds.length;
         const asignadosNombresStr = allConductorIds.map((id) => nombreConductor(id)).join(", ");
-        const responsableLine = isDemoApp()
-          ? officeResponsableServicioLine(sv, (uid) => nombreResponsable?.(uid))
-          : null;
+        const responsableLine = officeResponsableServicioLine(sv, (uid) => nombreResponsable?.(uid));
         return (
           <EmpresaFlotaServicioRowMemo
             key={sv.id}

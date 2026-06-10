@@ -2,6 +2,11 @@
 
 import { getSupabaseServerEnv } from "./lib/supabaseEnv.js";
 import { requireSuperadmin } from "./lib/superadminAuth.js";
+import {
+  normalizeServicioAdminRow,
+  stripServicioOperacionDisplay,
+} from "./lib/servicioDisplay.js";
+import { buildPanelQuery } from "./lib/panelQuery.js";
 
 const OFFICE_USER_TEMP_PASSWORD = "DemoCuaderno2026!";
 const UUID_RE =
@@ -169,6 +174,69 @@ function prodEmpresaFilter() {
   return "is_test=eq.false";
 }
 
+async function authAdminGetUser(userId) {
+  const r = await fetch(
+    `${sbServer().url}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    { headers: srRestHeaders(false) },
+  );
+  if (!r.ok) return null;
+  return r.json().catch(() => null);
+}
+
+async function enrichServiciosWithConductores(servicios, empNameMap = new Map()) {
+  if (!servicios?.length) return [];
+  const servIds = servicios.map((s) => s.id).filter(Boolean);
+  const condIdSet = new Set(servicios.map((s) => s.conductor_id).filter(Boolean));
+
+  let assignRows = [];
+  if (servIds.length) {
+    const ar = await restSelect(
+      `servicio_asignaciones?servicio_id=in.(${servIds.join(",")})&select=servicio_id,conductor_id,tipo_asignacion`,
+    );
+    assignRows = ar.data || [];
+    for (const a of assignRows) {
+      if (a.conductor_id) condIdSet.add(a.conductor_id);
+    }
+  }
+
+  const condIds = [...condIdSet];
+  const profMap = new Map();
+  if (condIds.length) {
+    const pr = await restSelect(
+      `profiles?id=in.(${condIds.join(",")})&select=id,nombre,is_archived`,
+    );
+    for (const p of pr.data || []) {
+      if (!p.is_archived) profMap.set(p.id, p.nombre || "Conductor");
+    }
+  }
+
+  const assignsByServ = new Map();
+  for (const a of assignRows) {
+    if (!assignsByServ.has(a.servicio_id)) assignsByServ.set(a.servicio_id, []);
+    assignsByServ.get(a.servicio_id).push({
+      id: a.conductor_id,
+      nombre: profMap.get(a.conductor_id) || "Conductor",
+      tipo: a.tipo_asignacion,
+    });
+  }
+
+  return servicios.map((s) => {
+    const list = [...(assignsByServ.get(s.id) || [])];
+    if (s.conductor_id && !list.some((c) => c.id === s.conductor_id)) {
+      list.unshift({
+        id: s.conductor_id,
+        nombre: profMap.get(s.conductor_id) || "Conductor",
+        tipo: "principal",
+      });
+    }
+    return normalizeServicioAdminRow(s, {
+      empresaNombre: empNameMap.get(s.empresa_id) || "—",
+      conductores: list,
+      conductorPrincipal: profMap.get(s.conductor_id) || list[0]?.nombre || null,
+    });
+  });
+}
+
 async function loadArchivedProfileIds() {
   const { data } = await restSelect("profiles?is_archived=eq.true&select=id");
   return new Set((data || []).map((p) => p.id));
@@ -220,10 +288,64 @@ async function handleDashboard() {
   }
 
   let empresasSinActividad = 0;
+  const sinActividadIds = [];
   for (const id of empIds) {
     const last = lastByEmpresa.get(id);
-    if (!last || last < since30) empresasSinActividad += 1;
+    if (!last || last < since30) {
+      empresasSinActividad += 1;
+      sinActividadIds.push(id);
+    }
   }
+
+  const { data: empresasRows } = await restSelect(
+    `empresas?${prod}&select=id,nombre,activa,created_at,codigo_equipo,codigo_corto&order=created_at.desc`,
+  );
+  const empNameMap = new Map((empresasRows || []).map((e) => [e.id, e.nombre]));
+
+  const ultimasEmpresas = (empresasRows || []).slice(0, 6).map((e) => ({
+    id: e.id,
+    nombre: e.nombre,
+    activa: e.activa !== false,
+    codigoEquipo: e.codigo_equipo || e.codigo_corto || null,
+    createdAt: e.created_at,
+  }));
+
+  const { data: recentServRows } = await restSelect(
+    `servicios?select=id,referencia,estado,empresa_id,conductor_id,origen,destino,created_at,updated_at&empresa_id=not.is.null&order=created_at.desc&limit=12`,
+  );
+  const ultimosServicios = await enrichServiciosWithConductores(
+    recentServRows || [],
+    empNameMap,
+  );
+
+  const { data: servs30 } = await restSelect(
+    `servicios?select=empresa_id&created_at=gte.${since30}&empresa_id=not.is.null`,
+  );
+  const act30 = new Map();
+  for (const s of servs30 || []) {
+    if (!s.empresa_id || !empIds.has(s.empresa_id)) continue;
+    act30.set(s.empresa_id, (act30.get(s.empresa_id) || 0) + 1);
+  }
+  const empresasMasActividad = [...act30.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([id, count]) => ({
+      id,
+      nombre: empNameMap.get(id) || "—",
+      servicios30d: count,
+    }));
+
+  const empresasSinActividadLista = sinActividadIds
+    .map((id) => {
+      const row = (empresasRows || []).find((e) => e.id === id);
+      return {
+        id,
+        nombre: row?.nombre || empNameMap.get(id) || "—",
+        ultimoServicio: lastByEmpresa.get(id) || null,
+        activa: row?.activa !== false,
+      };
+    })
+    .slice(0, 8);
 
   return {
     ok: true,
@@ -237,6 +359,10 @@ async function handleDashboard() {
       documentosSubidos: docsExtra,
       empresasSinActividad,
     },
+    ultimasEmpresas,
+    ultimosServicios,
+    empresasMasActividad,
+    empresasSinActividadLista,
   };
 }
 
@@ -250,11 +376,15 @@ async function handleListEmpresas() {
   const ids = (empresas || []).map((e) => e.id);
   if (!ids.length) return { ok: true, empresas: [] };
 
-  const [ceAll, euAll, servAll] = await Promise.all([
+  const monthStart = monthStartIso();
+  const [ceAll, euAll, servAll, servMesAll] = await Promise.all([
     restSelect("conductor_empresa?select=empresa_id,user_id,activo"),
     restSelect("empresa_usuarios?select=empresa_id,activo"),
     restSelect(
       "servicios?select=empresa_id,created_at&empresa_id=not.is.null&order=created_at.desc&limit=2000",
+    ),
+    restSelect(
+      `servicios?select=empresa_id&created_at=gte.${monthStart}&empresa_id=not.is.null`,
     ),
   ]);
 
@@ -262,6 +392,7 @@ async function handleListEmpresas() {
   const condByEmp = new Map();
   const officeByEmp = new Map();
   const servCountByEmp = new Map();
+  const servMesByEmp = new Map();
   const lastServByEmp = new Map();
 
   for (const c of ceAll.data || []) {
@@ -279,6 +410,10 @@ async function handleListEmpresas() {
       lastServByEmp.set(s.empresa_id, s.created_at);
     }
   }
+  for (const s of servMesAll.data || []) {
+    if (!s.empresa_id) continue;
+    servMesByEmp.set(s.empresa_id, (servMesByEmp.get(s.empresa_id) || 0) + 1);
+  }
 
   const list = (empresas || []).map((e) => ({
     id: e.id,
@@ -290,10 +425,98 @@ async function handleListEmpresas() {
     conductores: condByEmp.get(e.id) || 0,
     usuariosOficina: officeByEmp.get(e.id) || 0,
     servicios: servCountByEmp.get(e.id) || 0,
+    serviciosMes: servMesByEmp.get(e.id) || 0,
     ultimoServicio: lastServByEmp.get(e.id) || null,
   }));
 
   return { ok: true, empresas: list };
+}
+
+async function handleListUsuarios() {
+  const { data: empresas } = await restSelect(
+    `empresas?${prodEmpresaFilter()}&select=id,nombre`,
+  );
+  const empMap = new Map((empresas || []).map((e) => [e.id, e.nombre]));
+
+  const [office, conductores] = await Promise.all([
+    restSelect(
+      "empresa_usuarios?select=id,user_id,nombre,email,rol,activo,empresa_id,created_at&order=created_at.desc&limit=150",
+    ),
+    restSelect(
+      "conductor_empresa?select=id,user_id,nombre,matricula,activo,empresa_id,created_at&order=created_at.desc&limit=150",
+    ),
+  ]);
+
+  const usuariosOficina = (office.data || []).map((u) => ({
+    id: u.id,
+    userId: u.user_id,
+    nombre: u.nombre || "—",
+    email: u.email || null,
+    rol: u.rol,
+    activo: u.activo !== false,
+    empresaId: u.empresa_id,
+    empresaNombre: empMap.get(u.empresa_id) || "—",
+    tipo: "oficina",
+    createdAt: u.created_at,
+  }));
+
+  const usuariosConductor = (conductores.data || []).map((c) => ({
+    id: c.id,
+    userId: c.user_id,
+    nombre: c.nombre || "—",
+    matricula: c.matricula || null,
+    activo: c.activo !== false,
+    empresaId: c.empresa_id,
+    empresaNombre: empMap.get(c.empresa_id) || "—",
+    tipo: "conductor",
+    createdAt: c.created_at,
+  }));
+
+  return {
+    ok: true,
+    usuarios: [...usuariosOficina, ...usuariosConductor].sort(
+      (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+    ),
+  };
+}
+
+async function handleListServicios() {
+  const { data: empresas } = await restSelect(
+    `empresas?${prodEmpresaFilter()}&select=id,nombre`,
+  );
+  const empMap = new Map((empresas || []).map((e) => [e.id, e.nombre]));
+
+  const { data: servs } = await restSelect(
+    "servicios?select=id,referencia,estado,origen,destino,empresa_id,conductor_id,created_at,updated_at&empresa_id=not.is.null&order=created_at.desc&limit=80",
+  );
+
+  return {
+    ok: true,
+    servicios: await enrichServiciosWithConductores(servs || [], empMap),
+  };
+}
+
+async function handleListDocumentos() {
+  const { data: empresas } = await restSelect(
+    `empresas?${prodEmpresaFilter()}&select=id,nombre`,
+  );
+  const empMap = new Map((empresas || []).map((e) => [e.id, e.nombre]));
+
+  const { data: docs } = await restSelect(
+    "servicio_documentos_extra?select=id,tipo,archivo_nombre,empresa_id,created_at&order=created_at.desc&limit=80",
+  );
+
+  return {
+    ok: true,
+    documentos: (docs || []).map((d) => ({
+      id: d.id,
+      tipo: d.tipo,
+      nombre: d.archivo_nombre || d.tipo || "Documento",
+      empresaId: d.empresa_id,
+      empresaNombre: empMap.get(d.empresa_id) || "—",
+      createdAt: d.created_at,
+    })),
+  };
 }
 
 async function handleEmpresaDetail(empresaId) {
@@ -317,7 +540,7 @@ async function handleEmpresaDetail(empresaId) {
       `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresaId)}&select=id,user_id,nombre,email,rol,puede_ver_todos,activo,created_at&order=created_at.desc`,
     ),
     restSelect(
-      `servicios?empresa_id=eq.${encodeURIComponent(empresaId)}&select=id,estado,referencia,origen,destino,created_at&order=created_at.desc&limit=30`,
+      `servicios?empresa_id=eq.${encodeURIComponent(empresaId)}&select=id,estado,referencia,origen,destino,conductor_id,empresa_id,created_at,updated_at&order=created_at.desc&limit=30`,
     ),
     restSelect(
       `servicio_documentos_extra?empresa_id=eq.${encodeURIComponent(empresaId)}&select=id,tipo,archivo_nombre,created_at&order=created_at.desc&limit=15`,
@@ -403,14 +626,10 @@ async function handleEmpresaDetail(empresaId) {
     officeUsers,
     servicios: {
       stats: servicioStats,
-      recientes: servs.slice(0, 15).map((s) => ({
-        id: s.id,
-        estado: s.estado,
-        referencia: s.referencia,
-        origen: s.origen,
-        destino: s.destino,
-        createdAt: s.created_at,
-      })),
+      recientes: await enrichServiciosWithConductores(
+        servs.slice(0, 15),
+        new Map([[empresa.id, empresa.nombre]]),
+      ),
     },
     documentos: {
       cantidad: docsCount,
@@ -560,6 +779,373 @@ async function handleToggleOfficeUser(officeUserId, activo) {
   return { ok: true, activo: !!activo };
 }
 
+async function handleSupportSearch(query) {
+  const q = String(query || "").trim();
+  if (q.length < 2) {
+    return { ok: true, results: [] };
+  }
+  const ql = q.toLowerCase();
+  const qu = q.toUpperCase();
+  const results = [];
+  const seen = new Set();
+
+  function push(item) {
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(item);
+  }
+
+  if (UUID_RE.test(q)) {
+    const [emp, prof, svc] = await Promise.all([
+      restSelect(`empresas?id=eq.${encodeURIComponent(q)}&select=id,nombre,codigo_equipo,codigo_corto`),
+      restSelect(`profiles?id=eq.${encodeURIComponent(q)}&select=id,nombre,tipo_cuenta`),
+      restSelect(`servicios?id=eq.${encodeURIComponent(q)}&select=id,referencia,estado,empresa_id`),
+    ]);
+    if (emp.data?.[0]) {
+      push({
+        type: "empresa",
+        id: emp.data[0].id,
+        label: emp.data[0].nombre,
+        sublabel: emp.data[0].codigo_equipo || emp.data[0].codigo_corto || "Empresa",
+      });
+    }
+    if (prof.data?.[0]) {
+      push({
+        type: "usuario",
+        id: prof.data[0].id,
+        label: prof.data[0].nombre || "Usuario",
+        sublabel: prof.data[0].tipo_cuenta || "perfil",
+      });
+    }
+    if (svc.data?.[0]) {
+      const s = svc.data[0];
+      push({
+        type: "servicio",
+        id: s.id,
+        label: normalizeServicioAdminRow(s).refServicio,
+        sublabel: s.estado,
+      });
+    }
+  }
+
+  const { data: emps } = await restSelect(
+    `empresas?${prodEmpresaFilter()}&select=id,nombre,codigo_equipo,codigo_corto,cif&order=nombre.asc&limit=200`,
+  );
+  for (const e of emps || []) {
+    const code = (e.codigo_equipo || e.codigo_corto || "").toUpperCase();
+    const match =
+      String(e.nombre || "").toLowerCase().includes(ql) ||
+      String(e.cif || "").toLowerCase().includes(ql) ||
+      (code && (code.includes(qu) || qu.includes(code)));
+    if (match) {
+      push({ type: "empresa", id: e.id, label: e.nombre, sublabel: code || "Empresa" });
+    }
+  }
+
+  const { data: office } = await restSelect(
+    `empresa_usuarios?select=id,user_id,nombre,email,empresa_id&limit=200`,
+  );
+  const empMap = new Map((emps || []).map((e) => [e.id, e.nombre]));
+  for (const u of office || []) {
+    if (
+      String(u.email || "").toLowerCase().includes(ql) ||
+      String(u.nombre || "").toLowerCase().includes(ql)
+    ) {
+      push({
+        type: "usuario",
+        id: u.user_id,
+        label: u.nombre || u.email,
+        sublabel: `Oficina · ${empMap.get(u.empresa_id) || "—"}`,
+      });
+    }
+  }
+
+  const { data: ce } = await restSelect(
+    `conductor_empresa?select=id,user_id,nombre,matricula,empresa_id&limit=200`,
+  );
+  for (const c of ce || []) {
+    if (
+      String(c.nombre || "").toLowerCase().includes(ql) ||
+      String(c.matricula || "").toLowerCase().includes(ql)
+    ) {
+      push({
+        type: "usuario",
+        id: c.user_id,
+        label: c.nombre || c.matricula || "Conductor",
+        sublabel: `Conductor · ${empMap.get(c.empresa_id) || "—"}`,
+      });
+    }
+  }
+
+  const { data: servs } = await restSelect(
+    "servicios?select=id,referencia,estado,empresa_id&order=created_at.desc&limit=120",
+  );
+  for (const s of servs || []) {
+    const ref = stripServicioOperacionDisplay(s.referencia).toLowerCase();
+    const norm = normalizeServicioAdminRow(s, { empresaNombre: empMap.get(s.empresa_id) });
+    if (ref.includes(ql) || norm.refServicio.toLowerCase().includes(ql)) {
+      push({
+        type: "servicio",
+        id: s.id,
+        label: norm.refServicio,
+        sublabel: `${norm.estado} · ${empMap.get(s.empresa_id) || "—"}`,
+      });
+    }
+  }
+
+  return { ok: true, results: results.slice(0, 25) };
+}
+
+async function handleSupportUserDetail(userId) {
+  if (!userId || !UUID_RE.test(userId)) {
+    return { ok: false, status: 400, error: "user_id inválido" };
+  }
+
+  const [profRows, authUser, ceRows, euRows, servRows] = await Promise.all([
+    restSelect(`profiles?id=eq.${encodeURIComponent(userId)}&select=*`),
+    authAdminGetUser(userId),
+    restSelect(
+      `conductor_empresa?user_id=eq.${encodeURIComponent(userId)}&select=id,empresa_id,nombre,matricula,activo,created_at`,
+    ),
+    restSelect(
+      `empresa_usuarios?user_id=eq.${encodeURIComponent(userId)}&select=id,empresa_id,nombre,email,rol,puede_ver_todos,activo,created_at`,
+    ),
+    restSelect(
+      `servicios?conductor_id=eq.${encodeURIComponent(userId)}&select=id,estado,referencia,created_at&order=created_at.desc&limit=10`,
+    ),
+  ]);
+
+  const profile = profRows.data?.[0] || null;
+  const empresaIds = [
+    ...new Set([
+      ...(ceRows.data || []).map((r) => r.empresa_id),
+      ...(euRows.data || []).map((r) => r.empresa_id),
+    ].filter(Boolean)),
+  ];
+  let empMap = new Map();
+  if (empresaIds.length) {
+    const er = await restSelect(
+      `empresas?id=in.(${empresaIds.join(",")})&select=id,nombre,codigo_equipo,codigo_corto`,
+    );
+    empMap = new Map((er.data || []).map((e) => [e.id, e]));
+  }
+
+  const office = (euRows.data || [])[0] || null;
+  const conductoresVinculos = (ceRows.data || []).map((c) => ({
+    id: c.id,
+    empresaId: c.empresa_id,
+    empresaNombre: empMap.get(c.empresa_id)?.nombre || "—",
+    nombre: c.nombre,
+    matricula: c.matricula,
+    activo: c.activo !== false,
+  }));
+
+  const serviciosAsignados = await enrichServiciosWithConductores(
+    servRows.data || [],
+    new Map([...empMap.entries()].map(([id, e]) => [id, e.nombre])),
+  );
+
+  const empresaIdPrincipal = office?.empresa_id || conductoresVinculos[0]?.empresaId || null;
+  const codigoEmpresa = empresaIdPrincipal
+    ? empMap.get(empresaIdPrincipal)?.codigo_equipo || empMap.get(empresaIdPrincipal)?.codigo_corto || null
+    : null;
+
+  let serviciosVisibles = [];
+  if (office && empresaIdPrincipal) {
+    const visQ = office.puede_ver_todos
+      ? `servicios?empresa_id=eq.${empresaIdPrincipal}&select=id,estado,referencia,created_at&order=created_at.desc&limit=8`
+      : `servicios?empresa_id=eq.${empresaIdPrincipal}&responsable_user_id=eq.${encodeURIComponent(userId)}&select=id,estado,referencia,created_at&order=created_at.desc&limit=8`;
+    const visRows = await restSelect(visQ);
+    serviciosVisibles = await enrichServiciosWithConductores(
+      visRows.data || [],
+      new Map([...empMap.entries()].map(([id, e]) => [id, e.nombre])),
+    );
+  }
+
+  const servIds = [...new Set((servRows.data || []).map((s) => s.id))];
+  let ultimosDocumentos = [];
+  if (servIds.length) {
+    const docRows = await restSelect(
+      `servicio_documentos_extra?servicio_id=in.(${servIds.slice(0, 10).join(",")})&select=id,servicio_id,archivo_nombre,tipo,created_at&order=created_at.desc&limit=6`,
+    );
+    ultimosDocumentos = (docRows.data || []).map((d) => ({
+      id: d.id,
+      nombre: d.archivo_nombre || d.tipo || "Documento",
+      servicioId: d.servicio_id,
+      createdAt: d.created_at,
+    }));
+  }
+
+  return {
+    ok: true,
+    usuario: {
+      userId,
+      email: authUser?.email || office?.email || null,
+      nombre: profile?.nombre || office?.nombre || conductoresVinculos[0]?.nombre || "—",
+      uid: userId,
+      tipoCuenta: profile?.tipo_cuenta || "—",
+      ultimoAcceso: authUser?.last_sign_in_at || null,
+      activo: !profile?.is_archived,
+      rolOficina: office?.rol || null,
+      puedeVerTodos: office ? !!office.puede_ver_todos : null,
+      empresaId: empresaIdPrincipal,
+      empresaVinculada: office
+        ? empMap.get(office.empresa_id)?.nombre || "—"
+        : conductoresVinculos[0]?.empresaNombre || "—",
+      codigoEmpresa,
+      conductoresVinculos,
+      serviciosAsignados,
+      serviciosVisibles,
+      ultimosDocumentos,
+      officeUserId: office?.id || null,
+      officeActivo: office ? office.activo !== false : null,
+    },
+    erroresRecientes: [],
+    erroresDisponibles: false,
+  };
+}
+
+async function handleSupportEmpresaDiagnostic(empresaId) {
+  const detail = await handleEmpresaDetail(empresaId);
+  if (!detail.ok) return detail;
+
+  const condActivos = (detail.conductores || []).filter((c) => c.activo).length;
+  const condInactivos = (detail.conductores || []).length - condActivos;
+  const officeActivos = (detail.officeUsers || []).filter((u) => u.activo).length;
+  const officeInactivos = (detail.officeUsers || []).length - officeActivos;
+
+  return {
+    ok: true,
+    empresa: detail.empresa,
+    resumen: {
+      conductoresActivos: condActivos,
+      conductoresInactivos: condInactivos,
+      officeActivos,
+      officeInactivos,
+      serviciosActivos: detail.servicios?.stats?.activos || 0,
+    },
+    conductores: detail.conductores,
+    officeUsers: detail.officeUsers,
+    servicios: detail.servicios,
+    documentos: detail.documentos,
+    erroresRecientes: [],
+    erroresDisponibles: false,
+  };
+}
+
+async function handleSupportServicioDiagnostic(servicioId) {
+  if (!servicioId || !UUID_RE.test(servicioId)) {
+    return { ok: false, status: 400, error: "servicio_id inválido" };
+  }
+
+  const { data: servs } = await restSelect(
+    `servicios?id=eq.${encodeURIComponent(servicioId)}&select=*`,
+  );
+  const servicio = servs[0];
+  if (!servicio) return { ok: false, status: 404, error: "Servicio no encontrado" };
+
+  const [stops, assigns, docs, evidencias, empRows] = await Promise.all([
+    restSelect(
+      `stops?servicio_id=eq.${encodeURIComponent(servicioId)}&select=id,orden,tipo,nombre,direccion,estado,created_at&order=orden.asc`,
+    ),
+    restSelect(
+      `servicio_asignaciones?servicio_id=eq.${encodeURIComponent(servicioId)}&select=conductor_id,tipo_asignacion,created_at`,
+    ),
+    restSelect(
+      `servicio_documentos_extra?servicio_id=eq.${encodeURIComponent(servicioId)}&select=id,tipo,archivo_nombre,created_at&order=created_at.desc&limit=15`,
+    ),
+    restSelect(
+      `stops?servicio_id=eq.${encodeURIComponent(servicioId)}&select=id`,
+    ).then(async (sr) => {
+      const stopIds = (sr.data || []).map((s) => s.id);
+      if (!stopIds.length) return { data: [] };
+      return restSelect(
+        `evidencias?stop_id=in.(${stopIds.join(",")})&select=id,stop_id,tipo,created_at&order=created_at.desc&limit=20`,
+      );
+    }),
+    servicio.empresa_id
+      ? restSelect(`empresas?id=eq.${encodeURIComponent(servicio.empresa_id)}&select=nombre`)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const condIds = [
+    ...new Set([
+      servicio.conductor_id,
+      ...(assigns.data || []).map((a) => a.conductor_id),
+    ].filter(Boolean)),
+  ];
+  const profMap = new Map();
+  if (condIds.length) {
+    const pr = await restSelect(
+      `profiles?id=in.(${condIds.join(",")})&select=id,nombre`,
+    );
+    for (const p of pr.data || []) profMap.set(p.id, p.nombre || "—");
+  }
+
+  const empName = empRows.data?.[0]?.nombre || "—";
+  const [normalized] = await enrichServiciosWithConductores(
+    [servicio],
+    new Map([[servicio.empresa_id, empName]]),
+  );
+
+  return {
+    ok: true,
+    servicio: normalized,
+    conductorPrincipal: profMap.get(servicio.conductor_id) || null,
+    colaboradores: (assigns.data || [])
+      .filter((a) => a.conductor_id !== servicio.conductor_id)
+      .map((a) => ({
+        userId: a.conductor_id,
+        nombre: profMap.get(a.conductor_id) || "—",
+        tipo: a.tipo_asignacion,
+      })),
+    paradas: (stops.data || []).map((st) => ({
+      id: st.id,
+      orden: st.orden,
+      tipo: st.tipo,
+      nombre: st.nombre,
+      direccion: st.direccion,
+      estado: st.estado,
+    })),
+    evidencias: (evidencias.data || []).map((ev) => ({
+      id: ev.id,
+      tipo: ev.tipo,
+      createdAt: ev.created_at,
+    })),
+    documentos: (docs.data || []).map((d) => ({
+      id: d.id,
+      tipo: d.tipo,
+      nombre: d.archivo_nombre,
+      createdAt: d.created_at,
+    })),
+    tecnico: {
+      referenciaRaw: servicio.referencia,
+      servicioId: servicio.id,
+      empresaId: servicio.empresa_id,
+      conductorId: servicio.conductor_id,
+    },
+    erroresRecientes: [],
+    erroresDisponibles: false,
+  };
+}
+
+async function handlePanelQuery(body) {
+  const { view, filters, page, pageSize } = body || {};
+  if (!view) {
+    return { ok: false, status: 400, error: "view es obligatorio" };
+  }
+  return buildPanelQuery(
+    {
+      restSelect,
+      restCount,
+      enrichServiciosWithConductores,
+      authAdminGetUser,
+    },
+    { view, filters: filters || {}, page, pageSize },
+  );
+}
+
 async function handleResetPassword(userId) {
   if (!userId || !UUID_RE.test(userId)) {
     return { ok: false, status: 400, error: "user_id inválido" };
@@ -606,6 +1192,38 @@ export default async function handler(req, res) {
     case "list_empresas":
       result = await handleListEmpresas();
       break;
+    case "list_usuarios":
+      result = await handleListUsuarios();
+      break;
+    case "list_servicios":
+      result = await handleListServicios();
+      break;
+    case "list_documentos":
+      result = await handleListDocumentos();
+      break;
+    case "panel_query":
+      result = await handlePanelQuery(req.body || {});
+      break;
+    case "support_search": {
+      const { query } = req.body || {};
+      result = await handleSupportSearch(query);
+      break;
+    }
+    case "support_user_detail": {
+      const { user_id } = req.body || {};
+      result = await handleSupportUserDetail(user_id);
+      break;
+    }
+    case "support_empresa_diagnostic": {
+      const { empresa_id } = req.body || {};
+      result = await handleSupportEmpresaDiagnostic(empresa_id);
+      break;
+    }
+    case "support_servicio_diagnostic": {
+      const { servicio_id } = req.body || {};
+      result = await handleSupportServicioDiagnostic(servicio_id);
+      break;
+    }
     case "empresa_detail": {
       const { empresa_id } = req.body || {};
       result = await handleEmpresaDetail(empresa_id);

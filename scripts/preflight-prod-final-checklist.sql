@@ -75,19 +75,35 @@ WITH checks AS (
       WHERE n.nspname = 'public' AND p.proname = 'lookup_empresa_por_codigo'
     ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-empresas-join-lookup.sql'
 
-  -- 5) Objetos DEMO no deben existir
-  UNION ALL SELECT '05_no_demo', 'NO_tabla_empresa_usuarios',
-    CASE WHEN to_regclass('public.empresa_usuarios') IS NULL THEN 'OK' ELSE 'ALERTA' END, NULL
-  UNION ALL SELECT '05_no_demo', 'NO_col_responsable_user_id',
-    CASE WHEN NOT EXISTS (
+  -- 5) Multiusuario oficina (REAL = DEMO)
+  UNION ALL SELECT '05_multiusuario', 'tabla_empresa_usuarios',
+    CASE WHEN to_regclass('public.empresa_usuarios') IS NOT NULL THEN 'OK' ELSE 'FALTA' END,
+    'apply-prod-multiusuario-oficina.mjs'
+  UNION ALL SELECT '05_multiusuario', 'col_servicios_responsable_user_id',
+    CASE WHEN EXISTS (
       SELECT 1 FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'servicios' AND column_name = 'responsable_user_id'
-    ) THEN 'OK' ELSE 'ALERTA' END, NULL
-  UNION ALL SELECT '05_no_demo', 'NO_rpc_get_current_office_user_context',
-    CASE WHEN NOT EXISTS (
+    ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-multiusuario-oficina.mjs'
+  UNION ALL SELECT '05_multiusuario', 'col_servicios_responsable_nombre',
+    CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'servicios' AND column_name = 'responsable_nombre'
+    ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-multiusuario-oficina.mjs'
+  UNION ALL SELECT '05_multiusuario', 'rpc_get_current_office_user_context',
+    CASE WHEN EXISTS (
       SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public' AND p.proname = 'get_current_office_user_context'
-    ) THEN 'OK' ELSE 'ALERTA' END, NULL
+    ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-multiusuario-oficina.mjs'
+  UNION ALL SELECT '05_multiusuario', 'rpc_user_can_manage_empresa_usuarios',
+    CASE WHEN EXISTS (
+      SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'user_can_manage_empresa_usuarios'
+    ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-multiusuario-oficina.mjs'
+  UNION ALL SELECT '05_multiusuario', 'policy_eu_sel',
+    CASE WHEN EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = 'empresa_usuarios' AND policyname = 'eu_sel'
+    ) THEN 'OK' ELSE 'FALTA' END, 'apply-prod-multiusuario-oficina.mjs'
 
 )
 

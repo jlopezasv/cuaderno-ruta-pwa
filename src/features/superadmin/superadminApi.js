@@ -63,3 +63,35 @@ export function toggleSuperadminOfficeUser(empresaUsuarioId, activo) {
 export function resetSuperadminPassword(userId) {
   return postSuperadmin({ action: "reset_password", user_id: userId });
 }
+
+export function fetchSuperadminUsuarios() {
+  return postSuperadmin({ action: "list_usuarios" });
+}
+
+export function fetchSuperadminServicios() {
+  return postSuperadmin({ action: "list_servicios" });
+}
+
+export function fetchSuperadminDocumentos() {
+  return postSuperadmin({ action: "list_documentos" });
+}
+
+export function fetchSupportSearch(query) {
+  return postSuperadmin({ action: "support_search", query });
+}
+
+export function fetchSupportUserDetail(userId) {
+  return postSuperadmin({ action: "support_user_detail", user_id: userId });
+}
+
+export function fetchSupportEmpresaDiagnostic(empresaId) {
+  return postSuperadmin({ action: "support_empresa_diagnostic", empresa_id: empresaId });
+}
+
+export function fetchSupportServicioDiagnostic(servicioId) {
+  return postSuperadmin({ action: "support_servicio_diagnostic", servicio_id: servicioId });
+}
+
+export function fetchPanelQuery({ view, filters, page = 0, pageSize = 25 }) {
+  return postSuperadmin({ action: "panel_query", view, filters, page, pageSize });
+}

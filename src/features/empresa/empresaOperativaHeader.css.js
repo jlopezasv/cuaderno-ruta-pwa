@@ -1,4 +1,4 @@
-/** Cabecera operativa DEMO — una fila empresa + filtro visibilidad. */
+/** Cabecera operativa — una fila empresa + filtro visibilidad. */
 export const EMPRESA_OPERATIVA_HEADER_CSS = `
 .empresa-operativa-header {
   display: flex;

@@ -13,6 +13,7 @@ import {
   getVisibleEmpresaTabs,
 } from "../domain/empresa/officeUserFilters.js";
 import { EmpresaConfigDashboard } from "../features/empresa/EmpresaConfigDashboard.jsx";
+import { EmpresaEstadisticasPanel } from "../features/empresa/EmpresaEstadisticasPanel.jsx";
 import {
   enrichEmpresaRecordFromOffice,
   fetchEmpresaRecordById,
@@ -418,37 +419,36 @@ export default function EmpresaLayout({
         {/* PLANIFICADOR */}
         {tab === "planificador" && <EmpresaPanelSeccion seccion="planificador" prof={prof} showToast={showToast} />}
 
-        {/* CONFIGURACIÓN */}
-        {tab === "config" && canUseConfig && (
-          isDemoApp() ? (
-            canAccessEmpresaConfigTab(capabilities) ? (
-            <EmpresaConfigDashboard
-              empresaId={empresaId}
-              empresaRecord={empresaRecord}
-              prof={prof}
-              capabilities={capabilities}
-              officeUser={capabilities?.officeUser || null}
-              sbSelect={sbSelect}
-              sbUpsert={sbUpsert}
-              getUserId={getUserId}
-              onSave={onSave}
-              showToast={showToast}
-              ConfigPassword={ConfigPassword}
-              ConfigDangerZone={ConfigDangerZone}
-              tx={tx}
-              su={su}
-            />
-            ) : null
-          ) : (
-            <div style={{ maxWidth: 640, margin: "0 auto", padding: "24px 20px 80px" }}>
-              <div style={{ fontSize: 18, fontWeight: 650, color: tx, marginBottom: 4 }}>Configuración</div>
-              <div style={{ fontSize: 13, color: su, marginBottom: 20 }}>Datos de tu empresa</div>
-              {capabilities?.accountType === "empresa" && (
-                <ProfView prof={prof} onSave={onSave} norma={{ alerts: [] }} db={{ entries: [] }} showToast={showToast} />
-              )}
-            </div>
-          )
+        {/* ESTADÍSTICAS */}
+        {tab === "estadisticas" && (
+          <EmpresaEstadisticasPanel
+            empresaId={empresaId}
+            capabilities={capabilities}
+            getUserId={getUserId}
+            sbSelect={sbSelect}
+            showToast={showToast}
+          />
         )}
+
+        {/* CONFIGURACIÓN */}
+        {tab === "config" && canUseConfig && canAccessEmpresaConfigTab(capabilities) ? (
+          <EmpresaConfigDashboard
+            empresaId={empresaId}
+            empresaRecord={empresaRecord}
+            prof={prof}
+            capabilities={capabilities}
+            officeUser={capabilities?.officeUser || null}
+            sbSelect={sbSelect}
+            sbUpsert={sbUpsert}
+            getUserId={getUserId}
+            onSave={onSave}
+            showToast={showToast}
+            ConfigPassword={ConfigPassword}
+            ConfigDangerZone={ConfigDangerZone}
+            tx={tx}
+            su={su}
+          />
+        ) : null}
       </div>
 
       {/* ── BOTTOM NAV (móvil) ── */}

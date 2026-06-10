@@ -140,6 +140,13 @@ export function buildPlanificadorPendingCargas({
       hasCoords,
       pendingGeocode,
       pendingValidation,
+      locationStatus: hasCoords
+        ? pendingValidation
+          ? "pending_validation"
+          : "ready"
+        : pendingGeocode
+          ? "geocoding"
+          : "missing",
       geoTrace: origenGeo,
       origenGeoTrace: origenGeo,
       destinoGeoTrace: destinoGeo,

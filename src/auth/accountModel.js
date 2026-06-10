@@ -102,9 +102,9 @@ export function deriveFeatureFlags(account, activeMode = "conductor", ctx = {}) 
   const canManageOfficeUsers =
     inEmpresaShell &&
     (isEmpresaAccount ||
-      (isDemo && officeUser?.rol === "jefe_flota" && officeUser?.activo !== false));
+      (officeUser?.rol === "jefe_flota" && officeUser?.activo !== false));
   const inEmpresaShellAccess =
-    inEmpresaShell && (isEmpresaAccount || (isDemo && !!officeUser?.activo));
+    inEmpresaShell && (isEmpresaAccount || !!officeUser?.activo);
 
   return {
     [FEATURE_KEYS.CAN_CREATE_SERVICES]: !inEmpresaShell && isAutonomoPro,

@@ -1,8 +1,7 @@
-import { isDemoApp } from "../../config/appEnvironment.js";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
 import { officeUserRoleLabel } from "../../domain/empresa/empresaOfficeUsers.js";
 
-/** Campo Responsable del servicio (crear/editar) — solo DEMO. */
+/** Campo Responsable del servicio (crear/editar). */
 export function OfficeResponsableServicioField({
   officeUser = null,
   officeResponsables = [],
@@ -13,8 +12,6 @@ export function OfficeResponsableServicioField({
   surfaceSoft = "#f8fafc",
   border = "#dbe4ee",
 }) {
-  if (!isDemoApp()) return null;
-
   const labelStyle = lblStyle || {
     fontSize: 10,
     color: "#64748B",

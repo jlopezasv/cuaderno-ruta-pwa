@@ -102,7 +102,7 @@ function buildEmpresaOfficeUsersListFilter(empresaId) {
  */
 export async function fetchEmpresaOfficeUsers(_sbSelect, empresaId, { force = false } = {}) {
   const empty = { users: [], error: null, debug: null };
-  if (!empresaId || !isDemoApp()) return empty;
+  if (!empresaId) return empty;
 
   if (!force && officeUsersCache.empresaId === empresaId && officeUsersCache.data) {
     return { users: officeUsersCache.data, error: null, debug: { cached: true, empresaId } };
@@ -181,7 +181,7 @@ export function resolveEmpresaOfficeUsersTenantId(empresaIdProp, officeUser = nu
 export { mergeOfficeUserLists };
 
 export async function fetchActiveOfficeUserByUid(sbSelect, uid) {
-  if (!uid || !isDemoApp()) return null;
+  if (!uid) return null;
   const rows = await sbSelect(
     "empresa_usuarios",
     `user_id=eq.${uid}&activo=eq.true&limit=1`,
@@ -231,7 +231,7 @@ function mergeOfficeResponsablesWithSession(list, officeUser) {
  */
 export async function fetchEmpresaOfficeResponsables(_sbSelect, empresaId, officeUser = null) {
   const tenantId = resolveOfficeResponsablesEmpresaId(empresaId, officeUser);
-  if (!tenantId || !isDemoApp()) {
+  if (!tenantId) {
     logOfficeResponsablesDemo("skip", {
       empresaIdArg: empresaId ?? null,
       officeEmpresaId: officeUser?.empresaId ?? null,
@@ -308,17 +308,27 @@ export function officeResponsableDisplayName(userId, usersOrMap) {
 /** Etiqueta de listado: «Responsable · Nombre» o «Sin responsable». */
 export function officeResponsableServicioLine(servicio, usersOrMapOrResolver) {
   const uid = servicio?.responsable_user_id;
-  if (!uid) return "Responsable · Sin responsable";
+  const storedName = String(servicio?.responsable_nombre || "").trim();
+  if (!uid && !storedName) return "Responsable · Sin responsable";
   const name =
     typeof usersOrMapOrResolver === "function"
       ? usersOrMapOrResolver(uid)
       : officeResponsableDisplayName(uid, usersOrMapOrResolver);
-  return name ? `Responsable · ${name}` : "Responsable · Sin responsable";
+  return name || storedName ? `Responsable · ${name || storedName}` : "Responsable · Sin responsable";
 }
 
-/** Validación al crear servicio con responsable DEMO. */
+/** Payload al crear/editar servicio con responsable de oficina. */
+export function buildResponsableServicioPayload(responsableId, officeResponsables) {
+  if (!responsableId) return {};
+  const nombre = officeResponsableDisplayName(responsableId, officeResponsables);
+  return {
+    responsable_user_id: responsableId,
+    ...(nombre ? { responsable_nombre: nombre } : {}),
+  };
+}
+
+/** Validación al crear servicio con responsable de oficina. */
 export function validateOfficeResponsableOnCreate({ officeUser, responsableId, officeResponsables }) {
-  if (!isDemoApp()) return null;
   if (!officeResponsables?.length) {
     return "No hay usuarios de oficina activos como responsable. Contacta con el jefe de flota.";
   }
@@ -343,7 +353,7 @@ export async function fetchEmpresaOfficeResponsablesCached(
   { force = false } = {},
 ) {
   const tenantId = resolveOfficeResponsablesEmpresaId(empresaId, officeUser);
-  if (!tenantId || !isDemoApp()) return [];
+  if (!tenantId) return [];
 
   if (
     !force &&
@@ -409,8 +419,7 @@ export function setEmpresaOfficeUserPuedeVerTodos(id, puedeVerTodos) {
   return patchEmpresaOfficeUser(id, { puede_ver_todos: !!puedeVerTodos });
 }
 
-export async function createEmpresaOfficeUserDemo({ empresaId, nombre, email, rol, callerUid }) {
-  if (!isDemoApp()) throw new Error("Solo disponible en entorno DEMO");
+export async function createEmpresaOfficeUser({ empresaId, nombre, email, rol, callerUid }) {
   if (!empresaId || !nombre?.trim() || !email?.trim()) {
     throw new Error("Empresa, nombre y email son obligatorios");
   }
@@ -419,7 +428,7 @@ export async function createEmpresaOfficeUserDemo({ empresaId, nombre, email, ro
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      action: "create_office_user_demo",
+      action: "create_office_user",
       caller_uid: callerUid,
       empresa_id: empresaId,
       nombre: nombre.trim(),
@@ -429,11 +438,19 @@ export async function createEmpresaOfficeUserDemo({ empresaId, nombre, email, ro
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Error al crear usuario (${res.status})`);
-  return { ...data, demoPassword: data.password || DEMO_LOGIN_HINT.password };
+  const tempPassword = data.password || DEMO_LOGIN_HINT.password;
+  return {
+    ...data,
+    tempPassword,
+    message: data.message || `Usuario creado con contraseña temporal: ${tempPassword}`,
+  };
 }
 
+/** @deprecated Usar createEmpresaOfficeUser */
+export const createEmpresaOfficeUserDemo = createEmpresaOfficeUser;
+
 export function canManageEmpresaOfficeUsers(capabilities) {
-  if (!isDemoApp() || !capabilities?.empresa) return false;
+  if (!capabilities?.empresa) return false;
   if (capabilities.accountType === "empresa") return true;
   return (
     normalizeOfficeUserRol(capabilities.officeUser?.rol) === "jefe_flota" &&

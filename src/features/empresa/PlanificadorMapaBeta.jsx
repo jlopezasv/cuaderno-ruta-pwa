@@ -4,6 +4,7 @@ import {
   buildPlanificadorDriverMarkers,
   buildPlanificadorPendingCargas,
 } from "./planificadorMapBetaModel.js";
+import { enrichPlanificadorCargasWithGeocode } from "./planificadorCargoGeocode.js";
 
 const EUROPE_CENTER = [40.4168, -3.7038];
 const EUROPE_ZOOM = 6;
@@ -128,10 +129,37 @@ export function PlanificadorMapaBeta({
 
   const useLocalGeoFallback = isLocalGeoCatalogEnabled();
 
-  const cargas = useMemo(
+  const cargasBase = useMemo(
     () => buildPlanificadorPendingCargas({ servicios, flotaStops, useLocalGeoFallback }),
     [servicios, flotaStops, useLocalGeoFallback],
   );
+
+  const [cargas, setCargas] = useState(cargasBase);
+  const [geocodingCargas, setGeocodingCargas] = useState(false);
+
+  useEffect(() => {
+    setCargas(cargasBase);
+    const needsAsync = cargasBase.some((c) => !c.hasCoords && c.pendingGeocode);
+    if (!needsAsync) {
+      setGeocodingCargas(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setGeocodingCargas(true);
+    enrichPlanificadorCargasWithGeocode(cargasBase)
+      .then((enriched) => {
+        if (!cancelled) setCargas(enriched);
+      })
+      .catch(() => {
+        if (!cancelled) setCargas(cargasBase);
+      })
+      .finally(() => {
+        if (!cancelled) setGeocodingCargas(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cargasBase]);
 
   const drivers = useMemo(
     () =>
@@ -299,7 +327,7 @@ export function PlanificadorMapaBeta({
           padding: compactLayout ? "2px 6px" : "8px 10px",
         }}
       >
-        {`${cargas.length} carga${cargas.length !== 1 ? "s" : ""} sin conductor · ${driversDisponibles} sin servicio · ${driversConCoords} en mapa · 🟢 sin servicio · 🟠 asignado · 🔵 en curso · ⚪ sin GPS`}
+        {`${cargas.length} carga${cargas.length !== 1 ? "s" : ""} sin conductor · ${cargasConCoords} en mapa${geocodingCargas ? " · geocodificando…" : ""} · ${driversDisponibles} sin servicio · ${driversConCoords} conductores · 🟢 sin servicio · 🟠 asignado · 🔵 en curso · ⚪ sin GPS`}
       </div>
 
       <div
@@ -377,13 +405,17 @@ export function PlanificadorMapaBeta({
                     <div style={{ fontSize: 11, color: su, marginTop: 3 }}>
                       {cargo.cliente} · {cargo.salidaLabel}
                     </div>
-                    {cargo.pendingValidation ? (
+                    {cargo.pendingValidation || cargo.locationStatus === "pending_validation" ? (
                       <div style={{ fontSize: 10, color: "#b45309", marginTop: 4, fontWeight: 700 }}>
                         Ubicación pendiente de validar
                       </div>
-                    ) : cargo.pendingGeocode ? (
+                    ) : cargo.locationStatus === "missing" || cargo.locationMissing ? (
+                      <div style={{ fontSize: 10, color: "#b91c1c", marginTop: 4, fontWeight: 700 }}>
+                        Falta ubicación de carga
+                      </div>
+                    ) : geocodingCargas && !cargo.hasCoords ? (
                       <div style={{ fontSize: 10, color: "#b45309", marginTop: 4, fontWeight: 700 }}>
-                        Ubicación pendiente
+                        Calculando ubicación…
                       </div>
                     ) : null}
                     {onBuscarConductor ? (
@@ -505,6 +537,11 @@ export function PlanificadorMapaBeta({
               <div style={{ fontSize: 11, color: su, marginTop: 4, lineHeight: 1.45 }}>
                 {selectedCargo.cliente} · {selectedCargo.salidaLabel}
               </div>
+              {selectedCargo.locationMissing && !selectedCargo.hasCoords ? (
+                <div style={{ fontSize: 10, color: "#b91c1c", marginTop: 6, fontWeight: 700 }}>
+                  Falta ubicación de carga
+                </div>
+              ) : null}
               {onBuscarConductor ? (
                 <button
                   type="button"

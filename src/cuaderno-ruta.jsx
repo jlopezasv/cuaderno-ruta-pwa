@@ -52,6 +52,7 @@ import {
   CONDUCTOR_NORMA_PILLS_CSS,
 } from "./features/empresa/ConductorNormaMetricPills.jsx";
 import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
+import { EmpresaAgendaComercialPanel } from "./features/empresa/EmpresaAgendaComercialPanel.jsx";
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
 import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
 import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
@@ -141,7 +142,7 @@ import {
   registrationProfilePayload,
 } from "./auth/accountModel.js";
 import { isPlatformAdminUid } from "./config/adminUsers.js";
-import { SuperadminPanel } from "./features/superadmin/SuperadminPanel.jsx";
+import PropietarioLayout from "./layouts/PropietarioLayout.jsx";
 import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
 import { EmpresaPendingScreen } from "./ui/EmpresaPendingScreen.jsx";
 import { getPushClientContext, initFcmPush } from "./data/fcmPush";
@@ -203,7 +204,7 @@ import {
 } from "./domain/service/serviceExpediente.js";
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
-import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
+import { geoFromGpsPoint, resolveEventGeoFromOp } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
 import {
@@ -3232,7 +3233,6 @@ function AppInner(){
   const selTmpl=TMPLS.find(t=>t.id===tmplId);
   const authSession=getStoredAuthSession(getUserId());
   const showModeSwitch=isHybridSession(authSession);
-  const isAdmin=!!authSession?.capabilities?.admin;
   const canCreateServices=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_CREATE_SERVICES);
   const canViewAdvancedDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS);
   const canViewOperationalLite=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE);
@@ -3312,7 +3312,7 @@ function AppInner(){
       )}
 
       <nav style={s.nav}>
-        {getConductorTabs({isAdmin,T}).map(t=>(
+        {getConductorTabs({T}).map(t=>(
           <button key={t.id} onClick={()=>{setTab(t.id);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
               background:tab===t.id?"rgba(245,158,11,.10)":"transparent",
@@ -3496,7 +3496,6 @@ function AppInner(){
             {resumenTab==="historial"&&<HistorialView db={db} norma={norma} prof={prof} allSorted={allSorted} dayMap={dayMap} days={days} srch={srch} searchQ={searchQ} setSearchQ={setSearchQ} openEdit={openEdit} deleteEntry={deleteEntry}/>}
           </div>
         )}
-        {tab==="admin"&&isAdmin&&<SuperadminPanel/>}
         {tab==="perfil"&&<ProfView prof={prof} authUid={user} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast} onFleetJoinSuccess={()=>{setRolEmpresa("conductor");setTab("servicio");showToast("Equipo activo ✓","#22C55E");}}/>}
         {tab==="ruta"&&<MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>}
         {tab==="docs"&&(
@@ -5127,10 +5126,11 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   };
   const successBase=successMsgs[eventType]||"✓ Acción registrada";
 
-  showToast?.("Obteniendo ubicación…","#64748B",4000);
+  showToast?.("Obteniendo ubicación…","#64748B",3000);
   trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
 
-  const gps=await getDriverActionGps({fresh:true,timeoutMs:15000});
+  const gps=await getDriverActionGps({fresh:true,timeoutMs:12000});
+  let point=null;
   if(!gps.ok){
     devWarn("[OP3] gps fail",{
       eventType:eventType||null,
@@ -5138,11 +5138,15 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
       stopId:stopId||null,
       error:gps.error,
     });
-    showToast?.(`${gps.error}. Sin ubicación operativa.`,"#F97316",4200);
+    showToast?.("Evento guardado sin ubicación","#F97316",3600);
     trackingLog("operativa flow_gps_fail",{uid,error:gps.error});
-    return{gpsOk:false,error:gps.error};
+  }else{
+    point=gps.point;
   }
-  const point=gps.point;
+  if(!point){
+    devLog("[OP3] register without gps",{eventType:eventType||null,servicioId:servicio?.id||null,stopId:stopId||null});
+    return{gpsOk:false,point:null,geoUnavailable:true,error:gps.error||"sin ubicación"};
+  }
   devLog("[OP3] gps ok",{
     eventType:eventType||null,
     servicioId:servicio?.id||null,
@@ -15049,7 +15053,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           <div style={{width:9,height:9,borderRadius:99,background:ev.type==="incidencia"?"#f97316":ev.type==="cmr"?"#2563eb":ev.type==="foto"?"#16a34a":"#94a3b8",marginTop:4}}/>
                           <div style={{minWidth:0,borderBottom:idx===expedientePreview.timeline.length-1?"none":"1px solid #e2e8f0",paddingBottom:8}}>
                             <div style={{fontSize:13,fontWeight:750,color:"#0f172a",lineHeight:1.25}}>{ev.title}</div>
-                            {ev.detail&&<div style={{fontSize:12,color:"#64748b",lineHeight:1.35,marginTop:2}}>{ev.detail}</div>}
+                            {ev.detail&&<div style={{fontSize:12,color:"#64748b",lineHeight:1.35,marginTop:2,whiteSpace:"pre-line"}}>{ev.detail}</div>}
+                            {ev.ubicacion&&<div style={{fontSize:12,color:"#475569",lineHeight:1.35,marginTop:ev.detail?4:2}}>{ev.ubicacion}</div>}
                           </div>
                         </div>
                       ))}
@@ -15068,6 +15073,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                             <div style={{fontSize:11,color:"#9f1239",marginTop:4}}>
                               {inc.fechaLabel||"—"} · {inc.fase_operativa||"—"} · Fotos {inc.fotos?.length||0}
                             </div>
+                            {inc.ubicacion?<div style={{fontSize:11,color:"#7f1d1d",marginTop:4}}>{inc.ubicacion}</div>:null}
                           </div>
                         ))}
                       </div>
@@ -17309,13 +17315,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
-    const geo=geoFromGpsPoint(op?.point);
-    if(geo){
-      const stop=updated.find(s=>s.id===stopId);
-      const notas=mergeStopOperacionMeta(stop?.notas,{entrada_geo:geo});
-      await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
-      updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
-    }
+    const geo=resolveEventGeoFromOp(op);
+    const stop=updated.find(s=>s.id===stopId);
+    const notas=mergeStopOperacionMeta(stop?.notas,{entrada_geo:geo});
+    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
+    updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
     patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
@@ -17379,13 +17383,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
-    const geoSalida=geoFromGpsPoint(op?.point);
-    if(geoSalida){
-      const stop=updated.find(s=>s.id===stopId);
-      const notas=mergeStopOperacionMeta(stop?.notas,{salida_geo:geoSalida});
-      await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
-      updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
-    }
+    const geoSalida=resolveEventGeoFromOp(op);
+    const stopSalida=updated.find(s=>s.id===stopId);
+    const notasSalida=mergeStopOperacionMeta(stopSalida?.notas,{salida_geo:geoSalida});
+    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas:notasSalida})});
+    updated=updated.map(s=>s.id===stopId?{...s,notas:notasSalida}:s);
 
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
@@ -17406,7 +17408,17 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
     let nextServicio={...started};
     const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast});
-    if(op?.referencia)nextServicio={...nextServicio,referencia:op.referencia};
+    const inicioGeo=resolveEventGeoFromOp(op);
+    const referenciaInicio=mergeReferenciaOperacional(
+      op?.referencia||nextServicio.referencia||null,
+      {inicio_servicio_geo:inicioGeo},
+    );
+    if(referenciaInicio!==nextServicio.referencia){
+      await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia:referenciaInicio})});
+      nextServicio={...nextServicio,referencia:referenciaInicio};
+    }else if(op?.referencia){
+      nextServicio={...nextServicio,referencia:op.referencia};
+    }
     patchDriverView({servicio:nextServicio});
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
@@ -18602,6 +18614,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 //  EMPRESA DASHBOARD — pantalla principal empresa
 // ─────────────────────────────────────────────────────────────
 function EmpresaDashboard({prof,showToast,onTabChange}){
+  const[dashView,setDashView]=useState("operativa");
   const[empresa,setEmpresa]=useState(null);
   const[conductores,setConductores]=useState([]);
   const[serviciosRaw,setServiciosRaw]=useState([]);
@@ -18798,26 +18811,61 @@ function EmpresaDashboard({prof,showToast,onTabChange}){
         onShare={()=>{}}
         onQrInvite={()=>{}}
       />
-      <div style={{padding:"4px 12px 0",maxWidth:960,margin:"0 auto"}}>
-        <OfficeServiciosVistaSelector
-          officeUser={officeUserDash}
-          vista={officeServiciosVistaDash}
-          onVistaChange={(v)=>{
-            setOfficeServiciosVistaDash(v);
-            if(v===OFFICE_SERVICIOS_VISTA.MIS||v===OFFICE_SERVICIOS_VISTA.TODOS)writeStoredOfficeServiciosVista(v);
-          }}
-          responsableFiltroId={officeResponsableFiltroDash}
-          onResponsableFiltroChange={setOfficeResponsableFiltroDash}
-          officeResponsables={officeResponsablesDash}
-          ui={EMPRESA_UI}
-        />
+      <div style={{padding:"4px 16px 0",maxWidth:960,margin:"0 auto",display:"flex",gap:8,flexWrap:"wrap"}}>
+        {[
+          ["operativa","Operativa"],
+          ["agenda","Agenda Comercial"],
+        ].map(([id,label])=>{
+          const active=dashView===id;
+          return(
+            <button
+              key={id}
+              type="button"
+              onClick={()=>setDashView(id)}
+              style={{
+                background:active?EMPRESA_UI.accentSoft:"transparent",
+                border:`1px solid ${active?EMPRESA_UI.accent:EMPRESA_UI.border}`,
+                borderRadius:10,
+                padding:"8px 16px",
+                fontSize:13,
+                fontWeight:active?700:600,
+                color:active?EMPRESA_UI.accent:EMPRESA_UI.muted,
+                cursor:"pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
-      <EmpresaDashboardTower
-        tower={tower}
-        ui={EMPRESA_UI}
-        onTabChange={onTabChange}
-        empresaCodigo={isDemoApp()?null:(empresa?getEmpresaCodigoEquipoDisplay(empresa):null)}
-      />
+      {dashView==="operativa"?(
+        <>
+          <div style={{padding:"4px 12px 0",maxWidth:960,margin:"0 auto"}}>
+            <OfficeServiciosVistaSelector
+              officeUser={officeUserDash}
+              vista={officeServiciosVistaDash}
+              onVistaChange={(v)=>{
+                setOfficeServiciosVistaDash(v);
+                if(v===OFFICE_SERVICIOS_VISTA.MIS||v===OFFICE_SERVICIOS_VISTA.TODOS)writeStoredOfficeServiciosVista(v);
+              }}
+              responsableFiltroId={officeResponsableFiltroDash}
+              onResponsableFiltroChange={setOfficeResponsableFiltroDash}
+              officeResponsables={officeResponsablesDash}
+              ui={EMPRESA_UI}
+            />
+          </div>
+          <EmpresaDashboardTower
+            tower={tower}
+            ui={EMPRESA_UI}
+            onTabChange={onTabChange}
+            empresaCodigo={isDemoApp()?null:(empresa?getEmpresaCodigoEquipoDisplay(empresa):null)}
+          />
+        </>
+      ):(
+        <div style={{padding:"8px 12px 0",maxWidth:960,margin:"0 auto"}}>
+          <EmpresaAgendaComercialPanel empresaId={empresa?.id} showToast={showToast}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -18894,10 +18942,11 @@ export default function App(){
     devLog("[PRODUCT-1] App shell",{
       activeMode,
       capabilities:session?.capabilities||null,
-      renderiza:activeMode==="empresa"?"EmpresaLayout":"AppInner",
+      renderiza:activeMode==="propietario"?"PropietarioLayout":activeMode==="empresa"?"EmpresaLayout":"AppInner",
     });
   }
 
+  if(activeMode==="propietario")return <ErrorBoundary><PropietarioLayout sbSignOut={sbSignOut} getUserId={getUserId}/></ErrorBoundary>;
   if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView} ConfigPassword={CambiarPassword} ConfigDangerZone={BorrarTodo}/></ErrorBoundary>;
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }

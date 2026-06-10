@@ -1,4 +1,3 @@
-import { isDemoApp } from "../../config/appEnvironment.js";
 import { EMPRESA_TABS } from "../../navigation/empresaTabs.js";
 import { canManageEmpresaOfficeUsers, normalizeOfficeUserRol } from "./empresaOfficeUsers.js";
 
@@ -17,7 +16,7 @@ export function canViewAllServices(officeUser) {
   return false;
 }
 
-/** Vista operativa por defecto según rol oficina DEMO. */
+/** Vista operativa por defecto según rol oficina. */
 export function getDefaultOfficeServiciosVista(officeUser) {
   if (!officeUser?.activo) return OFFICE_SERVICIOS_VISTA.TODOS;
   const rol = String(officeUser.rol || "").toLowerCase();
@@ -26,9 +25,17 @@ export function getDefaultOfficeServiciosVista(officeUser) {
   return OFFICE_SERVICIOS_VISTA.TODOS;
 }
 
+export function soloMisServiciosFromVista(vista) {
+  return vista === OFFICE_SERVICIOS_VISTA.MIS;
+}
+
+export function vistaFromSoloMisServicios(soloMis) {
+  return soloMis ? OFFICE_SERVICIOS_VISTA.MIS : OFFICE_SERVICIOS_VISTA.TODOS;
+}
+
 /** Opciones del selector «Ver: …» (vacío = sin selector). */
 export function getOfficeServiciosVistaOptions(officeUser) {
-  if (!isDemoApp() || !officeUser?.activo) return [];
+  if (!officeUser?.activo) return [];
   const rol = String(officeUser.rol || "").toLowerCase();
   if (rol === "jefe_flota") {
     return [
@@ -50,33 +57,41 @@ export function shouldShowOfficeServiciosVistaSelector(officeUser) {
   return getOfficeServiciosVistaOptions(officeUser).length > 0;
 }
 
+/** Tick «Ver solo mis servicios» — jefe_flota y tráfico con puede_ver_todos. */
+export function shouldShowSoloMisServiciosToggle(officeUser) {
+  if (!officeUser?.activo) return false;
+  const rol = String(officeUser.rol || "").toLowerCase();
+  if (rol === "jefe_flota") return true;
+  if (rol === "trafico" && officeUser.puedeVerTodos) return true;
+  return false;
+}
+
 /** Puede elegir responsable al crear/editar servicio. */
 export function canPickOfficeServicioResponsable(officeUser) {
-  if (!isDemoApp() || !officeUser?.activo) return false;
+  if (!officeUser?.activo) return false;
   const rol = String(officeUser.rol || "").toLowerCase();
   return rol === "jefe_flota" || (rol === "trafico" && !!officeUser.puedeVerTodos);
 }
 
 /**
  * Filtra servicios según rol oficina y vista operativa.
- * @param {{ forDocumentos?: boolean, vista?: string, responsableFiltroId?: string|null }} [options]
+ * @param {{ forDocumentos?: boolean, forEstadisticas?: boolean, vista?: string, responsableFiltroId?: string|null }} [options]
  */
 export function filterServiciosForOfficeUser(servicios, officeUser, uid, options = {}) {
   const list = Array.isArray(servicios) ? servicios : [];
-  if (!isDemoApp() || !officeUser?.activo) return list;
+  if (!officeUser?.activo) return list;
 
   if (options.forDocumentos) {
-    const rol = String(officeUser.rol || "").toLowerCase();
-    if (rol === "administrativo") return list;
     return list;
   }
 
   const rol = String(officeUser.rol || "").toLowerCase();
-  if (rol === "administrativo") return [];
+  if (rol === "administrativo") {
+    return options.forEstadisticas ? list : [];
+  }
 
   const userId = uid || officeUser.userId;
 
-  // Tráfico sin puede_ver_todos: siempre solo sus servicios (sin selector en UI).
   if (rol === "trafico" && !officeUser.puedeVerTodos) {
     return list.filter((s) => s?.responsable_user_id && s.responsable_user_id === userId);
   }
@@ -102,14 +117,10 @@ export function filterServiciosForOfficeUser(servicios, officeUser, uid, options
 
 const TAB = Object.fromEntries(EMPRESA_TABS.map((t) => [t.id, t]));
 
-/** Tabs visibles por rol oficina DEMO. Owner sin officeUser → tabs completas. */
+/** Tabs visibles por rol oficina. Owner sin officeUser → tabs completas. */
 export function getVisibleEmpresaTabs(capabilities) {
-  if (!isDemoApp()) return EMPRESA_TABS;
   const office = capabilities?.officeUser;
   if (!office?.activo) {
-    if (isDemoApp()) {
-      return EMPRESA_TABS.filter((t) => t.id !== "config");
-    }
     return EMPRESA_TABS;
   }
 
@@ -117,13 +128,13 @@ export function getVisibleEmpresaTabs(capabilities) {
   let tabs;
   switch (rol) {
     case "jefe_flota":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.planificador, TAB.config];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador, TAB.config];
       break;
     case "trafico":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.documentos];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador];
       break;
     case "administrativo":
-      tabs = [TAB.documentos];
+      tabs = [TAB.documentos, TAB.estadisticas];
       break;
     default:
       tabs = [TAB.documentos];
@@ -139,18 +150,15 @@ export function getDefaultEmpresaTab(capabilities) {
 }
 
 export function officeUserCanAccessServicios(officeUser) {
-  if (!isDemoApp() || !officeUser?.activo) return true;
+  if (!officeUser?.activo) return true;
   return officeUser.rol !== "administrativo";
 }
 
-/** Owner puede editar perfil de empresa en Config DEMO. */
 export function canEditEmpresaConfigPerfil(capabilities) {
-  return capabilities?.accountType === "empresa";
+  return capabilities?.accountType === "empresa" || !!capabilities?.officeUser?.activo;
 }
 
-/** Tarjeta perfil visible para owner y usuarios oficina activos. */
 export function canViewEmpresaConfigPerfil(capabilities) {
-  if (!isDemoApp()) return capabilities?.accountType === "empresa";
   if (capabilities?.officeUser?.activo) return true;
   return capabilities?.accountType === "empresa";
 }
@@ -159,9 +167,9 @@ export function canViewEmpresaConfigUsuarios(capabilities) {
   return canManageEmpresaOfficeUsers(capabilities);
 }
 
-/** DEMO: pestaña Configuración solo para jefe_flota activo. */
+/** Configuración solo para owner empresa o jefe_flota activo. */
 export function canAccessEmpresaConfigTab(capabilities) {
-  if (!isDemoApp()) return true;
+  if (capabilities?.accountType === "empresa" && !capabilities?.officeUser?.activo) return true;
   const office = capabilities?.officeUser;
   return office?.activo && normalizeOfficeUserRol(office.rol) === "jefe_flota";
 }

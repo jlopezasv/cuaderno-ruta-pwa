@@ -1,4 +1,3 @@
-import { isDemoApp } from "../../config/appEnvironment.js";
 import { buildOfficeUserRow } from "./empresaOfficeUsers.js";
 
 export function buildOfficeUserCapabilities(row) {
@@ -25,21 +24,19 @@ export async function resolveEmpresaIdForUser(uid, sbSelect, officeUser = null) 
 }
 
 /**
- * Owner (empresas.owner_id) o usuario oficina activo en DEMO.
+ * Owner (empresas.owner_id) o usuario oficina activo.
  * @returns {Promise<object|null>} fila empresas
  */
 export async function resolveEmpresaRecordForUser(uid, sbSelect, officeUser = null) {
   if (!uid) return null;
 
-  if (isDemoApp() && officeUser?.empresaId) {
+  if (officeUser?.empresaId) {
     const emps = await sbSelect("empresas", `id=eq.${officeUser.empresaId}`).catch(() => []);
     if (emps[0]) return emps[0];
   }
 
   const ownerRows = await sbSelect("empresas", `owner_id=eq.${uid}`).catch(() => []);
   if (ownerRows[0]) return ownerRows[0];
-
-  if (!isDemoApp()) return null;
 
   const link = (await sbSelect("empresa_usuarios", `user_id=eq.${uid}&activo=eq.true&limit=1`).catch(() => []))[0];
 
