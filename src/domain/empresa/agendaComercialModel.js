@@ -1,14 +1,39 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { AGENDA_VISTAS, estadoComercialLabel, tipoAccionLabel } from "./agendaComercialConstants.js";
+import { AGENDA_CONTEXT, getAgendaContextConfig } from "./agendaComercialContext.js";
 
-const PROSPECTO_COLS =
+const PROSPECTO_COLS_TENANT =
   "id,tenant_empresa_id,nombre,cif,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,ultima_nota,created_at,updated_at";
 
-const CONTACTO_COLS =
+const CONTACTO_COLS_TENANT =
   "id,prospecto_id,tenant_empresa_id,nombre,cargo,telefono,email,whatsapp,observaciones,es_principal,created_at";
 
-const ACCION_COLS =
+const ACCION_COLS_TENANT =
   "id,prospecto_id,tenant_empresa_id,tipo,fecha_hora,contacto_nombre,resultado,proxima_accion,notas,completada,created_at";
+
+const PROSPECTO_COLS_ADMIN =
+  "id,nombre,cif,direccion,localidad,provincia,telefono,email,web,sector,estado_comercial,num_camiones,tipos_vehiculos,tipos_rutas,sistemas_actuales,dolores,ultima_nota,created_at,updated_at";
+
+const CONTACTO_COLS_ADMIN =
+  "id,prospecto_id,nombre,cargo,telefono,email,whatsapp,observaciones,es_principal,created_at";
+
+const ACCION_COLS_ADMIN =
+  "id,prospecto_id,tipo,fecha_hora,contacto_nombre,resultado,proxima_accion,notas,completada,created_at";
+
+function colsForContext(cfg) {
+  if (cfg.usesTenant) {
+    return {
+      prospecto: PROSPECTO_COLS_TENANT,
+      contacto: CONTACTO_COLS_TENANT,
+      accion: ACCION_COLS_TENANT,
+    };
+  }
+  return {
+    prospecto: PROSPECTO_COLS_ADMIN,
+    contacto: CONTACTO_COLS_ADMIN,
+    accion: ACCION_COLS_ADMIN,
+  };
+}
 
 function startOfDay(d) {
   const x = new Date(d);
@@ -71,52 +96,232 @@ function formatFechaHora(iso) {
   });
 }
 
-export async function fetchAgendaComercialBundle(tenantEmpresaId) {
-  if (!tenantEmpresaId) return { prospectos: [], contactos: [], acciones: [], tableMissing: false };
+async function responseTableMissing(r, tableHint) {
+  if (r.status === 404) return true;
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    const hint = tableHint || "agenda_comercial";
+    return (
+      new RegExp(`does not exist|${hint}|42P01|relation.*not found|PGRST205`, "i").test(body) ||
+      r.status === 400
+    );
+  }
+  return false;
+}
 
-  const [pr, cr, ar] = await Promise.all([
-    sbFetch(
-      `/rest/v1/agenda_comercial_prospectos?tenant_empresa_id=eq.${tenantEmpresaId}&order=updated_at.desc&select=${PROSPECTO_COLS}`,
-    ),
-    sbFetch(
-      `/rest/v1/agenda_comercial_contactos?tenant_empresa_id=eq.${tenantEmpresaId}&order=es_principal.desc,created_at.asc&select=${CONTACTO_COLS}`,
-    ),
-    sbFetch(
-      `/rest/v1/agenda_comercial_acciones?tenant_empresa_id=eq.${tenantEmpresaId}&order=fecha_hora.asc&select=${ACCION_COLS}`,
-    ),
-  ]);
+export function createAgendaComercialApi(contextKey = AGENDA_CONTEXT.EMPRESA_CRM) {
+  const cfg = getAgendaContextConfig(contextKey);
+  const cols = colsForContext(cfg);
+  const tableHint = cfg.prospectosTable;
 
-  async function responseTableMissing(r) {
-    if (r.status === 404) return true;
-    if (!r.ok) {
-      const body = await r.text().catch(() => "");
-      return (
-        /does not exist|agenda_comercial|42P01|relation.*not found|PGRST205/i.test(body) ||
-        r.status === 400
-      );
+  async function fetchBundle(tenantEmpresaId) {
+    if (cfg.usesTenant && !tenantEmpresaId) {
+      return { prospectos: [], contactos: [], acciones: [], tableMissing: false };
     }
-    return false;
+
+    const tenantQ = cfg.usesTenant ? `tenant_empresa_id=eq.${tenantEmpresaId}&` : "";
+    const [pr, cr, ar] = await Promise.all([
+      sbFetch(
+        `/rest/v1/${cfg.prospectosTable}?${tenantQ}order=updated_at.desc&select=${cols.prospecto}`,
+      ),
+      sbFetch(
+        `/rest/v1/${cfg.contactosTable}?${tenantQ}order=es_principal.desc,created_at.asc&select=${cols.contacto}`,
+      ),
+      sbFetch(
+        `/rest/v1/${cfg.accionesTable}?${tenantQ}order=fecha_hora.asc&select=${cols.accion}`,
+      ),
+    ]);
+
+    const [prMissing, crMissing, arMissing] = await Promise.all([
+      responseTableMissing(pr, tableHint),
+      responseTableMissing(cr, tableHint),
+      responseTableMissing(ar, tableHint),
+    ]);
+    if (prMissing || crMissing || arMissing) {
+      return { prospectos: [], contactos: [], acciones: [], tableMissing: true };
+    }
+
+    const prospectos = pr.ok ? await pr.json().catch(() => []) : [];
+    const contactos = cr.ok ? await cr.json().catch(() => []) : [];
+    const acciones = ar.ok ? await ar.json().catch(() => []) : [];
+
+    return {
+      prospectos: Array.isArray(prospectos) ? prospectos : [],
+      contactos: Array.isArray(contactos) ? contactos : [],
+      acciones: Array.isArray(acciones) ? acciones : [],
+      tableMissing: false,
+    };
   }
 
-  const [prMissing, crMissing, arMissing] = await Promise.all([
-    responseTableMissing(pr),
-    responseTableMissing(cr),
-    responseTableMissing(ar),
-  ]);
-  if (prMissing || crMissing || arMissing) {
-    return { prospectos: [], contactos: [], acciones: [], tableMissing: true };
+  async function saveProspecto(tenantEmpresaId, form, existingId = null) {
+    const body = {
+      nombre: String(form.nombre || "").trim(),
+      cif: form.cif || null,
+      direccion: form.direccion || null,
+      localidad: form.localidad || null,
+      provincia: form.provincia || null,
+      telefono: form.telefono || null,
+      email: form.email || null,
+      web: form.web || null,
+      sector: form.sector || null,
+      estado_comercial: form.estado_comercial || "pendiente_contactar",
+      num_camiones: form.num_camiones === "" || form.num_camiones == null ? null : Number(form.num_camiones),
+      tipos_vehiculos: form.tipos_vehiculos || [],
+      tipos_rutas: form.tipos_rutas || [],
+      sistemas_actuales: form.sistemas_actuales || [],
+      dolores: form.dolores || [],
+      ultima_nota: form.ultima_nota || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (cfg.usesTenant) body.tenant_empresa_id = tenantEmpresaId;
+    if (!body.nombre) throw new Error("El nombre es obligatorio");
+
+    if (existingId) {
+      const r = await sbFetch(`/rest/v1/${cfg.prospectosTable}?id=eq.${existingId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("No se pudo actualizar el registro");
+      const rows = await r.json();
+      return Array.isArray(rows) ? rows[0] : null;
+    }
+
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
+    const r = await sbFetch(`/rest/v1/${cfg.prospectosTable}`, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(id ? { id, ...body } : body),
+    });
+    if (!r.ok) throw new Error("No se pudo crear el registro");
+    const rows = await r.json();
+    return Array.isArray(rows) ? rows[0] : null;
   }
 
-  const prospectos = pr.ok ? await pr.json().catch(() => []) : [];
-  const contactos = cr.ok ? await cr.json().catch(() => []) : [];
-  const acciones = ar.ok ? await ar.json().catch(() => []) : [];
+  async function deleteProspecto(id) {
+    const r = await sbFetch(`/rest/v1/${cfg.prospectosTable}?id=eq.${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error("No se pudo eliminar");
+  }
+
+  async function saveContacto(tenantEmpresaId, prospectoId, form, existingId = null) {
+    const body = {
+      prospecto_id: prospectoId,
+      nombre: String(form.nombre || "").trim(),
+      cargo: form.cargo || null,
+      telefono: form.telefono || null,
+      email: form.email || null,
+      whatsapp: form.whatsapp || null,
+      observaciones: form.observaciones || null,
+      es_principal: !!form.es_principal,
+    };
+    if (cfg.usesTenant) body.tenant_empresa_id = tenantEmpresaId;
+    if (!body.nombre) throw new Error("El nombre del contacto es obligatorio");
+
+    if (existingId) {
+      const r = await sbFetch(`/rest/v1/${cfg.contactosTable}?id=eq.${existingId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("No se pudo actualizar el contacto");
+      const rows = await r.json();
+      return Array.isArray(rows) ? rows[0] : null;
+    }
+
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
+    const r = await sbFetch(`/rest/v1/${cfg.contactosTable}`, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(id ? { id, ...body } : body),
+    });
+    if (!r.ok) throw new Error("No se pudo crear el contacto");
+    const rows = await r.json();
+    return Array.isArray(rows) ? rows[0] : null;
+  }
+
+  async function deleteContacto(id) {
+    const r = await sbFetch(`/rest/v1/${cfg.contactosTable}?id=eq.${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error("No se pudo eliminar el contacto");
+  }
+
+  async function patchUltimaNota(prospectoId, nota) {
+    await sbFetch(`/rest/v1/${cfg.prospectosTable}?id=eq.${prospectoId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ ultima_nota: nota, updated_at: new Date().toISOString() }),
+    });
+  }
+
+  async function saveAccion(tenantEmpresaId, prospectoId, form, existingId = null) {
+    const body = {
+      prospecto_id: prospectoId,
+      tipo: form.tipo || "seguimiento",
+      fecha_hora: toIsoDateTime(form.fecha, form.hora),
+      contacto_nombre: form.contacto_nombre || null,
+      resultado: form.resultado || null,
+      proxima_accion: form.proxima_accion || null,
+      notas: form.notas || null,
+      completada: !!form.completada,
+    };
+    if (cfg.usesTenant) body.tenant_empresa_id = tenantEmpresaId;
+
+    if (existingId) {
+      const r = await sbFetch(`/rest/v1/${cfg.accionesTable}?id=eq.${existingId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("No se pudo actualizar la cita");
+      const rows = await r.json();
+      const saved = Array.isArray(rows) ? rows[0] : null;
+      if (form.notas) await patchUltimaNota(prospectoId, form.notas);
+      return saved;
+    }
+
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
+    const r = await sbFetch(`/rest/v1/${cfg.accionesTable}`, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(id ? { id, ...body } : body),
+    });
+    if (!r.ok) throw new Error("No se pudo crear la cita");
+    const rows = await r.json();
+    const saved = Array.isArray(rows) ? rows[0] : null;
+    if (form.notas) await patchUltimaNota(prospectoId, form.notas);
+    return saved;
+  }
+
+  async function toggleAccionCompletada(accion, completada) {
+    const r = await sbFetch(`/rest/v1/${cfg.accionesTable}?id=eq.${accion.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ completada }),
+    });
+    if (!r.ok) throw new Error("No se pudo actualizar");
+  }
+
+  async function deleteAccion(id) {
+    const r = await sbFetch(`/rest/v1/${cfg.accionesTable}?id=eq.${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error("No se pudo eliminar la cita");
+  }
 
   return {
-    prospectos: Array.isArray(prospectos) ? prospectos : [],
-    contactos: Array.isArray(contactos) ? contactos : [],
-    acciones: Array.isArray(acciones) ? acciones : [],
-    tableMissing: false,
+    contextKey,
+    cfg,
+    fetchBundle,
+    saveProspecto,
+    deleteProspecto,
+    saveContacto,
+    deleteContacto,
+    saveAccion,
+    toggleAccionCompletada,
+    deleteAccion,
   };
+}
+
+export const empresaCrmApi = createAgendaComercialApi(AGENDA_CONTEXT.EMPRESA_CRM);
+export const adminAgendaApi = createAgendaComercialApi(AGENDA_CONTEXT.ADMIN);
+
+export async function fetchAgendaComercialBundle(tenantEmpresaId) {
+  return empresaCrmApi.fetchBundle(tenantEmpresaId);
 }
 
 export function buildAgendaProspectoRows(bundle, now = new Date()) {
@@ -351,155 +556,13 @@ function toggleArray(arr, value) {
 
 export { toggleArray, formatFechaHora, tipoAccionLabel };
 
-export async function saveProspecto(tenantEmpresaId, form, existingId = null) {
-  const body = {
-    tenant_empresa_id: tenantEmpresaId,
-    nombre: String(form.nombre || "").trim(),
-    cif: form.cif || null,
-    direccion: form.direccion || null,
-    localidad: form.localidad || null,
-    provincia: form.provincia || null,
-    telefono: form.telefono || null,
-    email: form.email || null,
-    web: form.web || null,
-    sector: form.sector || null,
-    estado_comercial: form.estado_comercial || "pendiente_contactar",
-    num_camiones: form.num_camiones === "" || form.num_camiones == null ? null : Number(form.num_camiones),
-    tipos_vehiculos: form.tipos_vehiculos || [],
-    tipos_rutas: form.tipos_rutas || [],
-    sistemas_actuales: form.sistemas_actuales || [],
-    dolores: form.dolores || [],
-    ultima_nota: form.ultima_nota || null,
-    updated_at: new Date().toISOString(),
-  };
-  if (!body.nombre) throw new Error("El nombre de empresa es obligatorio");
-
-  if (existingId) {
-    const r = await sbFetch(`/rest/v1/agenda_comercial_prospectos?id=eq.${existingId}`, {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error("No se pudo actualizar la empresa");
-    const rows = await r.json();
-    return Array.isArray(rows) ? rows[0] : null;
-  }
-
-  const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
-  const r = await sbFetch(`/rest/v1/agenda_comercial_prospectos`, {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(id ? { id, ...body } : body),
-  });
-  if (!r.ok) throw new Error("No se pudo crear la empresa");
-  const rows = await r.json();
-  return Array.isArray(rows) ? rows[0] : null;
-}
-
-export async function deleteProspecto(id) {
-  const r = await sbFetch(`/rest/v1/agenda_comercial_prospectos?id=eq.${id}`, { method: "DELETE" });
-  if (!r.ok) throw new Error("No se pudo eliminar");
-}
-
-export async function saveContacto(tenantEmpresaId, prospectoId, form, existingId = null) {
-  const body = {
-    tenant_empresa_id: tenantEmpresaId,
-    prospecto_id: prospectoId,
-    nombre: String(form.nombre || "").trim(),
-    cargo: form.cargo || null,
-    telefono: form.telefono || null,
-    email: form.email || null,
-    whatsapp: form.whatsapp || null,
-    observaciones: form.observaciones || null,
-    es_principal: !!form.es_principal,
-  };
-  if (!body.nombre) throw new Error("El nombre del contacto es obligatorio");
-
-  if (existingId) {
-    const r = await sbFetch(`/rest/v1/agenda_comercial_contactos?id=eq.${existingId}`, {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error("No se pudo actualizar el contacto");
-    const rows = await r.json();
-    return Array.isArray(rows) ? rows[0] : null;
-  }
-
-  const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
-  const r = await sbFetch(`/rest/v1/agenda_comercial_contactos`, {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(id ? { id, ...body } : body),
-  });
-  if (!r.ok) throw new Error("No se pudo crear el contacto");
-  const rows = await r.json();
-  return Array.isArray(rows) ? rows[0] : null;
-}
-
-export async function deleteContacto(id) {
-  const r = await sbFetch(`/rest/v1/agenda_comercial_contactos?id=eq.${id}`, { method: "DELETE" });
-  if (!r.ok) throw new Error("No se pudo eliminar el contacto");
-}
-
-export async function saveAccion(tenantEmpresaId, prospectoId, form, existingId = null) {
-  const body = {
-    tenant_empresa_id: tenantEmpresaId,
-    prospecto_id: prospectoId,
-    tipo: form.tipo || "seguimiento",
-    fecha_hora: toIsoDateTime(form.fecha, form.hora),
-    contacto_nombre: form.contacto_nombre || null,
-    resultado: form.resultado || null,
-    proxima_accion: form.proxima_accion || null,
-    notas: form.notas || null,
-    completada: !!form.completada,
-  };
-
-  if (existingId) {
-    const r = await sbFetch(`/rest/v1/agenda_comercial_acciones?id=eq.${existingId}`, {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error("No se pudo actualizar la cita");
-    const rows = await r.json();
-    const saved = Array.isArray(rows) ? rows[0] : null;
-    if (form.notas) await patchUltimaNota(prospectoId, form.notas);
-    return saved;
-  }
-
-  const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
-  const r = await sbFetch(`/rest/v1/agenda_comercial_acciones`, {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(id ? { id, ...body } : body),
-  });
-  if (!r.ok) throw new Error("No se pudo crear la cita");
-  const rows = await r.json();
-  const saved = Array.isArray(rows) ? rows[0] : null;
-  if (form.notas) await patchUltimaNota(prospectoId, form.notas);
-  return saved;
-}
-
-async function patchUltimaNota(prospectoId, nota) {
-  await sbFetch(`/rest/v1/agenda_comercial_prospectos?id=eq.${prospectoId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ ultima_nota: nota, updated_at: new Date().toISOString() }),
-  });
-}
-
-export async function toggleAccionCompletada(accion, completada) {
-  const r = await sbFetch(`/rest/v1/agenda_comercial_acciones?id=eq.${accion.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ completada }),
-  });
-  if (!r.ok) throw new Error("No se pudo actualizar");
-}
-
-export async function deleteAccion(id) {
-  const r = await sbFetch(`/rest/v1/agenda_comercial_acciones?id=eq.${id}`, { method: "DELETE" });
-  if (!r.ok) throw new Error("No se pudo eliminar la cita");
-}
+export const saveProspecto = empresaCrmApi.saveProspecto.bind(empresaCrmApi);
+export const deleteProspecto = empresaCrmApi.deleteProspecto.bind(empresaCrmApi);
+export const saveContacto = empresaCrmApi.saveContacto.bind(empresaCrmApi);
+export const deleteContacto = empresaCrmApi.deleteContacto.bind(empresaCrmApi);
+export const saveAccion = empresaCrmApi.saveAccion.bind(empresaCrmApi);
+export const toggleAccionCompletada = empresaCrmApi.toggleAccionCompletada.bind(empresaCrmApi);
+export const deleteAccion = empresaCrmApi.deleteAccion.bind(empresaCrmApi);
 
 export function prospectoToForm(p) {
   if (!p) return emptyProspectoForm();

@@ -14,6 +14,7 @@ import {
 } from "../features/superadmin/superadminApi.js";
 import { PropietarioSoporte } from "../features/superadmin/PropietarioSoporte.jsx";
 import { PropietarioFilters } from "../features/superadmin/PropietarioFilters.jsx";
+import { AdminAgendaComercialPanel } from "../features/superadmin/AdminAgendaComercialPanel.jsx";
 import { DEFAULT_FILTERS, VIEW_PANEL_MAP, filtersForApi } from "../features/superadmin/propietarioFiltersModel.js";
 
 const EMPTY_FORM = {
@@ -234,7 +235,7 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
   }, []);
 
   const loadTab = useCallback(async () => {
-    if (tab === "soporte") {
+    if (tab === "soporte" || tab === "agenda_comercial") {
       setLoading(false);
       return;
     }
@@ -730,6 +731,8 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
       />
       <Pagination page={panelMeta.page} totalPages={panelMeta.totalPages} total={panelMeta.total} onPage={setPage} />
     </div>
+  ) : tab === "agenda_comercial" ? (
+    <AdminAgendaComercialPanel showToast={showToast} />
   ) : tab === "soporte" ? (
     <PropietarioSoporte
       showToast={showToast}
@@ -817,7 +820,7 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
         </nav>
 
         <main style={{ flex: 1, padding: "20px 24px 40px", maxWidth: 1200, minWidth: 0, overflow: "hidden" }}>
-          {tab !== "soporte" && !(tab === "empresas" && detailId) && (
+          {tab !== "soporte" && tab !== "agenda_comercial" && !(tab === "empresas" && detailId) && (
             <PropietarioFilters
               filters={filters}
               onChange={setFilters}

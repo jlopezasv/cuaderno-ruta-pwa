@@ -2,6 +2,9 @@ import React from "react";
 
 export const EMPRESA_DASH_VIEW = Object.freeze({
   OPERATIVA: "operativa",
+  /** CRM clientes de la empresa (antes «agenda»). */
+  CLIENTES: "clientes",
+  /** @deprecated alias — migración sessionStorage */
   AGENDA: "agenda",
 });
 
@@ -9,18 +12,24 @@ const STORAGE_KEY = "empresa_dashboard_view_v1";
 
 const TABS = [
   { id: EMPRESA_DASH_VIEW.OPERATIVA, label: "Operativa" },
-  { id: EMPRESA_DASH_VIEW.AGENDA, label: "Agenda Comercial" },
+  { id: EMPRESA_DASH_VIEW.CLIENTES, label: "Clientes" },
 ];
 
-/** Siempre visible en Panel Empresa → Dashboard (sin flags demo/superadmin). */
-export function canViewEmpresaDashboardAgenda() {
+/** CRM clientes por empresa — no confundir con agenda comercial super_admin. */
+export function canViewEmpresaDashboardClientes() {
   return true;
+}
+
+/** @deprecated usar canViewEmpresaDashboardClientes */
+export function canViewEmpresaDashboardAgenda() {
+  return canViewEmpresaDashboardClientes();
 }
 
 export function readStoredEmpresaDashView() {
   try {
     const v = sessionStorage.getItem(STORAGE_KEY);
-    if (v === EMPRESA_DASH_VIEW.AGENDA || v === EMPRESA_DASH_VIEW.OPERATIVA) return v;
+    if (v === EMPRESA_DASH_VIEW.CLIENTES || v === EMPRESA_DASH_VIEW.OPERATIVA) return v;
+    if (v === EMPRESA_DASH_VIEW.AGENDA) return EMPRESA_DASH_VIEW.CLIENTES;
   } catch (_) {}
   return EMPRESA_DASH_VIEW.OPERATIVA;
 }
@@ -32,11 +41,10 @@ export function writeStoredEmpresaDashView(view) {
 }
 
 /**
- * Subpestañas del dashboard empresa: Operativa | Agenda Comercial.
- * No depende de isDemoApp(), tablas SQL ni rol superadmin.
+ * Subpestañas del dashboard empresa: Operativa | Clientes (CRM).
  */
 export function EmpresaDashboardSubnav({ view, onChange, ui }) {
-  if (!canViewEmpresaDashboardAgenda()) return null;
+  if (!canViewEmpresaDashboardClientes()) return null;
 
   const accent = ui?.accent || "#2563eb";
   const accentSoft = ui?.accentSoft || "#eff6ff";

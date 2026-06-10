@@ -11,28 +11,22 @@ import {
   estadoComercialLabel,
   tipoAccionLabel,
 } from "../../domain/empresa/agendaComercialConstants.js";
+import { AGENDA_CONTEXT, AGENDA_UI_COPY } from "../../domain/empresa/agendaComercialContext.js";
 import {
   accionToForm,
+  adminAgendaApi,
   applyAgendaListFilters,
   buildAgendaProspectoRows,
   computeAgendaKpis,
-  deleteAccion,
-  deleteContacto,
-  deleteProspecto,
   emptyAccionForm,
   emptyContactoForm,
   emptyProspectoForm,
-  fetchAgendaComercialBundle,
+  empresaCrmApi,
   formatFechaHora,
   listAccionesAgenda,
   prospectoToForm,
-  saveAccion,
-  saveContacto,
-  saveProspecto,
-  toggleAccionCompletada,
   toggleArray,
 } from "../../domain/empresa/agendaComercialModel.js";
-import { DemoProductionOnlyBanner } from "./DemoProductionOnlyBanner.jsx";
 
 const card = UI_TOKENS.surface;
 const border = UI_TOKENS.border;
@@ -163,7 +157,16 @@ const DEFAULT_FILTERS = {
   soloPendientesSeguimiento: false,
 };
 
-export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
+export function EmpresaAgendaComercialPanel({
+  empresaId,
+  showToast,
+  contextKey = AGENDA_CONTEXT.EMPRESA_CRM,
+}) {
+  const api = contextKey === AGENDA_CONTEXT.ADMIN ? adminAgendaApi : empresaCrmApi;
+  const copy = AGENDA_UI_COPY[contextKey] || AGENDA_UI_COPY[AGENDA_CONTEXT.EMPRESA_CRM];
+  const isAdminAgenda = contextKey === AGENDA_CONTEXT.ADMIN;
+  const tenantKey = isAdminAgenda ? null : empresaId;
+
   const [bundle, setBundle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tableMissing, setTableMissing] = useState(false);
@@ -177,18 +180,18 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
   const [saving, setSaving] = useState(false);
 
   const reload = useCallback(async () => {
-    if (!empresaId) return;
+    if (!isAdminAgenda && !empresaId) return;
     setLoading(true);
     try {
-      const data = await fetchAgendaComercialBundle(empresaId);
+      const data = await api.fetchBundle(tenantKey);
       setBundle(data);
       setTableMissing(!!data.tableMissing);
     } catch (_) {
-      showToast?.("Error cargando agenda");
+      showToast?.("Error cargando datos");
     } finally {
       setLoading(false);
     }
-  }, [empresaId, showToast]);
+  }, [api, empresaId, isAdminAgenda, showToast, tenantKey]);
 
   useEffect(() => {
     void reload();
@@ -209,8 +212,8 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
   async function handleSaveProspecto(form, id) {
     setSaving(true);
     try {
-      await saveProspecto(empresaId, form, id);
-      showToast?.(id ? "Empresa actualizada" : "Empresa creada");
+      await api.saveProspecto(tenantKey, form, id);
+      showToast?.(id ? "Registro actualizado" : "Registro creado");
       setModalEmpresa(null);
       await reload();
     } catch (e) {
@@ -223,7 +226,7 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
   async function handleSaveContacto(prospectoId, form, id) {
     setSaving(true);
     try {
-      await saveContacto(empresaId, prospectoId, form, id);
+      await api.saveContacto(tenantKey, prospectoId, form, id);
       showToast?.("Contacto guardado");
       setModalContacto(null);
       await reload();
@@ -237,7 +240,7 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
   async function handleSaveAccion(prospectoId, form, id) {
     setSaving(true);
     try {
-      await saveAccion(empresaId, prospectoId, form, id);
+      await api.saveAccion(tenantKey, prospectoId, form, id);
       showToast?.("Cita guardada");
       setModalAccion(null);
       await reload();
@@ -248,10 +251,10 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
     }
   }
 
-  if (!empresaId) {
+  if (!isAdminAgenda && !empresaId) {
     return (
       <div style={{ padding: 24, textAlign: "center", color: su, fontSize: 14 }}>
-        Cargando datos de empresa…
+        {copy.emptyLoading || "Cargando…"}
       </div>
     );
   }
@@ -269,24 +272,25 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
       }}
     >
       <strong>Base de datos pendiente.</strong> Aplica la migración{" "}
-      <code>20260701120000_agenda_comercial.sql</code> en Supabase para guardar prospectos. La agenda se muestra en modo
-      solo lectura hasta entonces.
+      <code>{copy.sqlMigration}</code> en Supabase para guardar datos.
     </div>
   ) : null;
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <DemoProductionOnlyBanner message="CRM disponible en versión de producción" />
+    <div style={{ marginTop: isAdminAgenda ? 0 : 8 }}>
       {sqlBanner}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, flex: "1 1 200px" }}>Agenda comercial</h2>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 6 }}>
+        <div style={{ flex: "1 1 200px" }}>
+          <h2 style={{ margin: 0, fontSize: isAdminAgenda ? 22 : 18, fontWeight: 700 }}>{copy.title}</h2>
+          <div style={{ fontSize: 13, color: su, marginTop: 4 }}>{copy.subtitle}</div>
+        </div>
         <button
           type="button"
           style={btn(true)}
           disabled={tableMissing}
           onClick={() => setModalEmpresa({ form: emptyProspectoForm() })}
         >
-          + Nueva empresa
+          {copy.newEntityButton}
         </button>
       </div>
 
@@ -552,7 +556,7 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
           onEditContacto={(c) => setModalContacto({ prospectoId: fichaRow.id, id: c.id, form: { ...c, es_principal: !!c.es_principal } })}
           onDeleteContacto={async (id) => {
             if (!confirm("¿Eliminar contacto?")) return;
-            await deleteContacto(id);
+            await api.deleteContacto(id);
             await reload();
           }}
           onAddAccion={() =>
@@ -566,17 +570,17 @@ export function EmpresaAgendaComercialPanel({ empresaId, showToast }) {
           }
           onEditAccion={(a) => setModalAccion({ prospectoId: fichaRow.id, id: a.id, form: accionToForm(a) })}
           onToggleAccion={async (a) => {
-            await toggleAccionCompletada(a, !a.completada);
+            await api.toggleAccionCompletada(a, !a.completada);
             await reload();
           }}
           onDeleteAccion={async (id) => {
             if (!confirm("¿Eliminar cita?")) return;
-            await deleteAccion(id);
+            await api.deleteAccion(id);
             await reload();
           }}
           onDeleteProspecto={async () => {
             if (!confirm("¿Eliminar empresa y todos sus datos?")) return;
-            await deleteProspecto(fichaRow.id);
+            await api.deleteProspecto(fichaRow.id);
             setFichaId(null);
             await reload();
           }}
