@@ -50,6 +50,7 @@ export const NAV_ITEMS = [
   { id: "servicios", label: "Servicios" },
   { id: "documentos", label: "Documentos" },
   { id: "agenda_comercial", label: "Agenda Comercial Axis & Keel" },
+  { id: "retencion", label: "Archivo y limpieza" },
   { id: "soporte", label: "Soporte" },
 ];
 

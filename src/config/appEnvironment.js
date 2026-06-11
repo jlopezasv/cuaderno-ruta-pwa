@@ -117,6 +117,8 @@ export function isPublicRegistrationAllowed() {
 
 export const DEMO_LOGIN_HINT = Object.freeze({
 
+  propietario: "jlopezasv@gmail.com",
+
   empresa: "demo-empresa@cuaderno.test",
 
   conductor: "demo-conductor@cuaderno.test",

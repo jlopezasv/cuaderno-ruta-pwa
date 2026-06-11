@@ -20,6 +20,11 @@
     "deploy:demo:empresa-codigo": "node scripts/apply-demo-empresa-codigo-fix.mjs",
     "deploy:demo:agenda-comercial": "node scripts/apply-agenda-comercial-demo.mjs",
     "deploy:prod:admin-agenda": "node scripts/apply-admin-agenda-comercial-prod.mjs",
+    "deploy:demo:align-structure": "node scripts/apply-demo-align-structure.mjs",
+    "deploy:demo:archivo-limpieza": "node scripts/deploy-demo-archivo-limpieza.mjs",
+    "deploy:demo:superadmin-jlopez": "node scripts/apply-demo-superadmin-jlopez.mjs",
+    "inventory:export": "node scripts/export-supabase-inventory.mjs",
+    "inventory:compare": "node scripts/export-supabase-inventory.mjs --compare",
     "validate:operativa": "node scripts/validar-sync-operativa.mjs"
   },
   "dependencies": {

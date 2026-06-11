@@ -15,6 +15,7 @@ import {
 import { PropietarioSoporte } from "../features/superadmin/PropietarioSoporte.jsx";
 import { PropietarioFilters } from "../features/superadmin/PropietarioFilters.jsx";
 import { AdminAgendaComercialPanel } from "../features/superadmin/AdminAgendaComercialPanel.jsx";
+import { PropietarioRetencionPanel } from "../features/superadmin/PropietarioRetencionPanel.jsx";
 import { DEFAULT_FILTERS, VIEW_PANEL_MAP, filtersForApi } from "../features/superadmin/propietarioFiltersModel.js";
 
 const EMPTY_FORM = {
@@ -235,7 +236,7 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
   }, []);
 
   const loadTab = useCallback(async () => {
-    if (tab === "soporte" || tab === "agenda_comercial") {
+    if (tab === "soporte" || tab === "agenda_comercial" || tab === "retencion") {
       setLoading(false);
       return;
     }
@@ -733,6 +734,8 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
     </div>
   ) : tab === "agenda_comercial" ? (
     <AdminAgendaComercialPanel showToast={showToast} />
+  ) : tab === "retencion" ? (
+    <PropietarioRetencionPanel showToast={showToast} empresasOptions={empresasMeta} />
   ) : tab === "soporte" ? (
     <PropietarioSoporte
       showToast={showToast}
@@ -820,7 +823,7 @@ export default function PropietarioLayout({ sbSignOut, getUserId }) {
         </nav>
 
         <main style={{ flex: 1, padding: "20px 24px 40px", maxWidth: 1200, minWidth: 0, overflow: "hidden" }}>
-          {tab !== "soporte" && tab !== "agenda_comercial" && !(tab === "empresas" && detailId) && (
+          {tab !== "soporte" && tab !== "agenda_comercial" && tab !== "retencion" && !(tab === "empresas" && detailId) && (
             <PropietarioFilters
               filters={filters}
               onChange={setFilters}
