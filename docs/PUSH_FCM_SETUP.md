@@ -66,7 +66,29 @@ Content-Type: application/json
 
 Responde con `channel`, `cleanup` y cuerpo de respuesta FCM (truncado en JSON de error).
 
-## 4) Flujo implementado
+## 4) Diagnóstico en producción
+
+**Cliente (móvil, consola remota):**
+
+- Los fallos de registro muestran `[push] Paso N — …` en consola (siempre en fallo).
+- Activa traza completa: `VITE_PUSH_DEBUG=1` en Vercel Production y redeploy.
+- Service Worker: `chrome://inspect` → `[push-sw] push recibido`.
+
+**Servidor:**
+
+- Logs Vercel con prefijo `[push-send]`.
+- `POST /api/push` con `{"action":"diagnose"}` y `Authorization: Bearer <token>` → estado FCM + tokens en `push_tokens`.
+- Prueba de envío: `POST /api/push?action=test_send` (mismo Bearer).
+
+**Tablas:**
+
+| Tabla | Uso actual |
+|-------|------------|
+| `push_tokens` | **Activo** — tokens FCM por conductor |
+| `push_subscriptions` | Legacy Web Push VAPID (no usado por FCM actual) |
+| `push_schedule` | API `schedule` es noop; tacógrafo usa SW local |
+
+## 5) Flujo implementado
 
 - Conductor inicia sesión -> cliente pide permisos y registra token FCM.
 - Token se guarda en `push_tokens`.

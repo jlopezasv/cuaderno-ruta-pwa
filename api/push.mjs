@@ -538,6 +538,63 @@ export default async function handler(req, res) {
       });
     }
 
+    if (action === "diagnose") {
+      if (!sbServiceKey) {
+        return res.status(503).json({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY not configured", code: "PUSH_NOT_CONFIGURED" });
+      }
+      const supabase = getServiceSupabase(sbUrl, sbServiceKey);
+      const accessToken = bearerToken(req);
+      const { userId, error: authErr } = await authUserIdFromBearer(supabase, accessToken);
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: authErr || "Bearer requerido", code: "PUSH_UNAUTHORIZED" });
+      }
+      const { method, hasLegacy, hasV1 } = resolveFcmSendMethod();
+      const creds = parseGoogleApplicationCredentials();
+      const { data: tokenRows, error: qErr } = await supabase
+        .from("push_tokens")
+        .select("token,platform,updated_at")
+        .eq("user_id", userId)
+        .order("updated_at", { ascending: false })
+        .limit(5);
+      pushSendLog("diagnose", {
+        user_id_partial: userId.slice(0, 8),
+        token_count: tokenRows?.length || 0,
+        fcm_method: method,
+      });
+      return res.status(200).json({
+        ok: true,
+        user_id: userId,
+        server: {
+          fcm_method: method,
+          fcm_legacy_configured: hasLegacy,
+          fcm_v1_configured: hasV1,
+          fcm_project_id: creds?.project_id || process.env.VITE_FIREBASE_PROJECT_ID || null,
+          supabase_configured: !!sbServiceKey,
+          vapid_public_configured: !!(process.env.VAPID_PUBLIC_KEY || "").trim(),
+        },
+        client_build: {
+          vite_firebase_project_id: process.env.VITE_FIREBASE_PROJECT_ID || null,
+          vite_firebase_messaging_sender_id: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || null,
+          vite_firebase_vapid_present: !!(process.env.VITE_FIREBASE_VAPID_KEY || "").trim(),
+        },
+        tokens: qErr
+          ? { error: qErr.message }
+          : {
+              count: (tokenRows || []).length,
+              latest: (tokenRows || []).map((r) => ({
+                platform: r.platform,
+                updated_at: r.updated_at,
+                token_partial: r.token ? `${r.token.slice(0, 10)}…` : null,
+              })),
+            },
+        notes: [
+          "Asignaciones usan push_tokens (FCM), no push_subscriptions.",
+          "schedule/cancel en API son noop; avisos tacógrafo usan SW local.",
+          "Logs servidor: prefijo [push-send] en Vercel.",
+        ],
+      });
+    }
+
     if (action === "test_send") {
       pushSendLog("test_send start", { queryAction: !!req.query?.action });
       if (!sbServiceKey) {

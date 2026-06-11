@@ -1,4 +1,5 @@
 import { getUserId, sbFetch, getAccessToken } from "./supabaseClient";
+import { pushDebugInfo, pushDebugLog, pushDebugWarn } from "../lib/pushDebugLog.js";
 
 /** Firebase solo se descarga al inicializar push (no en el bundle inicial). */
 let firebaseSdkPromise = null;
@@ -25,7 +26,7 @@ const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
 const TOKEN_CACHE_KEY = "cuaderno_fcm_token_v1";
 
 function pushLog(...args) {
-  if (import.meta.env.DEV) console.log("[push]", ...args);
+  pushDebugLog(...args);
 }
 
 function partialToken(token) {
@@ -196,13 +197,13 @@ export async function initFcmPush({ showToast } = {}) {
 
   const uid = getUserId();
   if (!uid) {
-    pushLog("initFcmPush early exit: no_user", { uid: null });
+    pushDebugWarn("Paso 1 — sin sesión: no se registra token");
     return { ok: false, reason: "no_user", trace };
   }
   pushLog("initFcmPush session user", { uid: partialUid(uid) });
 
   if (!trace.browser.serviceWorker || !trace.browser.Notification) {
-    pushLog("initFcmPush early exit: unsupported (missing SW or Notification)");
+    pushDebugWarn("Paso 2 — navegador sin Service Worker o Notification API", trace.browser);
     return { ok: false, reason: "unsupported", trace };
   }
 
@@ -210,7 +211,7 @@ export async function initFcmPush({ showToast } = {}) {
   const standalone = trace.pwa.displayModeStandalone || trace.pwa.navigatorStandalone;
   if (ios && !standalone) {
     showToast?.("Instala la app en pantalla de inicio para recibir servicios en tiempo real.");
-    pushLog("initFcmPush early exit: ios_not_installed");
+    pushDebugWarn("Paso 3 — iOS: hace falta PWA instalada (Añadir a pantalla de inicio)");
     return { ok: false, reason: "ios_not_installed", trace };
   }
 
@@ -220,7 +221,7 @@ export async function initFcmPush({ showToast } = {}) {
   if (!firebaseConfig.messagingSenderId) missing.push("VITE_FIREBASE_MESSAGING_SENDER_ID");
   if (!firebaseConfig.appId) missing.push("VITE_FIREBASE_APP_ID");
   if (missing.length) {
-    pushLog("initFcmPush early exit: missing_config", { missing });
+    pushDebugWarn("Paso 4 — faltan variables VITE Firebase en el build", { missing });
     return { ok: false, reason: "missing_config", trace: { ...trace, missingConfig: missing } };
   }
 
@@ -232,7 +233,7 @@ export async function initFcmPush({ showToast } = {}) {
   });
   trace.messagingSupported = supported;
   if (!supported) {
-    pushLog("initFcmPush early exit: messaging_not_supported");
+    pushDebugWarn("Paso 5 — Firebase Messaging no soportado en este navegador");
     return { ok: false, reason: "messaging_not_supported", trace };
   }
 
@@ -251,6 +252,7 @@ export async function initFcmPush({ showToast } = {}) {
     const msg = e?.message || String(e);
     pushLog("serviceWorker register fail", msg, e);
     trace.swRegister = { ok: false, error: msg };
+    pushDebugWarn("Paso 6 — fallo al registrar /sw.js", msg);
     return { ok: false, reason: "sw_register_failed", error: msg, trace };
   }
 
@@ -267,7 +269,7 @@ export async function initFcmPush({ showToast } = {}) {
       await revokeTokenOnBackend(cached);
       localStorage.removeItem(TOKEN_CACHE_KEY);
     }
-    pushLog("initFcmPush early exit: permission_denied");
+    pushDebugWarn("Paso 7 — permiso de notificaciones denegado", { permission });
     return { ok: false, reason: "permission_denied", trace };
   }
 
@@ -304,11 +306,12 @@ export async function initFcmPush({ showToast } = {}) {
     const code = e?.code;
     pushLog("getToken fail", { message: msg, code, error: e });
     trace.getToken = { ok: false, message: msg, code };
+    pushDebugWarn("Paso 8 — getToken FCM falló (revisa VAPID y proyecto Firebase)", { message: msg, code });
     return { ok: false, reason: "get_token_failed", error: msg, code, trace };
   }
 
   if (!token) {
-    pushLog("getToken success but empty token");
+    pushDebugWarn("Paso 8 — getToken devolvió vacío");
     trace.getToken = { ok: false, empty: true };
     return { ok: false, reason: "no_token", trace };
   }
@@ -325,6 +328,9 @@ export async function initFcmPush({ showToast } = {}) {
     trace
   );
   trace.registerBackendOk = regResult?.ok === true;
+  if (!trace.registerBackendOk) {
+    pushDebugWarn("Paso 9 — token FCM OK pero falló guardado en servidor (push_tokens)", regResult);
+  }
 
   try {
     await sbFetch(`/rest/v1/profiles?id=eq.${uid}`, {
@@ -347,9 +353,27 @@ export async function initFcmPush({ showToast } = {}) {
   });
 
   localStorage.setItem(TOKEN_CACHE_KEY, token);
-  pushLog("initFcmPush complete", { token: partialToken(token), registerBackendOk: trace.registerBackendOk });
+  pushDebugInfo("OK — token registrado", {
+    token: partialToken(token),
+    registerBackendOk: trace.registerBackendOk,
+    permission,
+  });
 
   return { ok: true, token, trace };
+}
+
+/** Resumen para consola remota (Safari → Web Inspector). */
+export function logPushInitResult(result) {
+  if (!result) return;
+  if (result.ok) {
+    pushDebugInfo("initFcmPush resultado", { ok: true, token: partialToken(result.token) });
+  } else {
+    pushDebugWarn("initFcmPush resultado", {
+      ok: false,
+      reason: result.reason,
+      trace: result.trace,
+    });
+  }
 }
 
 export function getPushClientContext() {

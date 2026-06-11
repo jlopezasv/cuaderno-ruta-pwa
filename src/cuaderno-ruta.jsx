@@ -152,7 +152,8 @@ import { isPlatformAdminUid } from "./config/adminUsers.js";
 import PropietarioLayout from "./layouts/PropietarioLayout.jsx";
 import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
 import { EmpresaPendingScreen } from "./ui/EmpresaPendingScreen.jsx";
-import { getPushClientContext, initFcmPush } from "./data/fcmPush";
+import { getPushClientContext, initFcmPush, logPushInitResult } from "./data/fcmPush";
+import { pushDebugInfo, pushDebugWarn } from "./lib/pushDebugLog.js";
 import {
   ESTADO_COLOR,
   ESTADO_LABEL,
@@ -2530,7 +2531,7 @@ function AppInner(){
   // ── PUSH NOTIFICATIONS (FCM) — Android + iOS PWA ──
   // Depende de `user`: tras login `setUser(getUserId())` debe volver a ejecutar init (antes quedaba en no_user).
   useEffect(()=>{
-    if(prof?.tipo_cuenta==="empresa")return;
+    if(prof?.tipo_cuenta==="empresa"&&!prof?.canDrive)return;
     if(!user)return;
     if(!('serviceWorker' in navigator))return;
     navigator.serviceWorker.register('/sw.js').then(async reg=>{
@@ -2542,6 +2543,7 @@ function AppInner(){
           showToast("Instala la app en pantalla de inicio para recibir servicios en tiempo real.");
         }
         const init=await initFcmPush({showToast});
+        logPushInitResult(init);
         if(init?.ok)devLog("[push] FCM listo tras login");
         else devLog("[push] initFcmPush finished without token",{reason:init?.reason,traceKeys:init?.trace?Object.keys(init.trace):[]});
       }catch(e){
@@ -12316,19 +12318,33 @@ async function sendAssignmentPush({conductorId,origen,destino,fechaInicio,servic
   const access=await ensureAuthAccessToken();
   const headers={"Content-Type":"application/json"};
   if(access)headers.Authorization=`Bearer ${access}`;
-  await fetch("/api/push",{
-    method:"POST",
-    headers,
-    body:JSON.stringify({
-      action:"notify_assignment",
-      payload:{
-        conductor_id:conductorId,
-        servicio_id:servicioId||null,
-        route:`${String(origen||"").trim()} → ${String(destino||"").trim()}`,
-        salida:salidaLabel,
-      },
-    }),
-  }).catch(()=>{});
+  try{
+    const res=await fetch("/api/push",{
+      method:"POST",
+      headers,
+      body:JSON.stringify({
+        action:"notify_assignment",
+        payload:{
+          conductor_id:conductorId,
+          servicio_id:servicioId||null,
+          route:`${String(origen||"").trim()} → ${String(destino||"").trim()}`,
+          salida:salidaLabel,
+        },
+      }),
+    });
+    const text=await res.text().catch(()=>"");
+    let json=null;
+    try{json=text?JSON.parse(text):null;}catch{json={raw:text};}
+    if(!res.ok||json?.ok===false){
+      pushDebugWarn("notify_assignment falló",{status:res.status,body:json||text?.slice(0,500)});
+    }else if(json?.skipped==="no_token"){
+      pushDebugWarn("notify_assignment: conductor sin token en push_tokens",{conductorId:String(conductorId).slice(0,8)+"…"});
+    }else{
+      pushDebugInfo("notify_assignment enviado",{status:res.status,channel:json?.channel,skipped:json?.skipped||null});
+    }
+  }catch(e){
+    pushDebugWarn("notify_assignment error de red",e?.message||String(e));
+  }
 }
 
 function stopTipoFormMeta(tipo){

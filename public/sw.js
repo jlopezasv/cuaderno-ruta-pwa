@@ -1,26 +1,51 @@
 // Service Worker — Cuaderno de Ruta
 // Notificaciones push reales desde el servidor
-const CACHE = 'cuaderno-v6';
+const CACHE = 'cuaderno-v7';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(clients.claim()));
 
-// ── RECIBIR PUSH DEL SERVIDOR ──
+// ── RECIBIR PUSH DEL SERVIDOR (FCM / Web Push) ──
+function parsePushPayload(event) {
+  if (!event?.data) return { title: 'Cuaderno de Ruta', body: '', data: {} };
+  let raw;
+  try {
+    raw = event.data.json();
+  } catch {
+    return { title: 'Cuaderno de Ruta', body: event.data.text() || '', data: {} };
+  }
+  // FCM HTTP v1 anida title/body en notification; legacy a veces en raíz
+  const n = raw.notification || raw;
+  const data = raw.data || n.data || {};
+  return {
+    title: n.title || raw.title || 'Cuaderno de Ruta',
+    body: n.body || raw.body || '',
+    tag: data.tag || raw.tag || 'cr-notif',
+    data: {
+      url: data.url || n.click_action || raw.url || '/?tab=servicio',
+      ...data,
+    },
+  };
+}
+
 self.addEventListener('push', e => {
-  if (!e.data) return;
-  let data;
-  try { data = e.data.json(); } catch { data = { title: 'Cuaderno de Ruta', body: e.data.text() }; }
+  const parsed = parsePushPayload(e);
+  console.log('[push-sw] push recibido', {
+    title: parsed.title,
+    bodyLen: (parsed.body || '').length,
+    url: parsed.data?.url,
+  });
 
   e.waitUntil(
-    self.registration.showNotification(data.title || 'Cuaderno de Ruta', {
-      body: data.body || '',
-      tag: data.tag || 'cr-notif',
+    self.registration.showNotification(parsed.title, {
+      body: parsed.body,
+      tag: parsed.tag,
       icon: '/icons/icon-192.png',
       badge: '/icons/favicon-96.png',
       requireInteraction: true,
       vibrate: [400, 100, 400, 100, 400],
       silent: false,
-      data: { url: data?.data?.url || data?.url || '/?tab=servicio' },
+      data: parsed.data,
     })
   );
 });
