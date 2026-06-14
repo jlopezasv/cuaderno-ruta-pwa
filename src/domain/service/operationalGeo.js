@@ -8,9 +8,10 @@ export const GEO_SOURCE_LABEL = Object.freeze({
 });
 
 export function formatOperationalGeoLine(geo) {
-  if (!geo || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) return "";
+  const lng = geo?.lng ?? geo?.lon;
+  if (!geo || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(lng))) return "";
   const lat = Number(geo.lat).toFixed(5);
-  const lon = Number(geo.lon).toFixed(5);
+  const lon = Number(lng).toFixed(5);
   const acc =
     geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))
       ? ` · ±${Math.round(Number(geo.accuracy_m))} m`
@@ -18,18 +19,37 @@ export function formatOperationalGeoLine(geo) {
   return `📍 ${lat}, ${lon}${acc}`;
 }
 
+const LOCATION_REASON_LABELS = {
+  denied: "permiso denegado",
+  timeout: "timeout",
+  unavailable: "ubicación desactivada",
+  unsupported: "no soportado",
+  ok: "ok",
+};
+
+function geoReasonLabel(geo) {
+  const status = String(geo?.location_status || "").toLowerCase();
+  return geo?.location_error || LOCATION_REASON_LABELS[status] || status || "no disponible";
+}
+
 /** Línea legible para expediente operacional. */
 export function formatExpedienteUbicacionLine(geo) {
   if (!geo) return "Ubicación no disponible";
-  if (geo.source === "no_disponible" || geo.location_status === "denied" || geo.location_status === "timeout" || geo.location_status === "unavailable") {
-    const reason = geo.location_error || geo.location_status || "no disponible";
-    return `Ubicación no disponible (${reason})`;
+  const lng = geo.lng ?? geo.lon;
+  if (
+    geo.source === "no_disponible" ||
+    geo.location_status === "denied" ||
+    geo.location_status === "timeout" ||
+    geo.location_status === "unavailable" ||
+    geo.location_status === "unsupported"
+  ) {
+    return `Ubicación no disponible (${geoReasonLabel(geo)})`;
   }
-  if (!Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) {
-    return "Ubicación no disponible";
+  if (!Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(lng))) {
+    return `Ubicación no disponible (${geoReasonLabel(geo)})`;
   }
   const lat = Number(geo.lat).toFixed(4);
-  const lon = Number(geo.lon).toFixed(4);
+  const lon = Number(lng).toFixed(4);
   const acc =
     geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))
       ? ` · precisión ${Math.round(Number(geo.accuracy_m))} m`
@@ -40,12 +60,12 @@ export function formatExpedienteUbicacionLine(geo) {
 /** Detalle para timeline conductor. */
 export function formatDriverGeoTimelineLines(geo) {
   if (!geo) return [{ label: "Ubicación", value: "No disponible" }];
-  if (geo.source === "no_disponible" || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) {
-    const reason = geo.location_error || geo.location_status || "no disponible";
-    return [{ label: "Ubicación", value: `No disponible (${reason})` }];
+  const lng = geo.lng ?? geo.lon;
+  if (geo.source === "no_disponible" || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(lng))) {
+    return [{ label: "Ubicación", value: `No disponible (${geoReasonLabel(geo)})` }];
   }
   const lines = [
-    { label: "Ubicación", value: `${Number(geo.lat).toFixed(4)}, ${Number(geo.lon).toFixed(4)}` },
+    { label: "Ubicación", value: `${Number(geo.lat).toFixed(4)}, ${Number(lng).toFixed(4)}` },
   ];
   if (geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))) {
     lines.push({ label: "Precisión", value: `${Math.round(Number(geo.accuracy_m))} m` });
@@ -65,7 +85,8 @@ export function appendGeoToDetail(detail, geo) {
 }
 
 export function geoFromGpsPoint(point, opts = {}) {
-  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lon)) {
+  const lng = point?.lng ?? point?.lon;
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(lng)) {
     if (opts.recordUnavailable) {
       return {
         ts: new Date().toISOString(),
@@ -79,7 +100,8 @@ export function geoFromGpsPoint(point, opts = {}) {
   }
   return {
     lat: point.lat,
-    lon: point.lon,
+    lng,
+    lon: lng,
     ts: point.ts || point.location_captured_at || new Date().toISOString(),
     location_captured_at: point.location_captured_at || point.ts || new Date().toISOString(),
     accuracy_m: point.accuracy != null ? Math.round(point.accuracy) : null,

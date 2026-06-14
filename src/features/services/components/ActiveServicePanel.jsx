@@ -447,7 +447,7 @@ function DriverOperationalRouteNav({
 }) {
   const routeConfigured = hasActiveRouteDestination(servicio);
   const routeStartedByDriver = !!getOperationalRouteStartedAt(servicio);
-  const routeActive = routeConfigured && routeStartedByDriver;
+  const routeActive = routeStartedByDriver;
   const [recalculating, setRecalculating] = useState(false);
   const isDemo = variant === "demo";
   const isSecondary = emphasis === "secondary";
@@ -1636,9 +1636,17 @@ export function ActiveServicePanel({
           : String(stop?.tipo || "").toLowerCase() === "carga"
             ? "completar carga"
             : "salida de muelle";
+    const eventType =
+      kind === "entrada"
+        ? "entrada_muelle"
+        : String(stop?.tipo || "").toLowerCase() === "descarga"
+          ? "completar_descarga"
+          : String(stop?.tipo || "").toLowerCase() === "carga"
+            ? "completar_carga"
+            : "salida_muelle";
     setConfirmMuelleSaving(true);
     try {
-      const prefetchedGps = await acquireLocation(actionLabel);
+      const prefetchedGps = await acquireLocation(eventType, actionLabel);
       if (prefetchedGps === null) return;
       if (kind === "entrada") {
         await marcarLlegado(stopId, { prefetchedGps });
@@ -1673,7 +1681,7 @@ export function ActiveServicePanel({
       ? {
           label: "Iniciar servicio",
           onClick: async () => {
-            const prefetchedGps = await acquireLocation("iniciar servicio");
+            const prefetchedGps = await acquireLocation("inicio_servicio", "iniciar servicio");
             if (prefetchedGps === null) return;
             await onIniciarServicio(servicio.id, { prefetchedGps });
           },
@@ -1681,7 +1689,7 @@ export function ActiveServicePanel({
       : null;
 
   const handleStartRoute = async () => {
-    const prefetchedGps = await acquireLocation("iniciar ruta");
+    const prefetchedGps = await acquireLocation("ruta_iniciada", "iniciar ruta");
     if (prefetchedGps === null) return;
     await onIniciarRuta?.(servicio?.id, { prefetchedGps });
   };
@@ -1952,7 +1960,7 @@ export function ActiveServicePanel({
                 saving={cierreSaving}
                 onConfirm={async ({ comentario, firmaCanvas }) => {
                   if (cierreSaving) return;
-                  const prefetchedGps = await acquireLocation("finalizar servicio");
+                  const prefetchedGps = await acquireLocation("finalizar_servicio", "finalizar servicio");
                   if (prefetchedGps === null) return;
                   setCierreSaving(true);
                   try {
@@ -2240,7 +2248,7 @@ export function ActiveServicePanel({
             saving={cierreSaving}
             onConfirm={async ({ comentario, firmaCanvas }) => {
               if (cierreSaving) return;
-              const prefetchedGps = await acquireLocation("finalizar servicio");
+              const prefetchedGps = await acquireLocation("finalizar_servicio", "finalizar servicio");
               if (prefetchedGps === null) return;
               setCierreSaving(true);
               try {

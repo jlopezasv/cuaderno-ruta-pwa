@@ -212,7 +212,8 @@ import {
 } from "./domain/service/serviceExpediente.js";
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
-import { geoFromGpsPoint, resolveEventGeoFromOp } from "./domain/service/operationalGeo.js";
+import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
+import { getDriverActionGps, eventGeoFromLocationResult } from "./data/driverActionGps.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
 import { ServicioMercanciaBlock } from "./features/dcdt/ServicioMercanciaBlock.jsx";
@@ -4883,43 +4884,6 @@ function trackingLog(step,data){
 }
 
 /**
- * GPS para acciones operativas.
- * @param {{fresh?:boolean,timeoutMs?:number}} [opts] fresh=true evita caché del navegador (máxima frescura para ubicaciones).
- */
-function getDriverActionGps(opts={}){
-  const fresh=!!opts.fresh;
-  const timeoutMs=Number.isFinite(opts.timeoutMs)?Math.min(60000,Math.max(5000,opts.timeoutMs)):12000;
-  const maximumAge=fresh?0:60000;
-  if(typeof navigator==="undefined"||!navigator.geolocation){
-    trackingLog("gps unavailable",{reason:"navigator.geolocation missing"});
-    return Promise.resolve({ok:false,error:"GPS no disponible en este dispositivo"});
-  }
-  return new Promise(resolve=>{
-    trackingLog("gps requested",{timeoutMs,enableHighAccuracy:false,maximumAge,fresh});
-    navigator.geolocation.getCurrentPosition(
-      pos=>{
-        const{latitude:lat,longitude:lon,accuracy,speed}=pos.coords;
-        if(!Number.isFinite(lat)||!Number.isFinite(lon)){
-          trackingLog("gps invalid_coords",{lat,lon,accuracy});
-          resolve({ok:false,error:"Coordenadas GPS inválidas"});
-          return;
-        }
-        trackingLog("gps success",{lat,lon,accuracy,speed,fresh});
-        resolve({ok:true,point:{lat,lon,accuracy,speed,ts:new Date().toISOString()}});
-      },
-      error=>{
-        const detail={code:error?.code,message:error?.message||"unknown"};
-        if(error?.code===1)trackingLog("gps denied",detail);
-        else if(error?.code===3)trackingLog("gps timeout",detail);
-        else trackingLog("gps failed",detail);
-        resolve({ok:false,error:gpsActionErrorMessage(error)});
-      },
-      {enableHighAccuracy:false,timeout:timeoutMs,maximumAge}
-    );
-  });
-}
-
-/**
  * empresa_id para tracking: del servicio si tiene tenant flota.
  * No inferir conductor_empresa si el servicio es autónomo (empresa_id null en fila).
  */
@@ -5151,6 +5115,32 @@ async function persistServiceOperationalEta({
   return{referencia,operationalEta};
 }
 
+/**
+ * Persiste geo en metadatos de parada (`stops.notas`).
+ */
+async function patchStopOperacionGeo(stopId, notas, geoPatch) {
+  const notasNext = mergeStopOperacionMeta(notas, geoPatch);
+  const r = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ notas: notasNext }),
+  });
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch (_) {
+      /* ignore */
+    }
+    devWarn("[GPS evento] patch stop geo failed", {
+      stopId,
+      status: r.status,
+      detail: String(detail || "").slice(0, 200),
+    });
+    throw new Error("No se pudo guardar ubicación del evento");
+  }
+  return notasNext;
+}
+
 async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast,prefetchedGps=null}){
   const depStopsIn=Array.isArray(stops)?stops:[];
   devLog("[OP3] register start",{
@@ -5173,13 +5163,20 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   let gps;
   if(prefetchedGps!=null){
     gps=prefetchedGps;
-    if(gps.ok){
-      if(isDemoApp())console.log("[GPS acción] guardando evento con ubicación");
-    }else if(isDemoApp())console.log("[GPS acción] evento guardado sin ubicación");
+    if(isDemoApp())console.log("[GPS evento]",{
+      eventType:eventType||null,
+      callingFunction:"registerDriverOperationalPoint",
+      requested:true,
+      success:!!gps.ok,
+      lat:gps.point?.lat??null,
+      lng:gps.point?.lng??gps.point?.lon??null,
+      accuracy:gps.point?.accuracy??null,
+      error:gps.ok?null:gps.error||gps.location_error||null,
+    });
   }else{
     showToast?.("Obteniendo ubicación…","#64748B",3000);
     trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
-    gps=await getDriverActionGps({fresh:true,timeoutMs:12000});
+    gps=await getDriverActionGps({fresh:true,timeoutMs:10000,highAccuracy:true});
   }
   let point=null;
   if(!gps.ok){
@@ -17345,6 +17342,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     }
   }
   async function marcarLlegado(stopId,opts={}){
+    const geo=eventGeoFromLocationResult(opts.prefetchedGps??null);
     const now=new Date().toISOString();
     devLog("[TL1] click entrada_muelle",{
       servicioId:servicio?.id||null,
@@ -17384,20 +17382,18 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     }
     let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
     const stopEntrada=stops.find(s=>s.id===stopId);
+    const notasEntrada=await patchStopOperacionGeo(stopId,stopEntrada?.notas,{entrada_geo:geo});
+    updated=updated.map(s=>s.id===stopId?{...s,notas:notasEntrada}:s);
     await autoTacografoTramoMuelle({ alEntrada: true, stop: stopEntrada });
     if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
-    const geo=resolveEventGeoFromOp(op);
-    const stop=updated.find(s=>s.id===stopId);
-    const notas=mergeStopOperacionMeta(stop?.notas,{entrada_geo:geo});
-    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
-    updated=updated.map(s=>s.id===stopId?{...s,notas}:s);
     patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId,opts={}){
+    const geoSalida=eventGeoFromLocationResult(opts.prefetchedGps??null);
     const now=new Date().toISOString();
     devLog("[TL1] click salida_muelle",{
       servicioId:servicio?.id||null,
@@ -17454,14 +17450,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       sbUpsert("entries",rows).catch(()=>{});
     }
 
+    const stopSalidaRow=updated.find(s=>s.id===stopId);
+    const notasSalida=await patchStopOperacionGeo(stopId,stopSalidaRow?.notas,{salida_geo:geoSalida});
+    updated=updated.map(s=>s.id===stopId?{...s,notas:notasSalida}:s);
+
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
-    const geoSalida=resolveEventGeoFromOp(op);
-    const stopSalida=updated.find(s=>s.id===stopId);
-    const notasSalida=mergeStopOperacionMeta(stopSalida?.notas,{salida_geo:geoSalida});
-    await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas:notasSalida})});
-    updated=updated.map(s=>s.id===stopId?{...s,notas:notasSalida}:s);
 
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
@@ -17481,8 +17476,8 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(uid)await marcarParticipacionActiva(servicioId,uid).catch(()=>{});
     const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
     let nextServicio={...started};
+    const inicioGeo=eventGeoFromLocationResult(opts.prefetchedGps??null);
     const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast,prefetchedGps:opts.prefetchedGps??null});
-    const inicioGeo=resolveEventGeoFromOp(op);
     const referenciaInicio=mergeReferenciaOperacional(
       op?.referencia||nextServicio.referencia||null,
       {inicio_servicio_geo:inicioGeo},
@@ -17498,29 +17493,41 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function iniciarViajeOperacional(servicioId,opts={}){
     if(!servicio||servicio.id!==servicioId)return;
-    const op=await registerDriverOperationalPoint({uid,servicio,stops,norma,eventType:"ruta_iniciada",showToast,prefetchedGps:opts.prefetchedGps??null});
-    const rutaGeo=resolveEventGeoFromOp(op);
-    const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
-      operational_route_started_at:new Date().toISOString(),
-      operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+    const rutaGeo=eventGeoFromLocationResult(opts.prefetchedGps??null);
+    const routeStartedAt=new Date().toISOString();
+    let referencia=mergeReferenciaOperacional(servicio.referencia||null,{
+      operational_route_started_at:routeStartedAt,
+      operational_trip_started_at:getOperationalTripStartedAt(servicio)||routeStartedAt,
       operational_route_started_geo:rutaGeo,
     });
-    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
-    patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia}:prev.servicio}));
+    const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
+    if(!res.ok)throw new Error("No se pudo iniciar la ruta");
+    const nextServicio={...servicio,referencia};
+    patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...nextServicio}:prev.servicio}));
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+    try{
+      const op=await registerDriverOperationalPoint({uid,servicio:nextServicio,stops,norma,eventType:"ruta_iniciada",showToast,prefetchedGps:opts.prefetchedGps??null});
+      if(op?.referencia&&op.referencia!==referencia){
+        await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia:op.referencia})});
+        patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia:op.referencia}:prev.servicio}));
+      }
+    }catch(e){
+      devWarn("[ruta] tracking GPS/ETA opcional falló",e?.message||e);
+    }
   }
-  async function marcarInicioOperacionStop(stopId){
+  async function marcarInicioOperacionStop(stopId,opts={}){
     const stop=stops.find(s=>s.id===stopId);
     if(!stop||getInicioOperacionMs(stop))return;
     const now=new Date().toISOString();
-    const notas=mergeStopOperacionMeta(stop.notas||"",{inicio_operacion_at:now});
+    const opGeo=eventGeoFromLocationResult(opts.prefetchedGps??null);
+    const notas=mergeStopOperacionMeta(stop.notas||"",{inicio_operacion_at:now,inicio_operacion_geo:opGeo});
     await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({notas})});
     const updated=stops.map(s=>s.id===stopId?{...s,notas}:s);
     if(uid&&STOP_TIPOS_CON_AUTOTACO.includes(stop.tipo)){
       const tipoEv=STOP_TIPO_TO_INICIO_EV[stop.tipo];
       sbUpsert("entries",[{id:Date.now()+Math.random(),user_id:uid,type:tipoEv,ts:now,note:`Manual: ${stop.nombre}`,location:stop.direccion||stop.nombre||null,late:false}]).catch(()=>{});
     }
-    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"inicio_operacion_stop",stopId,showToast});
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"inicio_operacion_stop",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     patchDriverView({stops:updated,servicio:nextServicio});

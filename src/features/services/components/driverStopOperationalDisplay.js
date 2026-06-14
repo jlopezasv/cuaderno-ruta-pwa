@@ -1,4 +1,5 @@
 import { getStopOperacionMeta } from "../../../domain/service/stopOperacionMeta.js";
+import { getServicioOperacionMeta } from "../../../domain/service/serviceOperacionMeta.js";
 import { formatDriverGeoTimelineLines } from "../../../domain/service/operationalGeo.js";
 
 function stopClock(iso) {
@@ -33,6 +34,10 @@ export function buildDriverStopTimesRows({ stop, isFirstCarga, servicio }) {
 
   if (isFirstCarga && inicioServicioReal) {
     rows.push({ kind: "clock", label: "Inicio servicio", value: stopClock(inicioServicioReal) });
+    const svcMeta = getServicioOperacionMeta(servicio);
+    for (const line of formatDriverGeoTimelineLines(svcMeta?.inicio_servicio_geo)) {
+      rows.push({ kind: "geo", label: line.label, value: line.value });
+    }
   }
   if (entrada) {
     rows.push({ kind: "clock", label: "Entrada muelle", value: stopClock(entrada) });

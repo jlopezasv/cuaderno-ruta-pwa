@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import { isDemoApp } from "../../../config/appEnvironment.js";
 import { requestActionLocation } from "../../../data/driverActionGps.js";
 
 /**
@@ -11,14 +10,13 @@ export function useDriverActionLocation() {
   const gateRef = useRef(null);
   gateRef.current = gate;
 
-  const runAttempt = useCallback(async (actionLabel, resolve) => {
-    setGate({ actionLabel, phase: "requesting", resolve });
-    const result = await requestActionLocation();
+  const runAttempt = useCallback(async (eventType, actionLabel, resolve) => {
+    setGate({ actionLabel, phase: "requesting", resolve, eventType });
+    const result = await requestActionLocation(eventType, { callingFunction: "useDriverActionLocation" });
     const current = gateRef.current;
     if (!current || current.resolve !== resolve) return;
 
     if (result.ok) {
-      if (isDemoApp()) console.log("[GPS acción] guardando evento con ubicación");
       resolve(result);
       setGate(null);
       return;
@@ -28,15 +26,16 @@ export function useDriverActionLocation() {
       actionLabel,
       phase: "failed",
       resolve,
+      eventType,
       error: result.error || "No se pudo obtener ubicación",
       lastResult: result,
     });
   }, []);
 
   const acquireLocation = useCallback(
-    (actionLabel = "esta acción") =>
+    (eventType, actionLabel = "esta acción") =>
       new Promise((resolve) => {
-        void runAttempt(actionLabel, resolve);
+        void runAttempt(eventType, actionLabel, resolve);
       }),
     [runAttempt],
   );
@@ -44,14 +43,20 @@ export function useDriverActionLocation() {
   const retry = useCallback(() => {
     const g = gateRef.current;
     if (!g?.resolve) return;
-    void runAttempt(g.actionLabel, g.resolve);
+    void runAttempt(g.eventType || "retry", g.actionLabel, g.resolve);
   }, [runAttempt]);
 
   const continueWithout = useCallback(() => {
     const g = gateRef.current;
     if (!g?.resolve) return;
-    if (isDemoApp()) console.log("[GPS acción] evento guardado sin ubicación");
-    g.resolve(g.lastResult || { ok: false, location_status: "unavailable", error: g.error });
+    g.resolve(
+      g.lastResult || {
+        ok: false,
+        location_status: "unavailable",
+        error: g.error || "No se pudo obtener ubicación",
+        location_error: g.error || "No se pudo obtener ubicación",
+      },
+    );
     setGate(null);
   }, []);
 

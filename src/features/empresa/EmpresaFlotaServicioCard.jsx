@@ -473,6 +473,29 @@ function EmpresaFlotaServicioCardImpl({
             </div>
           ) : null}
 
+          {onDcdt && !expanded ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDcdt();
+              }}
+              style={{
+                marginTop: 10,
+                background: "#fffbeb",
+                color: "#92400e",
+                border: "1px solid #fcd34d",
+                borderRadius: 8,
+                padding: "7px 10px",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              DCDT
+            </button>
+          ) : null}
+
           {onAsignarConductor && !expanded && !servicio.conductor_id ? (
             <button
               type="button"
