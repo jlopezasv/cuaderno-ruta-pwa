@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DcdtReadonlyContent } from "./DcdtReadonlyContent.jsx";
 
 const UI = {
   bg: "#f0f4f8",
@@ -6,26 +7,13 @@ const UI = {
   tx: "#0f172a",
   su: "#64748b",
   border: "#dbe4ee",
-  brand: "#f59e0b",
   brandDeep: "#b45309",
-  green: "#16a34a",
 };
-
-function VerifyField({ label, value }) {
-  return (
-    <div style={{ padding: "10px 0", borderBottom: `1px solid ${UI.border}` }}>
-      <div style={{ fontSize: 10, fontWeight: 800, color: UI.su, letterSpacing: 0.6, textTransform: "uppercase" }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: UI.tx, marginTop: 4, lineHeight: 1.35 }}>{value || "—"}</div>
-    </div>
-  );
-}
 
 export function DcdtVerifyPublicPage({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [row, setRow] = useState(null);
+  const [sectionsModel, setSectionsModel] = useState(null);
 
   useEffect(() => {
     if (!token) {
@@ -42,7 +30,7 @@ export function DcdtVerifyPublicPage({ token }) {
           if (!cancelled) setError(data?.error || "No se pudo verificar el documento");
           return;
         }
-        if (!cancelled) setRow(data.dcdt);
+        if (!cancelled) setSectionsModel(data.dcdt?.sections || null);
       } catch {
         if (!cancelled) setError("Error de conexión");
       } finally {
@@ -71,21 +59,11 @@ export function DcdtVerifyPublicPage({ token }) {
           <div style={{ fontSize: 12, color: UI.su, marginTop: 6, lineHeight: 1.45 }}>
             Documento de Control del Transporte · Orden FOM/2861/2012
           </div>
-          <div
-            style={{
-              display: "inline-block",
-              marginTop: 10,
-              fontSize: 11,
-              fontWeight: 700,
-              color: "#166534",
-              background: "#dcfce7",
-              border: "1px solid #bbf7d0",
-              borderRadius: 999,
-              padding: "4px 10px",
-            }}
-          >
-            Solo lectura · Inspección
-          </div>
+          {sectionsModel ? (
+            <div style={{ fontSize: 12, color: UI.su, marginTop: 8 }}>
+              {sectionsModel.referencia} · {sectionsModel.estadoLabel}
+            </div>
+          ) : null}
         </div>
 
         <div
@@ -101,20 +79,8 @@ export function DcdtVerifyPublicPage({ token }) {
             <div style={{ textAlign: "center", color: UI.su, padding: "24px 0" }}>Verificando documento…</div>
           ) : error ? (
             <div style={{ textAlign: "center", color: "#b91c1c", padding: "24px 0", lineHeight: 1.5 }}>{error}</div>
-          ) : row ? (
-            <>
-              <VerifyField label="Número DCDT" value={row.numero} />
-              <VerifyField label="Estado" value={row.estado} />
-              <VerifyField label="Empresa transportista" value={row.transportista} />
-              <VerifyField label="Matrícula tractora" value={row.matriculaTractora} />
-              {row.matriculaRemolque ? (
-                <VerifyField label="Matrícula remolque" value={row.matriculaRemolque} />
-              ) : null}
-              <VerifyField label="Origen" value={row.origen} />
-              <VerifyField label="Destino" value={row.destino} />
-              <VerifyField label="Fecha transporte" value={row.fechaTransporte} />
-              <VerifyField label="Mercancía principal" value={row.mercanciaPrincipal} />
-            </>
+          ) : sectionsModel ? (
+            <DcdtReadonlyContent sectionsModel={sectionsModel} variant="public" showPending={false} />
           ) : null}
         </div>
 

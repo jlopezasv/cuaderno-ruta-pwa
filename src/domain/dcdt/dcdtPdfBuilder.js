@@ -52,6 +52,19 @@ function formatFecha(iso) {
   return d.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+function formatFechaHora(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function parteLines(label, parte) {
   const out = [`${label}`];
   if (!parte?.nombre) {
@@ -151,13 +164,14 @@ export async function buildDcdtPdfBlob(doc) {
   text("4. MERCANCIA", margin, 12, "#0f172a");
   lines(`Naturaleza: ${doc.mercancia?.descripcion || "—"}`, margin);
   lines(`Peso (kg): ${doc.mercancia?.peso_kg ?? "—"}`, margin);
-  if (doc.mercancia?.bultos != null) lines(`Bultos: ${doc.mercancia.bultos}`, margin);
-  if (doc.mercancia?.palets != null) lines(`Palets: ${doc.mercancia.palets}`, margin);
+  lines(`Bultos: ${doc.mercancia?.bultos ?? "—"}`, margin);
+  lines(`Palets: ${doc.mercancia?.palets ?? "—"}`, margin);
   y -= 6;
 
   text("5. FECHA Y VEHICULO", margin, 12, "#0f172a");
   lines(`Fecha transporte: ${formatFecha(doc.fecha_transporte)}`, margin);
-  lines(`Matricula: ${doc.vehiculo?.matricula || "—"}`, margin);
+  lines(`Matricula tractora: ${doc.vehiculo?.matricula || "—"}`, margin);
+  if (doc.vehiculo?.remolque) lines(`Matricula remolque: ${doc.vehiculo.remolque}`, margin);
   y -= 6;
 
   if (doc.observaciones) {
@@ -168,7 +182,12 @@ export async function buildDcdtPdfBlob(doc) {
 
   if (doc.validado_at) {
     y -= 6;
-    lines(`Validado por trafico: ${formatFecha(doc.validado_at)}`, margin, 10, "#15803d");
+    const validado = formatFechaHora(doc.validado_at);
+    lines(`Estado: Validado`, margin, 10, "#15803d");
+    lines(`Validado por trafico: ${validado}`, margin, 10, "#15803d");
+    if (doc.transportista?.nombre) {
+      lines(`Empresa transportista: ${doc.transportista.nombre}`, margin, 10, "#15803d");
+    }
   }
 
   finishPage(true);

@@ -551,7 +551,10 @@ export async function fetchDcdtById(id) {
 
 export async function ensureDcdtQrVerification({ dcdt, doc, servicio, conductor = null, missing = [] }) {
   if (!dcdt?.id || !isDcdtQrEligible(dcdt.estado, { missing })) return dcdt;
-  if (dcdt.datos?.qr_verificacion_token && dcdt.datos?.qr_verificacion_snapshot) return dcdt;
+  const snap = dcdt.datos?.qr_verificacion_snapshot;
+  const hasFullSnap =
+    snap?.schema_version >= 2 || (snap?.cargador && snap?.mercancia && snap?.transportista);
+  if (dcdt.datos?.qr_verificacion_token && hasFullSnap) return dcdt;
   const snapshot = buildDcdtVerifySnapshot({ doc, dcdt, servicio, conductor });
   return attachQrVerificationToDcdt(dcdt.id, snapshot);
 }

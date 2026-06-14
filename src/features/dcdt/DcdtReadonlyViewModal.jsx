@@ -1,6 +1,6 @@
-import { DCDT_ESTADO_LABELS } from "../../domain/dcdt/dcdtConstants.js";
-import { formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
+import { buildDcdtReadonlySections } from "../../domain/dcdt/dcdtReadonlyViewModel.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { DcdtReadonlyContent } from "./DcdtReadonlyContent.jsx";
 
 const UI = {
   overlay: "rgba(15,23,42,.45)",
@@ -11,40 +11,9 @@ const UI = {
   su: "#64748b",
 };
 
-function FieldRow({ label, value }) {
-  const text = formatDcdtDisplayValueOrDash(value);
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "130px 1fr",
-        gap: 8,
-        padding: "6px 0",
-        borderBottom: `1px solid ${UI.border}`,
-        fontSize: 13,
-      }}
-    >
-      <div style={{ color: UI.su, fontWeight: 700, fontSize: 11 }}>{label}</div>
-      <div style={{ color: UI.tx }}>{text}</div>
-    </div>
-  );
-}
-
-function parteLine(parte) {
-  const nombre = formatDcdtDisplayValueOrDash(parte?.nombre);
-  if (nombre === "—") return "—";
-  const bits = [
-    nombre,
-    formatDcdtDisplayValueOrDash(parte?.nif),
-    formatDcdtDisplayValueOrDash(parte?.domicilio || parte?.direccion),
-  ].filter((x) => x && x !== "—");
-  return bits.length ? bits.join(" · ") : "—";
-}
-
 export function DcdtReadonlyViewModal({ servicio, doc, dcdt, missing = [], onClose }) {
-  const estadoLabel = DCDT_ESTADO_LABELS[dcdt?.estado] || dcdt?.estado || "—";
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
-  const pending = Array.isArray(missing) ? missing : [];
+  const sectionsModel = buildDcdtReadonlySections({ doc, dcdt, servicioReferencia: serviceLabel });
 
   return (
     <div
@@ -77,40 +46,11 @@ export function DcdtReadonlyViewModal({ servicio, doc, dcdt, missing = [], onClo
         <div style={{ padding: "16px 18px", borderBottom: `1px solid ${UI.border}` }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>DCDT</div>
           <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
-            {serviceLabel} · {estadoLabel}
+            {sectionsModel.referencia || serviceLabel} · {sectionsModel.estadoLabel || "—"}
           </div>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
-          {pending.length ? (
-            <div
-              style={{
-                background: "#fff7ed",
-                border: "1px solid #fed7aa",
-                borderRadius: 10,
-                padding: "10px 12px",
-                marginBottom: 12,
-                fontSize: 11,
-                color: "#92400e",
-                lineHeight: 1.45,
-              }}
-            >
-              <div style={{ fontWeight: 800, marginBottom: 4 }}>Pendientes ({pending.length})</div>
-              {pending.map((m) => m.label).join(" · ")}
-            </div>
-          ) : null}
-          <FieldRow label="Cargador" value={parteLine(doc?.cargador)} />
-          <FieldRow label="Transportista" value={parteLine(doc?.transportista)} />
-          <FieldRow label="Destinatario" value={parteLine(doc?.destinatario)} />
-          <FieldRow label="Origen" value={doc?.origen} />
-          <FieldRow label="Destino" value={doc?.destino} />
-          <FieldRow label="Matrícula tractora" value={doc?.vehiculo?.matricula} />
-          {doc?.vehiculo?.remolque ? <FieldRow label="Matrícula remolque" value={doc.vehiculo.remolque} /> : null}
-          <FieldRow
-            label="Fecha transporte"
-            value={doc?.fecha_transporte ? new Date(doc.fecha_transporte).toLocaleDateString("es-ES") : ""}
-          />
-          <FieldRow label="Mercancía" value={doc?.mercancia?.descripcion} />
-          {doc?.mercancia?.peso_kg != null ? <FieldRow label="Peso (kg)" value={String(doc.mercancia.peso_kg)} /> : null}
+          <DcdtReadonlyContent sectionsModel={sectionsModel} missing={missing} variant="modal" />
         </div>
         <div style={{ padding: "12px 18px", borderTop: `1px solid ${UI.border}`, background: UI.soft }}>
           <button

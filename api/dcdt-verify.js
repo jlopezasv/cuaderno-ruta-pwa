@@ -1,26 +1,9 @@
 // api/dcdt-verify.js — Verificación pública DCDT (solo lectura, QR inspección)
 import { getSupabaseServiceRoleKey, getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
+import { formatDcdtVerifyPublicRow } from "../src/domain/dcdt/dcdtVerifyPayload.js";
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
 const ESTADOS_QR = new Set(["validado", "incluido_en_expediente"]);
-
-const ESTADO_LABELS = {
-  borrador: "Borrador",
-  incompleto: "Incompleto",
-  pendiente_ocr: "Pendiente OCR",
-  pendiente_validacion: "Pendiente validación",
-  validado: "Validado",
-  incluido_en_expediente: "Incluido en expediente",
-};
-
-function srHeaders() {
-  const key = getSupabaseServiceRoleKey();
-  return {
-    apikey: key,
-    Authorization: `Bearer ${key}`,
-    "Content-Type": "application/json",
-  };
-}
 
 async function fetchDcdtByToken(token) {
   const { url } = getSupabaseServerEnv();
@@ -35,32 +18,24 @@ async function fetchDcdtByToken(token) {
   return null;
 }
 
-function publicRowFromSnapshot(snapshot, estado) {
-  if (!snapshot || typeof snapshot !== "object") return null;
-  let fecha = "—";
-  if (snapshot.fecha_transporte) {
-    try {
-      fecha = new Date(snapshot.fecha_transporte).toLocaleDateString("es-ES", {
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-      });
-    } catch {
-      fecha = String(snapshot.fecha_transporte);
-    }
-  }
+function srHeaders() {
+  const key = getSupabaseServiceRoleKey();
   return {
-    numero: snapshot.numero || "—",
-    estado: ESTADO_LABELS[estado] || ESTADO_LABELS[snapshot.estado] || snapshot.estado || "—",
-    transportista: snapshot.transportista || "—",
-    matriculaTractora: snapshot.matricula_tractora || "—",
-    matriculaRemolque: snapshot.matricula_remolque || null,
-    origen: snapshot.origen || "—",
-    destino: snapshot.destino || "—",
-    fechaTransporte: fecha,
-    mercanciaPrincipal: snapshot.mercancia_principal || "—",
-    validadoAt: snapshot.validado_at || null,
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
   };
+}
+
+function resolveVerifySnapshot(datos) {
+  if (!datos || typeof datos !== "object") return null;
+  if (datos.qr_verificacion_snapshot && typeof datos.qr_verificacion_snapshot === "object") {
+    return datos.qr_verificacion_snapshot;
+  }
+  if (datos.validacion_snapshot && typeof datos.validacion_snapshot === "object") {
+    return datos.validacion_snapshot;
+  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -90,9 +65,9 @@ export default async function handler(req, res) {
     }
 
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
-    const snapshot = datos.qr_verificacion_snapshot;
-    const publicRow = publicRowFromSnapshot(snapshot, estado);
-    if (!publicRow) {
+    const snapshot = resolveVerifySnapshot(datos);
+    const publicRow = formatDcdtVerifyPublicRow(snapshot, { estado, validadoAt: row.validado_at });
+    if (!publicRow?.sections) {
       return res.status(404).json({ ok: false, error: "Datos de verificación no disponibles" });
     }
 
