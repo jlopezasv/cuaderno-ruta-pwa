@@ -4,22 +4,20 @@ import {
   assignDcdtParte,
   buildMercanciaDatosPatch,
   computeDcdtEstado,
-  dcdtStatusUxLabel,
   ensureDcdtForServicio,
   extractLatestOcrFromEvidencias,
   isDcdtEstadoValidated,
-  isDcdtFullyValidated,
   mergeOcrIntoDcdtDatos,
   mercanciaEditFromDatos,
   persistDcdtPartesFromStops,
   reconcileDcdtEstadoIfNeeded,
-  resolveDcdtDocument,
   saveDcdtDatos,
   validarDcdtTrafico,
 } from "../../domain/dcdt/dcdtModel.js";
+import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
-import { generateAndPersistDcdtPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
+import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
@@ -279,18 +277,21 @@ export function EmpresaDcdtModal({
         }
         if (cancelled) return;
 
-        const resolvedPreview = resolveDcdtDocument({
+        const mercanciaForReadiness = hydrateMercanciaEdit(persisted?.datos?.mercancia, servicioRef.current);
+        const readinessPreview = validateDcdtReadiness({
           servicio: servicioRef.current,
-          stops: stopRows,
           dcdt: persisted,
+          stops: stopRows,
           masterById: masterMap,
           empresa: empresaRef.current,
           empresaOwnerProfile: ownerProfile,
           conductor: conductorRef.current,
+          mercanciaEdit: mercanciaForReadiness,
+          flotaEvs: flotaEvsRef.current,
         });
         persisted = await reconcileDcdtEstadoIfNeeded({
           dcdt: persisted,
-          missing: resolvedPreview.missing,
+          missing: readinessPreview.missing,
           flotaEvs: flotaEvsRef.current,
           datos: persisted?.datos,
         });
@@ -319,29 +320,24 @@ export function EmpresaDcdtModal({
     return m;
   }, [partes]);
 
-  const { doc, missing, datos } = useMemo(() => {
-    if (!dcdt) return { doc: null, missing: [], datos: null };
-    const datosMerged = {
-      ...dcdt.datos,
-      mercancia: {
-        ...dcdt.datos?.mercancia,
-        descripcion: mercanciaEdit.descripcion || dcdt.datos?.mercancia?.descripcion,
-        peso_kg: mercanciaEdit.peso_kg !== "" ? Number(mercanciaEdit.peso_kg) : dcdt.datos?.mercancia?.peso_kg,
-        bultos: mercanciaEdit.bultos !== "" ? Number(mercanciaEdit.bultos) : dcdt.datos?.mercancia?.bultos,
-        palets: mercanciaEdit.palets !== "" ? Number(mercanciaEdit.palets) : dcdt.datos?.mercancia?.palets,
-      },
-    };
-    return resolveDcdtDocument({
+  const readiness = useMemo(() => {
+    if (!dcdt) {
+      return validateDcdtReadiness({ servicio, dcdt: null });
+    }
+    return validateDcdtReadiness({
       servicio,
+      dcdt,
       stops,
-      dcdt: { ...dcdt, datos: datosMerged },
       masterById,
       empresa,
       empresaOwnerProfile,
       conductor: conductorEmpresa || conductor,
+      mercanciaEdit,
+      flotaEvs,
     });
-  }, [dcdt, servicio, stops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit]);
+  }, [dcdt, servicio, stops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit, flotaEvs]);
 
+  const { doc, missing, datos } = readiness;
   const missingKeys = useMemo(() => new Set(missing.map((f) => f.key)), [missing]);
   const estadoAuto = useMemo(
     () =>
@@ -354,15 +350,10 @@ export function EmpresaDcdtModal({
     [missing, flotaEvs, dcdt?.datos, dcdt?.estado],
   );
 
-  const statusLabel = dcdtStatusUxLabel({
-    estado: dcdt?.estado || estadoAuto,
-    missing,
-    pdfGeneradoAt: dcdt?.pdfGeneradoAt,
-  });
-  const puedeValidar =
-    missing.length === 0 && !isDcdtEstadoValidated(dcdt?.estado) && !isDcdtEstadoValidated(estadoAuto);
-  const puedePdf = isDcdtFullyValidated({ estado: dcdt?.estado, missing });
-  const puedeDescargarPdf = puedePdf && !!dcdt?.pdfGeneradoAt;
+  const statusLabel = readiness.statusLabel;
+  const puedeValidar = readiness.canValidate;
+  const puedePdf = readiness.canGeneratePdf;
+  const puedeDescargarPdf = readiness.canDownloadPdf;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
 
   async function guardarMercancia() {
@@ -374,14 +365,16 @@ export function EmpresaDcdtModal({
         mercancia: buildMercanciaDatosPatch(mercanciaEdit),
       };
       const estado = computeDcdtEstado({
-        missing: resolveDcdtDocument({
+        missing: validateDcdtReadiness({
           servicio,
-          stops,
           dcdt: { ...dcdt, datos: nextDatos },
+          stops,
           masterById,
           empresa,
           empresaOwnerProfile,
           conductor: conductorEmpresa || conductor,
+          mercanciaEdit,
+          flotaEvs,
         }).missing,
         evidenciasByStop: flotaEvs,
         datos: nextDatos,
@@ -409,14 +402,15 @@ export function EmpresaDcdtModal({
     setBusy("ocr");
     try {
       const nextDatos = mergeOcrIntoDcdtDatos(dcdt.datos, ocr);
-      const { missing: m2 } = resolveDcdtDocument({
+      const { missing: m2 } = validateDcdtReadiness({
         servicio,
-        stops,
         dcdt: { ...dcdt, datos: nextDatos },
+        stops,
         masterById,
         empresa,
         empresaOwnerProfile,
-        conductor,
+        conductor: conductorEmpresa || conductor,
+        flotaEvs,
       });
       const estado = computeDcdtEstado({
         missing: m2,
@@ -444,7 +438,13 @@ export function EmpresaDcdtModal({
     }
     setBusy("validar");
     try {
-      const next = await validarDcdtTrafico(dcdt.id, userId, { doc, servicio, conductor: conductorEmpresa || conductor, missing });
+      const next = await validarDcdtTrafico(dcdt.id, userId, {
+        doc,
+        servicio,
+        conductor: conductorEmpresa || conductor,
+        missing,
+        dcdt,
+      });
       setDcdt(next);
       showToast?.("DCDT validado");
     } catch (e) {
@@ -482,11 +482,13 @@ export function EmpresaDcdtModal({
       showToast?.("Genera el PDF DCDT antes de descargarlo");
       return;
     }
-    if (openDcdtStoredPdf(dcdt)) {
-      showToast?.("Abriendo PDF DCDT");
-      return;
+    try {
+      const name = dcdt.datos?.pdf_archivo_nombre || `dcdt-${serviceLabel}.pdf`;
+      await downloadDcdtStoredPdf(dcdt, name);
+      showToast?.("PDF DCDT descargado");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo descargar el PDF");
     }
-    showToast?.("No se encontró el PDF guardado");
   }
 
   return (

@@ -6,6 +6,7 @@ import {
   isExtraDocUrlOpenable,
   deleteServicioDocumentoExtra,
   uploadServicioDocumentoExtra,
+  resolveExtraDocAccessUrl,
 } from "../../../domain/service/serviceExtraDocuments.js";
 import { logExtraDoc } from "../../../domain/documents/extraDocumentUploadLog.js";
 import { sanitizeDocumentCommentText } from "../../../domain/documents/documentCommentSanitize.js";
@@ -77,8 +78,16 @@ export function ServiceExtraDocumentsBlock({
     setModal(true);
   }, [openAddRequestVersion]);
 
-  function openDocument(row) {
-    const url = extraDocFileUrl(row);
+  async function openDocument(row) {
+    let url = extraDocFileUrl(row);
+    try {
+      const resolved = await resolveExtraDocAccessUrl(row);
+      if (resolved) url = resolved;
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo abrir el documento");
+      logExtraDoc("DOCUMENT_VER_FAIL", { id: row?.id, reason: "sign_failed" });
+      return;
+    }
     if (!isExtraDocUrlOpenable(url)) {
       showToast?.("Documento sin URL valida — vuelve a subirlo");
       logExtraDoc("DOCUMENT_VER_FAIL", { id: row?.id, url: url ? String(url).slice(0, 40) : null });

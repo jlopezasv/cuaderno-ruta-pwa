@@ -1,5 +1,5 @@
 import { getUserId, sbFetch } from "../../data/supabaseClient.js";
-import { uploadUserFile } from "../../data/uploadUserPhoto.js";
+import { signStorageObjectPath, uploadUserFile, USER_PHOTOS_BUCKET } from "../../data/uploadUserPhoto.js";
 import { buildDocMetaPayload } from "../documents/operationalDocumentRecord.js";
 import { storageUploadUrl, traceMediaV2DocMeta } from "../documents/mediaStorageV2.js";
 import {
@@ -30,6 +30,31 @@ export function extraDocFileUrl(row) {
   const u = row.archivo_url ?? row.url ?? null;
   if (!u || typeof u !== "string") return null;
   return u;
+}
+
+/** URL accesible; renueva firma para DCDT y docs con bucket/path en datos. */
+export async function resolveExtraDocAccessUrl(row) {
+  if (!row) return null;
+  const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
+  const docMeta = datos.doc_meta && typeof datos.doc_meta === "object" ? datos.doc_meta : {};
+  const bucket =
+    datos.bucket ||
+    datos.pdf_storage_bucket ||
+    docMeta.storage_bucket ||
+    docMeta.bucket ||
+    USER_PHOTOS_BUCKET;
+  const path =
+    datos.path ||
+    datos.pdf_storage_path ||
+    docMeta.storage_path ||
+    docMeta.path ||
+    null;
+  if (path) {
+    const signed = await signStorageObjectPath(bucket, path);
+    return storageUploadUrl(signed);
+  }
+  const legacy = extraDocFileUrl(row);
+  return isHttpStorageUrl(legacy) ? legacy : null;
 }
 
 export function isExtraDocUrlOpenable(url) {

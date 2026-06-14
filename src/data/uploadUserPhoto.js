@@ -109,6 +109,33 @@ function requireStorageAuth() {
   return { uid, token };
 }
 
+/** Renueva URL firmada para un objeto ya subido (PDF DCDT, etc.). */
+export async function signStorageObjectPath(bucket, objectPath, expiresIn = SIGNED_URL_TTL_SEC) {
+  const { token } = requireStorageAuth();
+  guardDemoCannotUseProduction(SB_URL, `storage:sign:${bucket}`);
+  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${objectPath}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SB_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expiresIn }),
+  });
+  const signBody = await readResponseBody(signRes);
+  if (!signRes.ok) {
+    throw new Error(`No se pudo firmar URL de storage (${signRes.status})`);
+  }
+  const finalUrl = signedUrlFromSignBody(signBody.json);
+  if (!isHttpStorageUrl(finalUrl)) throw new Error(STORAGE_URL_ERROR);
+  return buildStorageUploadResult({
+    url: finalUrl,
+    bucket,
+    path: objectPath,
+    signedExpiresInSec: Number(signBody.json?.expiresIn) || expiresIn,
+  });
+}
+
 /**
  * @param {Blob} blob
  * @param {string} mime

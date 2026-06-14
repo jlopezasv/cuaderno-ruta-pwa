@@ -194,6 +194,38 @@ export async function assignDcdtParte({
   return saveDcdtDatos(dcdt.id, nextDatos, estado);
 }
 
+function buildValidacionSnapshot(doc) {
+  if (!doc) return null;
+  return {
+    at: new Date().toISOString(),
+    referencia: doc.referencia,
+    cargador: doc.cargador,
+    destinatario: doc.destinatario,
+    transportista: doc.transportista,
+    origen: doc.origen,
+    destino: doc.destino,
+    mercancia: doc.mercancia,
+    fecha_transporte: doc.fecha_transporte,
+    vehiculo: doc.vehiculo,
+  };
+}
+
+function applyValidacionSnapshot(doc, dcdt) {
+  const snap = dcdt?.datos?.validacion_snapshot;
+  if (!snap || !isDcdtEstadoValidated(dcdt?.estado)) return doc;
+  return {
+    ...doc,
+    cargador: snap.cargador || doc.cargador,
+    destinatario: snap.destinatario || doc.destinatario,
+    transportista: snap.transportista || doc.transportista,
+    origen: snap.origen || doc.origen,
+    destino: snap.destino || doc.destino,
+    mercancia: snap.mercancia || doc.mercancia,
+    fecha_transporte: snap.fecha_transporte || doc.fecha_transporte,
+    vehiculo: snap.vehiculo || doc.vehiculo,
+  };
+}
+
 /** Resuelve documento DCDT para UI/PDF sin duplicar master. */
 export function resolveDcdtDocument({
   servicio,
@@ -260,13 +292,15 @@ export function resolveDcdtDocument({
     domicilio: formatDcdtDisplayValue(destinatario?.domicilio || destinatario?.direccion),
   };
 
+  const docFinal = applyValidacionSnapshot(doc, dcdt);
+
   const missing = [];
   for (const f of DCDT_REQUIRED_FIELDS) {
-    const val = getNested(doc, f.key);
+    const val = getNested(docFinal, f.key);
     if (val == null || String(val).trim() === "") missing.push(f);
   }
 
-  return { doc, missing, datos };
+  return { doc: docFinal, missing, datos };
 }
 
 export function hasCmrEvidencias(evidenciasByStop) {
@@ -522,10 +556,22 @@ export async function ensureDcdtQrVerification({ dcdt, doc, servicio, conductor 
   return attachQrVerificationToDcdt(dcdt.id, snapshot);
 }
 
-export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor, missing = [] } = {}) {
+export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor, missing = [], dcdt = null } = {}) {
   if (Array.isArray(missing) && missing.length > 0) {
     throw new Error("Completa los campos obligatorios antes de validar");
   }
+  const current = dcdt || (await fetchDcdtById(id));
+  const validacion_snapshot = buildValidacionSnapshot(doc);
+  const nextDatos = {
+    ...(current?.datos || emptyDatos()),
+    validacion_snapshot,
+    transportista_resuelto: doc?.transportista || null,
+    vehiculo: {
+      ...(current?.datos?.vehiculo || {}),
+      use_conductor_matricula: true,
+      matricula_override: doc?.vehiculo?.matricula || current?.datos?.vehiculo?.matricula_override || null,
+    },
+  };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
@@ -533,6 +579,7 @@ export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor,
       estado: DCDT_ESTADO.VALIDADO,
       validado_por: userId,
       validado_at: new Date().toISOString(),
+      datos: nextDatos,
       updated_at: new Date().toISOString(),
     }),
   });
@@ -564,6 +611,9 @@ export async function markDcdtIncluidoExpediente(id) {
 }
 
 export async function markDcdtPdfGenerado(id, meta = {}) {
+  if (!meta.pdfStoragePath) {
+    throw new Error("PDF DCDT: no se registró sin ruta en storage");
+  }
   const current = await fetchDcdtById(id);
   const datos = {
     ...(current?.datos || {}),
@@ -572,6 +622,8 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
     pdf_archivo_nombre: meta.pdfArchivoNombre ?? current?.datos?.pdf_archivo_nombre ?? null,
     pdf_retention_until: meta.pdfRetentionUntil ?? current?.datos?.pdf_retention_until ?? null,
     pdf_dcdt_version: meta.pdfDcdtVersion ?? current?.datos?.pdf_dcdt_version ?? null,
+    pdf_storage_bucket: meta.pdfStorageBucket ?? current?.datos?.pdf_storage_bucket ?? null,
+    pdf_storage_path: meta.pdfStoragePath ?? current?.datos?.pdf_storage_path ?? null,
   };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
