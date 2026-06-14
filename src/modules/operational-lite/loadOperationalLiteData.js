@@ -43,20 +43,46 @@ export async function loadOperationalLiteData(servicio, { nombreConductor } = {}
   let dcdtBlock = null;
   let dcdtRecord = null;
 
-  if (dcdtRow && isDcdtValidadoParaExpediente(dcdtRow)) {
+  if (dcdtRow) {
     const partes = servicio.empresa_id ? await fetchPartesTransporte(servicio.empresa_id) : [];
     const masterById = {};
     for (const p of partes) masterById[p.id] = p;
-    const { doc } = resolveDcdtDocument({
+
+    let conductorLite = null;
+    if (servicio.conductor_id) {
+      const cr = await sbFetch(
+        `/rest/v1/conductor_empresa?user_id=eq.${servicio.conductor_id}&select=matricula,remolque,nombre&limit=1`,
+      );
+      if (cr.ok) {
+        const crows = await cr.json().catch(() => []);
+        conductorLite = Array.isArray(crows) ? crows[0] : null;
+      }
+    }
+
+    let empresaFull = empresa;
+    if (servicio.empresa_id) {
+      const er = await sbFetch(
+        `/rest/v1/empresas?id=eq.${servicio.empresa_id}&select=nombre,cif,direccion,cp,ciudad,domicilio_fiscal,owner_id&limit=1`,
+      );
+      if (er.ok) {
+        const erows = await er.json().catch(() => []);
+        empresaFull = Array.isArray(erows) ? erows[0] : empresa;
+      }
+    }
+
+    const { doc, missing } = resolveDcdtDocument({
       servicio,
       stops: stopList,
       dcdt: dcdtRow,
       masterById,
-      empresa,
-      conductor: null,
+      empresa: empresaFull,
+      conductor: conductorLite,
     });
-    dcdtBlock = doc;
-    dcdtRecord = dcdtRow;
+
+    if (isDcdtValidadoParaExpediente(dcdtRow, { missing })) {
+      dcdtBlock = doc;
+      dcdtRecord = dcdtRow;
+    }
   }
 
   const model = buildOperationalLiteModel({

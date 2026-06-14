@@ -33,6 +33,9 @@ import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
 import { ParticipacionTiemposPanel } from "./ParticipacionTiemposPanel.jsx";
 import { formatOperationalEtaLabel } from "../../../domain/service/etaFormatter.js";
 import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
+import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
+import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
+import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -1010,12 +1013,15 @@ function StopTimesBlock({ stop, isFirstCarga, servicio }) {
             <span
               style={{
                 color:
-                  row.kind === "duration"
+                  row.kind === "geo"
+                    ? DRIVER_UI.su
+                    : row.kind === "duration"
                     ? DRIVER_UI.amber
                     : row.kind === "pending"
                       ? DRIVER_UI.su
                       : DRIVER_UI.tx,
-                fontWeight: 800,
+                fontWeight: row.kind === "geo" ? 600 : 800,
+                fontSize: row.kind === "geo" ? 11 : 12,
                 fontVariantNumeric: "tabular-nums",
               }}
             >
@@ -1191,6 +1197,9 @@ function DriverClienteDocumentosSection({
   goods,
   observations,
   servicio,
+  empresa = null,
+  stops = [],
+  conductorUid = null,
   showToast,
   conductorNombreUploader,
 }) {
@@ -1247,6 +1256,16 @@ function DriverClienteDocumentosSection({
             ) : null}
           </div>
         ) : null}
+        <div style={{ padding: "12px 16px", ...demoRowDivider() }}>
+          <ConductorDcdtPanel
+            servicio={servicio}
+            empresa={empresa}
+            conductorUid={conductorUid}
+            stops={stops}
+            showToast={showToast}
+            compact
+          />
+        </div>
         <div style={{ padding: "12px 16px", ...demoRowDivider() }}>
           <ServiceExtraDocumentsBlock
             servicio={servicio}
@@ -1538,8 +1557,10 @@ export function ActiveServicePanel({
   totalParticipantes = 1,
   activosParticipantes = 1,
   onFinalizarParticipacion = null,
+  conductorUid = null,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
+  const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [cierreSaving, setCierreSaving] = useState(false);
@@ -1606,14 +1627,24 @@ export function ActiveServicePanel({
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
+    const stop = sortedStops.find((s) => s.id === stopId);
+    const actionLabel =
+      kind === "entrada"
+        ? "entrada en muelle"
+        : String(stop?.tipo || "").toLowerCase() === "descarga"
+          ? "completar descarga"
+          : String(stop?.tipo || "").toLowerCase() === "carga"
+            ? "completar carga"
+            : "salida de muelle";
     setConfirmMuelleSaving(true);
     try {
+      const prefetchedGps = await acquireLocation(actionLabel);
+      if (prefetchedGps === null) return;
       if (kind === "entrada") {
-        await marcarLlegado(stopId);
+        await marcarLlegado(stopId, { prefetchedGps });
         await recargar?.();
       } else {
-        await marcarCompletado(stopId);
-        // marcarCompletado dispara cuaderno-recargar-servicio; evitar segundo fetch que mezcle estados
+        await marcarCompletado(stopId, { prefetchedGps });
       }
       setConfirmMuelle(null);
     } catch (error) {
@@ -1641,9 +1672,31 @@ export function ActiveServicePanel({
     mode === "asignado"
       ? {
           label: "Iniciar servicio",
-          onClick: () => onIniciarServicio(servicio.id),
+          onClick: async () => {
+            const prefetchedGps = await acquireLocation("iniciar servicio");
+            if (prefetchedGps === null) return;
+            await onIniciarServicio(servicio.id, { prefetchedGps });
+          },
         }
       : null;
+
+  const handleStartRoute = async () => {
+    const prefetchedGps = await acquireLocation("iniciar ruta");
+    if (prefetchedGps === null) return;
+    await onIniciarRuta?.(servicio?.id, { prefetchedGps });
+  };
+
+  const locationGateModal = (
+    <DriverLocationGateModal
+      open={!!gate}
+      phase={gate?.phase}
+      actionLabel={gate?.actionLabel}
+      error={gate?.error}
+      onRetry={retry}
+      onContinue={continueWithout}
+      onCancel={cancelGate}
+    />
+  );
 
   const confirmStop = confirmMuelle ? sortedStops.find((s) => s.id === confirmMuelle.stopId) : null;
   const confirmOperationName = operationNameForStop(confirmStop);
@@ -1800,7 +1853,7 @@ export function ActiveServicePanel({
                   variant="demo"
                   emphasis="secondary"
                   showToast={showToast}
-                  onStartRoute={() => onIniciarRuta?.(servicio?.id)}
+                  onStartRoute={handleStartRoute}
                   onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
                   onRecalculateRoute={onRecalculateOperationalRoute}
                 />
@@ -1815,6 +1868,9 @@ export function ActiveServicePanel({
               goods={goods}
               observations={observations}
               servicio={servicio}
+              empresa={empresaById[servicio?.empresa_id] || null}
+              stops={sortedStops}
+              conductorUid={conductorUid}
               showToast={showToast}
               conductorNombreUploader={conductorNombre}
             />
@@ -1896,9 +1952,11 @@ export function ActiveServicePanel({
                 saving={cierreSaving}
                 onConfirm={async ({ comentario, firmaCanvas }) => {
                   if (cierreSaving) return;
+                  const prefetchedGps = await acquireLocation("finalizar servicio");
+                  if (prefetchedGps === null) return;
                   setCierreSaving(true);
                   try {
-                    await onCerrarExpediente?.({ comentario, firmaCanvas });
+                    await onCerrarExpediente?.({ comentario, firmaCanvas, prefetchedGps });
                     showToast?.("Expediente cerrado");
                   } catch (e) {
                     showToast?.(e?.message || "No se pudo cerrar el expediente");
@@ -1921,6 +1979,7 @@ export function ActiveServicePanel({
           </DriverDemoSection>
         </div>
         {confirmMuelleDialog}
+        {locationGateModal}
         {confirmFinalizar ? (
           <div
             style={{
@@ -2151,7 +2210,7 @@ export function ActiveServicePanel({
           <EtaPrevistaBlock servicio={servicio} tx={DRIVER_UI.tx} su={DRIVER_UI.su} subtle={DRIVER_UI.muted} />
         </div>
 
-        <div style={{ marginTop: 20 }}>
+        <div style={{ marginTop: 14 }}>
           <ServiceExtraDocumentsBlock servicio={servicio} showToast={showToast} uploaderName={conductorNombre} tone="light" compact />
         </div>
         <ServiceEmpresaDocumentsBlock
@@ -2169,7 +2228,7 @@ export function ActiveServicePanel({
               variant="driver"
               emphasis="secondary"
               showToast={showToast}
-              onStartRoute={() => onIniciarRuta?.(servicio?.id)}
+              onStartRoute={handleStartRoute}
               onOpenRoute={() => openOperationalRouteModal(servicio, onOpenViajeModal)}
               onRecalculateRoute={onRecalculateOperationalRoute}
             />
@@ -2181,9 +2240,11 @@ export function ActiveServicePanel({
             saving={cierreSaving}
             onConfirm={async ({ comentario, firmaCanvas }) => {
               if (cierreSaving) return;
+              const prefetchedGps = await acquireLocation("finalizar servicio");
+              if (prefetchedGps === null) return;
               setCierreSaving(true);
               try {
-                await onCerrarExpediente?.({ comentario, firmaCanvas });
+                await onCerrarExpediente?.({ comentario, firmaCanvas, prefetchedGps });
                 showToast?.("Expediente cerrado");
               } catch (e) {
                 showToast?.(e?.message || "No se pudo cerrar el expediente");
@@ -2200,6 +2261,7 @@ export function ActiveServicePanel({
         <SiguienteServicioEmpty />
       )}
       {confirmMuelleDialog}
+      {locationGateModal}
       {confirmFinalizar ? (
         <div
           style={{

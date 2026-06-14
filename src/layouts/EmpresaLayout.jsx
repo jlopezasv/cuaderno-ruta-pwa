@@ -248,18 +248,18 @@ export default function EmpresaLayout({
     border = UI_TOKENS.border,
     accent = UI_TOKENS.brand,
     accentHover = UI_TOKENS.brandSoft,
-    tabIdle = "#475569",
+    tabIdle = "#334155",
     tabActive = UI_TOKENS.brandDeep;
   const canUseConfig = true;
 
   const tabBtnStyle = (active) => ({
-    background: active ? accentHover : "transparent",
+    background: active ? "rgba(245,158,11,.18)" : "transparent",
     border: "none",
-    borderBottom: `2px solid ${active ? accent : "transparent"}`,
+    borderBottom: `3px solid ${active ? accent : "transparent"}`,
     borderRadius: active ? "8px 8px 0 0" : 0,
-    padding: "12px 14px 10px",
+    padding: "11px 14px 9px",
     fontSize: 13,
-    fontWeight: active ? 700 : 550,
+    fontWeight: active ? 800 : 600,
     color: active ? tabActive : tabIdle,
     cursor: "pointer",
     display: "flex",
@@ -267,6 +267,7 @@ export default function EmpresaLayout({
     gap: 6,
     transition: "background .15s ease, color .15s ease, border-color .15s ease",
     whiteSpace: "nowrap",
+    boxShadow: active ? "inset 0 -1px 0 rgba(245,158,11,.25)" : "none",
   });
 
   return (
@@ -317,7 +318,7 @@ export default function EmpresaLayout({
                   if (tab !== t.id) e.currentTarget.style.background = "transparent";
                 }}
               >
-                <span style={{ fontSize: 14, color: tab === t.id ? accent : "#94a3b8" }}>{t.icon}</span>
+                <span style={{ fontSize: 14, color: tab === t.id ? accent : "#64748b" }}>{t.icon}</span>
                 {t.label}
               </button>
             ))}
@@ -403,21 +404,22 @@ export default function EmpresaLayout({
                   onClick={() => setTab(t.id)}
                   style={{
                     flexShrink: 0,
-                    background: active ? accentHover : "transparent",
+                    background: active ? "rgba(245,158,11,.18)" : "transparent",
                     border: "none",
-                    borderBottom: `2px solid ${active ? accent : "transparent"}`,
-                    padding: "10px 14px 8px",
+                    borderBottom: `3px solid ${active ? accent : "transparent"}`,
+                    padding: "10px 14px 7px",
                     fontSize: 12,
-                    fontWeight: active ? 700 : 600,
+                    fontWeight: active ? 800 : 600,
                     color: active ? tabActive : tabIdle,
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
                     gap: 5,
                     whiteSpace: "nowrap",
+                    boxShadow: active ? "inset 0 -1px 0 rgba(245,158,11,.25)" : "none",
                   }}
                 >
-                  <span style={{ fontSize: 14, color: active ? accent : "#94a3b8" }}>{t.icon}</span>
+                  <span style={{ fontSize: 14, color: active ? accent : "#64748b" }}>{t.icon}</span>
                   {t.label}
                 </button>
               );

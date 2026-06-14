@@ -1,14 +1,19 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
 import { operationalGroupFromStopTipo } from "../service/tripOperationalDossier.js";
-import { getFixedServiceRoute } from "../service/serviceIdentity.js";
+import { getServiceNumberForDisplay, resolveServiceRouteEndpoints } from "../service/serviceIdentity.js";
 import { resolveParteFields, suggestParteTipoForStop } from "./partesTransporteModel.js";
+import { formatDcdtDisplayValue } from "./dcdtDisplayText.js";
 import {
   DCDT_ESTADO,
   DCDT_REQUIRED_FIELDS,
   DCDT_TABLE,
   DCDT_TABLE_LEGACY,
 } from "./dcdtConstants.js";
+import { buildDcdtVerifySnapshot } from "./dcdtVerifyPayload.js";
+import { generateDcdtVerifyToken, isDcdtQrEligible } from "./dcdtVerifyToken.js";
+import { resolveTransportistaDcdt } from "./empresaTransportistaDcdt.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 
 const COLS = "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,updated_at";
 
@@ -45,6 +50,30 @@ function rowToDcdt(row) {
   };
 }
 
+function parseMercanciaNumber(val) {
+  if (val == null || val === "") return null;
+  const n = Number(String(val).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+export function buildMercanciaDatosPatch(mercanciaEdit) {
+  return {
+    descripcion: String(mercanciaEdit?.descripcion || "").trim() || null,
+    peso_kg: parseMercanciaNumber(mercanciaEdit?.peso_kg),
+    bultos: parseMercanciaNumber(mercanciaEdit?.bultos),
+    palets: parseMercanciaNumber(mercanciaEdit?.palets),
+  };
+}
+
+export function mercanciaEditFromDatos(mercancia = {}) {
+  return {
+    descripcion: formatDcdtDisplayValue(mercancia.descripcion) || "",
+    peso_kg: mercancia.peso_kg != null ? String(mercancia.peso_kg) : "",
+    bultos: mercancia.bultos != null ? String(mercancia.bultos) : "",
+    palets: mercancia.palets != null ? String(mercancia.palets) : "",
+  };
+}
+
 function getNested(obj, path) {
   return path.split(".").reduce((o, k) => (o && o[k] != null ? o[k] : null), obj);
 }
@@ -76,14 +105,93 @@ export function buildStopBindingsFromStops(stops) {
 }
 
 export function syncParteIdsFromStops(datos, stops) {
-  const out = { ...datos, partes: { ...datos.partes } };
+  const out = { ...datos, partes: { ...(datos?.partes || {}) } };
   out.stops = buildStopBindingsFromStops(stops);
   for (const b of out.stops) {
     if (!b.parte_id) continue;
-    if (b.grupo === "carga" && !out.partes.cargador_id) out.partes.cargador_id = b.parte_id;
-    if (b.grupo === "descarga" && !out.partes.destinatario_id) out.partes.destinatario_id = b.parte_id;
+    if (b.grupo === "carga") out.partes.cargador_id = b.parte_id;
+    if (b.grupo === "descarga") out.partes.destinatario_id = b.parte_id;
   }
   return out;
+}
+
+function partesIdsChanged(before, after) {
+  const a = before?.partes || {};
+  const b = after?.partes || {};
+  return a.cargador_id !== b.cargador_id || a.destinatario_id !== b.destinatario_id;
+}
+
+/** Sincroniza cargador/destinatario desde paradas y persiste si cambió. */
+export async function persistDcdtPartesFromStops({
+  dcdt,
+  servicio,
+  stops = [],
+  flotaEvs = {},
+  empresa = null,
+  conductor = null,
+  masterById = {},
+}) {
+  if (!dcdt?.id) return dcdt;
+  const syncedDatos = syncParteIdsFromStops(dcdt.datos, stops);
+  if (!partesIdsChanged(dcdt.datos, syncedDatos)) return dcdt;
+  const { missing } = resolveDcdtDocument({
+    servicio,
+    stops,
+    dcdt: { ...dcdt, datos: syncedDatos },
+    masterById,
+    empresa,
+    conductor,
+  });
+  const estado = computeDcdtEstado({
+    missing,
+    evidenciasByStop: flotaEvs,
+    datos: syncedDatos,
+    currentEstado: dcdt.estado,
+  });
+  return saveDcdtDatos(dcdt.id, syncedDatos, estado);
+}
+
+export async function assignDcdtParte({
+  dcdt,
+  role,
+  parteId,
+  servicio,
+  stops = [],
+  flotaEvs = {},
+  empresa = null,
+  conductor = null,
+  masterById = {},
+}) {
+  if (!dcdt?.id || !parteId) throw new Error("Dato incompleto");
+  const idKey = role === "cargador" ? "cargador_id" : "destinatario_id";
+  const overrideKey = role === "cargador" ? "cargador_overrides" : "destinatario_overrides";
+  const nextDatos = syncParteIdsFromStops(
+    {
+      ...dcdt.datos,
+      partes: {
+        ...(dcdt.datos?.partes || {}),
+        [idKey]: parteId,
+        [overrideKey]: {},
+      },
+    },
+    stops,
+  );
+  nextDatos.partes[idKey] = parteId;
+  const { missing } = resolveDcdtDocument({
+    servicio,
+    stops,
+    dcdt: { ...dcdt, datos: nextDatos },
+    masterById,
+    empresa,
+    conductor,
+  });
+  const estado = computeDcdtEstado({
+    missing,
+    evidenciasByStop: flotaEvs,
+    datos: nextDatos,
+    currentEstado: dcdt.estado,
+  });
+  return saveDcdtDatos(dcdt.id, nextDatos, estado);
 }
 
 /** Resuelve documento DCDT para UI/PDF sin duplicar master. */
@@ -93,6 +201,7 @@ export function resolveDcdtDocument({
   dcdt,
   masterById = {},
   empresa = null,
+  empresaOwnerProfile = null,
   conductor = null,
 }) {
   const datos = syncParteIdsFromStops(dcdt?.datos || emptyDatos(), stops);
@@ -104,39 +213,51 @@ export function resolveDcdtDocument({
     partes.destinatario_overrides,
   );
 
-  const transportista = {
-    nombre: empresa?.nombre || "",
-    nif: empresa?.cif || "",
-    domicilio: empresa?.direccion || "",
-  };
+  const transportista = resolveTransportistaDcdt(empresa, empresaOwnerProfile);
 
   let matricula = datos.vehiculo?.matricula_override || null;
   if (!matricula && datos.vehiculo?.use_conductor_matricula !== false) {
     matricula = conductor?.matricula || null;
   }
+  const remolque = String(conductor?.remolque || "").trim() || null;
 
-  const route = getFixedServiceRoute(servicio, "—", "—", stops);
+  const routeEndpoints = resolveServiceRouteEndpoints(servicio, stops);
   const fecha = servicio?.fecha_inicio || servicio?.created_at || null;
 
   const doc = {
-    referencia: servicio?.referencia || servicio?.id,
+    referencia: getServiceNumberForDisplay(servicio) || "—",
     cargador,
     destinatario,
-    transportista,
-    origen: route.origen || servicio?.origen || "",
-    destino: route.destino || servicio?.destino || "",
+    transportista: {
+      nombre: formatDcdtDisplayValue(transportista.nombre),
+      nif: formatDcdtDisplayValue(transportista.nif),
+      domicilio: formatDcdtDisplayValue(transportista.domicilio),
+    },
+    origen: formatDcdtDisplayValue(routeEndpoints.origen) || "—",
+    destino: formatDcdtDisplayValue(routeEndpoints.destino) || "—",
     mercancia: {
-      descripcion: datos.mercancia?.descripcion || null,
+      descripcion: formatDcdtDisplayValue(datos.mercancia?.descripcion) || null,
       peso_kg: datos.mercancia?.peso_kg ?? null,
       bultos: datos.mercancia?.bultos ?? null,
       palets: datos.mercancia?.palets ?? null,
     },
     fecha_transporte: fecha,
-    vehiculo: { matricula },
-    observaciones: datos.observaciones || "",
+    vehiculo: { matricula: formatDcdtDisplayValue(matricula) || null, remolque },
+    observaciones: formatDcdtDisplayValue(datos.observaciones) || "",
     validado_at: dcdt?.validadoAt || null,
     validado_por_label: null,
     estado: dcdt?.estado || DCDT_ESTADO.BORRADOR,
+  };
+
+  doc.cargador = {
+    nombre: formatDcdtDisplayValue(cargador?.nombre),
+    nif: formatDcdtDisplayValue(cargador?.nif),
+    domicilio: formatDcdtDisplayValue(cargador?.domicilio || cargador?.direccion),
+  };
+  doc.destinatario = {
+    nombre: formatDcdtDisplayValue(destinatario?.nombre),
+    nif: formatDcdtDisplayValue(destinatario?.nif),
+    domicilio: formatDcdtDisplayValue(destinatario?.domicilio || destinatario?.direccion),
   };
 
   const missing = [];
@@ -156,18 +277,87 @@ export function hasCmrEvidencias(evidenciasByStop) {
 }
 
 export function computeDcdtEstado({ missing, evidenciasByStop, datos, currentEstado }) {
+  if (missing.length > 0) {
+    const mercMissing = missing.some((f) => f.key.startsWith("mercancia"));
+    if (mercMissing && hasCmrEvidencias(evidenciasByStop) && !datos?.ocr_ultimo) {
+      return DCDT_ESTADO.PENDIENTE_OCR;
+    }
+    return DCDT_ESTADO.INCOMPLETO;
+  }
   if (
     currentEstado === DCDT_ESTADO.VALIDADO ||
     currentEstado === DCDT_ESTADO.EN_EXPEDIENTE
   ) {
     return currentEstado;
   }
-  if (!missing.length) return DCDT_ESTADO.PENDIENTE_VALIDACION;
-  const mercMissing = missing.some((f) => f.key.startsWith("mercancia"));
-  if (mercMissing && hasCmrEvidencias(evidenciasByStop) && !datos?.ocr_ultimo) {
-    return DCDT_ESTADO.PENDIENTE_OCR;
+  return DCDT_ESTADO.PENDIENTE_VALIDACION;
+}
+
+export function isDcdtEstadoValidated(estado) {
+  const e = String(estado || "").toLowerCase();
+  return e === DCDT_ESTADO.VALIDADO || e === DCDT_ESTADO.EN_EXPEDIENTE;
+}
+
+/** DCDT listo para validar / mostrar como validado: sin pendientes obligatorios. */
+export function isDcdtFullyValidated({ estado, missing = [] }) {
+  return missing.length === 0 && isDcdtEstadoValidated(estado);
+}
+
+/** Etiqueta UX unificada empresa/conductor. */
+export function dcdtStatusUxLabel({ estado, missing = [], pdfGeneradoAt = null }) {
+  if (missing.length > 0) {
+    const e = computeDcdtEstado({ missing, evidenciasByStop: {}, datos: {}, currentEstado: estado });
+    if (e === DCDT_ESTADO.PENDIENTE_OCR) return "DCDT pendiente OCR";
+    if (e === DCDT_ESTADO.PENDIENTE_VALIDACION) return "DCDT completo — listo para validar";
+    return "DCDT incompleto";
   }
-  return DCDT_ESTADO.INCOMPLETO;
+  if (!isDcdtEstadoValidated(estado)) return "DCDT completo — listo para validar";
+  if (pdfGeneradoAt) return "DCDT validado · PDF generado";
+  return "DCDT validado";
+}
+
+/** Rebaja estado validado si faltan campos obligatorios y persiste. */
+export async function reconcileDcdtEstadoIfNeeded({ dcdt, missing, flotaEvs = {}, datos }) {
+  if (!dcdt?.id) return dcdt;
+  const nextEstado = computeDcdtEstado({
+    missing,
+    evidenciasByStop: flotaEvs,
+    datos: datos || dcdt.datos,
+    currentEstado: dcdt.estado,
+  });
+  if (nextEstado === dcdt.estado) return dcdt;
+
+  const downgrading = isDcdtEstadoValidated(dcdt.estado) && !isDcdtEstadoValidated(nextEstado);
+  const patch = {
+    estado: nextEstado,
+    updated_at: new Date().toISOString(),
+  };
+  if (downgrading) {
+    patch.validado_por = null;
+    patch.validado_at = null;
+    patch.datos = {
+      ...dcdt.datos,
+      qr_verificacion_token: null,
+      qr_verificacion_snapshot: null,
+    };
+    if (isDemoApp()) {
+      console.log("[DCDT estado] rebajando por pendientes", {
+        dcdt_id: dcdt.id,
+        from: dcdt.estado,
+        to: nextEstado,
+        missing: missing.map((m) => m.key),
+      });
+    }
+  }
+
+  const r = await dcdtRequest(`?id=eq.${dcdt.id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) return dcdt;
+  const rows = await r.json().catch(() => []);
+  return rowToDcdt(Array.isArray(rows) ? rows[0] : null) || dcdt;
 }
 
 export function mergeOcrIntoDcdtDatos(datos, ocrFields) {
@@ -268,17 +458,74 @@ export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] 
 export async function saveDcdtDatos(id, datos, estado = null) {
   const body = { datos, updated_at: new Date().toISOString() };
   if (estado) body.estado = estado;
+  if (isDemoApp()) {
+    console.log("[DCDT mercancía] payload", { dcdt_id: id, datos: body.datos?.mercancia, estado: body.estado ?? null });
+  }
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error("No se pudo guardar DCDT");
+  const resText = await r.text().catch(() => "");
+  if (!r.ok) {
+    if (isDemoApp()) {
+      console.log("[DCDT mercancía] error Supabase", { dcdt_id: id, status: r.status, body: resText });
+    }
+    throw new Error(resText || "No se pudo guardar DCDT");
+  }
+  let rows = [];
+  try {
+    rows = resText ? JSON.parse(resText) : [];
+  } catch {
+    rows = [];
+  }
+  if (!Array.isArray(rows) || !rows[0]) {
+    if (isDemoApp()) {
+      console.log("[DCDT mercancía] resultado update", { dcdt_id: id, ok: false, rows: 0, hint: "RLS o id inexistente" });
+    }
+    throw new Error("DCDT: no se actualizó el registro (permisos RLS o fila no encontrada)");
+  }
+  if (isDemoApp()) {
+    console.log("[DCDT mercancía] resultado update", {
+      dcdt_id: id,
+      ok: true,
+      mercancia: rows[0]?.datos?.mercancia ?? null,
+      estado: rows[0]?.estado ?? null,
+    });
+  }
+  return rowToDcdt(rows[0]);
+}
+
+export async function attachQrVerificationToDcdt(id, snapshot) {
+  const current = await fetchDcdtById(id);
+  if (!current) throw new Error("DCDT no encontrado");
+  const token = current.datos?.qr_verificacion_token || generateDcdtVerifyToken();
+  const datos = {
+    ...current.datos,
+    qr_verificacion_token: token,
+    qr_verificacion_snapshot: snapshot,
+  };
+  return saveDcdtDatos(id, datos);
+}
+
+export async function fetchDcdtById(id) {
+  const r = await dcdtRequest(`?id=eq.${id}&select=${COLS}&limit=1`);
+  if (!r.ok) return null;
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
 
-export async function validarDcdtTrafico(id, userId) {
+export async function ensureDcdtQrVerification({ dcdt, doc, servicio, conductor = null, missing = [] }) {
+  if (!dcdt?.id || !isDcdtQrEligible(dcdt.estado, { missing })) return dcdt;
+  if (dcdt.datos?.qr_verificacion_token && dcdt.datos?.qr_verificacion_snapshot) return dcdt;
+  const snapshot = buildDcdtVerifySnapshot({ doc, dcdt, servicio, conductor });
+  return attachQrVerificationToDcdt(dcdt.id, snapshot);
+}
+
+export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor, missing = [] } = {}) {
+  if (Array.isArray(missing) && missing.length > 0) {
+    throw new Error("Completa los campos obligatorios antes de validar");
+  }
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
@@ -291,7 +538,15 @@ export async function validarDcdtTrafico(id, userId) {
   });
   if (!r.ok) throw new Error("No se pudo validar DCDT");
   const rows = await r.json();
-  return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+  let next = rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+  if (next && doc && servicio) {
+    try {
+      next = await ensureDcdtQrVerification({ dcdt: next, doc, servicio, conductor });
+    } catch {
+      /* QR opcional; validación ya aplicada */
+    }
+  }
+  return next;
 }
 
 export async function markDcdtIncluidoExpediente(id) {
@@ -308,12 +563,22 @@ export async function markDcdtIncluidoExpediente(id) {
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
 
-export async function markDcdtPdfGenerado(id) {
+export async function markDcdtPdfGenerado(id, meta = {}) {
+  const current = await fetchDcdtById(id);
+  const datos = {
+    ...(current?.datos || {}),
+    pdf_documento_extra_id: meta.pdfDocumentoExtraId ?? current?.datos?.pdf_documento_extra_id ?? null,
+    pdf_archivo_url: meta.pdfArchivoUrl ?? current?.datos?.pdf_archivo_url ?? null,
+    pdf_archivo_nombre: meta.pdfArchivoNombre ?? current?.datos?.pdf_archivo_nombre ?? null,
+    pdf_retention_until: meta.pdfRetentionUntil ?? current?.datos?.pdf_retention_until ?? null,
+    pdf_dcdt_version: meta.pdfDcdtVersion ?? current?.datos?.pdf_dcdt_version ?? null,
+  };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({
       pdf_generado_at: new Date().toISOString(),
+      datos,
       updated_at: new Date().toISOString(),
     }),
   });
@@ -322,7 +587,7 @@ export async function markDcdtPdfGenerado(id) {
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
 
-export function isDcdtValidadoParaExpediente(dcdt) {
-  const e = String(dcdt?.estado || "").toLowerCase();
-  return e === DCDT_ESTADO.VALIDADO || e === DCDT_ESTADO.EN_EXPEDIENTE;
+export function isDcdtValidadoParaExpediente(dcdt, { missing = [] } = {}) {
+  if (missing.length > 0) return false;
+  return isDcdtEstadoValidated(dcdt?.estado);
 }

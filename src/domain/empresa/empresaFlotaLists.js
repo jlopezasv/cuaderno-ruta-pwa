@@ -56,7 +56,7 @@ export async function fetchEmpresaConductoresLite(empresaId) {
     rels.map(async (r) => {
       try {
         const pr = await sbFetch(
-          `/rest/v1/profiles?id=eq.${r.user_id}&select=nombre,matricula,is_archived`,
+          `/rest/v1/profiles?id=eq.${r.user_id}&select=nombre,matricula,remolque,tipo_vehiculo,is_archived`,
         );
         if (!pr.ok) return { ...r, nombre: r.nombre || "Conductor", matricula: r.matricula || "" };
         const profile = (await pr.json().catch(() => []))[0];
@@ -65,6 +65,8 @@ export async function fetchEmpresaConductoresLite(empresaId) {
           ...r,
           nombre: profile?.nombre || r.nombre || "Conductor",
           matricula: profile?.matricula || r.matricula || "",
+          remolque: profile?.remolque || "",
+          tipo_vehiculo: profile?.tipo_vehiculo || "articulado",
         };
       } catch (_) {
         return { ...r, nombre: r.nombre || "Conductor", matricula: r.matricula || "" };

@@ -215,8 +215,24 @@ import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expe
 import { geoFromGpsPoint, resolveEventGeoFromOp } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
-import { ParteTransporteStopField } from "./features/dcdt/ParteTransporteStopField.jsx";
+import { ServicioMercanciaBlock } from "./features/dcdt/ServicioMercanciaBlock.jsx";
+import { DcdtReadinessPanel } from "./features/dcdt/DcdtReadinessPanel.jsx";
+import {
+  getStopTone,
+  primaryButtonStyle,
+  resolveConductorVehiculo,
+  secondaryButtonStyle,
+  SERVICIO_MODAL_SHELL,
+} from "./features/services/servicioFormTheme.js";
+import { ServicioStopToolbar } from "./features/services/components/ServicioStopToolbar.jsx";
+import { MatriculaVehiculoBadge } from "./features/services/components/MatriculaVehiculoBadge.jsx";
 import { EmpresaDcdtModal } from "./features/dcdt/EmpresaDcdtModal.jsx";
+import {
+  buildServicioMercanciaMetaPatch,
+  emptyServicioMercancia,
+} from "./domain/dcdt/servicioMercanciaMeta.js";
+import { stopContractualTitle } from "./domain/dcdt/dcdtFormReadiness.js";
+import { fetchPartesTransporte } from "./domain/dcdt/partesTransporteModel.js";
 import {
   defaultStopCountry,
   EU_COUNTRY_OPTIONS,
@@ -5135,7 +5151,7 @@ async function persistServiceOperationalEta({
   return{referencia,operationalEta};
 }
 
-async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast}){
+async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventType,stopId,showToast,prefetchedGps=null}){
   const depStopsIn=Array.isArray(stops)?stops:[];
   devLog("[OP3] register start",{
     uid:uid||null,
@@ -5150,13 +5166,21 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
     salida_muelle:"Muelle finalizado",
     inicio_servicio:"Servicio en marcha",
     inicio_operacion_stop:"Operación registrada",
+    ruta_iniciada:"Ruta iniciada",
   };
   const successBase=successMsgs[eventType]||"✓ Acción registrada";
 
-  showToast?.("Obteniendo ubicación…","#64748B",3000);
-  trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
-
-  const gps=await getDriverActionGps({fresh:true,timeoutMs:12000});
+  let gps;
+  if(prefetchedGps!=null){
+    gps=prefetchedGps;
+    if(gps.ok){
+      if(isDemoApp())console.log("[GPS acción] guardando evento con ubicación");
+    }else if(isDemoApp())console.log("[GPS acción] evento guardado sin ubicación");
+  }else{
+    showToast?.("Obteniendo ubicación…","#64748B",3000);
+    trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
+    gps=await getDriverActionGps({fresh:true,timeoutMs:12000});
+  }
   let point=null;
   if(!gps.ok){
     devWarn("[OP3] gps fail",{
@@ -5172,7 +5196,15 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   }
   if(!point){
     devLog("[OP3] register without gps",{eventType:eventType||null,servicioId:servicio?.id||null,stopId:stopId||null});
-    return{gpsOk:false,point:null,geoUnavailable:true,error:gps.error||"sin ubicación"};
+    return{
+      gpsOk:false,
+      point:null,
+      geoUnavailable:true,
+      error:gps.error||"sin ubicación",
+      location_status:gps.location_status||null,
+      location_error:gps.location_error||gps.error||null,
+      prefetchedGps:gps,
+    };
   }
   devLog("[OP3] gps ok",{
     eventType:eventType||null,
@@ -12066,6 +12098,7 @@ async function crearServicioConIdentidad({
   cliente,
   referenciaCliente,
   operationalPlaces = null,
+  servicioMetaExtras = null,
   ownershipMode = SERVICIO_OWNERSHIP.FLEET_EMPRESA,
   uid: uidProp = null,
   _debugSource,
@@ -12090,9 +12123,10 @@ async function crearServicioConIdentidad({
     referenciaCliente,
     lugaresOperativos: placesPatch.lugares_operativos,
   });
+  const extraMeta = servicioMetaExtras && typeof servicioMetaExtras === "object" ? servicioMetaExtras : {};
   const referencia =
-    Object.keys(identityMeta).length || Object.keys(placesPatch).length
-      ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch })
+    Object.keys(identityMeta).length || Object.keys(placesPatch).length || Object.keys(extraMeta).length
+      ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch, ...extraMeta })
       : referenciaBase;
   const officeUserForInsert = getOfficeUserFromSession(authUid);
   const insertCtx = await resolveServicioInsertContext({
@@ -12358,91 +12392,6 @@ function formatNuevoServicioStopSummary(stop){
   return `${meta.icon} ${meta.label} · ${formatStopGeoSummary(stop)}`;
 }
 
-/** Campos de parada — solo modal Nuevo servicio (AsignarServicioModal). */
-function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,warn,empresaId=null}){
-  const[lookupStatus,setLookupStatus]=useState("idle");
-  const[lookupHint,setLookupHint]=useState("");
-  const lastLookupKey=useRef("");
-  const onChangeRef=useRef(onChange);
-  onChangeRef.current=onChange;
-
-  useEffect(()=>{
-    const cp=String(stop?.codigo_postal||"").trim();
-    const pais=String(stop?.pais||"").trim()||defaultStopCountry();
-    if(cp.length<4){setLookupStatus("idle");if(!cp)setLookupHint("");return;}
-    const key=`${pais}|${cp}`;
-    if(key===lastLookupKey.current)return;
-    let cancelled=false;
-    const timer=setTimeout(async()=>{
-      setLookupStatus("loading");
-      const result=await lookupPostalCode({pais,codigoPostal:cp});
-      if(cancelled)return;
-      lastLookupKey.current=key;
-      if(!result){setLookupStatus("miss");setLookupHint("CP no encontrado — completa ciudad manualmente");return;}
-      setLookupStatus("ok");
-      setLookupHint(result.provincia?`Sugerido: ${result.ciudad}, ${result.provincia}`:`Sugerido: ${result.ciudad}`);
-      if(result.ciudad&&!String(stop?.nombre||"").trim())onChangeRef.current(index,"nombre",result.ciudad);
-      if(result.provincia&&!String(stop?.provincia||"").trim())onChangeRef.current(index,"provincia",result.provincia);
-      if(result.pais&&!String(stop?.pais||"").trim())onChangeRef.current(index,"pais",result.pais);
-      if(result.lat!=null&&(stop?.lat==null||stop?.lat===""))onChangeRef.current(index,"lat",result.lat);
-      if(result.lon!=null&&(stop?.lon==null||stop?.lon===""))onChangeRef.current(index,"lon",result.lon);
-    },400);
-    return()=>{cancelled=true;clearTimeout(timer);};
-  },[stop?.pais,stop?.codigo_postal,index]);
-
-  const set=(field,val)=>{
-    if(field==="detalles"){onChange(index,"detalles",val);onChange(index,"notas",val);return;}
-    if(field==="codigo_postal"||field==="pais")lastLookupKey.current="";
-    onChange(index,field,val);
-  };
-
-  const missingCp=stopMissingPostalWarning(stop);
-
-  return(
-    <div className="nuevo-servicio-parada-grid">
-      <style>{`
-.nuevo-servicio-parada-grid .nsp-row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-bottom:8px;}
-@media(max-width:720px){.nuevo-servicio-parada-grid .nsp-row-2{grid-template-columns:1fr;gap:6px;}}
-`}</style>
-      <div className="nsp-row-2">
-        <div>
-          <div style={lbl}>Ciudad</div>
-          <input value={stop?.nombre||""} onChange={e=>set("nombre",e.target.value)} placeholder="El Ejido" style={inp}/>
-        </div>
-        <div>
-          <div style={lbl}>Código Postal</div>
-          <input value={stop?.codigo_postal||""} onChange={e=>set("codigo_postal",e.target.value.toUpperCase())} placeholder="04700" style={inp}/>
-          <div style={{...lbl,marginTop:4}}>País</div>
-          <select value={stop?.pais||defaultStopCountry()} onChange={e=>set("pais",e.target.value)} style={{...inp,marginBottom:0,fontSize:12,padding:"6px 8px"}}>
-            {EU_COUNTRY_OPTIONS.map(c=><option key={c.code} value={c.label}>{c.label}</option>)}
-          </select>
-        </div>
-      </div>
-      {lookupStatus==="loading"?<div style={{fontSize:10,color:su,marginBottom:4}}>Buscando localidad…</div>:lookupHint?(
-        <div style={{fontSize:10,color:lookupStatus==="ok"?accent:warn,marginBottom:4,fontWeight:600}}>{lookupHint}</div>
-      ):null}
-      {missingCp?<div style={{fontSize:10,color:warn,marginBottom:6}}>Sin código postal: la ubicación puede ser menos precisa.</div>:null}
-      <div className="nsp-row-2">
-        <div>
-          <div style={lbl}>Muelle / Operador</div>
-          <input value={stop?.empresa||""} onChange={e=>set("empresa",e.target.value)} placeholder="Polígono sector 20" style={{...inp,color:su}}/>
-        </div>
-        <div>
-          <div style={lbl}>Dirección</div>
-          <input value={stop?.direccion||""} onChange={e=>set("direccion",e.target.value)} placeholder="Calle, polígono, nave…" style={inp}/>
-        </div>
-      </div>
-      <div>
-        <div style={lbl}>Detalles</div>
-        <input value={stop?.detalles??stop?.notas??""} onChange={e=>set("detalles",e.target.value)} placeholder="Puerta, horario, referencia muelle…" style={{...inp,marginBottom:0}}/>
-      </div>
-      {empresaId?(
-        <ParteTransporteStopField stop={stop} index={index} onChange={onChange} empresaId={empresaId} themeKey="empresa" compact/>
-      ):null}
-    </div>
-  );
-}
-
 function AsignarServicioModal({
   conductorId=null,
   conductorNombre=null,
@@ -12463,6 +12412,8 @@ function AsignarServicioModal({
     emptyStopGeoForm({orden:2,tipo:"descarga"}),
   ]);
   const[responsableId,setResponsableId]=useState("");
+  const[mercancia,setMercancia]=useState(()=>emptyServicioMercancia());
+  const[partesCatalog,setPartesCatalog]=useState([]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
   const[routeEditorOpen,setRouteEditorOpen]=useState(false);
@@ -12472,7 +12423,6 @@ function AsignarServicioModal({
   const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
   const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
   const responsableFieldProps={officeUser,officeResponsables,value:responsableId,onChange:setResponsableId,lblStyle:lbl,fieldStyle:inp,surfaceSoft:bg,border:EMPRESA_UI.border};
-  const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309",empresaId};
   const conductoresFlota=useMemo(
     ()=>(Array.isArray(conductores)?conductores:[]).filter((c)=>c?.user_id),
     [conductores],
@@ -12483,11 +12433,12 @@ function AsignarServicioModal({
     return hit?.nombre||conductorNombre||"Conductor";
   },[conductorSelId,conductoresFlota,conductorNombre]);
   const sinConductor=!conductorSelId;
+  const conductorVehiculo=resolveConductorVehiculo(conductoresFlota, conductorSelId);
   const desktopModalStyle=isMobile?modalStyle:{
     position:"relative",
-    width:"min(95vw, 1200px)",
-    maxWidth:1200,
-    maxHeight:"88vh",
+    width:SERVICIO_MODAL_SHELL.width,
+    maxWidth:SERVICIO_MODAL_SHELL.maxWidth,
+    maxHeight:SERVICIO_MODAL_SHELL.maxHeight,
     borderRadius:16,
     display:"flex",
     flexDirection:"column",
@@ -12571,6 +12522,7 @@ function AsignarServicioModal({
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
         operationalPlaces,
+        servicioMetaExtras: buildServicioMercanciaMetaPatch(mercancia),
         fecha_inicio:new Date(fechaInicio).toISOString(),
         ...responsablePayload,
       });
@@ -12646,6 +12598,13 @@ function AsignarServicioModal({
   },[conductorId]);
 
   useEffect(()=>{
+    if(!empresaId)return;
+    let cancelled=false;
+    fetchPartesTransporte(empresaId).then((rows)=>{if(!cancelled)setPartesCatalog(rows);}).catch(()=>{if(!cancelled)setPartesCatalog([]);});
+    return()=>{cancelled=true;};
+  },[empresaId]);
+
+  useEffect(()=>{
     logServiceCreate("SERVICE_CREATE_START",{
       source:"AsignarServicioModal.mount",
       empresaIdProp:empresaId,
@@ -12656,26 +12615,35 @@ function AsignarServicioModal({
     });
   },[]);
 
-  const renderFullStopEditor=(stop,i)=>(
+  const renderStopFields=(stop,i)=>(
+    <StopGeoFieldsForm
+      stop={stop}
+      index={i}
+      onChange={changeStop}
+      themeKey="empresa"
+      layout="servicio-grid"
+      showGeoStatus={false}
+      empresaId={empresaId}
+      onPartesChange={setPartesCatalog}
+    />
+  );
+
+  const renderFullStopEditor=(stop,i)=>{
+    const tone=getStopTone(stop);
+    return(
     <div key={`full-${stop.orden}-${i}`}>
-      <div style={{background:bg,borderRadius:10,padding:"8px 10px",marginBottom:4,border:`1px solid ${EMPRESA_UI.border}`}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-          <div style={{display:"flex",gap:5,alignItems:"center"}}>
-            <span style={{background:"#e2e8f0",color:EMPRESA_UI.subtle,borderRadius:5,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:650,flexShrink:0}}>{i+1}</span>
+      <div style={{background:tone.bg,borderRadius:14,padding:"10px 12px",marginBottom:4,border:`1px solid ${tone.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:800,color:tone.header}}>{stopContractualTitle(stop,i)}</div>
             <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
-              style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"3px 6px",fontSize:11,color:tx,outline:"none"}}>
+              style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,color:tx,outline:"none",marginTop:6}}>
               {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
             </select>
           </div>
-          <div style={{display:"flex",gap:3}}>
-            <button type="button" onClick={()=>moveStop(i,-1)} disabled={i===0}
-              style={{background:i===0?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===0?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===0?"default":"pointer",fontSize:11}}>↑</button>
-            <button type="button" onClick={()=>moveStop(i,1)} disabled={i===stops.length-1}
-              style={{background:i===stops.length-1?"transparent":"#e2e8f0",border:"none",borderRadius:4,width:20,height:20,color:i===stops.length-1?"#cbd5e1":EMPRESA_UI.subtle,cursor:i===stops.length-1?"default":"pointer",fontSize:11}}>↓</button>
-            {stops.length>1&&<button type="button" onClick={()=>removeStop(i)} style={{background:"transparent",border:"none",color:"#EF4444",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>}
-          </div>
+          <ServicioStopToolbar index={i} total={stops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
         </div>
-        <NuevoServicioParadaFields stop={stop} index={i} onChange={changeStop} {...paradaFieldProps}/>
+        {renderStopFields(stop,i)}
       </div>
       {i<stops.length-1&&(
         <button type="button" onClick={()=>addStopAfter(i)}
@@ -12684,7 +12652,7 @@ function AsignarServicioModal({
         </button>
       )}
     </div>
-  );
+  );};
 
   return(
     <div style={overlayStyle} onClick={onClose}>
@@ -12742,8 +12710,19 @@ function AsignarServicioModal({
                   No hay conductores activos en la flota. Invítalos desde la pestaña Conductores.
                 </div>
               ):null}
+              <MatriculaVehiculoBadge matricula={conductorVehiculo.matricula} remolque={conductorVehiculo.remolque} tipoVehiculo={conductorVehiculo.tipoVehiculo}/>
             </div>
           </div>
+
+          <DcdtReadinessPanel
+            stops={stops}
+            mercancia={mercancia}
+            partesCatalog={partesCatalog}
+            fechaInicio={fechaInicio}
+            matricula={conductorVehiculo.matricula||null}
+            remolque={conductorVehiculo.remolque||null}
+            tipoVehiculo={conductorVehiculo.tipoVehiculo}
+          />
 
           <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"8px 10px",marginBottom:8}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:routeEditorOpen?0:6}}>
@@ -12770,7 +12749,7 @@ function AsignarServicioModal({
           </div>
 
           {routeEditorOpen?(
-            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":stops.length<=2?"1fr 1fr":"1fr",gap:isMobile?6:12}}>
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2, minmax(0, 1fr))",gap:isMobile?8:12}}>
               <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6,gridColumn:isMobile?"1":"1 / -1"}}>Editor de paradas</div>
               {stops.map((stop,i)=>renderFullStopEditor(stop,i))}
               <button type="button" onClick={addStop}
@@ -12779,22 +12758,22 @@ function AsignarServicioModal({
               </button>
             </div>
           ):(
-            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":stops.length<=2?"1fr 1fr":"1fr",gap:isMobile?6:12}}>
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2, minmax(0, 1fr))",gap:isMobile?8:12}}>
               {stops.map((stop,i)=>{
-                const meta=stopTipoFormMeta(stop.tipo);
+                const tone=getStopTone(stop);
                 return(
-                  <div key={`cmp-${stop.orden}-${i}`} style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"8px 10px",marginBottom:0}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
-                        <span style={{fontSize:13,fontWeight:800,color:tx,whiteSpace:"nowrap"}}>{meta.icon} {meta.label}</span>
+                  <div key={`cmp-${stop.orden}-${i}`} style={{background:tone.bg,border:`1px solid ${tone.border}`,borderRadius:14,padding:"10px 12px",marginBottom:0}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                      <div>
+                        <div style={{fontSize:15,fontWeight:800,color:tone.header,whiteSpace:"nowrap"}}>{stopContractualTitle(stop,i)}</div>
                         <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
-                          style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"2px 5px",fontSize:10,color:tx,outline:"none",maxWidth:110}}>
+                          style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"2px 5px",fontSize:10,color:tx,outline:"none",maxWidth:120,marginTop:6}}>
                           {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
                         </select>
                       </div>
-                      <span style={{fontSize:10,color:su,fontWeight:700,flexShrink:0}}>#{i+1}</span>
+                      <ServicioStopToolbar index={i} total={stops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
                     </div>
-                    <NuevoServicioParadaFields stop={stop} index={i} onChange={changeStop} {...paradaFieldProps}/>
+                    {renderStopFields(stop,i)}
                   </div>
                 );
               })}
@@ -12805,13 +12784,17 @@ function AsignarServicioModal({
             </div>
           )}
 
+          <ServicioMercanciaBlock value={mercancia} onChange={setMercancia} />
+
           {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red,marginBottom:8}}>{error}</div>}
         </div>
 
-        <div style={{padding:"10px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
-          <button type="button" onClick={guardar} disabled={saving}
-            style={{width:"100%",background:saving?"#cbd5e1":EMPRESA_UI.tx,color:saving?"#64748B":"white",border:"none",borderRadius:12,padding:isMobile?"14px":"12px",fontSize:15,fontWeight:650,cursor:saving?"default":"pointer"}}>
-            {saving?(sinConductor?"Guardando...":"Asignando..."):(sinConductor?"Crear servicio planificado":"Asignar servicio")}
+        <div style={{padding:"10px 16px",borderTop:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card,display:"flex",gap:10}}>
+          <button type="button" onClick={onClose} disabled={saving} style={secondaryButtonStyle(saving)}>
+            Cancelar
+          </button>
+          <button type="button" onClick={guardar} disabled={saving} style={primaryButtonStyle(saving)}>
+            {saving?(sinConductor?"Guardando...":"Asignando..."):(sinConductor?"Crear servicio":"Guardar servicio")}
           </button>
         </div>
 
@@ -12976,6 +12959,17 @@ const EMPRESA_UI=Object.freeze({
   shadow:"0 1px 2px rgba(15,23,42,.05)",
 });
 
+function empresaPrimaryBtnStyle(disabled = false) {
+  return {
+    background: disabled ? "#cbd5e1" : EMPRESA_UI.btnPrimary,
+    color: disabled ? "#64748b" : "#ffffff",
+    border: `1px solid ${disabled ? EMPRESA_UI.border : EMPRESA_UI.btnPrimaryBorder}`,
+    borderRadius: 9,
+    fontWeight: 600,
+    cursor: disabled ? "default" : "pointer",
+  };
+}
+
 function empresaTone(color){
   const c=String(color||"").toLowerCase();
   if(c.includes("ef4444")||c.includes("f97316")||c.includes("fb923c"))return{fg:EMPRESA_UI.red,bg:EMPRESA_UI.redSoft,border:"#fecaca"};
@@ -13061,6 +13055,14 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const flotaLightBusyRef=useRef(false);
   const flotaEvsLoadedServiciosRef=useRef(new Set());
   const flotaStopsFetchedIdsRef=useRef(new Set());
+
+  const dcdtModalFlotaEvs=useMemo(()=>{
+    if(!dcdtModal?.id)return{};
+    const stops=flotaStops[dcdtModal.id]||[];
+    const o={};
+    for(const st of stops){if(flotaEvs[st.id])o[st.id]=flotaEvs[st.id];}
+    return o;
+  },[dcdtModal?.id,flotaStops,flotaEvs]);
 
   useEffect(() => {
     function onEvidenciaSaved(e) {
@@ -14665,7 +14667,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           {/* Invite */}
           <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
             {!addOpen?(
-              <button onClick={()=>setAddOpen(true)} style={{width:"100%",background:EMPRESA_UI.tx,color:"white",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+              <button onClick={()=>setAddOpen(true)} style={{width:"100%",...empresaPrimaryBtnStyle(),padding:"11px",fontSize:14}}>
                 + Invitar conductor
               </button>
             ):(
@@ -14678,7 +14680,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <button onClick={()=>setAddOpen(false)} style={{background:EMPRESA_UI.surfaceSoft,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"10px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
                   <button onClick={añadirConductor} disabled={addLoading||!addForm.nombre.trim()||!addForm.email.trim()}
-                    style={{background:addLoading||!addForm.nombre.trim()||!addForm.email.trim()?"#cbd5e1":EMPRESA_UI.tx,color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                    style={{...empresaPrimaryBtnStyle(addLoading||!addForm.nombre.trim()||!addForm.email.trim()),padding:"10px",fontSize:13}}>
                     {addLoading?"Enviando...":"Invitar"}
                   </button>
                 </div>
@@ -14793,7 +14795,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
                     {!c.pendiente&&c.user_id&&(
                       <button onClick={()=>setAsignarModal({id:c.user_id,nombre:c.nombre})}
-                        style={{width:"100%",background:EMPRESA_UI.tx,color:"white",border:"none",borderRadius:9,padding:"10px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                        style={{width:"100%",...empresaPrimaryBtnStyle(),padding:"10px",fontSize:13,marginTop:10}}>
                         Asignar servicio
                       </button>
                     )}
@@ -15565,12 +15567,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           servicio={dcdtModal}
           empresa={empresa}
           conductor={conductores.find((c)=>c.user_id===dcdtModal.conductor_id)}
-          flotaEvs={(()=>{
-            const stops=flotaStops[dcdtModal.id]||[];
-            const o={};
-            for(const st of stops){if(flotaEvs[st.id])o[st.id]=flotaEvs[st.id];}
-            return o;
-          })()}
+          flotaEvs={dcdtModalFlotaEvs}
           stops={flotaStops[dcdtModal.id]}
           userId={getUserId?.()||null}
           onClose={()=>setDcdtModal(null)}
@@ -17347,7 +17344,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       window.dispatchEvent(new Event("cuaderno-recargar-entries"));
     }
   }
-  async function marcarLlegado(stopId){
+  async function marcarLlegado(stopId,opts={}){
     const now=new Date().toISOString();
     devLog("[TL1] click entrada_muelle",{
       servicioId:servicio?.id||null,
@@ -17389,7 +17386,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const stopEntrada=stops.find(s=>s.id===stopId);
     await autoTacografoTramoMuelle({ alEntrada: true, stop: stopEntrada });
     if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
-    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast});
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     const geo=resolveEventGeoFromOp(op);
@@ -17400,7 +17397,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
-  async function marcarCompletado(stopId){
+  async function marcarCompletado(stopId,opts={}){
     const now=new Date().toISOString();
     devLog("[TL1] click salida_muelle",{
       servicioId:servicio?.id||null,
@@ -17457,7 +17454,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       sbUpsert("entries",rows).catch(()=>{});
     }
 
-    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast});
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     const geoSalida=resolveEventGeoFromOp(op);
@@ -17474,7 +17471,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
-  async function iniciarServicio(servicioId){
+  async function iniciarServicio(servicioId,opts={}){
     if(servicio?.id&&servicioId!==servicio.id){
       devWarn("[OP1] iniciarServicio id mismatch",{uiId:servicio.id,requestedId:servicioId});
       throw new Error("El servicio en pantalla no coincide. Espera a cerrar el expediente o recarga.");
@@ -17484,7 +17481,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(uid)await marcarParticipacionActiva(servicioId,uid).catch(()=>{});
     const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
     let nextServicio={...started};
-    const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast});
+    const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast,prefetchedGps:opts.prefetchedGps??null});
     const inicioGeo=resolveEventGeoFromOp(op);
     const referenciaInicio=mergeReferenciaOperacional(
       op?.referencia||nextServicio.referencia||null,
@@ -17499,11 +17496,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     patchDriverView({servicio:nextServicio});
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  async function iniciarViajeOperacional(servicioId){
+  async function iniciarViajeOperacional(servicioId,opts={}){
     if(!servicio||servicio.id!==servicioId)return;
+    const op=await registerDriverOperationalPoint({uid,servicio,stops,norma,eventType:"ruta_iniciada",showToast,prefetchedGps:opts.prefetchedGps??null});
+    const rutaGeo=resolveEventGeoFromOp(op);
     const referencia=mergeReferenciaOperacional(servicio.referencia||null,{
       operational_route_started_at:new Date().toISOString(),
       operational_trip_started_at:getOperationalTripStartedAt(servicio)||new Date().toISOString(),
+      operational_route_started_geo:rutaGeo,
     });
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
     patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia}:prev.servicio}));
@@ -17526,7 +17526,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     patchDriverView({stops:updated,servicio:nextServicio});
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  async function cerrarExpediente({ comentario, firmaCanvas }) {
+  async function cerrarExpediente({ comentario, firmaCanvas, prefetchedGps = null }) {
     if (!servicio?.id) throw new Error("Sin servicio activo");
     await cerrarExpedienteServicio({
       servicio,
@@ -17534,6 +17534,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       firmaCanvas,
       conductorId: uid,
       conductorNombre: conductorNombre || null,
+      prefetchedGps,
     });
     setDriverView(EMPTY_DRIVER_VIEW);
     driverViewRef.current=EMPTY_DRIVER_VIEW;
@@ -18676,6 +18677,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         totalParticipantes={participacion?.total||1}
         activosParticipantes={participacion?.activos||1}
         onFinalizarParticipacion={finalizarParticipacion}
+        conductorUid={uid}
       />
       {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>

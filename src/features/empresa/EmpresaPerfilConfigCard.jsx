@@ -8,7 +8,7 @@ const FIELDS = [
   { key: "cif", label: "CIF / NIF", ph: "B12345678" },
   { key: "telefono", label: "Teléfono", ph: "+34 950 123 456" },
   { key: "emailEmpresa", label: "Email", ph: "info@transportes.com" },
-  { key: "direccion", label: "Dirección", ph: "Calle Industria 12", full: true },
+  { key: "direccion", label: "Domicilio fiscal / dirección", ph: "Calle Industria 12", full: true },
   { key: "cp", label: "Código postal", ph: "04001" },
   { key: "ciudad", label: "Ciudad", ph: "Almería" },
 ];
@@ -119,6 +119,9 @@ export function EmpresaPerfilConfigCard({
             id: eid,
             nombre: form.nombre?.trim() || empresaRecord?.nombre || "Empresa",
             cif: form.cif?.trim() || null,
+            direccion: form.direccion?.trim() || null,
+            cp: form.cp?.trim() || null,
+            ciudad: form.ciudad?.trim() || null,
           },
         ]);
         invalidateEmpresaRecordCache(eid);

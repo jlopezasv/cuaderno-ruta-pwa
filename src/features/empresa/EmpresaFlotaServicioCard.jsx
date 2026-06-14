@@ -1012,9 +1012,9 @@ function EmpresaFlotaServicioCardImpl({
                 style={{
                   width: "100%",
                   marginTop: 8,
-                  background: UI.accentSoft,
-                  color: UI.accent,
-                  border: "1px solid #bfdbfe",
+                  background: "#fffbeb",
+                  color: "#92400e",
+                  border: "1px solid #fcd34d",
                   borderRadius: 9,
                   padding: "10px 10px",
                   fontSize: 12.5,
@@ -1043,14 +1043,14 @@ function EmpresaFlotaServicioCardImpl({
                   padding: "10px 10px",
                   fontSize: 12.5,
                   fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              {servicio.conductor_id ? "Gestionar conductores" : "Asignar conductor"}
-            </button>
-          ) : null}
+                  cursor: "pointer",
+                }}
+              >
+                {servicio.conductor_id ? "Gestionar conductores" : "Asignar conductor"}
+              </button>
+            ) : null}
 
-          {servicio.estado !== "anulado" ? (
+            {servicio.estado !== "anulado" ? (
               <button
                 type="button"
                 onClick={(e) => {

@@ -26,6 +26,7 @@ function urlDedupKey(url) {
 
 function bucketForExtraTipo(tipo) {
   const t = String(tipo || "").toLowerCase();
+  if (t === "dcdt") return "dcdt";
   if (t === "cmr") return "cmr";
   if (t === "foto") return "fotos";
   if (t === "incidencia") return "incidencias";

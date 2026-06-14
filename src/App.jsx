@@ -1,6 +1,8 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 // Inicializar el adaptador de almacenamiento ANTES del bundle principal
 import './storage.js';
+import { parseDcdtVerifyTokenFromLocation } from './domain/dcdt/dcdtVerifyToken.js';
+import { DcdtVerifyPublicPage } from './features/dcdt/DcdtVerifyPublicPage.jsx';
 
 const CuadernoRuta = lazy(() => import('./cuaderno-ruta.jsx'));
 
@@ -25,6 +27,12 @@ function AppLoading() {
 }
 
 export default function App() {
+  const verifyToken = useMemo(() => parseDcdtVerifyTokenFromLocation(), []);
+
+  if (verifyToken) {
+    return <DcdtVerifyPublicPage token={verifyToken} />;
+  }
+
   return (
     <Suspense fallback={<AppLoading />}>
       <CuadernoRuta />

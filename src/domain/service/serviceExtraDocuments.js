@@ -15,6 +15,7 @@ const STORAGE_URL_ERROR = "Error generando URL del documento";
 const TABLE = "servicio_documentos_extra";
 
 export const EXTRA_DOC_TIPOS = Object.freeze([
+  { id: "dcdt", label: "DCDT" },
   { id: "cmr", label: "CMR" },
   { id: "ticket", label: "Ticket" },
   { id: "factura", label: "Factura" },

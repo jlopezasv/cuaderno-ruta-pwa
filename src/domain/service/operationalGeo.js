@@ -20,8 +20,13 @@ export function formatOperationalGeoLine(geo) {
 
 /** Línea legible para expediente operacional. */
 export function formatExpedienteUbicacionLine(geo) {
-  if (!geo || geo.source === "no_disponible" || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) {
-    return "Ubicación no registrada";
+  if (!geo) return "Ubicación no disponible";
+  if (geo.source === "no_disponible" || geo.location_status === "denied" || geo.location_status === "timeout" || geo.location_status === "unavailable") {
+    const reason = geo.location_error || geo.location_status || "no disponible";
+    return `Ubicación no disponible (${reason})`;
+  }
+  if (!Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) {
+    return "Ubicación no disponible";
   }
   const lat = Number(geo.lat).toFixed(4);
   const lon = Number(geo.lon).toFixed(4);
@@ -30,6 +35,22 @@ export function formatExpedienteUbicacionLine(geo) {
       ? ` · precisión ${Math.round(Number(geo.accuracy_m))} m`
       : "";
   return `Ubicación: ${lat}, ${lon}${acc}`;
+}
+
+/** Detalle para timeline conductor. */
+export function formatDriverGeoTimelineLines(geo) {
+  if (!geo) return [{ label: "Ubicación", value: "No disponible" }];
+  if (geo.source === "no_disponible" || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lon))) {
+    const reason = geo.location_error || geo.location_status || "no disponible";
+    return [{ label: "Ubicación", value: `No disponible (${reason})` }];
+  }
+  const lines = [
+    { label: "Ubicación", value: `${Number(geo.lat).toFixed(4)}, ${Number(geo.lon).toFixed(4)}` },
+  ];
+  if (geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))) {
+    lines.push({ label: "Precisión", value: `${Math.round(Number(geo.accuracy_m))} m` });
+  }
+  return lines;
 }
 
 export function formatGeoSourceLabel(geo) {
@@ -48,7 +69,10 @@ export function geoFromGpsPoint(point, opts = {}) {
     if (opts.recordUnavailable) {
       return {
         ts: new Date().toISOString(),
+        location_captured_at: new Date().toISOString(),
         source: "no_disponible",
+        location_status: opts.location_status || "unavailable",
+        location_error: opts.location_error || null,
       };
     }
     return null;
@@ -56,9 +80,12 @@ export function geoFromGpsPoint(point, opts = {}) {
   return {
     lat: point.lat,
     lon: point.lon,
-    ts: point.ts || new Date().toISOString(),
+    ts: point.ts || point.location_captured_at || new Date().toISOString(),
+    location_captured_at: point.location_captured_at || point.ts || new Date().toISOString(),
     accuracy_m: point.accuracy != null ? Math.round(point.accuracy) : null,
     source: point.source || opts.source || "gps",
+    location_status: point.location_status || opts.location_status || "ok",
+    location_error: point.location_error || null,
   };
 }
 
@@ -66,7 +93,11 @@ export function geoFromGpsPoint(point, opts = {}) {
 export function resolveEventGeoFromOp(op) {
   const fromPoint = geoFromGpsPoint(op?.point);
   if (fromPoint) return fromPoint;
-  return geoFromGpsPoint(null, { recordUnavailable: true });
+  return geoFromGpsPoint(null, {
+    recordUnavailable: true,
+    location_status: op?.location_status || op?.prefetchedGps?.location_status || "unavailable",
+    location_error: op?.location_error || op?.prefetchedGps?.location_error || op?.error || null,
+  });
 }
 
 export function getGeoFromDocMeta(ev) {

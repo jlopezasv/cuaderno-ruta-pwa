@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { sbFetch } from "../../data/supabaseClient.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { getServiceClient, getServiceNumber } from "../../domain/service/serviceIdentity.js";
 import { mergeReferenciaOperacional, getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import {
@@ -22,6 +23,24 @@ import {
   validateOfficeResponsableOnCreate,
 } from "../../domain/empresa/empresaOfficeUsers.js";
 import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField.jsx";
+import { ServicioMercanciaBlock } from "../dcdt/ServicioMercanciaBlock.jsx";
+import { DcdtReadinessPanel } from "../dcdt/DcdtReadinessPanel.jsx";
+import {
+  buildServicioMercanciaMetaPatch,
+  emptyServicioMercancia,
+  getServicioMercanciaFromMeta,
+} from "../../domain/dcdt/servicioMercanciaMeta.js";
+import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
+import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
+import {
+  getStopTone,
+  primaryButtonStyle,
+  resolveConductorVehiculo,
+  secondaryButtonStyle,
+  SERVICIO_MODAL_SHELL,
+} from "../services/servicioFormTheme.js";
+import { ServicioStopToolbar } from "../services/components/ServicioStopToolbar.jsx";
+import { MatriculaVehiculoBadge } from "../services/components/MatriculaVehiculoBadge.jsx";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -81,13 +100,20 @@ export function EmpresaEditarServicioModal({
   const [adminNotas, setAdminNotas] = useState("");
   const [conductorSel, setConductorSel] = useState("");
   const [responsableSel, setResponsableSel] = useState("");
+  const [mercancia, setMercancia] = useState(emptyServicioMercancia);
+  const [partesCatalog, setPartesCatalog] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const formInitRef = useRef(null);
+  const stopsLoadedRef = useRef(null);
 
   const rutaDesdeParadas = useMemo(() => routeTextFromStops(stops), [stops]);
 
   useEffect(() => {
     if (!servicio?.id) return;
+    if (formInitRef.current === servicio.id) return;
+    formInitRef.current = servicio.id;
+    stopsLoadedRef.current = null;
     setFechaInicioLocal(servicio.fecha_inicio ? toDTL(servicio.fecha_inicio) : "");
     setServiceNumber(String(servicio.service_number ?? "").trim());
     setCliente(String(getServiceClient(servicio) || "").trim());
@@ -96,11 +122,28 @@ export function EmpresaEditarServicioModal({
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
     const resp = servicio.responsable_user_id ? servicio.responsable_user_id : "";
     setResponsableSel(responsableLockedUid || resp);
+    setMercancia(getServicioMercanciaFromMeta(servicio));
     setError("");
-  }, [servicio, responsableLockedUid]);
+  }, [servicio?.id, responsableLockedUid]);
+
+  useEffect(() => {
+    if (!servicio?.empresa_id) return;
+    let cancelled = false;
+    fetchPartesTransporte(servicio.empresa_id)
+      .then((rows) => {
+        if (!cancelled) setPartesCatalog(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setPartesCatalog([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [servicio?.empresa_id]);
 
   useEffect(() => {
     if (!servicio?.id || !wide) return;
+    if (stopsLoadedRef.current === servicio.id) return;
     let cancelled = false;
     setStopsLoading(true);
     (async () => {
@@ -111,6 +154,7 @@ export function EmpresaEditarServicioModal({
         if (!res.ok) throw new Error(`Error ${res.status}`);
         const rows = await res.json().catch(() => []);
         if (cancelled) return;
+        stopsLoadedRef.current = servicio.id;
         if (Array.isArray(rows) && rows.length) {
           setStops(rows.map(stopRowToForm));
         } else {
@@ -149,9 +193,26 @@ export function EmpresaEditarServicioModal({
       return [...arr].sort((a, b) => a.orden - b.orden);
     });
   }
-  function changeStop(i, field, val) {
+  const patchStop = useCallback((i, patch) => {
+    setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  }, []);
+
+  const changeStop = useCallback((i, field, val) => {
     setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, [field]: val } : s)));
-  }
+  }, []);
+
+  const handlePartesCatalog = useCallback((next) => {
+    setPartesCatalog((prev) => {
+      const a = prev || [];
+      const b = next || [];
+      if (a.length === b.length && a.every((p, i) => p?.id === b[i]?.id)) return prev;
+      return b;
+    });
+  }, []);
+
+  const handleMercanciaChange = useCallback((next) => {
+    setMercancia(next);
+  }, []);
 
   const guardar = useCallback(async () => {
     if (!servicio?.id || !mode || saving) return;
@@ -243,7 +304,28 @@ export function EmpresaEditarServicioModal({
           pushAudit("fecha_inicio", fi0, fi1);
         }
 
-        const stopsResult = await replaceStopsForServicio(servicio.id, prepareStopsGeoForPersist(stops));
+        const stopsPayload = prepareStopsGeoForPersist(stops);
+        if (isDemoApp()) {
+          const carga = stops.find((s) => String(s.tipo).toLowerCase() === "carga");
+          const descarga = [...stops].reverse().find((s) => String(s.tipo).toLowerCase() === "descarga");
+          console.log("[DEMO editar-servicio] guardar", {
+            servicio_id: servicio.id,
+            stops_payload: stopsPayload,
+            cargador_parte_id: carga?.parte_transporte_id ?? null,
+            destinatario_parte_id: descarga?.parte_transporte_id ?? null,
+            mercancia_payload: buildServicioMercanciaMetaPatch(mercancia),
+            servicio_patch_keys: Object.keys(patch),
+          });
+        }
+
+        const stopsResult = await replaceStopsForServicio(servicio.id, stopsPayload);
+        if (isDemoApp()) {
+          console.log("[DEMO editar-servicio] stops resultado", {
+            servicio_id: servicio.id,
+            ok: stopsResult.ok,
+            error: stopsResult.error || null,
+          });
+        }
         if (!stopsResult.ok) throw new Error(stopsResult.error || "No se pudieron guardar las paradas");
       }
 
@@ -271,12 +353,22 @@ export function EmpresaEditarServicioModal({
       const prevMeta = getServicioOperacionMeta(servicio).admin_notas;
       const prevAdm = prevMeta == null ? "" : String(prevMeta).trim();
       const adm1 = String(adminNotas || "").trim();
-      if (adm1 !== prevAdm) {
+      const mercanciaPatch = buildServicioMercanciaMetaPatch(mercancia);
+      const prevMerc = getServicioMercanciaFromMeta(servicio);
+      const mercChanged =
+        String(prevMerc.descripcion) !== String(mercancia.descripcion || "") ||
+        String(prevMerc.palets) !== String(mercancia.palets ?? "") ||
+        String(prevMerc.bultos) !== String(mercancia.bultos ?? "") ||
+        String(prevMerc.peso_kg) !== String(mercancia.peso_kg ?? "");
+
+      if (adm1 !== prevAdm || mercChanged) {
+        const refMetaPatch = { ...mercanciaPatch };
+        if (adm1 !== prevAdm) refMetaPatch.admin_notas = adm1 || null;
         patch.referencia = mergeReferenciaOperacional(
           (patch.referencia ?? servicio.referencia) || "",
-          { admin_notas: adm1 || null },
+          refMetaPatch,
         );
-        pushAudit("admin_notas", prevAdm, adm1);
+        if (adm1 !== prevAdm) pushAudit("admin_notas", prevAdm, adm1);
       }
 
       if (canEditResponsable) {
@@ -296,7 +388,14 @@ export function EmpresaEditarServicioModal({
         });
         if (!res.ok) {
           const t = await res.text().catch(() => "");
+          if (isDemoApp()) {
+            console.log("[DEMO editar-servicio] servicio PATCH error", { servicio_id: servicio.id, status: res.status, body: t });
+          }
           throw new Error(t || `Error ${res.status}`);
+        }
+        if (isDemoApp()) {
+          const rows = await res.json().catch(() => []);
+          console.log("[DEMO editar-servicio] servicio PATCH ok", { servicio_id: servicio.id, rows });
         }
       }
 
@@ -356,6 +455,7 @@ export function EmpresaEditarServicioModal({
     cliente,
     refCliente,
     adminNotas,
+    mercancia,
     conductorSel,
     responsableSel,
     canEditResponsable,
@@ -367,6 +467,8 @@ export function EmpresaEditarServicioModal({
   ]);
 
   if (!servicio || !mode) return null;
+
+  const conductorVehiculo = resolveConductorVehiculo(conductores, conductorSel);
 
   const paradaInputStyle = {
     width: "100%",
@@ -390,15 +492,16 @@ export function EmpresaEditarServicioModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 16,
+        padding: 10,
       }}
       onClick={onClose}
       role="presentation"
     >
       <div
         style={{
-          width: "min(520px, 100%)",
-          maxHeight: "min(88vh, 720px)",
+          width: SERVICIO_MODAL_SHELL.width,
+          maxWidth: SERVICIO_MODAL_SHELL.maxWidth,
+          maxHeight: SERVICIO_MODAL_SHELL.maxHeight,
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
@@ -419,6 +522,10 @@ export function EmpresaEditarServicioModal({
         </div>
 
         <div style={{ padding: "12px 16px", overflowY: "auto", flex: 1 }}>
+          <style>{`
+@media (max-width: 900px) { .servicio-stops-grid-edit { grid-template-columns: 1fr !important; } }
+@media (min-width: 901px) { .servicio-stops-grid-edit { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+`}</style>
           <div
             style={{
               display: "grid",
@@ -463,6 +570,15 @@ export function EmpresaEditarServicioModal({
               <div style={{ fontSize: 11, fontWeight: 700, color: EMPRESA_UI.muted, margin: "4px 0 8px", letterSpacing: 0.4 }}>
                 PARADAS · {stops.length}
               </div>
+              <DcdtReadinessPanel
+                stops={stops}
+                mercancia={mercancia}
+                partesCatalog={partesCatalog}
+                fechaInicio={fechaInicioLocal}
+                matricula={conductorVehiculo.matricula || null}
+                remolque={conductorVehiculo.remolque || null}
+                tipoVehiculo={conductorVehiculo.tipoVehiculo}
+              />
               {stopsLoading ? (
                 <div style={{ fontSize: 12, color: EMPRESA_UI.muted, marginBottom: 12 }}>Cargando paradas…</div>
               ) : (
@@ -472,24 +588,28 @@ export function EmpresaEditarServicioModal({
                       Ruta: {rutaDesdeParadas.origen || "—"} → {rutaDesdeParadas.destino || "—"}
                     </div>
                   ) : null}
-                  {stops.map((stop, i) => (
+                  <div className="servicio-stops-grid-edit" style={{ display: "grid", gap: 12, marginBottom: 8 }}>
+                  {stops.map((stop, i) => {
+                    const tone = getStopTone(stop);
+                    return (
                     <div
                       key={`${stop.orden}-${i}`}
                       style={{
-                        background: EMPRESA_UI.surfaceSoft,
-                        borderRadius: 10,
-                        padding: "8px 10px",
-                        marginBottom: 8,
-                        border: `1px solid ${EMPRESA_UI.border}`,
+                        background: tone.bg,
+                        borderRadius: 14,
+                        padding: "12px 14px",
+                        border: `1px solid ${tone.border}`,
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: EMPRESA_UI.muted }}>{i + 1}</span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: tone.header }}>
+                            {stopContractualTitle(stop, i)}
+                          </div>
                           <select
                             value={stop.tipo}
                             onChange={(e) => changeStop(i, "tipo", e.target.value)}
-                            style={{ ...paradaInputStyle, marginBottom: 0, width: "auto", flex: 1 }}
+                            style={{ ...paradaInputStyle, marginTop: 6, marginBottom: 0, width: "auto", minWidth: 140, background: "#fff" }}
                           >
                             {STOP_TIPOS_FORM.map((t) => (
                               <option key={t.id} value={t.id}>
@@ -498,31 +618,30 @@ export function EmpresaEditarServicioModal({
                             ))}
                           </select>
                         </div>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <button type="button" onClick={() => moveStop(i, -1)} disabled={i === 0} style={stopBtnStyle}>
-                            ↑
-                          </button>
-                          <button type="button" onClick={() => moveStop(i, 1)} disabled={i === stops.length - 1} style={stopBtnStyle}>
-                            ↓
-                          </button>
-                          {stops.length > 1 ? (
-                            <button type="button" onClick={() => removeStop(i)} style={{ ...stopBtnStyle, color: EMPRESA_UI.red }}>
-                              ✕
-                            </button>
-                          ) : null}
-                        </div>
+                        <ServicioStopToolbar
+                          index={i}
+                          total={stops.length}
+                          onMoveUp={() => moveStop(i, -1)}
+                          onMoveDown={() => moveStop(i, 1)}
+                          onRemove={() => removeStop(i)}
+                        />
                       </div>
                       <StopGeoFieldsForm
                         stop={stop}
                         index={i}
                         onChange={changeStop}
+                        onPatchStop={patchStop}
                         themeKey="empresa"
-                        compact
+                        layout="servicio-grid"
                         showGeoStatus={false}
                         empresaId={servicio?.empresa_id}
+                        onPartesChange={handlePartesCatalog}
                       />
                     </div>
-                  ))}
+                  );
+                  })}
+                  </div>
+                  <ServicioMercanciaBlock value={mercancia} onChange={handleMercanciaChange} />
                   <button
                     type="button"
                     onClick={addStop}
@@ -585,6 +704,11 @@ export function EmpresaEditarServicioModal({
                   </option>
                 ))}
               </select>
+              <MatriculaVehiculoBadge
+                matricula={conductorVehiculo.matricula}
+                remolque={conductorVehiculo.remolque}
+                tipoVehiculo={conductorVehiculo.tipoVehiculo}
+              />
               <div style={{ fontSize: 11, color: EMPRESA_UI.muted, marginTop: 4 }}>
                 Si eliges un conductor, el servicio pasará a «Asignado».
               </div>
@@ -620,16 +744,7 @@ export function EmpresaEditarServicioModal({
             type="button"
             onClick={onClose}
             disabled={saving}
-            style={{
-              flex: 1,
-              background: EMPRESA_UI.surfaceSoft,
-              border: `1px solid ${EMPRESA_UI.border}`,
-              borderRadius: 10,
-              padding: "11px",
-              fontSize: 13,
-              color: EMPRESA_UI.muted,
-              cursor: saving ? "default" : "pointer",
-            }}
+            style={secondaryButtonStyle(saving)}
           >
             Cancelar
           </button>
@@ -637,17 +752,7 @@ export function EmpresaEditarServicioModal({
             type="button"
             onClick={() => void guardar()}
             disabled={saving || (wide && stopsLoading)}
-            style={{
-              flex: 1,
-              background: EMPRESA_UI.accentSoft,
-              border: "1px solid #bfdbfe",
-              borderRadius: 10,
-              padding: "11px",
-              fontSize: 13,
-              fontWeight: 800,
-              color: EMPRESA_UI.accent,
-              cursor: saving || (wide && stopsLoading) ? "default" : "pointer",
-            }}
+            style={primaryButtonStyle(saving || (wide && stopsLoading))}
           >
             {saving ? "Guardando…" : "Guardar"}
           </button>
@@ -656,16 +761,6 @@ export function EmpresaEditarServicioModal({
     </div>
   );
 }
-
-const stopBtnStyle = {
-  background: "#e2e8f0",
-  border: "none",
-  borderRadius: 4,
-  width: 22,
-  height: 22,
-  fontSize: 11,
-  cursor: "pointer",
-};
 
 const labelStyle = {
   display: "flex",

@@ -1,18 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { sbFetch } from "../../data/supabaseClient.js";
-import { DCDT_ESTADO, DCDT_ESTADO_LABELS } from "../../domain/dcdt/dcdtConstants.js";
 import {
+  assignDcdtParte,
+  buildMercanciaDatosPatch,
   computeDcdtEstado,
+  dcdtStatusUxLabel,
   ensureDcdtForServicio,
   extractLatestOcrFromEvidencias,
+  isDcdtEstadoValidated,
+  isDcdtFullyValidated,
   mergeOcrIntoDcdtDatos,
+  mercanciaEditFromDatos,
+  persistDcdtPartesFromStops,
+  reconcileDcdtEstadoIfNeeded,
   resolveDcdtDocument,
   saveDcdtDatos,
   validarDcdtTrafico,
-  markDcdtPdfGenerado,
 } from "../../domain/dcdt/dcdtModel.js";
+import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
-import { downloadDcdtPdf } from "../../domain/dcdt/generateDcdtPdf.js";
+import { generateAndPersistDcdtPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
+import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
+import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
 
 const UI = {
   overlay: "rgba(15,23,42,.45)",
@@ -28,17 +38,43 @@ const UI = {
 };
 
 function FieldRow({ label, value, missing }) {
+  const text = formatDcdtDisplayValueOrDash(value);
   return (
     <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 8, padding: "6px 0", borderBottom: `1px solid ${UI.border}`, fontSize: 13 }}>
       <div style={{ color: missing ? UI.red : UI.su, fontWeight: 700, fontSize: 11 }}>{label}</div>
-      <div style={{ color: UI.tx }}>{value || "—"}</div>
+      <div style={{ color: UI.tx }}>{text}</div>
     </div>
   );
 }
 
+function hydrateMercanciaEdit(dcdtMercancia, servicio) {
+  const fromDcdt = mercanciaEditFromDatos(dcdtMercancia);
+  const hasDcdt =
+    fromDcdt.descripcion ||
+    fromDcdt.peso_kg ||
+    fromDcdt.bultos ||
+    fromDcdt.palets;
+  if (hasDcdt) return fromDcdt;
+  const fromSvc = getServicioMercanciaFromMeta(servicio);
+  return {
+    descripcion: fromSvc.descripcion || "",
+    peso_kg: fromSvc.peso_kg ?? "",
+    bultos: fromSvc.bultos ?? "",
+    palets: fromSvc.palets ?? "",
+  };
+}
+
+const MERC_LBL = { fontSize: 10, color: UI.su, fontWeight: 700, marginBottom: 4 };
+
 function parteLine(parte) {
-  if (!parte?.nombre) return "—";
-  return [parte.nombre, parte.nif, parte.domicilio || parte.direccion].filter(Boolean).join(" · ");
+  const nombre = formatDcdtDisplayValueOrDash(parte?.nombre);
+  if (nombre === "—") return "—";
+  const bits = [
+    nombre,
+    formatDcdtDisplayValueOrDash(parte?.nif),
+    formatDcdtDisplayValueOrDash(parte?.domicilio || parte?.direccion),
+  ].filter((x) => x && x !== "—");
+  return bits.length ? bits.join(" · ") : "—";
 }
 
 export function EmpresaDcdtModal({
@@ -57,44 +93,225 @@ export function EmpresaDcdtModal({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [mercanciaEdit, setMercanciaEdit] = useState({ descripcion: "", peso_kg: "", bultos: "", palets: "" });
+  const [pickingRole, setPickingRole] = useState(null);
+  const [confirmRole, setConfirmRole] = useState(null);
+  const [empresaOwnerProfile, setEmpresaOwnerProfile] = useState(null);
+  const [conductorEmpresa, setConductorEmpresa] = useState(conductor);
+  const mercanciaDirtyRef = useRef(false);
+  const syncedPartesRef = useRef(false);
+  const flotaEvsRef = useRef(flotaEvs);
+  flotaEvsRef.current = flotaEvs;
+  const servicioRef = useRef(servicio);
+  servicioRef.current = servicio;
+  const conductorRef = useRef(conductor);
+  conductorRef.current = conductorEmpresa || conductor;
+  const empresaRef = useRef(empresa);
+  empresaRef.current = empresa;
+  const stopsPropRef = useRef(stopsProp);
+  stopsPropRef.current = stopsProp;
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
 
   const empresaId = servicio?.empresa_id || empresa?.id;
 
-  const load = useCallback(async () => {
-    if (!servicio?.id || !empresaId) return;
-    setLoading(true);
-    try {
-      let stopRows = stopsProp;
-      if (!stopRows?.length) {
-        const sr = await sbFetch(
-          `/rest/v1/stops?servicio_id=eq.${servicio.id}&select=id,orden,tipo,nombre,direccion,notas&order=orden.asc`,
-        );
-        stopRows = sr.ok ? await sr.json() : [];
-      }
-      setStops(Array.isArray(stopRows) ? stopRows : []);
-      const [row, master] = await Promise.all([
-        ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops: stopRows }),
-        fetchPartesTransporte(empresaId),
-      ]);
-      setDcdt(row);
-      setPartes(master);
-      const m = row?.datos?.mercancia || {};
-      setMercanciaEdit({
-        descripcion: m.descripcion || "",
-        peso_kg: m.peso_kg != null ? String(m.peso_kg) : "",
-        bultos: m.bultos != null ? String(m.bultos) : "",
-        palets: m.palets != null ? String(m.palets) : "",
-      });
-    } catch (e) {
-      showToast?.(e?.message || "No se pudo cargar DCDT");
-    } finally {
-      setLoading(false);
-    }
-  }, [servicio?.id, empresaId, stopsProp, showToast]);
+  function setMercanciaField(field, value) {
+    mercanciaDirtyRef.current = true;
+    setMercanciaEdit((p) => ({ ...p, [field]: value }));
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!confirmRole) return;
+    const t = setTimeout(() => setConfirmRole(null), 2500);
+    return () => clearTimeout(t);
+  }, [confirmRole]);
+
+  useEffect(() => {
+    setConductorEmpresa(conductor);
+  }, [conductor]);
+
+  useEffect(() => {
+    const uid = servicio?.conductor_id || conductor?.user_id;
+    if (!uid || conductor?.matricula) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await sbFetch(
+          `/rest/v1/conductor_empresa?user_id=eq.${uid}&select=matricula,remolque,nombre,user_id&limit=1`,
+        );
+        if (!r.ok || cancelled) return;
+        const rows = await r.json();
+        const row = Array.isArray(rows) ? rows[0] : null;
+        if (row && !cancelled) setConductorEmpresa(row);
+      } catch {
+        /* perfil opcional */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [servicio?.conductor_id, conductor?.user_id, conductor?.matricula]);
+
+  async function seleccionarParte(role, parteId, parteNueva = null) {
+    if (!dcdt || !parteId) return;
+    setBusy(`parte-${role}`);
+    try {
+      const masterMap = { ...masterById };
+      if (parteNueva?.id) masterMap[parteNueva.id] = parteNueva;
+      const next = await assignDcdtParte({
+        dcdt,
+        role,
+        parteId,
+        servicio,
+        stops,
+        flotaEvs,
+        empresa,
+        conductor: conductorEmpresa || conductor,
+        masterById: masterMap,
+      });
+      setDcdt(next);
+      if (parteNueva) setPartes((prev) => (prev.some((p) => p.id === parteNueva.id) ? prev : [...prev, parteNueva]));
+      setPickingRole(null);
+      setConfirmRole(role);
+      showToast?.(role === "cargador" ? "Cargador asignado" : "Destinatario asignado");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo guardar");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function renderParteBlock(role, label, lineValue, missingField) {
+    const isMissing = missingField || lineValue === "—";
+    const showPicker = pickingRole === role;
+    return (
+      <div key={role}>
+        {confirmRole === role ? <DcdtParteConfirmFlash label={label} /> : null}
+        <FieldRow label={label} value={lineValue} missing={isMissing} />
+        {showPicker ? (
+          <DcdtPartePicker
+            label={label}
+            role={role}
+            empresaId={empresaId}
+            partes={partes}
+            selectedParteId={dcdt?.datos?.partes?.[role === "cargador" ? "cargador_id" : "destinatario_id"]}
+            busy={!!busy}
+            onSelect={(id, nueva) => seleccionarParte(role, id, nueva)}
+            onCancel={() => setPickingRole(null)}
+          />
+        ) : (
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => setPickingRole(role)}
+            style={{
+              margin: "0 0 8px",
+              background: isMissing ? "#fff7ed" : UI.soft,
+              color: isMissing ? UI.amber : UI.accent,
+              border: `1px solid ${isMissing ? "#fed7aa" : UI.border}`,
+              borderRadius: 8,
+              padding: "6px 12px",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {isMissing ? "Completar dato" : "Cambiar"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  useEffect(() => {
+    if (!servicio?.id || !empresaId) return;
+    let cancelled = false;
+    mercanciaDirtyRef.current = false;
+    syncedPartesRef.current = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        let stopRows = stopsPropRef.current;
+        if (!stopRows?.length) {
+          const sr = await sbFetch(
+            `/rest/v1/stops?servicio_id=eq.${servicio.id}&select=id,orden,tipo,nombre,direccion,notas&order=orden.asc`,
+          );
+          stopRows = sr.ok ? await sr.json() : [];
+        }
+        if (cancelled) return;
+        setStops(Array.isArray(stopRows) ? stopRows : []);
+
+        const [row, master] = await Promise.all([
+          ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops: stopRows }),
+          fetchPartesTransporte(empresaId),
+        ]);
+        if (cancelled) return;
+
+        let ownerProfile = null;
+        const ownerId = empresaRef.current?.owner_id;
+        if (ownerId) {
+          const pr = await sbFetch(
+            `/rest/v1/profiles?id=eq.${ownerId}&select=id,nombre,cif,direccion,cp,ciudad&limit=1`,
+          );
+          if (pr.ok) {
+            const profileRows = await pr.json().catch(() => []);
+            ownerProfile = Array.isArray(profileRows) ? profileRows[0] : null;
+          }
+        }
+        if (cancelled) return;
+        setEmpresaOwnerProfile(ownerProfile);
+
+        const masterMap = {};
+        for (const p of master || []) masterMap[p.id] = p;
+
+        let persisted = row;
+        if (!syncedPartesRef.current) {
+          syncedPartesRef.current = true;
+          persisted = await persistDcdtPartesFromStops({
+            dcdt: row,
+            servicio: servicioRef.current,
+            stops: stopRows,
+            flotaEvs: flotaEvsRef.current,
+            empresa: empresaRef.current,
+            conductor: conductorRef.current,
+            masterById: masterMap,
+          });
+        }
+        if (cancelled) return;
+
+        const resolvedPreview = resolveDcdtDocument({
+          servicio: servicioRef.current,
+          stops: stopRows,
+          dcdt: persisted,
+          masterById: masterMap,
+          empresa: empresaRef.current,
+          empresaOwnerProfile: ownerProfile,
+          conductor: conductorRef.current,
+        });
+        persisted = await reconcileDcdtEstadoIfNeeded({
+          dcdt: persisted,
+          missing: resolvedPreview.missing,
+          flotaEvs: flotaEvsRef.current,
+          datos: persisted?.datos,
+        });
+        if (cancelled) return;
+
+        setDcdt(persisted);
+        setPartes(master);
+        if (!mercanciaDirtyRef.current) {
+          setMercanciaEdit(hydrateMercanciaEdit(persisted?.datos?.mercancia, servicioRef.current));
+        }
+      } catch (e) {
+        if (!cancelled) showToastRef.current?.(e?.message || "No se pudo cargar DCDT");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [servicio?.id, empresaId]);
 
   const masterById = useMemo(() => {
     const m = {};
@@ -120,9 +337,10 @@ export function EmpresaDcdtModal({
       dcdt: { ...dcdt, datos: datosMerged },
       masterById,
       empresa,
-      conductor,
+      empresaOwnerProfile,
+      conductor: conductorEmpresa || conductor,
     });
-  }, [dcdt, servicio, stops, masterById, empresa, conductor, mercanciaEdit]);
+  }, [dcdt, servicio, stops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit]);
 
   const missingKeys = useMemo(() => new Set(missing.map((f) => f.key)), [missing]);
   const estadoAuto = useMemo(
@@ -136,10 +354,16 @@ export function EmpresaDcdtModal({
     [missing, flotaEvs, dcdt?.datos, dcdt?.estado],
   );
 
-  const estadoLabel = DCDT_ESTADO_LABELS[dcdt?.estado] || DCDT_ESTADO_LABELS[estadoAuto] || "Borrador";
-  const puedeValidar = missing.length === 0 && dcdt?.estado !== DCDT_ESTADO.VALIDADO;
-  const puedePdf =
-    dcdt?.estado === DCDT_ESTADO.VALIDADO || dcdt?.estado === DCDT_ESTADO.EN_EXPEDIENTE;
+  const statusLabel = dcdtStatusUxLabel({
+    estado: dcdt?.estado || estadoAuto,
+    missing,
+    pdfGeneradoAt: dcdt?.pdfGeneradoAt,
+  });
+  const puedeValidar =
+    missing.length === 0 && !isDcdtEstadoValidated(dcdt?.estado) && !isDcdtEstadoValidated(estadoAuto);
+  const puedePdf = isDcdtFullyValidated({ estado: dcdt?.estado, missing });
+  const puedeDescargarPdf = puedePdf && !!dcdt?.pdfGeneradoAt;
+  const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
 
   async function guardarMercancia() {
     if (!dcdt) return;
@@ -147,12 +371,7 @@ export function EmpresaDcdtModal({
     try {
       const nextDatos = {
         ...dcdt.datos,
-        mercancia: {
-          descripcion: mercanciaEdit.descripcion.trim() || null,
-          peso_kg: mercanciaEdit.peso_kg !== "" ? Number(mercanciaEdit.peso_kg) : null,
-          bultos: mercanciaEdit.bultos !== "" ? Number(mercanciaEdit.bultos) : null,
-          palets: mercanciaEdit.palets !== "" ? Number(mercanciaEdit.palets) : null,
-        },
+        mercancia: buildMercanciaDatosPatch(mercanciaEdit),
       };
       const estado = computeDcdtEstado({
         missing: resolveDcdtDocument({
@@ -161,7 +380,8 @@ export function EmpresaDcdtModal({
           dcdt: { ...dcdt, datos: nextDatos },
           masterById,
           empresa,
-          conductor,
+          empresaOwnerProfile,
+          conductor: conductorEmpresa || conductor,
         }).missing,
         evidenciasByStop: flotaEvs,
         datos: nextDatos,
@@ -169,6 +389,8 @@ export function EmpresaDcdtModal({
       });
       const next = await saveDcdtDatos(dcdt.id, nextDatos, estado);
       setDcdt(next);
+      setMercanciaEdit(mercanciaEditFromDatos(next?.datos?.mercancia));
+      mercanciaDirtyRef.current = false;
       showToast?.("Mercancía guardada");
     } catch (e) {
       showToast?.(e?.message || "Error al guardar");
@@ -193,6 +415,7 @@ export function EmpresaDcdtModal({
         dcdt: { ...dcdt, datos: nextDatos },
         masterById,
         empresa,
+        empresaOwnerProfile,
         conductor,
       });
       const estado = computeDcdtEstado({
@@ -204,12 +427,8 @@ export function EmpresaDcdtModal({
       const next = await saveDcdtDatos(dcdt.id, nextDatos, estado);
       setDcdt(next);
       const m = next.datos?.mercancia || {};
-      setMercanciaEdit({
-        descripcion: m.descripcion || "",
-        peso_kg: m.peso_kg != null ? String(m.peso_kg) : "",
-        bultos: m.bultos != null ? String(m.bultos) : "",
-        palets: m.palets != null ? String(m.palets) : "",
-      });
+      mercanciaDirtyRef.current = false;
+      setMercanciaEdit(mercanciaEditFromDatos(m));
       showToast?.("Datos completados desde OCR");
     } catch (e) {
       showToast?.(e?.message || "Error OCR");
@@ -225,7 +444,7 @@ export function EmpresaDcdtModal({
     }
     setBusy("validar");
     try {
-      const next = await validarDcdtTrafico(dcdt.id, userId);
+      const next = await validarDcdtTrafico(dcdt.id, userId, { doc, servicio, conductor: conductorEmpresa || conductor, missing });
       setDcdt(next);
       showToast?.("DCDT validado");
     } catch (e) {
@@ -237,19 +456,37 @@ export function EmpresaDcdtModal({
 
   async function generarPdf() {
     if (!dcdt || !doc || !puedePdf) {
-      showToast?.("Valida el DCDT antes de generar PDF");
+      showToast?.("Valida el DCDT y completa los datos obligatorios antes de generar PDF");
       return;
     }
     setBusy("pdf");
     try {
-      await downloadDcdtPdf(doc, `dcdt-${servicio.referencia || servicio.id}.pdf`);
-      await markDcdtPdfGenerado(dcdt.id);
-      showToast?.("PDF DCDT generado");
+      const { dcdt: next } = await generateAndPersistDcdtPdf({
+        servicio,
+        dcdt,
+        doc,
+        userId,
+        downloadAfter: true,
+      });
+      setDcdt(next);
+      showToast?.("PDF DCDT generado y guardado en documentos del servicio");
     } catch (e) {
       showToast?.(e?.message || "Error al generar PDF");
     } finally {
       setBusy("");
     }
+  }
+
+  async function descargarPdfGuardado() {
+    if (!dcdt || !puedeDescargarPdf) {
+      showToast?.("Genera el PDF DCDT antes de descargarlo");
+      return;
+    }
+    if (openDcdtStoredPdf(dcdt)) {
+      showToast?.("Abriendo PDF DCDT");
+      return;
+    }
+    showToast?.("No se encontró el PDF guardado");
   }
 
   return (
@@ -261,7 +498,7 @@ export function EmpresaDcdtModal({
             Documento de Control del Transporte · Orden FOM/2861/2012
           </div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4 }}>
-            {servicio?.referencia || servicio?.id} · {estadoLabel}
+            {serviceLabel} · {statusLabel}
           </div>
         </div>
 
@@ -277,25 +514,77 @@ export function EmpresaDcdtModal({
                 </div>
               ) : (
                 <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, fontWeight: 700, color: UI.green }}>
-                  Datos completos — listo para validación
+                  {isDcdtEstadoValidated(dcdt?.estado)
+                    ? dcdt?.pdfGeneradoAt
+                      ? "DCDT validado · PDF generado"
+                      : "DCDT validado"
+                    : "DCDT completo — listo para validar"}
                 </div>
               )}
 
               <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 6 }}>DATOS ENCONTRADOS</div>
-              <FieldRow label="Cargador" value={parteLine(doc?.cargador)} missing={missingKeys.has("cargador.nombre")} />
-              <FieldRow label="Transportista" value={parteLine(doc?.transportista)} missing={missingKeys.has("transportista.nombre")} />
-              <FieldRow label="Destinatario" value={parteLine(doc?.destinatario)} />
+              {renderParteBlock(
+                "cargador",
+                "Cargador",
+                parteLine(doc?.cargador),
+                missingKeys.has("cargador.nombre") || missingKeys.has("cargador.nif") || missingKeys.has("cargador.domicilio"),
+              )}
+              <FieldRow
+                label="Transportista"
+                value={parteLine(doc?.transportista)}
+                missing={
+                  missingKeys.has("transportista.nombre") ||
+                  missingKeys.has("transportista.nif") ||
+                  missingKeys.has("transportista.domicilio")
+                }
+              />
+              {renderParteBlock(
+                "destinatario",
+                "Destinatario",
+                parteLine(doc?.destinatario),
+                !doc?.destinatario?.nombre,
+              )}
               <FieldRow label="Origen" value={doc?.origen} missing={missingKeys.has("origen")} />
               <FieldRow label="Destino" value={doc?.destino} missing={missingKeys.has("destino")} />
               <FieldRow label="Matrícula" value={doc?.vehiculo?.matricula} missing={missingKeys.has("vehiculo.matricula")} />
               <FieldRow label="Fecha" value={doc?.fecha_transporte ? new Date(doc.fecha_transporte).toLocaleDateString("es-ES") : ""} missing={missingKeys.has("fecha_transporte")} />
 
               <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, margin: "14px 0 6px" }}>MERCANCÍA (tráfico / OCR)</div>
-              <input value={mercanciaEdit.descripcion} onChange={(e) => setMercanciaEdit((p) => ({ ...p, descripcion: e.target.value }))} placeholder="Naturaleza" style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }} />
+              <div style={MERC_LBL}>Naturaleza de la mercancía</div>
+              <input
+                value={mercanciaEdit.descripcion}
+                onChange={(e) => setMercanciaField("descripcion", e.target.value)}
+                placeholder="Ej. Sandía, patatas, palets hortícola…"
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }}
+              />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-                <input value={mercanciaEdit.peso_kg} onChange={(e) => setMercanciaEdit((p) => ({ ...p, peso_kg: e.target.value }))} placeholder="Peso kg" style={{ padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}` }} />
-                <input value={mercanciaEdit.bultos} onChange={(e) => setMercanciaEdit((p) => ({ ...p, bultos: e.target.value }))} placeholder="Bultos" style={{ padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}` }} />
-                <input value={mercanciaEdit.palets} onChange={(e) => setMercanciaEdit((p) => ({ ...p, palets: e.target.value }))} placeholder="Palets" style={{ padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}` }} />
+                <div>
+                  <div style={MERC_LBL}>Peso (kg)</div>
+                  <input
+                    value={mercanciaEdit.peso_kg}
+                    onChange={(e) => setMercanciaField("peso_kg", e.target.value)}
+                    placeholder="Ej. 2000"
+                    style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <div style={MERC_LBL}>Bultos</div>
+                  <input
+                    value={mercanciaEdit.bultos}
+                    onChange={(e) => setMercanciaField("bultos", e.target.value)}
+                    placeholder="Ej. 12"
+                    style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <div style={MERC_LBL}>Palets</div>
+                  <input
+                    value={mercanciaEdit.palets}
+                    onChange={(e) => setMercanciaField("palets", e.target.value)}
+                    placeholder="Ej. 23"
+                    style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                  />
+                </div>
               </div>
               <button type="button" disabled={busy === "save"} onClick={guardarMercancia} style={{ fontSize: 11, fontWeight: 700, marginBottom: 12, cursor: "pointer" }}>
                 Guardar mercancía
@@ -311,8 +600,11 @@ export function EmpresaDcdtModal({
           <button type="button" disabled={!!busy || loading || !puedeValidar} onClick={validarDcdt} style={btn(UI.green, "#fff")}>
             Validar DCDT
           </button>
-          <button type="button" disabled={!!busy || loading || !puedePdf} onClick={generarPdf} style={btn("#0f172a", "#fff")}>
+          <button type="button" disabled={!!busy || loading || !puedePdf} onClick={generarPdf} style={btn("#166534", "#fff")}>
             Generar PDF DCDT
+          </button>
+          <button type="button" disabled={!!busy || loading || !puedeDescargarPdf} onClick={descargarPdfGuardado} style={btn(UI.accent, "#fff")}>
+            Descargar PDF DCDT
           </button>
           <button type="button" onClick={onClose} style={{ ...btn("#fff", UI.tx), marginLeft: "auto" }}>
             Cerrar

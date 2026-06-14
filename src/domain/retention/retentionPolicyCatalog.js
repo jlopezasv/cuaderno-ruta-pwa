@@ -54,6 +54,14 @@ export const RETENTION_ASSET_CATALOG = Object.freeze([
     notes: "Expediente ampliado no ligado a parada.",
   },
   {
+    asset_class: "dcdt_pdf",
+    label: "PDF DCDT (documento legal)",
+    tier: RETENTION_TIER.RETENIDO,
+    includes: "servicio_documentos_extra.tipo=dcdt + storage",
+    storage: true,
+    notes: "Conservación mínima 365 días; no purgar antes de retention_until.",
+  },
+  {
     asset_class: "servicio_documentos_empresa",
     label: "Documentos empresa del servicio",
     tier: RETENTION_TIER.ARCHIVABLE,

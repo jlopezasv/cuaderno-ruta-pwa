@@ -1,7 +1,7 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { uploadBlobToStorage } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../documents/mediaStorageV2.js";
-import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
+import { tryDriverGeoSnapshot, geoPayloadFromLocationResult } from "../../data/driverActionGps.js";
 import { geoFromGpsPoint } from "./operationalGeo.js";
 import { SERVICIO_ESTADO_COMPLETADO } from "../fleet/serviceStatus.js";
 import {
@@ -36,6 +36,7 @@ export async function cerrarExpedienteServicio({
   firmaCanvas,
   conductorId = null,
   conductorNombre = null,
+  prefetchedGps = null,
 }) {
   if (!servicio?.id) throw new Error("Servicio no válido");
   if (!firmaCanvas) throw new Error("Añade tu firma antes de cerrar");
@@ -57,11 +58,18 @@ export async function cerrarExpedienteServicio({
   }
 
   let geo = null;
-  try {
-    const point = await tryDriverGeoSnapshot({ timeoutMs: 10000 });
-    geo = geoFromGpsPoint(point);
-  } catch {
-    geo = null;
+  if (prefetchedGps != null) {
+    geo = geoPayloadFromLocationResult(prefetchedGps);
+  } else {
+    try {
+      const point = await tryDriverGeoSnapshot({ timeoutMs: 10000 });
+      geo = geoFromGpsPoint(point, { recordUnavailable: !point });
+      if (!geo && point === null) {
+        geo = geoPayloadFromLocationResult({ ok: false, location_status: "unavailable" });
+      }
+    } catch {
+      geo = geoPayloadFromLocationResult({ ok: false, location_status: "unavailable" });
+    }
   }
 
   const closedAt = new Date().toISOString();

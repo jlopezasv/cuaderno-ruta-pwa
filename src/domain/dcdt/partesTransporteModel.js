@@ -1,5 +1,52 @@
 import { sbFetch } from "../../data/supabaseClient.js";
+import { parseSupabaseErrorBody } from "../documents/extraDocumentUploadLog.js";
 import { PARTE_TIPO } from "./dcdtConstants.js";
+
+const LOG_PREFIX = "[DCDT parte]";
+
+export class ParteTransporteCreateError extends Error {
+  constructor(message, { status, supabase, request } = {}) {
+    super(message);
+    this.name = "ParteTransporteCreateError";
+    this.status = status ?? null;
+    this.supabase = supabase ?? null;
+    this.request = request ?? null;
+  }
+}
+
+async function readSupabaseHttpError(response) {
+  const raw = await response.text().catch(() => "");
+  return { ...parseSupabaseErrorBody(raw), status: response.status, raw };
+}
+
+function formatParteInsertTechnicalError({ status, supabase, request }) {
+  const parts = [
+    `HTTP ${status}`,
+    supabase?.code ? `code=${supabase.code}` : null,
+    supabase?.message || null,
+    supabase?.details ? `details=${supabase.details}` : null,
+    supabase?.hint ? `hint=${supabase.hint}` : null,
+  ].filter(Boolean);
+
+  const rlsHit =
+    status === 403 ||
+    supabase?.code === "42501" ||
+    /row-level security|permission denied/i.test(String(supabase?.message || ""));
+  if (rlsHit) {
+    parts.push(
+      "RLS mpt_ins: requiere user_can_manage_dcdt_trafico (owner, jefe_flota o trafico activo en empresa_usuarios)",
+    );
+  }
+
+  if (request?.empresa_id) {
+    parts.push(`empresa_id=${request.empresa_id}`);
+  }
+  if (request?.tipo) {
+    parts.push(`tipo=${request.tipo}`);
+  }
+
+  return parts.join(" · ");
+}
 
 const COLS =
   "id,empresa_id,tipo,nombre,nif,domicilio_fiscal,direccion_operativa,ciudad,codigo_postal,pais,contacto_nombre,contacto_email,contacto_telefono,activo,updated_at";
@@ -67,21 +114,117 @@ export async function fetchPartesTransporte(empresaId, { tipo = null, activoOnly
 }
 
 export async function createParteTransporteRapido({ empresaId, tipo, nombre, direccion, nif = null, ciudad = null }) {
+  return createParteTransporte({
+    empresaId,
+    tipo,
+    nombre,
+    nif,
+    direccionOperativa: direccion,
+    ciudad,
+  });
+}
+
+export async function createParteTransporte({
+  empresaId,
+  tipo,
+  nombre,
+  nif = null,
+  domicilioFiscal = null,
+  direccionOperativa = null,
+  ciudad = null,
+  codigoPostal = null,
+  pais = null,
+  contactoNombre = null,
+  contactoEmail = null,
+  contactoTelefono = null,
+}) {
+  if (!empresaId) {
+    throw new ParteTransporteCreateError("empresa_id vacío — no se puede insertar en master_partes_transporte", {
+      status: 0,
+      request: { empresa_id: null, tipo, nombre },
+    });
+  }
+
   const body = parteToDb({
     empresaId,
     tipo: tipo || PARTE_TIPO.OPERADOR,
     nombre,
     nif,
-    direccionOperativa: direccion,
+    domicilioFiscal,
+    direccionOperativa,
     ciudad,
+    codigoPostal,
+    pais,
+    contactoNombre,
+    contactoEmail,
+    contactoTelefono,
     activo: true,
   });
+
+  return postParteTransporte(body);
+}
+
+export async function updateParteTransporte(id, patch) {
+  if (!id) throw new ParteTransporteCreateError("id de parte vacío", { status: 0 });
+  const body = parteToDb({
+    empresaId: patch.empresaId,
+    tipo: patch.tipo,
+    nombre: patch.nombre,
+    nif: patch.nif,
+    domicilioFiscal: patch.domicilioFiscal,
+    direccionOperativa: patch.direccionOperativa,
+    ciudad: patch.ciudad,
+    codigoPostal: patch.codigoPostal,
+    pais: patch.pais,
+    contactoNombre: patch.contactoNombre,
+    contactoEmail: patch.contactoEmail,
+    contactoTelefono: patch.contactoTelefono,
+    activo: patch.activo !== false,
+  });
+  delete body.empresa_id;
+
+  const r = await sbFetch(`/rest/v1/master_partes_transporte?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(body),
+  });
+
+  if (!r.ok) {
+    const supabase = await readSupabaseHttpError(r);
+    const technical = formatParteInsertTechnicalError({ status: r.status, supabase, request: { id, ...body } });
+    console.error(`${LOG_PREFIX} UPDATE master_partes_transporte falló`, { id, body, supabase });
+    throw new ParteTransporteCreateError(technical, { status: r.status, supabase, request: body });
+  }
+
+  const rows = await r.json();
+  return rowToParte(Array.isArray(rows) ? rows[0] : null);
+}
+
+async function postParteTransporte(body) {
   const r = await sbFetch("/rest/v1/master_partes_transporte", {
     method: "POST",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error("No se pudo crear la parte");
+
+  if (!r.ok) {
+    const supabase = await readSupabaseHttpError(r);
+    const technical = formatParteInsertTechnicalError({ status: r.status, supabase, request: body });
+    console.error(`${LOG_PREFIX} INSERT master_partes_transporte falló`, {
+      status: r.status,
+      request: {
+        empresa_id: body.empresa_id,
+        tipo: body.tipo,
+        nombre: body.nombre,
+        direccion_operativa: body.direccion_operativa,
+        nif: body.nif,
+        ciudad: body.ciudad,
+      },
+      supabase,
+    });
+    throw new ParteTransporteCreateError(technical, { status: r.status, supabase, request: body });
+  }
+
   const rows = await r.json();
   return rowToParte(Array.isArray(rows) ? rows[0] : null);
 }
