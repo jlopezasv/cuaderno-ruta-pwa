@@ -85,6 +85,7 @@ function EmpresaFlotaServicioCardImpl({
   onAnular,
   onAsignarConductor,
   onEditarServicio,
+  onDcdt,
   asignadosCount = 0,
   asignadosNombresStr = "",
   empresaNombre = "Empresa",
@@ -998,6 +999,30 @@ function EmpresaFlotaServicioCardImpl({
                 }}
               >
                 Editar servicio
+              </button>
+            ) : null}
+
+            {onDcdt ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDcdt();
+                }}
+                style={{
+                  width: "100%",
+                  marginTop: 8,
+                  background: UI.accentSoft,
+                  color: UI.accent,
+                  border: "1px solid #bfdbfe",
+                  borderRadius: 9,
+                  padding: "10px 10px",
+                  fontSize: 12.5,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                DCDT
               </button>
             ) : null}
 

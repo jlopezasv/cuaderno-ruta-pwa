@@ -169,6 +169,7 @@ export function buildOperationalLiteModel({
   extraDocumentos = [],
   incidenciasExpediente = null,
   nombreConductor,
+  dcdt = null,
 }) {
   if (!servicio?.id) return null;
 
@@ -306,5 +307,12 @@ export function buildOperationalLiteModel({
   };
 
   model.evidenciasAnnexo = collectLiteAnnexItems(model);
+  if (dcdt) {
+    model.dcdt = {
+      titulo: "Documento de Control del Transporte",
+      subtitulo: "DCDT — Orden FOM/2861/2012",
+      ...dcdt,
+    };
+  }
   return model;
 }

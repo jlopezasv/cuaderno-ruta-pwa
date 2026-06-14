@@ -6,6 +6,7 @@ import {
 } from "../../../domain/geo/postalCodeLookup.js";
 import { stopGeoToPlace, stopMissingPostalWarning } from "../../../domain/geo/stopGeoModel.js";
 import { geocodeQueryFromPlace } from "../../../domain/service/serviceOperationalPlaces.js";
+import { ParteTransporteStopField } from "../../dcdt/ParteTransporteStopField.jsx";
 
 const THEMES = {
   empresa: {
@@ -84,6 +85,7 @@ export function StopGeoFieldsForm({
   compact = false,
   layout = "default",
   showGeoStatus = true,
+  empresaId = null,
 }) {
   const theme = THEMES[themeKey] || THEMES.empresa;
   const isGrid = layout === "servicio-grid";
@@ -258,6 +260,16 @@ export function StopGeoFieldsForm({
           />
         </div>
         {geoStatusLine}
+        {empresaId ? (
+          <ParteTransporteStopField
+            stop={stop}
+            index={index}
+            onChange={onChange}
+            empresaId={empresaId}
+            themeKey={themeKey}
+            compact={compact}
+          />
+        ) : null}
       </div>
     );
   }
@@ -335,6 +347,16 @@ export function StopGeoFieldsForm({
         style={{ ...inp, marginBottom: showGeoStatus ? 4 : 0 }}
       />
       {geoStatusLine}
+      {empresaId ? (
+        <ParteTransporteStopField
+          stop={stop}
+          index={index}
+          onChange={onChange}
+          empresaId={empresaId}
+          themeKey={themeKey}
+          compact={compact}
+        />
+      ) : null}
     </div>
   );
 }

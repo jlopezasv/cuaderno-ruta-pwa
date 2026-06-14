@@ -18,6 +18,8 @@ export function emptyStopGeoForm(overrides = {}) {
     notas: "",
     lat: null,
     lon: null,
+    parte_transporte_id: null,
+    parte_transporte_tipo: null,
     ...overrides,
   };
 }
@@ -42,6 +44,8 @@ export function stopRowToGeoForm(row) {
     notas: detalles,
     lat: lat == null || lat === "" ? null : Number(lat),
     lon: lon == null || lon === "" ? null : Number(lon),
+    parte_transporte_id: meta.parte_transporte_id || null,
+    parte_transporte_tipo: meta.parte_transporte_tipo || null,
   };
 }
 
@@ -68,6 +72,8 @@ export function prepareStopRowForPersist(stop) {
     empresa_logistica: String(stop.empresa || "").trim() || null,
     geo_lat: stop.lat != null && stop.lat !== "" ? Number(stop.lat) : null,
     geo_lon: stop.lon != null && stop.lon !== "" ? Number(stop.lon) : null,
+    parte_transporte_id: stop.parte_transporte_id || null,
+    parte_transporte_tipo: stop.parte_transporte_tipo || null,
   };
   const notas = mergeStopOperacionMeta(detalles, metaPatch);
   return {

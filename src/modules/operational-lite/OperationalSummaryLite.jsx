@@ -160,6 +160,27 @@ export function OperationalSummaryLite({
         >
           <LiteHeader doc={doc} compact={compact} />
 
+          {doc.dcdt ? (
+            <div style={{ padding: "14px 16px", borderBottom: `1px solid ${LITE_THEME.line}`, background: "#f0f9ff" }}>
+              <SectionTitle>DCDT — Documento de Control del Transporte</SectionTitle>
+              <div style={{ fontSize: 12, color: LITE_THEME.su, marginBottom: 10 }}>Orden FOM/2861/2012</div>
+              {[
+                ["Cargador", doc.dcdt.cargador?.nombre],
+                ["Transportista", doc.dcdt.transportista?.nombre],
+                ["Origen", doc.dcdt.origen],
+                ["Destino", doc.dcdt.destino],
+                ["Mercancía", doc.dcdt.mercancia?.descripcion],
+                ["Peso (kg)", doc.dcdt.mercancia?.peso_kg],
+                ["Matrícula", doc.dcdt.vehiculo?.matricula],
+              ].map(([k, v]) => (
+                <div key={k} style={{ fontSize: 13, marginBottom: 4 }}>
+                  <span style={{ fontWeight: 700, color: LITE_THEME.su }}>{k}: </span>
+                  <span style={{ color: LITE_THEME.tx }}>{v ?? "—"}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div
             className="no-print lite-actions"
             style={{

@@ -519,6 +519,7 @@ export function EmpresaEditarServicioModal({
                         themeKey="empresa"
                         compact
                         showGeoStatus={false}
+                        empresaId={servicio?.empresa_id}
                       />
                     </div>
                   ))}

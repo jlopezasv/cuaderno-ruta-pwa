@@ -19,6 +19,7 @@
     "deploy:demo:office-planned-insert": "node scripts/apply-demo-office-planned-insert-definitive.mjs",
     "deploy:demo:empresa-codigo": "node scripts/apply-demo-empresa-codigo-fix.mjs",
     "deploy:demo:agenda-comercial": "node scripts/apply-agenda-comercial-demo.mjs",
+    "deploy:demo:dcdt": "node scripts/apply-demo-dcdt.mjs",
     "deploy:prod:admin-agenda": "node scripts/apply-admin-agenda-comercial-prod.mjs",
     "deploy:demo:align-structure": "node scripts/apply-demo-align-structure.mjs",
     "deploy:demo:archivo-limpieza": "node scripts/deploy-demo-archivo-limpieza.mjs",

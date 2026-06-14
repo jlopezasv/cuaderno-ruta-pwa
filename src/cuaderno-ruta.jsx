@@ -215,6 +215,8 @@ import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expe
 import { geoFromGpsPoint, resolveEventGeoFromOp } from "./domain/service/operationalGeo.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
+import { ParteTransporteStopField } from "./features/dcdt/ParteTransporteStopField.jsx";
+import { EmpresaDcdtModal } from "./features/dcdt/EmpresaDcdtModal.jsx";
 import {
   defaultStopCountry,
   EU_COUNTRY_OPTIONS,
@@ -831,7 +833,7 @@ const GROUPS=[
 ];
 
 const TMPLS=[
-  {id:"cmr",       icon:"📄",label:"CMR — Carta de Porte",color:"#0EA5E9",fields:[
+  {id:"cmr",       icon:"📄",label:"CMR / Albarán",color:"#0EA5E9",fields:[
     {key:"num_cmr",        label:"Nº CMR",              type:"text", required:true},
     {key:"lugar_fecha",    label:"Lugar y fecha",        type:"text", placeholder:"Madrid, 24/04/2026"},
     {key:"remitente",      label:"Remitente",            type:"textarea",required:true,placeholder:"Nombre, dirección..."},
@@ -1190,7 +1192,7 @@ function exportCMRPDF(fields,prof){
   const w=window.open("","_blank","width=900,height=700");
   if(!w){alert("Activa ventanas emergentes");return;}
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
-  <title>CMR - Carta de Porte</title>
+  <title>CMR / Albarán</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     body{font-family:Arial,sans-serif;font-size:11px;padding:10px;}
@@ -12357,7 +12359,7 @@ function formatNuevoServicioStopSummary(stop){
 }
 
 /** Campos de parada — solo modal Nuevo servicio (AsignarServicioModal). */
-function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,warn}){
+function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,warn,empresaId=null}){
   const[lookupStatus,setLookupStatus]=useState("idle");
   const[lookupHint,setLookupHint]=useState("");
   const lastLookupKey=useRef("");
@@ -12434,6 +12436,9 @@ function NuevoServicioParadaFields({stop,index,onChange,lbl,inp,su,tx,accent,war
         <div style={lbl}>Detalles</div>
         <input value={stop?.detalles??stop?.notas??""} onChange={e=>set("detalles",e.target.value)} placeholder="Puerta, horario, referencia muelle…" style={{...inp,marginBottom:0}}/>
       </div>
+      {empresaId?(
+        <ParteTransporteStopField stop={stop} index={index} onChange={onChange} empresaId={empresaId} themeKey="empresa" compact/>
+      ):null}
     </div>
   );
 }
@@ -12467,7 +12472,7 @@ function AsignarServicioModal({
   const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
   const inp={...iStyle,padding:"7px 9px",fontSize:13,marginBottom:0};
   const responsableFieldProps={officeUser,officeResponsables,value:responsableId,onChange:setResponsableId,lblStyle:lbl,fieldStyle:inp,surfaceSoft:bg,border:EMPRESA_UI.border};
-  const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309"};
+  const paradaFieldProps={lbl,inp,su,tx,accent:EMPRESA_UI.accent,warn:"#b45309",empresaId};
   const conductoresFlota=useMemo(
     ()=>(Array.isArray(conductores)?conductores:[]).filter((c)=>c?.user_id),
     [conductores],
@@ -13013,6 +13018,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[asignadosByServicioId,setAsignadosByServicioId]=useState({});
   const[asignadosTick,setAsignadosTick]=useState(0);
   const[editarServicioModal,setEditarServicioModal]=useState(null);
+  const[dcdtModal,setDcdtModal]=useState(null);
   const[officeResponsables,setOfficeResponsables]=useState([]);
   const officeUserPanel=getOfficeUserFromSession(getUserId?.());
   const[officeServiciosVista,setOfficeServiciosVista]=useState(()=>readStoredOfficeServiciosVista(getOfficeUserFromSession(getUserId?.())));
@@ -14361,6 +14367,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     if(sv)setEditarServicioModal(sv);
   },[officeUserPanel?.rol,showToast]);
 
+  const handleDcdtServicioId=useCallback((servicioId)=>{
+    const sv=flotaServiciosRef.current.find((s)=>s.id===servicioId);
+    if(sv)setDcdtModal(sv);
+  },[]);
+
   async function crearEmpresa(nombre,cif){
     const uid=getUserId();if(!uid)return;
     const codigo=buildEmpresaCodigoCortoSeed(nombre);
@@ -14928,6 +14939,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   onAnularServicioId={handleAnularServicioId}
                   onAsignarConductorServicioId={handleAsignarConductorServicioId}
                   onEditarServicioId={handleEditarServicioId}
+                  onDcdtServicioId={handleDcdtServicioId}
                   empresaNombre={empresa?.nombre || "Empresa"}
                   showToast={showToast}
                   fmtDur={fmtDur}
@@ -15545,6 +15557,24 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
           onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
+        />
+      )}
+
+      {dcdtModal&&(
+        <EmpresaDcdtModal
+          servicio={dcdtModal}
+          empresa={empresa}
+          conductor={conductores.find((c)=>c.user_id===dcdtModal.conductor_id)}
+          flotaEvs={(()=>{
+            const stops=flotaStops[dcdtModal.id]||[];
+            const o={};
+            for(const st of stops){if(flotaEvs[st.id])o[st.id]=flotaEvs[st.id];}
+            return o;
+          })()}
+          stops={flotaStops[dcdtModal.id]}
+          userId={getUserId?.()||null}
+          onClose={()=>setDcdtModal(null)}
+          showToast={showToast}
         />
       )}
 

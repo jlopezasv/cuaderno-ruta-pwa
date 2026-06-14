@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 /**
- * Aplica un archivo .sql contra Postgres (Supabase) vía psql.
+ * Aplica un archivo .sql contra Postgres (Supabase).
+ *
+ * 1. Si `psql` está en PATH, lo usa (comportamiento original).
+ * 2. Si no, usa el paquete `pg` de node_modules.
  *
  * Uso demo:
- *   set SUPABASE_DB_URL_DEMO=postgresql://postgres.[ref]:[pass]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
- *   node scripts/apply-sql-file.mjs scripts/sql-pr1-incidencias-demo-FINAL.sql
+ *   $env:SUPABASE_DB_URL_DEMO = "postgresql://postgres.[ref]:[pass]@..."
+ *   node scripts/apply-sql-file.mjs supabase/migrations/....sql
  */
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pg from "pg";
 
+const PROD_REF = "glyexutcypmhkndvmcxd";
 const file = process.argv[2];
 const dbUrl = process.env.SUPABASE_DB_URL_DEMO || process.env.SUPABASE_DB_URL;
 
@@ -17,19 +23,70 @@ if (!file) {
   process.exit(1);
 }
 if (!dbUrl) {
-  console.error("Definir SUPABASE_DB_URL_DEMO o SUPABASE_DB_URL (connection string Postgres).");
+  console.error("Definir SUPABASE_DB_URL_DEMO (connection string Postgres del proyecto DEMO).");
+  process.exit(1);
+}
+if (dbUrl.includes(PROD_REF)) {
+  console.error(`ERROR: la URL apunta a PRODUCCIÓN (${PROD_REF}). Abortado.`);
   process.exit(1);
 }
 
 const abs = resolve(file);
-const r = spawnSync("psql", [dbUrl, "-v", "ON_ERROR_STOP=1", "-f", abs], {
-  stdio: "inherit",
-  env: process.env,
-});
 
-if (r.error) {
-  console.error("psql no disponible:", r.error.message);
-  console.error("Alternativa: pegar el SQL en Supabase Dashboard → SQL Editor (proyecto DEMO).");
+function psqlAvailable() {
+  const r = spawnSync("psql", ["--version"], { stdio: "pipe", env: process.env });
+  return !r.error && r.status === 0;
+}
+
+/** Líneas meta de psql (`\set`, `\i`, etc.) no son SQL válido para `pg`. */
+function stripPsqlDirectives(sql) {
+  return sql
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*\\/.test(line))
+    .join("\n");
+}
+
+function reportSqlError(filePath, err, extra) {
+  console.error("\n=== Error aplicando SQL ===");
+  console.error("Archivo SQL:", filePath);
+  if (extra) console.error(extra);
+  console.error("Error:", err?.message || String(err));
+  if (err?.detail) console.error("Detalle:", err.detail);
+  if (err?.hint) console.error("Hint:", err.hint);
+  if (err?.position) console.error("Posición:", err.position);
   process.exit(1);
 }
-process.exit(r.status ?? 1);
+
+async function runWithPg() {
+  const sql = stripPsqlDirectives(readFileSync(abs, "utf8"));
+  const client = new pg.Client({
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false },
+  });
+  try {
+    await client.connect();
+    await client.query(sql);
+    console.log("OK (pg):", abs);
+  } catch (err) {
+    reportSqlError(abs, err);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function runWithPsql() {
+  const r = spawnSync("psql", [dbUrl, "-v", "ON_ERROR_STOP=1", "-f", abs], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if ((r.status ?? 1) !== 0) {
+    reportSqlError(abs, new Error(`psql salió con código ${r.status ?? 1}`));
+  }
+}
+
+if (psqlAvailable()) {
+  runWithPsql();
+} else {
+  console.log("psql no disponible — usando paquete pg");
+  await runWithPg();
+}

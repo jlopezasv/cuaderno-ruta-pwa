@@ -41,6 +41,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   onAnularServicioId,
   onAsignarConductorServicioId,
   onEditarServicioId,
+  onDcdtServicioId,
   asignadosCount,
   asignadosNombresStr,
   empresaNombre,
@@ -61,6 +62,10 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   const onAsignarConductor = useCallback(
     () => onAsignarConductorServicioId?.(servicioId),
     [onAsignarConductorServicioId, servicioId],
+  );
+  const onDcdt = useCallback(
+    () => onDcdtServicioId?.(servicioId),
+    [onDcdtServicioId, servicioId],
   );
   const pendienteAsignacion = servicioPendienteAsignacion(servicio);
   const estadoLower = String(servicio?.estado || "").toLowerCase();
@@ -90,6 +95,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
       onAnular={onAnular}
       onAsignarConductor={puedeGestionarConductores ? onAsignarConductor : undefined}
       onEditarServicio={onEditarServicioId ? () => onEditarServicioId(servicioId) : undefined}
+      onDcdt={onDcdtServicioId ? onDcdt : undefined}
       asignadosCount={asignadosCount}
       asignadosNombresStr={asignadosNombresStr}
       empresaNombre={empresaNombre}
@@ -154,6 +160,7 @@ function EmpresaFlotaServiciosListImpl({
   onAnularServicioId,
   onAsignarConductorServicioId,
   onEditarServicioId,
+  onDcdtServicioId,
   empresaNombre = "Empresa",
   showToast,
   fmtDur,
@@ -218,6 +225,7 @@ function EmpresaFlotaServiciosListImpl({
             onAnularServicioId={onAnularServicioId}
             onAsignarConductorServicioId={onAsignarConductorServicioId}
             onEditarServicioId={onEditarServicioId}
+            onDcdtServicioId={onDcdtServicioId}
             empresaNombre={empresaNombre}
             showToast={showToast}
             fmtDur={fmtDur}

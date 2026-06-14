@@ -3,9 +3,16 @@ import { fetchServicioDocumentosExtra } from "../../domain/service/serviceExtraD
 import { fetchEvidenciasGroupedByStop } from "../../domain/service/serviceDocuments.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { buildOperationalLiteModel } from "./buildOperationalLiteModel.js";
+import {
+  fetchDcdtByServicio,
+  isDcdtValidadoParaExpediente,
+  markDcdtIncluidoExpediente,
+  resolveDcdtDocument,
+} from "../../domain/dcdt/dcdtModel.js";
+import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 
 /**
- * Carga stops, evidencias, incidencias y docs extra para un servicio (misma RLS que conductor).
+ * Carga stops, evidencias, incidencias, docs extra y DCDT validado para expediente.
  */
 export async function loadOperationalLiteData(servicio, { nombreConductor } = {}) {
   if (!servicio?.id) return null;
@@ -17,18 +24,54 @@ export async function loadOperationalLiteData(servicio, { nombreConductor } = {}
   const stopList = Array.isArray(stops) ? stops : [];
   const stopIds = stopList.map((s) => s.id).filter(Boolean);
 
-  const [evidenciasByStop, incidenciasExpediente, extraDocumentos] = await Promise.all([
-    stopIds.length ? fetchEvidenciasGroupedByStop(stopIds, sbFetch) : {},
-    fetchIncidenciasExpedientePayload(servicio.id),
-    fetchServicioDocumentosExtra(servicio.id),
-  ]);
+  const empresaPromise = servicio.empresa_id
+    ? sbFetch(
+        `/rest/v1/empresas?id=eq.${servicio.empresa_id}&select=nombre,cif,direccion&limit=1`,
+      ).then((r) => (r.ok ? r.json() : []))
+    : Promise.resolve([]);
 
-  return buildOperationalLiteModel({
+  const [evidenciasByStop, incidenciasExpediente, extraDocumentos, empresaRows, dcdtRow] =
+    await Promise.all([
+      stopIds.length ? fetchEvidenciasGroupedByStop(stopIds, sbFetch) : {},
+      fetchIncidenciasExpedientePayload(servicio.id),
+      fetchServicioDocumentosExtra(servicio.id),
+      empresaPromise,
+      fetchDcdtByServicio(servicio.id),
+    ]);
+
+  const empresa = Array.isArray(empresaRows) ? empresaRows[0] : null;
+  let dcdtBlock = null;
+  let dcdtRecord = null;
+
+  if (dcdtRow && isDcdtValidadoParaExpediente(dcdtRow)) {
+    const partes = servicio.empresa_id ? await fetchPartesTransporte(servicio.empresa_id) : [];
+    const masterById = {};
+    for (const p of partes) masterById[p.id] = p;
+    const { doc } = resolveDcdtDocument({
+      servicio,
+      stops: stopList,
+      dcdt: dcdtRow,
+      masterById,
+      empresa,
+      conductor: null,
+    });
+    dcdtBlock = doc;
+    dcdtRecord = dcdtRow;
+  }
+
+  const model = buildOperationalLiteModel({
     servicio,
     stops: stopList,
     evidenciasByStop,
     extraDocumentos: Array.isArray(extraDocumentos) ? extraDocumentos : [],
     incidenciasExpediente,
     nombreConductor,
+    dcdt: dcdtBlock,
   });
+
+  if (dcdtRecord?.id && dcdtRecord.estado === "validado") {
+    void markDcdtIncluidoExpediente(dcdtRecord.id).catch(() => {});
+  }
+
+  return model;
 }

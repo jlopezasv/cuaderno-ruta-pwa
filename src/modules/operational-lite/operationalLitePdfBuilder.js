@@ -252,6 +252,30 @@ export async function buildOperationalLitePdfBlob(doc) {
     y -= 14;
   };
 
+  // —— DCDT (primera sección si validado) ——
+  if (doc.dcdt) {
+    section("Documento de Control del Transporte", "DCDT — Orden FOM/2861/2012");
+    const d = doc.dcdt;
+    kv("Cargador contractual", d.cargador?.nombre);
+    if (d.cargador?.nif) kv("NIF cargador", d.cargador.nif);
+    if (d.cargador?.domicilio) kv("Domicilio cargador", d.cargador.domicilio);
+    kv("Transportista efectivo", d.transportista?.nombre);
+    if (d.transportista?.nif) kv("NIF transportista", d.transportista.nif);
+    if (d.transportista?.domicilio) kv("Domicilio transportista", d.transportista.domicilio);
+    kv("Origen / carga", d.origen);
+    kv("Destino / descarga", d.destino);
+    kv("Mercancia", d.mercancia?.descripcion);
+    kv("Peso (kg)", d.mercancia?.peso_kg != null ? String(d.mercancia.peso_kg) : "");
+    if (d.mercancia?.bultos != null) kv("Bultos", String(d.mercancia.bultos));
+    kv("Fecha transporte", d.fecha_transporte ? new Date(d.fecha_transporte).toLocaleDateString("es-ES") : "");
+    kv("Matricula", d.vehiculo?.matricula);
+    if (d.observaciones) {
+      lines("Observaciones:", margin, 9, "#64748b", 90, 12);
+      lines(d.observaciones, margin, 10, "#334155", 88, 14);
+    }
+    y -= 12;
+  }
+
   // —— Portada operacional ——
   rect(0, pageHeight, pageWidth, 88, "#0c4a6e");
   text("EXPEDIENTE OPERACIONAL", margin, 808, 20, "#ffffff");

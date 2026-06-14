@@ -54,6 +54,9 @@ const META_SKIP_KEYS = new Set([
   "geo_lat",
   "geo_lon",
   "empresa_logistica",
+  "parte_transporte_id",
+  "parte_transporte_tipo",
+  "parte_transporte_overrides",
 ]);
 
 const META_LABELS = {
