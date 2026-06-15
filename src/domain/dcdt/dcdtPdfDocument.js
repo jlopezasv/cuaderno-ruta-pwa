@@ -73,7 +73,30 @@ async function patchExtraDocRow(id, body) {
 /** URL accesible (renueva firma si hay bucket/path). */
 export async function resolveDcdtPdfAccessUrl(dcdt) {
   const bucket = dcdt?.datos?.pdf_storage_bucket || USER_PHOTOS_BUCKET;
-  const path = dcdt?.datos?.pdf_storage_path;
+  let path = dcdt?.datos?.pdf_storage_path;
+
+  const extraId = dcdt?.datos?.pdf_documento_extra_id;
+  if (extraId) {
+    try {
+      const r = await sbFetch(
+        `/rest/v1/servicio_documentos_extra?id=eq.${extraId}&select=datos&limit=1`,
+      );
+      if (r.ok) {
+        const rows = await r.json().catch(() => []);
+        const extraDatos = Array.isArray(rows) ? rows[0]?.datos : null;
+        const extraPath = String(extraDatos?.path || extraDatos?.pdf_storage_path || "").trim();
+        const extraBucket = String(extraDatos?.bucket || extraDatos?.pdf_storage_bucket || "").trim();
+        if (extraPath) path = extraPath;
+        if (extraBucket) {
+          const signed = await signStorageObjectPath(extraBucket, path || extraPath);
+          return storageUploadUrl(signed);
+        }
+      }
+    } catch {
+      /* fallback a pdf_storage_path en dcdt */
+    }
+  }
+
   if (path) {
     const signed = await signStorageObjectPath(bucket, path);
     return storageUploadUrl(signed);

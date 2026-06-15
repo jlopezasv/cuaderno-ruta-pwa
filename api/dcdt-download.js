@@ -58,6 +58,55 @@ async function fetchDcdtByDecaPublicId(decaPublicId) {
   return null;
 }
 
+async function fetchRestRows(path) {
+  const { url } = getSupabaseServerEnv();
+  const r = await fetch(`${url}/rest/v1/${path}`, { headers: srJsonHeaders() });
+  if (!r.ok) return null;
+  const rows = await r.json();
+  return Array.isArray(rows) ? rows : null;
+}
+
+function storageFromExtraDatos(extraDatos) {
+  if (!extraDatos || typeof extraDatos !== "object") return null;
+  const path = String(extraDatos.path || extraDatos.pdf_storage_path || "").trim();
+  const bucket = String(extraDatos.bucket || extraDatos.pdf_storage_bucket || "").trim();
+  if (!path || !bucket) return null;
+  return {
+    bucket,
+    path,
+    sizeBytes: extraDatos.pdf_size_bytes ?? null,
+    pdfHasQr: extraDatos.pdf_has_qr === true,
+  };
+}
+
+/** Fuente canónica del PDF servido: documento extra (más reciente) → datos DCDT. */
+async function resolvePdfStorageLocation(row) {
+  const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
+  const extraId = datos.pdf_documento_extra_id;
+
+  if (extraId) {
+    const extraRows = await fetchRestRows(
+      `servicio_documentos_extra?id=eq.${encodeURIComponent(extraId)}&select=datos,size_bytes&limit=1`,
+    );
+    const hit = storageFromExtraDatos(extraRows?.[0]?.datos);
+    if (hit) return hit;
+  }
+
+  if (row.servicio_id) {
+    const latestRows = await fetchRestRows(
+      `servicio_documentos_extra?servicio_id=eq.${encodeURIComponent(row.servicio_id)}` +
+        `&tipo=eq.dcdt&select=datos,size_bytes&order=created_at.desc&limit=1`,
+    );
+    const hit = storageFromExtraDatos(latestRows?.[0]?.datos);
+    if (hit) return hit;
+  }
+
+  const path = String(datos.pdf_storage_path || "").trim();
+  const bucket = String(datos.pdf_storage_bucket || "").trim();
+  if (!path || !bucket) return null;
+  return { bucket, path, sizeBytes: datos.pdf_size_bytes ?? null, pdfHasQr: datos.pdf_has_qr === true };
+}
+
 async function fetchStoragePdf(bucket, objectPath) {
   const { url } = getSupabaseServerEnv();
   const encPath = encodeStorageObjectPath(objectPath);
@@ -95,11 +144,11 @@ export default async function handler(req, res) {
     if (!ESTADOS_DESCARGA.has(estado)) return notFound(res);
 
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
-    const storagePath = String(datos.pdf_storage_path || "").trim();
-    if (!storagePath) return notFound(res);
+    const storage = await resolvePdfStorageLocation(row);
+    if (!storage?.path || !storage?.bucket) return notFound(res);
 
-    const bucket = String(datos.pdf_storage_bucket || "").trim();
-    if (!bucket) return notFound(res);
+    const storagePath = storage.path;
+    const bucket = storage.bucket;
 
     // TODO (Paso 5): ventana pública DeCA — >7 días naturales tras fin efectivo del servicio → 404.
     // Punto de enganche: aquí, tras validar estado/path y antes de fetchStoragePdf.
