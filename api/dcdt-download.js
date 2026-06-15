@@ -29,7 +29,12 @@ function encodeStorageObjectPath(objectPath) {
     .join("/");
 }
 
-function notFound(res) {
+function notFound(res, reason = "") {
+  const isDemo = /^(demo|1|true)$/i.test(String(process.env.APP_ENV || process.env.VITE_APP_ENV || ""));
+  if (isDemo && reason) {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    return res.status(404).send(reason);
+  }
   return res.status(404).end();
 }
 
@@ -46,8 +51,13 @@ async function fetchDcdtByDecaPublicId(decaPublicId) {
   const { url } = getSupabaseServerEnv();
   const enc = encodeURIComponent(decaPublicId);
   const select = "id,servicio_id,estado,datos,validado_at";
+  const filters = [
+    `deca_public_id=eq.${enc}`,
+    `datos->>deca_public_id=eq.${enc}`,
+    `datos->>deca_download_url=ilike.*${enc}*`,
+  ];
   for (const table of DCDT_TABLES) {
-    for (const filter of [`deca_public_id=eq.${enc}`, `datos->>deca_public_id=eq.${enc}`]) {
+    for (const filter of filters) {
       const apiPath = `${url}/rest/v1/${table}?${filter}&select=${select}&limit=1`;
       const r = await fetch(apiPath, { headers: srJsonHeaders() });
       if (!r.ok) continue;
@@ -69,7 +79,9 @@ async function fetchRestRows(path) {
 function storageFromExtraDatos(extraDatos) {
   if (!extraDatos || typeof extraDatos !== "object") return null;
   const path = String(extraDatos.path || extraDatos.pdf_storage_path || "").trim();
-  const bucket = String(extraDatos.bucket || extraDatos.pdf_storage_bucket || "").trim();
+  const bucket = String(
+    extraDatos.bucket || extraDatos.pdf_storage_bucket || "user-photos",
+  ).trim();
   if (!path || !bucket) return null;
   return {
     bucket,
@@ -102,7 +114,7 @@ async function resolvePdfStorageLocation(row) {
   }
 
   const path = String(datos.pdf_storage_path || "").trim();
-  const bucket = String(datos.pdf_storage_bucket || "").trim();
+  const bucket = String(datos.pdf_storage_bucket || "user-photos").trim();
   if (!path || !bucket) return null;
   return { bucket, path, sizeBytes: datos.pdf_size_bytes ?? null, pdfHasQr: datos.pdf_has_qr === true };
 }
@@ -110,16 +122,22 @@ async function resolvePdfStorageLocation(row) {
 async function fetchStoragePdf(bucket, objectPath) {
   const { url } = getSupabaseServerEnv();
   const encPath = encodeStorageObjectPath(objectPath);
-  const storageUrl = `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${encPath}`;
-  const r = await fetch(storageUrl, { headers: srHeaders() });
-  if (!r.ok) return null;
-  const contentType = String(r.headers.get("content-type") || "").toLowerCase();
-  if (contentType && !contentType.includes("application/pdf") && !contentType.includes("octet-stream")) {
-    return null;
+  const encBucket = encodeURIComponent(bucket);
+  const candidates = [
+    `${url}/storage/v1/object/${encBucket}/${encPath}`,
+    `${url}/storage/v1/object/authenticated/${encBucket}/${encPath}`,
+  ];
+  for (const storageUrl of candidates) {
+    const r = await fetch(storageUrl, { headers: srHeaders() });
+    if (!r.ok) continue;
+    const contentType = String(r.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !contentType.includes("application/pdf") && !contentType.includes("octet-stream")) {
+      continue;
+    }
+    const buffer = Buffer.from(await r.arrayBuffer());
+    if (buffer.length) return buffer;
   }
-  const buffer = Buffer.from(await r.arrayBuffer());
-  if (!buffer.length) return null;
-  return buffer;
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -133,19 +151,28 @@ export default async function handler(req, res) {
 
   const decaPublicId = String(req.query?.id || "").trim();
   if (!decaPublicId || !UUID_RE.test(decaPublicId)) {
-    return notFound(res);
+    return notFound(res, "DeCA: id invalido (debe ser UUID). Copia la URL del modal «Mostrar QR DeCA».");
   }
 
   try {
     const row = await fetchDcdtByDecaPublicId(decaPublicId);
-    if (!row) return notFound(res);
+    if (!row) {
+      return notFound(
+        res,
+        "DeCA: no hay DCDT con ese id. Genera el PDF de nuevo y usa la URL exacta del QR.",
+      );
+    }
 
     const estado = String(row.estado || "").toLowerCase();
-    if (!ESTADOS_DESCARGA.has(estado)) return notFound(res);
+    if (!ESTADOS_DESCARGA.has(estado)) {
+      return notFound(res, `DeCA: DCDT en estado «${estado || "?"}». Debe estar validado.`);
+    }
 
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
     const storage = await resolvePdfStorageLocation(row);
-    if (!storage?.path || !storage?.bucket) return notFound(res);
+    if (!storage?.path || !storage?.bucket) {
+      return notFound(res, "DeCA: PDF no registrado en storage. Pulsa «Generar PDF DCDT» en el modal.");
+    }
 
     const storagePath = storage.path;
     const bucket = storage.bucket;
@@ -162,13 +189,13 @@ export default async function handler(req, res) {
 
     if (req.method === "HEAD") {
       const pdf = await fetchStoragePdf(bucket, storagePath);
-      if (!pdf) return notFound(res);
+      if (!pdf) return notFound(res, "DeCA: fichero PDF no encontrado en storage. Regenera el PDF.");
       res.setHeader("Content-Length", String(pdf.length));
       return res.status(200).end();
     }
 
     const pdf = await fetchStoragePdf(bucket, storagePath);
-    if (!pdf) return notFound(res);
+    if (!pdf) return notFound(res, "DeCA: fichero PDF no encontrado en storage. Regenera el PDF.");
     res.setHeader("Content-Length", String(pdf.length));
     return res.status(200).send(pdf);
   } catch (e) {

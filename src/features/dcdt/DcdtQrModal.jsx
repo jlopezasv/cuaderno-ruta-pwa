@@ -106,7 +106,13 @@ export function DcdtQrModal({
           <div style={{ padding: "40px 0", color: UI.su }}>Generando QR…</div>
         )}
         <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 12, wordBreak: "break-all" }}>
-          {downloadUrl || "URL no disponible"}
+          {downloadUrl ? (
+            <a href={downloadUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb" }}>
+              {downloadUrl}
+            </a>
+          ) : (
+            "URL no disponible"
+          )}
         </div>
         <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 16 }}>
           Escanee para descargar el documento DeCA (PDF). Sin login ni pagina intermedia.

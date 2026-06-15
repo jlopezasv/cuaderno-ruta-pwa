@@ -592,7 +592,11 @@ export async function ensureDecaPublicId(dcdt) {
   const r = await dcdtRequest(`?id=eq.${dcdt.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ deca_public_id: newId }),
+    body: JSON.stringify({
+      deca_public_id: newId,
+      datos: { ...(dcdt?.datos || emptyDatos()), deca_public_id: newId },
+      updated_at: new Date().toISOString(),
+    }),
   });
   const body = await r.text().catch(() => "");
   if (!r.ok) {
