@@ -1,5 +1,10 @@
 // api/dcdt-download.js — Descarga pública directa DeCA (PDF binario, sin auth)
 import { getSupabaseServiceRoleKey, getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
+import {
+  DECA_PUBLIC_DOWNLOAD_DAYS,
+  isDecaPublicDownloadExpired,
+  resolveServicioFinEfectivoAt,
+} from "../src/domain/dcdt/decaRetention.js";
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
 const ESTADOS_DESCARGA = new Set(["validado", "incluido_en_expediente"]);
@@ -119,6 +124,14 @@ async function resolvePdfStorageLocation(row) {
   return { bucket, path, sizeBytes: datos.pdf_size_bytes ?? null, pdfHasQr: datos.pdf_has_qr === true };
 }
 
+async function fetchServicioById(servicioId) {
+  if (!servicioId) return null;
+  const rows = await fetchRestRows(
+    `servicios?id=eq.${encodeURIComponent(servicioId)}&select=estado,referencia,updated_at&limit=1`,
+  );
+  return rows?.[0] ?? null;
+}
+
 async function fetchStoragePdf(bucket, objectPath) {
   const { url } = getSupabaseServerEnv();
   const encPath = encodeStorageObjectPath(objectPath);
@@ -177,10 +190,17 @@ export default async function handler(req, res) {
     const storagePath = storage.path;
     const bucket = storage.bucket;
 
-    // TODO (Paso 5): ventana pública DeCA — >7 días naturales tras fin efectivo del servicio → 404.
-    // Punto de enganche: aquí, tras validar estado/path y antes de fetchStoragePdf.
-    // Ej.: const finServicio = await fetchServicioFechaFin(row.servicio_id);
-    // if (isDecaPublicDownloadExpired(finServicio)) return notFound(res);
+    if (row.servicio_id) {
+      const servicio = await fetchServicioById(row.servicio_id);
+      const finEfectivo = resolveServicioFinEfectivoAt(servicio);
+      if (finEfectivo && isDecaPublicDownloadExpired(finEfectivo)) {
+        return notFound(
+          res,
+          `DeCA: ventana pública cerrada (>${DECA_PUBLIC_DOWNLOAD_DAYS} días naturales tras finalizar el servicio). ` +
+            "El PDF sigue conservado en el expediente; solicítelo a la empresa transportista.",
+        );
+      }
+    }
 
     const filename = resolvePdfFilename(datos, decaPublicId);
     res.setHeader("Content-Type", "application/pdf");

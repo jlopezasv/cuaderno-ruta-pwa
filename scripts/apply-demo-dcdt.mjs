@@ -18,6 +18,7 @@ const migrations = [
   resolve(root, "supabase/migrations/20260709120000_dcdt_master_partes.sql"),
   resolve(root, "supabase/migrations/20260710120000_dcdt_rename_from_carta_porte.sql"),
   resolve(root, "supabase/migrations/20260710130000_fix_dcdt_rls_function_volatility.sql"),
+  resolve(root, "supabase/migrations/20260712120000_dcdt_deca_public_id_demo.sql"),
 ];
 const verify = resolve(root, "scripts/verify-dcdt-demo.sql");
 

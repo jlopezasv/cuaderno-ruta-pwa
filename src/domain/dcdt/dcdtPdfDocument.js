@@ -13,13 +13,15 @@ import { buildDcdtPdfBlob } from "./dcdtPdfBuilder.js";
 import { ensureDecaPublicId, markDcdtPdfGenerado } from "./dcdtModel.js";
 import { buildDecaDownloadUrl, resolveDecaPublicDownloadUrl } from "./decaUrl.js";
 import { generateDecaQrPngBytes } from "./decaQrImage.js";
+import {
+  DCDT_MIN_RETENTION_DAYS,
+  DECA_PUBLIC_DOWNLOAD_DAYS,
+  retentionUntilIso,
+} from "./decaRetention.js";
 
 const TABLE = "servicio_documentos_extra";
-export const DCDT_RETENTION_DAYS = 365;
-
-function retentionUntilIso(from = new Date()) {
-  return new Date(from.getTime() + DCDT_RETENTION_DAYS * 86400000).toISOString();
-}
+/** @deprecated Usar DCDT_MIN_RETENTION_DAYS */
+export const DCDT_RETENTION_DAYS = DCDT_MIN_RETENTION_DAYS;
 
 function dcdtPdfDemoLog(phase, extra) {
   if (!isDemoApp()) return;
@@ -243,7 +245,8 @@ export async function generateAndPersistDcdtPdf({
     generado_por_nombre: userLabel ? String(userLabel).trim() : null,
     generado_en: generatedAt,
     retention_until: retentionUntil,
-    min_retention_days: DCDT_RETENTION_DAYS,
+    min_retention_days: DCDT_MIN_RETENTION_DAYS,
+    deca_public_download_days: DECA_PUBLIC_DOWNLOAD_DAYS,
     dcdt_version: dcdtVersion,
     uploaded_at: generatedAt,
     storage_ok: true,

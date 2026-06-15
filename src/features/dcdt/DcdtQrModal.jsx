@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { buildDecaDownloadUrl } from "../../domain/dcdt/decaUrl.js";
+import { DECA_PUBLIC_DOWNLOAD_DAYS, DCDT_MIN_RETENTION_DAYS } from "../../domain/dcdt/decaRetention.js";
 import { generateDecaQrDataUrl } from "../../domain/dcdt/decaQrImage.js";
 import { downloadDecaQrPng } from "../../domain/dcdt/dcdtPdfDocument.js";
 
@@ -116,6 +117,9 @@ export function DcdtQrModal({
         </div>
         <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 16 }}>
           Escanee para descargar el documento DeCA (PDF). Sin login ni pagina intermedia.
+          <br />
+          Descarga pública activa {DECA_PUBLIC_DOWNLOAD_DAYS} días naturales tras finalizar el servicio.
+          Conservación mínima del fichero: {DCDT_MIN_RETENTION_DAYS} días.
         </div>
         <button
           type="button"
