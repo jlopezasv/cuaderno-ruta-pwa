@@ -113,7 +113,8 @@ function requireStorageAuth() {
 export async function signStorageObjectPath(bucket, objectPath, expiresIn = SIGNED_URL_TTL_SEC) {
   const { token } = requireStorageAuth();
   guardDemoCannotUseProduction(SB_URL, `storage:sign:${bucket}`);
-  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${objectPath}`, {
+  const encPath = encodeStoragePathForUrl(objectPath);
+  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${encPath}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

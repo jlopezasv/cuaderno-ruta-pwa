@@ -71,3 +71,16 @@ export function buildDecaDownloadUrl(decaPublicId, options = {}) {
 
   return `${base}/api/dcdt-download?id=${encodeURIComponent(id)}`;
 }
+
+/** URL pública DeCA ya guardada o reconstruida desde dcdt (sin firmar storage). */
+export function resolveDecaPublicDownloadUrl(dcdt, { allowBrowserOriginFallback = true } = {}) {
+  const stored = String(dcdt?.datos?.deca_download_url || "").trim();
+  if (stored.startsWith("https://")) return stored;
+  const id = String(dcdt?.decaPublicId || dcdt?.datos?.deca_public_id || "").trim();
+  if (!id) return "";
+  try {
+    return buildDecaDownloadUrl(id, { allowBrowserOriginFallback });
+  } catch {
+    return "";
+  }
+}

@@ -11,7 +11,7 @@ import { parseSupabaseErrorBody } from "../documents/extraDocumentUploadLog.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { buildDcdtPdfBlob } from "./dcdtPdfBuilder.js";
 import { ensureDecaPublicId, markDcdtPdfGenerado } from "./dcdtModel.js";
-import { buildDecaDownloadUrl } from "./decaUrl.js";
+import { buildDecaDownloadUrl, resolveDecaPublicDownloadUrl } from "./decaUrl.js";
 import { generateDecaQrPngBytes } from "./decaQrImage.js";
 
 const TABLE = "servicio_documentos_extra";
@@ -70,10 +70,17 @@ async function patchExtraDocRow(id, body) {
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
-/** URL accesible (renueva firma si hay bucket/path). */
+async function trySignDcdtStorageUrl(bucket, path) {
+  if (!path) return null;
+  const signed = await signStorageObjectPath(bucket, path);
+  return storageUploadUrl(signed);
+}
+
+/** URL accesible: storage firmado (empresa) o descarga pública DeCA (conductor / inspección). */
 export async function resolveDcdtPdfAccessUrl(dcdt) {
   const bucket = dcdt?.datos?.pdf_storage_bucket || USER_PHOTOS_BUCKET;
   let path = dcdt?.datos?.pdf_storage_path;
+  let bucketUsed = bucket;
 
   const extraId = dcdt?.datos?.pdf_documento_extra_id;
   if (extraId) {
@@ -87,10 +94,7 @@ export async function resolveDcdtPdfAccessUrl(dcdt) {
         const extraPath = String(extraDatos?.path || extraDatos?.pdf_storage_path || "").trim();
         const extraBucket = String(extraDatos?.bucket || extraDatos?.pdf_storage_bucket || "").trim();
         if (extraPath) path = extraPath;
-        if (extraBucket) {
-          const signed = await signStorageObjectPath(extraBucket, path || extraPath);
-          return storageUploadUrl(signed);
-        }
+        if (extraBucket) bucketUsed = extraBucket;
       }
     } catch {
       /* fallback a pdf_storage_path en dcdt */
@@ -98,9 +102,17 @@ export async function resolveDcdtPdfAccessUrl(dcdt) {
   }
 
   if (path) {
-    const signed = await signStorageObjectPath(bucket, path);
-    return storageUploadUrl(signed);
+    try {
+      const signedUrl = await trySignDcdtStorageUrl(bucketUsed, path);
+      if (signedUrl) return signedUrl;
+    } catch (e) {
+      dcdtPdfDemoLog("storage_sign_fallback", e?.message || e);
+    }
   }
+
+  const publicUrl = resolveDecaPublicDownloadUrl(dcdt);
+  if (publicUrl) return publicUrl;
+
   const legacy = String(dcdt?.datos?.pdf_archivo_url || "").trim();
   return isHttpStorageUrl(legacy) ? legacy : null;
 }

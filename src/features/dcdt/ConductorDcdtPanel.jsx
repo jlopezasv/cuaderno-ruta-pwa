@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
-import { downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
+import { downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 import { DcdtReadonlyViewModal } from "./DcdtReadonlyViewModal.jsx";
@@ -165,18 +165,9 @@ export function ConductorDcdtPanel({
     }
     setBusy("pdf");
     try {
-      if (readiness.canDownloadPdf) {
-        const name = dcdt.datos?.pdf_archivo_nombre || `dcdt-${serviceLabel}.pdf`;
-        await downloadDcdtStoredPdf(dcdt, name);
-        showToast?.("PDF DCDT descargado");
-        return;
-      }
-      const opened = await openDcdtStoredPdf(dcdt);
-      if (opened) {
-        showToast?.("Abriendo PDF DCDT");
-        return;
-      }
-      showToast?.("Tráfico debe generar el PDF DCDT antes de descargarlo");
+      const name = dcdt.datos?.pdf_archivo_nombre || `dcdt-${serviceLabel}.pdf`;
+      await downloadDcdtStoredPdf(dcdt, name);
+      showToast?.("PDF DCDT descargado");
     } catch (e) {
       showToast?.(e?.message || "No se pudo obtener el PDF");
     } finally {
@@ -200,7 +191,7 @@ export function ConductorDcdtPanel({
     ? { border: "1px solid #bbf7d0", background: UI.greenSoft }
     : { border: `1px solid ${UI.amberBorder}`, background: UI.amberSoft };
 
-  const pdfBtnLabel = readiness.canDownloadPdf
+  const pdfBtnLabel = readiness.canDownloadPdf || decaDownloadUrl
     ? "Descargar PDF"
     : validated
       ? "Descargar PDF (pendiente de generar)"
@@ -236,7 +227,7 @@ export function ConductorDcdtPanel({
                 type="button"
                 style={docBtnStyle("default")}
                 onClick={descargarPdf}
-                disabled={!doc || busy === "pdf"}
+                disabled={!doc || busy === "pdf" || (!readiness.canDownloadPdf && !decaDownloadUrl)}
               >
                 {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
               </button>
