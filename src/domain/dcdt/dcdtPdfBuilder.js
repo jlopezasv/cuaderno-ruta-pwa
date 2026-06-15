@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "./decaBranding.js";
+import { DECA_FULL_NAME, DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "./decaBranding.js";
 
 /** Límite DeCA (Orden FOM/2861/2012 / requisito electrónico). */
 export const DECA_PDF_MAX_BYTES = 5 * 1024 * 1024;
@@ -165,10 +165,28 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
     drawLine(str, MARGIN, 12, "#0f172a", true);
   }
 
-  drawLine(DECA_FULL_TITLE, MARGIN, 16, "#0f172a", true);
-  drawLine(DECA_LEGAL_REF, MARGIN, 11, "#475569");
-  y -= 6;
-  drawLine(`Referencia servicio: ${doc.referencia || "—"}`, MARGIN, 10, "#64748b");
+  function drawHeaderLine(str, size, color, bold = false) {
+    ensure(size + 4);
+    const text = plain(str);
+    if (!text) {
+      y -= LINE_H;
+      return;
+    }
+    page.drawText(text, {
+      x: MARGIN,
+      y: y - size,
+      size,
+      font: bold ? fontBold : font,
+      color: hexRgb(color),
+    });
+    y -= Math.max(LINE_H, size + 2);
+  }
+
+  drawHeaderLine(DECA_SHORT_LABEL, 16, "#0f172a", true);
+  drawHeaderLine(DECA_FULL_NAME, 12, "#0f172a");
+  drawHeaderLine("Orden FOM/2861/2012 · Resolución de 5 de junio de 2026", 9, "#64748b");
+  y -= 4;
+  drawLine(`Referencia servicio: ${doc.referencia || "—"}`, MARGIN, 10, "#334155");
   y -= 10;
 
   drawSectionTitle("1. CARGADOR CONTRACTUAL");
