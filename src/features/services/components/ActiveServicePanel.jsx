@@ -33,12 +33,15 @@ import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
 import { ParticipacionTiemposPanel } from "./ParticipacionTiemposPanel.jsx";
 import { formatOperationalEtaLabel } from "../../../domain/service/etaFormatter.js";
 import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
-import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 import { logMuelleGps } from "../../../data/muelleGeoTrace.js";
-import { ServiceMessagesPanel } from "../../messages/ServiceMessagesPanel.jsx";
 import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
+import { DriverQuickActionsBar } from "./DriverQuickActionsBar.jsx";
+import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
+import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
+import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
+import { useServiceMessagesUnread } from "../hooks/useServiceMessagesUnread.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -1276,16 +1279,6 @@ function DriverClienteDocumentosSection({
           </div>
         ) : null}
         <div style={{ padding: "12px 16px", ...demoRowDivider() }}>
-          <ConductorDcdtPanel
-            servicio={servicio}
-            empresa={empresa}
-            conductorUid={conductorUid}
-            stops={stops}
-            showToast={showToast}
-            compact
-          />
-        </div>
-        <div style={{ padding: "12px 16px", ...demoRowDivider() }}>
           <ServiceExtraDocumentsBlock
             servicio={servicio}
             showToast={showToast}
@@ -1590,12 +1583,28 @@ export function ActiveServicePanel({
   const [cierreSaving, setCierreSaving] = useState(false);
   const [confirmFinalizar, setConfirmFinalizar] = useState(false);
   const [finalizarSaving, setFinalizarSaving] = useState(false);
+  const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
+  const [chatModalOpen, setChatModalOpen] = useState(false);
   const showCierreDocumental = useMemo(
     () => needsExpedienteClosure(servicio, stops) && typeof onCerrarExpediente === "function",
     [servicio, stops, onCerrarExpediente],
   );
   const timelineItems = useMemo(() => buildTimelineItems(stops), [stops]);
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
+  const empresaServicio = empresaById[servicio?.empresa_id] || null;
+  const showChatQuick = isServiceMessagesEnabled(servicio);
+  const showDcdtQuick = !!servicio?.empresa_id;
+  const dcdtQuick = useConductorDcdtQuickStatus({
+    servicio,
+    empresa: empresaServicio,
+    conductorUid,
+    stops: sortedStops,
+  });
+  const messagesUnread = useServiceMessagesUnread({
+    servicioId: servicio?.id,
+    userId: conductorUid,
+    enabled: showChatQuick,
+  });
   const expandedStopId = resolveExpandedStopId(sortedStops, servicio);
   const firstCargaStopId = useMemo(() => {
     let seen = 0;
@@ -1871,6 +1880,22 @@ export function ActiveServicePanel({
             </DriverDemoSection>
           ) : null}
 
+          {showDcdtQuick || showChatQuick ? (
+            <DriverDemoSection style={{ padding: "10px 16px 12px" }}>
+              <DriverQuickActionsBar
+                showDcdt={showDcdtQuick}
+                dcdtVisual={dcdtQuick.visual}
+                onDcdtClick={() => setDcdtModalOpen(true)}
+                showChat={showChatQuick}
+                unreadCount={messagesUnread.unread}
+                onChatClick={() => {
+                  setChatModalOpen(true);
+                  messagesUnread.markRead();
+                }}
+              />
+            </DriverDemoSection>
+          ) : null}
+
           <DriverDemoSection title="Recorrido" style={{ padding: 0 }}>
             <DriverRecorridoStops
               items={timelineItems}
@@ -1905,18 +1930,6 @@ export function ActiveServicePanel({
               </div>
             ) : null}
           </DriverDemoSection>
-
-          {isServiceMessagesEnabled(servicio) ? (
-            <DriverDemoSection title="Mensajes">
-              <ServiceMessagesPanel
-                servicio={servicio}
-                audience="conductor"
-                senderName={conductorNombre}
-                senderRole="conductor"
-                showToast={showToast}
-              />
-            </DriverDemoSection>
-          ) : null}
 
           <DriverDemoSection style={{ padding: 0 }}>
             <DriverClienteDocumentosSection
@@ -2037,6 +2050,29 @@ export function ActiveServicePanel({
         </div>
         {confirmMuelleDialog}
         {locationGateModal}
+        <DriverDcdtActionModal
+          open={dcdtModalOpen}
+          onClose={() => {
+            setDcdtModalOpen(false);
+            void dcdtQuick.reload();
+          }}
+          servicio={servicio}
+          empresa={empresaServicio}
+          conductorUid={conductorUid}
+          stops={sortedStops}
+          showToast={showToast}
+        />
+        <ServiceMessagesModal
+          open={chatModalOpen}
+          onClose={() => {
+            setChatModalOpen(false);
+            messagesUnread.markRead();
+            void messagesUnread.refresh();
+          }}
+          servicio={servicio}
+          senderName={conductorNombre}
+          showToast={showToast}
+        />
         {confirmFinalizar ? (
           <div
             style={{

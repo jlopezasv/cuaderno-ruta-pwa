@@ -25,6 +25,8 @@ export function ServiceMessagesPanel({
   canMarkForCustomerReport = false,
   showToast,
   compact = false,
+  modalLayout = false,
+  onMessagesChange,
 }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +55,10 @@ export function ServiceMessagesPanel({
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    onMessagesChange?.(messages);
+  }, [messages, onMessagesChange]);
+
   const handleSend = async () => {
     const text = draft.trim();
     if (!text || sending) return;
@@ -77,23 +83,36 @@ export function ServiceMessagesPanel({
   };
 
   const count = messages.length;
+  const listMaxHeight = modalLayout ? undefined : compact ? 220 : 280;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: compact ? 8 : 10 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <div style={{ fontSize: compact ? 12 : 13, fontWeight: 700, color: UI.tx }}>
-          Mensajes ({count})
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: compact ? 8 : 10,
+        height: modalLayout ? "100%" : undefined,
+        minHeight: modalLayout ? 0 : undefined,
+      }}
+    >
+      {!modalLayout ? (
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ fontSize: compact ? 12 : 13, fontWeight: 700, color: UI.tx }}>
+            Mensajes ({count})
+          </div>
+          <div style={{ fontSize: 11, color: UI.muted }}>Interno · no visible al cliente</div>
         </div>
-        <div style={{ fontSize: 11, color: UI.muted }}>Interno · no visible al cliente</div>
-      </div>
+      ) : null}
 
       <div
         style={{
-          background: UI.soft,
-          border: `1px solid ${UI.border}`,
-          borderRadius: 10,
-          padding: compact ? "10px 10px" : "12px 12px",
-          maxHeight: compact ? 220 : 280,
+          background: modalLayout ? "transparent" : UI.soft,
+          border: modalLayout ? "none" : `1px solid ${UI.border}`,
+          borderRadius: modalLayout ? 0 : 10,
+          padding: modalLayout ? 0 : compact ? "10px 10px" : "12px 12px",
+          maxHeight: listMaxHeight,
+          flex: modalLayout ? 1 : undefined,
+          minHeight: modalLayout ? 0 : undefined,
           overflowY: "auto",
         }}
       >
@@ -141,7 +160,7 @@ export function ServiceMessagesPanel({
         )}
       </div>
 
-      <div>
+      <div style={{ flexShrink: modalLayout ? 0 : undefined }}>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

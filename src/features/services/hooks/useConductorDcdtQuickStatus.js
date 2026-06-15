@@ -1,0 +1,85 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../../domain/dcdt/dcdtModel.js";
+import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../../domain/dcdt/dcdtReadiness.js";
+
+/** @typedef {"validated"|"incomplete"|"none"} DcdtQuickVisual */
+
+/**
+ * Estado visual del botón DCDT (misma validación que ConductorDcdtPanel).
+ * @returns {{ visual: DcdtQuickVisual, loading: boolean, hasDcdt: boolean, readiness: object|null }}
+ */
+export function useConductorDcdtQuickStatus({ servicio, empresa, conductorUid, stops = [] }) {
+  const empresaId = servicio?.empresa_id || empresa?.id;
+  const [dcdt, setDcdt] = useState(null);
+  const [loading, setLoading] = useState(!!empresaId);
+  const [resolveCtx, setResolveCtx] = useState({
+    stops,
+    empresa,
+    empresaOwnerProfile: null,
+    conductor: null,
+    masterById: {},
+  });
+
+  const load = useCallback(async () => {
+    if (!servicio?.id || !empresaId) {
+      setDcdt(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const [row, ctx] = await Promise.all([
+        fetchDcdtByServicio(servicio.id).then(
+          (r) => r || ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops }),
+        ),
+        fetchDcdtResolveContext({
+          servicio,
+          stops,
+          empresa,
+          conductorUid: conductorUid || servicio?.conductor_id,
+        }),
+      ]);
+      setResolveCtx(ctx);
+      setDcdt(row);
+    } catch {
+      setDcdt(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [servicio, empresaId, stops, empresa, conductorUid]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const readiness = useMemo(() => {
+    if (!dcdt) return validateDcdtReadiness({ servicio, dcdt: null });
+    return validateDcdtReadiness({
+      servicio,
+      dcdt,
+      stops: resolveCtx.stops,
+      masterById: resolveCtx.masterById,
+      empresa: resolveCtx.empresa,
+      empresaOwnerProfile: resolveCtx.empresaOwnerProfile,
+      conductor: resolveCtx.conductor,
+    });
+  }, [dcdt, servicio, resolveCtx]);
+
+  useEffect(() => {
+    if (!servicio?.id || readiness.isValidated) return;
+    const t = setInterval(() => {
+      void load();
+    }, 20000);
+    return () => clearInterval(t);
+  }, [servicio?.id, readiness.isValidated, load]);
+
+  const visual = useMemo(() => {
+    if (!empresaId) return "none";
+    if (loading && !dcdt) return "none";
+    if (!dcdt) return "none";
+    if (readiness.isValidated) return "validated";
+    return "incomplete";
+  }, [empresaId, loading, dcdt, readiness.isValidated]);
+
+  return { visual, loading, hasDcdt: !!dcdt, readiness, reload: load };
+}
