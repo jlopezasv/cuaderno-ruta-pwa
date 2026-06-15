@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { isServiceMessagesEnabled } from "../../config/serviceMessages.js";
+import { getAuthUid } from "../../data/supabaseClient.js";
 import { ServiceQuickActionsBar } from "../services/components/ServiceQuickActionsBar.jsx";
 import { ServiceMessagesModal } from "../services/components/ServiceMessagesModal.jsx";
 import { useServiceDcdtQuickStatus } from "../services/hooks/useConductorDcdtQuickStatus.js";
@@ -18,8 +19,9 @@ export function EmpresaServicioQuickActions({
   showDcdt = false,
 }) {
   const [chatOpen, setChatOpen] = useState(false);
-  const showChat = isServiceMessagesEnabled(servicio);
+  const showChat = isServiceMessagesEnabled(servicio) && !!servicio?.id;
   const showDcdtBtn = showDcdt && !!servicio?.empresa_id;
+  const authUserId = empresaUserId || getAuthUid?.() || null;
 
   const dcdtQuick = useServiceDcdtQuickStatus({
     servicio,
@@ -29,7 +31,7 @@ export function EmpresaServicioQuickActions({
 
   const messagesUnread = useServiceMessagesUnread({
     servicioId: servicio?.id,
-    userId: empresaUserId,
+    userId: authUserId,
     enabled: showChat,
   });
 

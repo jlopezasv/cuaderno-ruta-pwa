@@ -21,7 +21,8 @@ const DCDT_STYLES = {
 
 function quickBtnBase({ compact }) {
   return {
-    flex: 1,
+    width: "100%",
+    minWidth: 0,
     minHeight: compact ? 36 : 48,
     borderRadius: compact ? 8 : 10,
     padding: compact ? "7px 10px" : "10px 14px",
@@ -62,12 +63,14 @@ export function ServiceQuickActionsBar({
   const chatBadge = unreadCount > 0 ? (unreadCount > 99 ? "99+" : String(unreadCount)) : null;
   const chatHasUnread = unreadCount > 0;
 
+  const colCount = (showDcdt ? 1 : 0) + (showChat ? 1 : 0);
+
   return (
     <div style={{ width: "100%" }}>
       <div
         style={{
-          display: "flex",
-          flexDirection: "row",
+          display: "grid",
+          gridTemplateColumns: colCount > 1 ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
           alignItems: "stretch",
           gap: compact ? 8 : 10,
           width: "100%",
