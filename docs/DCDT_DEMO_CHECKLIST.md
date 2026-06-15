@@ -8,7 +8,8 @@
 
 ## Preparación
 
-- [ ] Migraciones DCDT aplicadas en DEMO (`master_partes_transporte`, `dcdt_servicio`)
+- [ ] `VITE_DECA_PUBLIC_BASE_URL=https://cuaderno-demo-ab.vercel.app` en Vercel demo (DeCA / QR en PDF)
+- [ ] Migraciones DCDT aplicadas en DEMO (`master_partes_transporte`, `dcdt_servicio`, `deca_public_id`)
 - [ ] Usuario tráfico o jefe de flota
 - [ ] Conductor con servicio de prueba
 - [ ] Frontend demo desplegado con módulo DCDT

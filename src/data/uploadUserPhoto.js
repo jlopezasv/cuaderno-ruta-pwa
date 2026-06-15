@@ -137,6 +137,64 @@ export async function signStorageObjectPath(bucket, objectPath, expiresIn = SIGN
 }
 
 /**
+ * Sube (o sobrescribe) un blob en una ruta fija de Storage (upsert).
+ * Usado por DeCA para regenerar PDF en la misma pdf_storage_path.
+ */
+export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, options = {}) {
+  const { requireHttpUrl = true } = options;
+  const { token } = requireStorageAuth();
+  const path = String(objectPath || "").trim();
+  if (!path) throw new Error("Ruta de storage no válida");
+  const sizeBytes = blobByteSize(blob);
+  if (!blob || sizeBytes <= 0) throw new Error("Blob inválido o vacío");
+
+  guardDemoCannotUseProduction(SB_URL, `storage:uploadAt:${bucket}`);
+  const uploadUrl = `${SB_URL}/storage/v1/object/${bucket}/${path}`;
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SB_KEY,
+      "Content-Type": mime || "application/octet-stream",
+      "x-upsert": "true",
+    },
+    body: blob,
+  });
+  const uploadBody = await readResponseBody(res);
+  if (!res.ok) {
+    logStorageDocFail("DOCUMENT_STORAGE_UPLOAD_FAIL", new Error(`HTTP ${res.status}`), {
+      bucket,
+      path,
+      status: res.status,
+      supabaseResponse: uploadBody.json ?? uploadBody.text,
+    });
+    throw new Error(STORAGE_URL_ERROR);
+  }
+
+  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SB_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expiresIn: SIGNED_URL_TTL_SEC }),
+  });
+  const signBody = await readResponseBody(signRes);
+  if (!signRes.ok) {
+    throw new Error(`No se pudo firmar URL de storage (${signRes.status})`);
+  }
+  const finalUrl = signedUrlFromSignBody(signBody.json);
+  if (requireHttpUrl && !isHttpStorageUrl(finalUrl)) throw new Error(STORAGE_URL_ERROR);
+  return buildStorageUploadResult({
+    url: finalUrl,
+    bucket,
+    path,
+    signedExpiresInSec: Number(signBody.json?.expiresIn) || SIGNED_URL_TTL_SEC,
+  });
+}
+
+/**
  * @param {Blob} blob
  * @param {string} mime
  * @param {string} folder

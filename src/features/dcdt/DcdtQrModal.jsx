@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import QRCode from "qrcode";
-import { buildDcdtVerifyUrl } from "../../domain/dcdt/dcdtVerifyToken.js";
+import { buildDecaDownloadUrl } from "../../domain/dcdt/decaUrl.js";
+import { generateDecaQrDataUrl } from "../../domain/dcdt/decaQrImage.js";
+import { downloadDecaQrPng } from "../../domain/dcdt/dcdtPdfDocument.js";
 
 const UI = {
   overlay: "rgba(15,23,42,.5)",
@@ -10,16 +11,59 @@ const UI = {
   border: "#dbe4ee",
 };
 
-export function DcdtQrModal({ token, numeroDcdt, onClose }) {
+export function DcdtQrModal({
+  decaPublicId = null,
+  downloadUrl: downloadUrlProp = null,
+  dcdt = null,
+  numeroDcdt,
+  onClose,
+  showToast,
+}) {
   const [dataUrl, setDataUrl] = useState("");
-  const verifyUrl = buildDcdtVerifyUrl(token);
+  const [busy, setBusy] = useState(false);
+
+  const downloadUrl =
+    downloadUrlProp ||
+    dcdt?.datos?.deca_download_url ||
+    (decaPublicId ? buildDecaDownloadUrl(decaPublicId, { allowBrowserOriginFallback: true }) : "");
 
   useEffect(() => {
-    if (!verifyUrl) return;
-    QRCode.toDataURL(verifyUrl, { width: 280, margin: 2, color: { dark: "#0f172a", light: "#ffffff" } })
-      .then(setDataUrl)
-      .catch(() => setDataUrl(""));
-  }, [verifyUrl]);
+    if (!downloadUrl) {
+      setDataUrl("");
+      return;
+    }
+    let cancelled = false;
+    generateDecaQrDataUrl(downloadUrl)
+      .then((url) => {
+        if (!cancelled) setDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [downloadUrl]);
+
+  async function descargarPng() {
+    if (!dcdt?.datos?.deca_qr_png_storage_path) {
+      if (!dataUrl) return;
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `DeCA-QR-${numeroDcdt || "servicio"}.png`;
+      a.click();
+      return;
+    }
+    setBusy(true);
+    try {
+      await downloadDecaQrPng(dcdt, `DeCA-QR-${numeroDcdt || "servicio"}.png`);
+      showToast?.("QR DeCA descargado");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo descargar el QR");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div
@@ -48,22 +92,43 @@ export function DcdtQrModal({ token, numeroDcdt, onClose }) {
           textAlign: "center",
         }}
       >
-        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx }}>QR de verificación</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx }}>QR DeCA</div>
         <div style={{ fontSize: 12, color: UI.su, marginTop: 6, lineHeight: 1.45 }}>
-          DCDT {numeroDcdt || ""} · Válido para inspección
+          {numeroDcdt || ""} · Descarga directa del PDF
         </div>
         {dataUrl ? (
           <img
             src={dataUrl}
-            alt="Código QR verificación DCDT"
+            alt="Codigo QR descarga DeCA"
             style={{ width: 280, height: 280, margin: "18px auto 8px", display: "block", borderRadius: 8 }}
           />
         ) : (
           <div style={{ padding: "40px 0", color: UI.su }}>Generando QR…</div>
         )}
-        <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 16 }}>
-          La autoridad puede escanear este código para ver los datos del documento en modo solo lectura.
+        <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 12, wordBreak: "break-all" }}>
+          {downloadUrl || "URL no disponible"}
         </div>
+        <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.5, marginBottom: 16 }}>
+          Escanee para descargar el documento DeCA (PDF). Sin login ni pagina intermedia.
+        </div>
+        <button
+          type="button"
+          disabled={busy || !dataUrl}
+          onClick={descargarPng}
+          style={{
+            width: "100%",
+            background: "#ecfdf5",
+            color: "#166534",
+            border: "1px solid #bbf7d0",
+            borderRadius: 12,
+            padding: "12px",
+            fontWeight: 700,
+            cursor: busy || !dataUrl ? "not-allowed" : "pointer",
+            marginBottom: 8,
+          }}
+        >
+          {busy ? "Descargando…" : "Descargar PNG del QR"}
+        </button>
         <button
           type="button"
           onClick={onClose}

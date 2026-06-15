@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ensureDcdtForServicio, ensureDcdtQrVerification, fetchDcdtByServicio } from "../../domain/dcdt/dcdtModel.js";
+import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
-import { getDcdtQrToken } from "../../domain/dcdt/dcdtVerifyToken.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 import { DcdtReadonlyViewModal } from "./DcdtReadonlyViewModal.jsx";
@@ -135,7 +134,8 @@ export function ConductorDcdtPanel({
       ? "pending_validation"
       : "incomplete";
   const statusLabel = readiness.statusLabel;
-  const qrToken = getDcdtQrToken(dcdt);
+  const decaPublicId = dcdt?.decaPublicId || dcdt?.datos?.deca_public_id || null;
+  const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
 
   useEffect(() => {
@@ -146,31 +146,16 @@ export function ConductorDcdtPanel({
     return () => clearInterval(t);
   }, [servicio?.id, validated, load]);
 
-  async function openQr() {
+  function openQr() {
     if (!dcdt || !validated || !doc) {
       showToast?.("No disponible hasta validar el DCDT.");
       return;
     }
-    setBusy("qr");
-    try {
-      const next = await ensureDcdtQrVerification({
-        dcdt,
-        doc,
-        servicio,
-        conductor: resolveCtx.conductor,
-        missing,
-      });
-      setDcdt(next);
-      if (!getDcdtQrToken(next)) {
-        showToast?.("No se pudo generar el QR");
-        return;
-      }
-      setQrOpen(true);
-    } catch (e) {
-      showToast?.(e?.message || "Error al preparar QR");
-    } finally {
-      setBusy(false);
+    if (!decaDownloadUrl) {
+      showToast?.("Genera el PDF DeCA antes de mostrar el QR.");
+      return;
     }
+    setQrOpen(true);
   }
 
   async function descargarPdf() {
@@ -255,8 +240,8 @@ export function ConductorDcdtPanel({
               >
                 {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
               </button>
-              <button type="button" disabled={busy === "qr"} style={docBtnStyle("default")} onClick={openQr}>
-                {busy === "qr" ? "Preparando QR…" : "Mostrar QR"}
+              <button type="button" disabled={!decaDownloadUrl} style={docBtnStyle("default")} onClick={openQr}>
+                Mostrar QR
               </button>
             </>
           ) : (
@@ -277,8 +262,15 @@ export function ConductorDcdtPanel({
         />
       ) : null}
 
-      {qrOpen && qrToken ? (
-        <DcdtQrModal token={getDcdtQrToken(dcdt)} numeroDcdt={serviceLabel} onClose={() => setQrOpen(false)} />
+      {qrOpen ? (
+        <DcdtQrModal
+          decaPublicId={decaPublicId}
+          downloadUrl={decaDownloadUrl}
+          dcdt={dcdt}
+          numeroDcdt={serviceLabel}
+          showToast={showToast}
+          onClose={() => setQrOpen(false)}
+        />
       ) : null}
     </>
   );

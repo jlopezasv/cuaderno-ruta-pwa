@@ -109,6 +109,7 @@ Plantilla completa: [`.env.demo.example`](../.env.demo.example).
 | `SUPABASE_ANON_KEY` | Sí | Mismo anon |
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí | Service role **solo demo** |
 | `ALLOWED_ORIGIN` | Recomendada | URL pública del deploy demo |
+| `VITE_DECA_PUBLIC_BASE_URL` | Sí (DeCA) | URL canónica HTTPS del deploy (`https://cuaderno-demo-ab.vercel.app` en demo) |
 | `ADMIN_PANEL_USER_IDS` | Opcional | UID owner seed |
 
 **Nunca en demo:** `VITE_ALLOW_PROD_SUPABASE`, `ALLOW_PROD_SUPABASE`, keys Stripe live, service role prod.

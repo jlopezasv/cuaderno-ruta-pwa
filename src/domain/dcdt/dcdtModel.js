@@ -15,7 +15,8 @@ import { generateDcdtVerifyToken, isDcdtQrEligible } from "./dcdtVerifyToken.js"
 import { resolveTransportistaDcdt } from "./empresaTransportistaDcdt.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 
-const COLS = "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,updated_at";
+const COLS =
+  "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,deca_public_id,created_at,updated_at";
 
 function emptyDatos() {
   return {
@@ -46,6 +47,8 @@ function rowToDcdt(row) {
     validadoPor: row.validado_por,
     validadoAt: row.validado_at,
     pdfGeneradoAt: row.pdf_generado_at,
+    decaPublicId: row.deca_public_id || null,
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
@@ -549,6 +552,16 @@ export async function fetchDcdtById(id) {
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
 
+/** Garantiza deca_public_id en la fila (Paso 1 — estable para URL/QR). */
+export async function ensureDecaPublicId(dcdt) {
+  if (String(dcdt?.decaPublicId || "").trim()) return dcdt;
+  const fresh = await fetchDcdtById(dcdt?.id);
+  if (String(fresh?.decaPublicId || "").trim()) return fresh;
+  throw new Error(
+    "deca_public_id no disponible en este DCDT. Aplica la migración demo DeCA (20260712120000).",
+  );
+}
+
 export async function ensureDcdtQrVerification({ dcdt, doc, servicio, conductor = null, missing = [] }) {
   if (!dcdt?.id || !isDcdtQrEligible(dcdt.estado, { missing })) return dcdt;
   const snap = dcdt.datos?.qr_verificacion_snapshot;
@@ -627,6 +640,11 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
     pdf_dcdt_version: meta.pdfDcdtVersion ?? current?.datos?.pdf_dcdt_version ?? null,
     pdf_storage_bucket: meta.pdfStorageBucket ?? current?.datos?.pdf_storage_bucket ?? null,
     pdf_storage_path: meta.pdfStoragePath ?? current?.datos?.pdf_storage_path ?? null,
+    deca_download_url: meta.decaDownloadUrl ?? current?.datos?.deca_download_url ?? null,
+    deca_qr_png_storage_bucket:
+      meta.decaQrPngStorageBucket ?? current?.datos?.deca_qr_png_storage_bucket ?? null,
+    deca_qr_png_storage_path:
+      meta.decaQrPngStoragePath ?? current?.datos?.deca_qr_png_storage_path ?? null,
   };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",

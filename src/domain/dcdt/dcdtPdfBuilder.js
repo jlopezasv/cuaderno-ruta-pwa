@@ -1,4 +1,12 @@
-const enc = new TextEncoder();
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+
+/** Límite DeCA (Orden FOM/2861/2012 / requisito electrónico). */
+export const DECA_PDF_MAX_BYTES = 5 * 1024 * 1024;
+
+const PAGE_W = 595;
+const PAGE_H = 842;
+const MARGIN = 48;
+const LINE_H = 14;
 
 function plain(value) {
   return String(value ?? "")
@@ -6,10 +14,6 @@ function plain(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\x20-\x7E\n\r\t]/g, "")
     .trim();
-}
-
-function pdfEscape(text) {
-  return plain(text).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
 function wrapText(text, maxChars = 82) {
@@ -29,20 +33,13 @@ function wrapText(text, maxChars = 82) {
   return lines.length ? lines : [""];
 }
 
-function bytes(data) {
-  return enc.encode(data);
-}
-
-function concatParts(parts) {
-  let len = 0;
-  for (const p of parts) len += p.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.length;
-  }
-  return out;
+function hexRgb(hex) {
+  const h = String(hex || "#000000").replace("#", "");
+  return rgb(
+    parseInt(h.slice(0, 2), 16) / 255,
+    parseInt(h.slice(2, 4), 16) / 255,
+    parseInt(h.slice(4, 6), 16) / 255,
+  );
 }
 
 function formatFecha(iso) {
@@ -78,139 +75,154 @@ function parteLines(label, parte) {
   return out;
 }
 
-/** PDF DCDT (Orden FOM/2861/2012). */
-export async function buildDcdtPdfBlob(doc) {
-  const margin = 48;
-  const pageW = 595;
-  const pageH = 842;
-  const lineH = 14;
-  const objects = [];
-  const pageRefs = [];
-  let y = pageH - margin;
-  const commands = [];
+function parsePdfDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * PDF DeCA/DCDT (Orden FOM/2861/2012) — generado con pdf-lib (PDF válido + metadatos).
+ *
+ * @param {object} doc — documento resuelto (resolveDcdtDocument)
+ * @param {{ creationDate?: string|null, qrPngBytes?: Uint8Array|null }} [options]
+ *   creationDate: dcdt_servicio.created_at (creación del registro documento)
+ *   qrPngBytes: PNG del QR DeCA (URL de descarga directa)
+ */
+export async function buildDcdtPdfBlob(doc, options = {}) {
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const referencia = plain(doc?.referencia || "servicio");
+  const creationDate = parsePdfDate(options.creationDate) || new Date();
+  const modificationDate = new Date();
+
+  pdfDoc.setTitle(`DeCA — ${referencia}`);
+  pdfDoc.setAuthor("Cuaderno Ruta");
+  pdfDoc.setCreator("Cuaderno Ruta");
+  pdfDoc.setProducer("Cuaderno Ruta — DeCA");
+  pdfDoc.setSubject("Documento de Control del Transporte — Orden FOM/2861/2012");
+  pdfDoc.setCreationDate(creationDate);
+  pdfDoc.setModificationDate(modificationDate);
+  pdfDoc.setKeywords(["DeCA", "DCDT", "FOM/2861/2012", referencia]);
+
+  let page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  let y = PAGE_H - MARGIN;
 
   function ensure(h) {
-    if (y - h < margin) {
-      finishPage(false);
-      y = pageH - margin;
+    if (y - h < MARGIN) {
+      page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+      y = PAGE_H - MARGIN;
     }
   }
 
-  function text(str, x, size = 10, color = "#0f172a") {
-    const [r, g, b] = [
-      parseInt(color.slice(1, 3), 16) / 255,
-      parseInt(color.slice(3, 5), 16) / 255,
-      parseInt(color.slice(5, 7), 16) / 255,
-    ];
-    commands.push(
-      `BT /F1 ${size} Tf ${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg ${x} ${y} Td (${pdfEscape(str)}) Tj ET`,
-    );
-    y -= lineH;
+  function drawLine(str, x, size, color, bold = false) {
+    ensure(LINE_H + 2);
+    const text = plain(str);
+    if (!text) {
+      y -= LINE_H;
+      return;
+    }
+    page.drawText(text, {
+      x,
+      y: y - size,
+      size,
+      font: bold ? fontBold : font,
+      color: hexRgb(color),
+    });
+    y -= LINE_H;
   }
 
-  function lines(str, x, size = 10, color = "#334155", maxChars = 82) {
+  function drawLines(str, x, size = 10, color = "#334155", maxChars = 82) {
     for (const ln of wrapText(str, maxChars)) {
-      ensure(lineH + 2);
-      text(ln, x, size, color);
+      drawLine(ln, x, size, color);
     }
   }
 
-  function finishPage(last) {
-    const stream = commands.join("\n");
-    const pageIdx = objects.length + 1;
-    const contentIdx = objects.length + 2;
-    pageRefs.push(`${pageIdx} 0 R`);
-    objects.push(
-      bytes(
-        `<< /Type /Page /Parent 1 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Contents ${contentIdx} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`,
-      ),
-    );
-    objects.push(bytes(`<< /Length ${bytes(stream).length} >>\nstream\n${stream}\nendstream`));
-    commands.length = 0;
-    if (!last) y = pageH - margin;
+  function drawSectionTitle(str) {
+    drawLine(str, MARGIN, 12, "#0f172a", true);
   }
 
-  objects.push(bytes("<< >>"));
-  objects.push(
-    bytes("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"),
-  );
-
-  ensure(50);
-  text("Documento de Control del Transporte", margin, 16, "#0f172a");
-  text("DCDT - Orden FOM/2861/2012", margin, 11, "#475569");
+  drawLine("Documento de Control del Transporte", MARGIN, 16, "#0f172a", true);
+  drawLine("DCDT - Orden FOM/2861/2012", MARGIN, 11, "#475569");
   y -= 6;
-  text(`Referencia servicio: ${doc.referencia || "—"}`, margin, 10, "#64748b");
+  drawLine(`Referencia servicio: ${doc.referencia || "—"}`, MARGIN, 10, "#64748b");
   y -= 10;
 
-  text("1. CARGADOR CONTRACTUAL", margin, 12, "#0f172a");
-  for (const ln of parteLines("", doc.cargador)) lines(ln, margin);
+  drawSectionTitle("1. CARGADOR CONTRACTUAL");
+  for (const ln of parteLines("", doc.cargador)) drawLines(ln, MARGIN);
   y -= 6;
 
-  text("2. TRANSPORTISTA EFECTIVO", margin, 12, "#0f172a");
-  for (const ln of parteLines("", doc.transportista)) lines(ln, margin);
+  drawSectionTitle("2. TRANSPORTISTA EFECTIVO");
+  for (const ln of parteLines("", doc.transportista)) drawLines(ln, MARGIN);
   y -= 6;
 
   if (doc.destinatario?.nombre) {
-    text("DESTINATARIO", margin, 11, "#64748b");
-    for (const ln of parteLines("", doc.destinatario)) lines(ln, margin);
+    drawLine("DESTINATARIO", MARGIN, 11, "#64748b", true);
+    for (const ln of parteLines("", doc.destinatario)) drawLines(ln, MARGIN);
     y -= 4;
   }
 
-  text("3. ORIGEN Y DESTINO", margin, 12, "#0f172a");
-  lines(`Origen / carga: ${doc.origen || "—"}`, margin);
-  lines(`Destino / descarga: ${doc.destino || "—"}`, margin);
+  drawSectionTitle("3. ORIGEN Y DESTINO");
+  drawLines(`Origen / carga: ${doc.origen || "—"}`, MARGIN);
+  drawLines(`Destino / descarga: ${doc.destino || "—"}`, MARGIN);
   y -= 6;
 
-  text("4. MERCANCIA", margin, 12, "#0f172a");
-  lines(`Naturaleza: ${doc.mercancia?.descripcion || "—"}`, margin);
-  lines(`Peso (kg): ${doc.mercancia?.peso_kg ?? "—"}`, margin);
-  lines(`Bultos: ${doc.mercancia?.bultos ?? "—"}`, margin);
-  lines(`Palets: ${doc.mercancia?.palets ?? "—"}`, margin);
+  drawSectionTitle("4. MERCANCIA");
+  drawLines(`Naturaleza: ${doc.mercancia?.descripcion || "—"}`, MARGIN);
+  drawLines(`Peso (kg): ${doc.mercancia?.peso_kg ?? "—"}`, MARGIN);
+  drawLines(`Bultos: ${doc.mercancia?.bultos ?? "—"}`, MARGIN);
+  drawLines(`Palets: ${doc.mercancia?.palets ?? "—"}`, MARGIN);
   y -= 6;
 
-  text("5. FECHA Y VEHICULO", margin, 12, "#0f172a");
-  lines(`Fecha transporte: ${formatFecha(doc.fecha_transporte)}`, margin);
-  lines(`Matricula tractora: ${doc.vehiculo?.matricula || "—"}`, margin);
-  if (doc.vehiculo?.remolque) lines(`Matricula remolque: ${doc.vehiculo.remolque}`, margin);
+  drawSectionTitle("5. FECHA Y VEHICULO");
+  drawLines(`Fecha transporte: ${formatFecha(doc.fecha_transporte)}`, MARGIN);
+  drawLines(`Matricula tractora: ${doc.vehiculo?.matricula || "—"}`, MARGIN);
+  if (doc.vehiculo?.remolque) drawLines(`Matricula remolque: ${doc.vehiculo.remolque}`, MARGIN);
   y -= 6;
 
   if (doc.observaciones) {
-    text("OBSERVACIONES", margin, 12, "#0f172a");
-    lines(doc.observaciones, margin);
+    drawSectionTitle("OBSERVACIONES");
+    drawLines(doc.observaciones, MARGIN);
     y -= 4;
   }
 
   if (doc.validado_at) {
     y -= 6;
     const validado = formatFechaHora(doc.validado_at);
-    lines(`Estado: Validado`, margin, 10, "#15803d");
-    lines(`Validado por trafico: ${validado}`, margin, 10, "#15803d");
+    drawLines("Estado: Validado", MARGIN, 10, "#15803d");
+    drawLines(`Validado por trafico: ${validado}`, MARGIN, 10, "#15803d");
     if (doc.transportista?.nombre) {
-      lines(`Empresa transportista: ${doc.transportista.nombre}`, margin, 10, "#15803d");
+      drawLines(`Empresa transportista: ${doc.transportista.nombre}`, MARGIN, 10, "#15803d");
     }
   }
 
-  finishPage(true);
-  objects[0] = bytes(`<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${pageRefs.length} >>`);
+  const qrBytes = options.qrPngBytes;
+  if (qrBytes?.length) {
+    const qrImage = await pdfDoc.embedPng(qrBytes);
+    const qrSize = 96;
+    const pages = pdfDoc.getPages();
+    const footerPage = pages[pages.length - 1];
+    const qrX = PAGE_W - MARGIN - qrSize;
+    const qrY = MARGIN + 18;
+    footerPage.drawImage(qrImage, { x: qrX, y: qrY, width: qrSize, height: qrSize });
+    footerPage.drawText("DeCA — escanee para descargar", {
+      x: MARGIN,
+      y: qrY + qrSize / 2 - 4,
+      size: 9,
+      font,
+      color: hexRgb("#475569"),
+    });
+  }
 
-  const parts = [bytes("%PDF-1.4\n")];
-  const offsets = [0];
-  let offset = parts[0].length;
-  objects.forEach((obj, idx) => {
-    offsets.push(offset);
-    const prefix = bytes(`${idx + 1} 0 obj\n`);
-    const suffix = bytes("\nendobj\n");
-    parts.push(prefix, obj, suffix);
-    offset += prefix.length + obj.length + suffix.length;
-  });
-  const xrefOffset = offset;
-  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  offsets.slice(1).forEach((off) => {
-    xref += `${String(off).padStart(10, "0")} 00000 n \n`;
-  });
-  xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  parts.push(bytes(xref));
-  return new Blob([concatParts(parts)], { type: "application/pdf" });
+  const pdfBytes = await pdfDoc.save();
+  if (pdfBytes.byteLength > DECA_PDF_MAX_BYTES) {
+    const mb = (pdfBytes.byteLength / (1024 * 1024)).toFixed(2);
+    throw new Error(`El PDF DeCA supera el limite de 5 MB (${mb} MB). Reduce el contenido del documento.`);
+  }
+
+  return new Blob([pdfBytes], { type: "application/pdf" });
 }
 
 /** Bloque DCDT para insertar en expediente operacional PDF. */

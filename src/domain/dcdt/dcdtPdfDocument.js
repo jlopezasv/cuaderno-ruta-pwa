@@ -1,11 +1,18 @@
 import { getUserId, sbFetch } from "../../data/supabaseClient.js";
-import { uploadBlobToStorage, signStorageObjectPath, USER_PHOTOS_BUCKET } from "../../data/uploadUserPhoto.js";
+import {
+  uploadBlobToStorage,
+  uploadBlobAtStoragePath,
+  signStorageObjectPath,
+  USER_PHOTOS_BUCKET,
+} from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../documents/mediaStorageV2.js";
 import { isHttpStorageUrl } from "../documents/storageDocumentUploadLog.js";
 import { parseSupabaseErrorBody } from "../documents/extraDocumentUploadLog.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { buildDcdtPdfBlob } from "./dcdtPdfBuilder.js";
-import { markDcdtPdfGenerado } from "./dcdtModel.js";
+import { ensureDecaPublicId, markDcdtPdfGenerado } from "./dcdtModel.js";
+import { buildDecaDownloadUrl } from "./decaUrl.js";
+import { generateDecaQrPngBytes } from "./decaQrImage.js";
 
 const TABLE = "servicio_documentos_extra";
 export const DCDT_RETENTION_DAYS = 365;
@@ -18,6 +25,15 @@ function dcdtPdfDemoLog(phase, extra) {
   if (!isDemoApp()) return;
   if (extra !== undefined) console.log(`[DCDT PDF] ${phase}`, extra);
   else console.log(`[DCDT PDF] ${phase}`);
+}
+
+function resolveDecaQrStoragePath({ uid, empresaId, servicioId, pdfStoragePath, existingQrPath }) {
+  if (existingQrPath) return existingQrPath;
+  if (pdfStoragePath) {
+    const dir = String(pdfStoragePath).replace(/\/[^/]+\.pdf$/i, "");
+    if (dir) return `${dir}/deca-qr.png`;
+  }
+  return `${uid}/dcdt/${empresaId || "empresa"}/${servicioId}/deca-qr.png`;
 }
 
 async function postExtraDocRow(body) {
@@ -66,6 +82,15 @@ export async function resolveDcdtPdfAccessUrl(dcdt) {
   return isHttpStorageUrl(legacy) ? legacy : null;
 }
 
+/** URL firmada del PNG QR DeCA (fichero suelto). */
+export async function resolveDecaQrPngAccessUrl(dcdt) {
+  const bucket = dcdt?.datos?.deca_qr_png_storage_bucket || USER_PHOTOS_BUCKET;
+  const path = dcdt?.datos?.deca_qr_png_storage_path;
+  if (!path) return null;
+  const signed = await signStorageObjectPath(bucket, path);
+  return storageUploadUrl(signed);
+}
+
 function triggerBlobDownload(blob, filename) {
   if (typeof document === "undefined") return;
   const url = URL.createObjectURL(blob);
@@ -88,8 +113,23 @@ export async function downloadDcdtStoredPdf(dcdt, filename = "dcdt.pdf") {
   return { url: accessUrl, blob };
 }
 
+/** Descarga PNG del QR DeCA (fichero suelto). */
+export async function downloadDecaQrPng(dcdt, filename = "deca-qr.png") {
+  const accessUrl = await resolveDecaQrPngAccessUrl(dcdt);
+  if (!accessUrl) throw new Error("QR DeCA no disponible en storage");
+  const res = await fetch(accessUrl);
+  if (!res.ok) throw new Error(`No se pudo descargar el QR (${res.status})`);
+  const blob = await res.blob();
+  if (!blob?.size) throw new Error("QR DeCA vacío o corrupto");
+  const name =
+    filename ||
+    `DeCA-QR-${String(dcdt?.datos?.pdf_archivo_nombre || "qr").replace(/\.pdf$/i, ".png")}`;
+  triggerBlobDownload(blob, name);
+  return { url: accessUrl, blob };
+}
+
 /**
- * Genera PDF DCDT, lo sube a storage y lo registra como documento del servicio (tipo dcdt).
+ * Genera PDF DCDT con QR embebido, lo sube a storage y lo registra como documento del servicio (tipo dcdt).
  */
 export async function generateAndPersistDcdtPdf({
   servicio,
@@ -103,35 +143,71 @@ export async function generateAndPersistDcdtPdf({
   const uid = userId || getUserId();
   if (!uid) throw new Error("Sesión no válida");
 
+  const dcdtReady = await ensureDecaPublicId(dcdt);
+  const decaPublicId = dcdtReady.decaPublicId;
+  const decaDownloadUrl = buildDecaDownloadUrl(decaPublicId);
+
+  dcdtPdfDemoLog("deca_download_url", decaDownloadUrl);
+
+  const qrPngBytes = await generateDecaQrPngBytes(decaDownloadUrl);
+  const qrPngBlob = new Blob([qrPngBytes], { type: "image/png" });
+
   dcdtPdfDemoLog("generando");
-  const blob = await buildDcdtPdfBlob(doc);
+  const blob = await buildDcdtPdfBlob(doc, {
+    creationDate: dcdtReady.createdAt || null,
+    qrPngBytes,
+  });
   if (!blob?.size) throw new Error("No se pudo generar el PDF DCDT");
 
   const serviceLabel = String(doc.referencia || servicio.id).replace(/[^\w.\-áéíóúñ]+/gi, "_");
   const filename = `dcdt-${serviceLabel}.pdf`;
   const folder = `dcdt/${servicio.empresa_id || "empresa"}/${servicio.id}`;
 
-  const storage = await uploadBlobToStorage(blob, "application/pdf", folder, filename, {
-    requireHttpUrl: true,
-  });
+  const existingPdfPath = String(dcdtReady.datos?.pdf_storage_path || "").trim();
+  const existingBucket = dcdtReady.datos?.pdf_storage_bucket || USER_PHOTOS_BUCKET;
+
+  let storage;
+  if (existingPdfPath) {
+    dcdtPdfDemoLog("storage_upsert_path", existingPdfPath);
+    storage = await uploadBlobAtStoragePath(blob, "application/pdf", existingBucket, existingPdfPath, {
+      requireHttpUrl: true,
+    });
+  } else {
+    storage = await uploadBlobToStorage(blob, "application/pdf", folder, filename, {
+      requireHttpUrl: true,
+    });
+  }
+
   const storagePath = storage?.path;
   const storageBucket = storage?.bucket || USER_PHOTOS_BUCKET;
   if (!storagePath) throw new Error("PDF DCDT: upload sin ruta en storage");
+
+  const qrStoragePath = resolveDecaQrStoragePath({
+    uid,
+    empresaId: servicio.empresa_id,
+    servicioId: servicio.id,
+    pdfStoragePath: storagePath,
+    existingQrPath: dcdtReady.datos?.deca_qr_png_storage_path,
+  });
+  const qrStorage = await uploadBlobAtStoragePath(qrPngBlob, "image/png", storageBucket, qrStoragePath, {
+    requireHttpUrl: true,
+  });
 
   const archivoUrl = storageUploadUrl(storage);
   if (!isHttpStorageUrl(archivoUrl)) throw new Error("PDF DCDT: URL de storage inválida");
 
   dcdtPdfDemoLog("storage_path", storagePath);
+  dcdtPdfDemoLog("qr_storage_path", qrStoragePath);
   dcdtPdfDemoLog("public_url", archivoUrl);
 
   const generatedAt = new Date().toISOString();
   const retentionUntil = retentionUntilIso(new Date(generatedAt));
-  const dcdtVersion = dcdt.updatedAt || generatedAt;
+  const dcdtVersion = dcdtReady.updatedAt || generatedAt;
 
   const datosPayload = {
     schema_version: 1,
     tipo_documento: "dcdt",
-    dcdt_id: dcdt.id,
+    dcdt_id: dcdtReady.id,
     estado: "generado",
     generado_por: uid,
     generado_por_nombre: userLabel ? String(userLabel).trim() : null,
@@ -143,6 +219,10 @@ export async function generateAndPersistDcdtPdf({
     storage_ok: true,
     bucket: storageBucket,
     path: storagePath,
+    deca_public_id: decaPublicId,
+    deca_download_url: decaDownloadUrl,
+    deca_qr_png_bucket: qrStorage.bucket,
+    deca_qr_png_path: qrStorage.path,
   };
 
   const rowBody = {
@@ -159,7 +239,7 @@ export async function generateAndPersistDcdtPdf({
     datos: datosPayload,
   };
 
-  const existingId = dcdt.datos?.pdf_documento_extra_id || null;
+  const existingId = dcdtReady.datos?.pdf_documento_extra_id || null;
   let extraDoc;
   if (existingId) {
     extraDoc = await patchExtraDocRow(existingId, rowBody);
@@ -169,7 +249,7 @@ export async function generateAndPersistDcdtPdf({
 
   dcdtPdfDemoLog("documento_id", extraDoc.id);
 
-  const nextDcdt = await markDcdtPdfGenerado(dcdt.id, {
+  const nextDcdt = await markDcdtPdfGenerado(dcdtReady.id, {
     pdfDocumentoExtraId: extraDoc.id,
     pdfArchivoUrl: archivoUrl,
     pdfArchivoNombre: filename,
@@ -177,19 +257,34 @@ export async function generateAndPersistDcdtPdf({
     pdfDcdtVersion: dcdtVersion,
     pdfStorageBucket: storageBucket,
     pdfStoragePath: storagePath,
+    decaDownloadUrl,
+    decaQrPngStorageBucket: qrStorage.bucket,
+    decaQrPngStoragePath: qrStorage.path,
   });
 
   dcdtPdfDemoLog("generado", {
     servicio_id: servicio.id,
-    dcdt_id: dcdt.id,
+    dcdt_id: dcdtReady.id,
+    deca_public_id: decaPublicId,
     documento_id: extraDoc.id,
     storage_path: storagePath,
-    public_url: archivoUrl,
+    qr_storage_path: qrStoragePath,
+    deca_download_url: decaDownloadUrl,
   });
 
   if (downloadAfter) triggerBlobDownload(blob, filename);
 
-  return { dcdt: nextDcdt, extraDoc, blob, archivoUrl, filename, storagePath };
+  return {
+    dcdt: nextDcdt,
+    extraDoc,
+    blob,
+    archivoUrl,
+    filename,
+    storagePath,
+    decaDownloadUrl,
+    qrPngBlob,
+    qrStoragePath,
+  };
 }
 
 /** Abre PDF en nueva pestaña (renueva URL firmada). */
