@@ -36,6 +36,7 @@ import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
 import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
+import { traceMuelleGeo } from "../../../data/muelleGeoTrace.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -1645,26 +1646,34 @@ export function ActiveServicePanel({
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === expandedStopId);
 
-  const handleMuelleRequest = async ({ kind, stopId }) => {
+  const handleMuelleRequest = ({ kind, stopId }) => {
     if (confirmMuelleSaving) return;
-    const stop = sortedStops.find((s) => s.id === stopId);
-    const { eventType, actionLabel } = muelleActionMeta(kind, stop);
-    const prefetchedGps = await acquireLocation(eventType, actionLabel);
-    if (prefetchedGps === null) return;
-    muelleGpsRef.current = prefetchedGps;
+    muelleGpsRef.current = null;
     setConfirmMuelle({ kind, stopId });
   };
 
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
-    const prefetchedGps = muelleGpsRef.current;
-    if (!prefetchedGps) return;
+    const stop = sortedStops.find((s) => s.id === stopId);
+    const { eventType, actionLabel } = muelleActionMeta(kind, stop);
+    const prefetchedGps = await acquireLocation(eventType, actionLabel);
+    traceMuelleGeo(eventType, "confirm_acquire", {
+      cancelled: prefetchedGps === null,
+      ok: !!prefetchedGps?.ok,
+      usedCache: !!prefetchedGps?.usedCache,
+      lat: prefetchedGps?.point?.lat ?? null,
+      lng: prefetchedGps?.point?.lng ?? prefetchedGps?.point?.lon ?? null,
+      accuracy: prefetchedGps?.point?.accuracy ?? null,
+      status: prefetchedGps?.location_status ?? null,
+      error: prefetchedGps?.error ?? prefetchedGps?.location_error ?? null,
+    });
+    if (prefetchedGps === null) return;
+    muelleGpsRef.current = prefetchedGps;
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
         await marcarLlegado(stopId, { prefetchedGps });
-        await recargar?.();
       } else {
         await marcarCompletado(stopId, { prefetchedGps });
       }

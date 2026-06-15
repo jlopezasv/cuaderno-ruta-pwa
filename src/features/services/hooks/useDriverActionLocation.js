@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { requestActionLocation } from "../../../data/driverActionGps.js";
+import { tryRecentCacheAsGpsResult, requestActionLocation } from "../../../data/driverActionGps.js";
 
 /**
  * Solicita ubicación antes de una acción operativa (desde gesto del usuario).
@@ -49,14 +49,19 @@ export function useDriverActionLocation() {
   const continueWithout = useCallback(() => {
     const g = gateRef.current;
     if (!g?.resolve) return;
-    g.resolve(
-      g.lastResult || {
-        ok: false,
-        location_status: "unavailable",
-        error: g.error || "No se pudo obtener ubicación",
-        location_error: g.error || "No se pudo obtener ubicación",
-      },
-    );
+    const cached = tryRecentCacheAsGpsResult();
+    if (cached) {
+      g.resolve(cached);
+    } else {
+      g.resolve(
+        g.lastResult || {
+          ok: false,
+          location_status: "unavailable",
+          error: g.error || "No se pudo obtener ubicación",
+          location_error: g.error || "No se pudo obtener ubicación",
+        },
+      );
+    }
     setGate(null);
   }, []);
 

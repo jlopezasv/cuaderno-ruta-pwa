@@ -181,6 +181,43 @@ export async function requestActionLocation(eventType, opts = {}) {
   return result;
 }
 
+/** Última posición válida en memoria (< 5 min) como resultado GPS. */
+export function tryRecentCacheAsGpsResult() {
+  if (!lastGoodPoint || Date.now() - lastGoodCapturedAt > CACHE_FALLBACK_MS) return null;
+  const cachedAt = lastGoodPoint.location_captured_at || lastGoodPoint.ts || new Date().toISOString();
+  return {
+    ok: true,
+    point: {
+      ...lastGoodPoint,
+      source: "cached",
+      location_status: LOCATION_STATUS.CACHED,
+      location_captured_at: cachedAt,
+      ts: cachedAt,
+    },
+    location_status: LOCATION_STATUS.CACHED,
+    usedCache: true,
+  };
+}
+
+/** Repone caché en memoria desde geo ya persistida (p. ej. inicio_servicio_geo). */
+export function seedLocationCacheFromGeo(geo) {
+  const lng = geo?.lng ?? geo?.lon;
+  if (!geo || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(lng))) return false;
+  const capturedAt = geo.location_captured_at || geo.ts || new Date().toISOString();
+  lastGoodPoint = {
+    lat: Number(geo.lat),
+    lng: Number(lng),
+    lon: Number(lng),
+    accuracy: geo.accuracy_m != null ? Number(geo.accuracy_m) : geo.accuracy,
+    ts: capturedAt,
+    location_captured_at: capturedAt,
+    location_status: geo.location_status || LOCATION_STATUS.CAPTURED,
+    source: geo.source || "gps",
+  };
+  lastGoodCapturedAt = Date.parse(capturedAt) || Date.now();
+  return true;
+}
+
 /** Intenta GPS sin modal (solo fallback interno). */
 export async function tryDriverGeoSnapshot(opts = {}) {
   const gps = await getDriverActionGps({
@@ -221,10 +258,88 @@ export function geoPayloadFromLocationResult(result) {
   };
 }
 
-/** Geo para persistir en evento: usa resultado GPS prefetch si existe. */
-export function eventGeoFromLocationResult(prefetchedGps) {
-  if (prefetchedGps == null) {
-    return geoPayloadFromLocationResult({ ok: false, location_status: LOCATION_STATUS.UNAVAILABLE });
+/** Geo para persistir en evento: prefetch, caché reciente o inicio_servicio_geo del servicio. */
+export function resolveEventGeoForPersist(prefetchedGps, eventType, opts = {}) {
+  if (prefetchedGps?.ok && prefetchedGps.point) {
+    const geo = geoPayloadFromLocationResult(prefetchedGps);
+    gpsActionLog({
+      eventType: eventType || null,
+      stage: "persist_from_prefetch",
+      success: true,
+      lat: geo.lat ?? null,
+      lng: geo.lng ?? null,
+      accuracy: geo.accuracy_m ?? null,
+      status: geo.location_status,
+      usedCache: prefetchedGps.usedCache || geo.source === "cached",
+    });
+    return geo;
   }
-  return geoPayloadFromLocationResult(prefetchedGps);
+
+  const cached = tryRecentCacheAsGpsResult();
+  if (cached) {
+    const geo = geoPayloadFromLocationResult(cached);
+    gpsActionLog({
+      eventType: eventType || null,
+      stage: "persist_from_cache",
+      success: true,
+      lat: geo.lat ?? null,
+      lng: geo.lng ?? null,
+      accuracy: geo.accuracy_m ?? null,
+      status: geo.location_status,
+      usedCache: true,
+    });
+    return geo;
+  }
+
+  const servicioGeo = opts.servicioInicioGeo;
+  const lng = servicioGeo?.lng ?? servicioGeo?.lon;
+  if (servicioGeo && Number.isFinite(Number(servicioGeo.lat)) && Number.isFinite(Number(lng))) {
+    const geo = {
+      lat: Number(servicioGeo.lat),
+      lng: Number(lng),
+      lon: Number(lng),
+      ts: servicioGeo.ts || servicioGeo.location_captured_at || new Date().toISOString(),
+      location_captured_at:
+        servicioGeo.location_captured_at || servicioGeo.ts || new Date().toISOString(),
+      accuracy_m:
+        servicioGeo.accuracy_m != null
+          ? Math.round(Number(servicioGeo.accuracy_m))
+          : null,
+      source: "cached",
+      location_status: LOCATION_STATUS.CACHED,
+      location_error: null,
+    };
+    gpsActionLog({
+      eventType: eventType || null,
+      stage: "persist_from_inicio_servicio_geo",
+      success: true,
+      lat: geo.lat,
+      lng: geo.lng,
+      accuracy: geo.accuracy_m,
+      status: geo.location_status,
+      usedCache: true,
+    });
+    return geo;
+  }
+
+  const geo = geoPayloadFromLocationResult(
+    prefetchedGps ?? { ok: false, location_status: LOCATION_STATUS.UNAVAILABLE },
+  );
+  gpsActionLog({
+    eventType: eventType || null,
+    stage: "persist_unavailable",
+    success: false,
+    lat: null,
+    lng: null,
+    accuracy: null,
+    status: geo.location_status,
+    error: geo.location_error,
+    usedCache: false,
+  });
+  return geo;
+}
+
+/** @deprecated use resolveEventGeoForPersist */
+export function eventGeoFromLocationResult(prefetchedGps) {
+  return resolveEventGeoForPersist(prefetchedGps, null);
 }

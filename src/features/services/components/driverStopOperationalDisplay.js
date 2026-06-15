@@ -1,6 +1,8 @@
 import { getStopOperacionMeta } from "../../../domain/service/stopOperacionMeta.js";
 import { getServicioOperacionMeta } from "../../../domain/service/serviceOperacionMeta.js";
 import { formatDriverGeoTimelineLines } from "../../../domain/service/operationalGeo.js";
+import { traceMuelleGeo } from "../../../data/muelleGeoTrace.js";
+import { isDemoApp } from "../../../config/appEnvironment.js";
 
 function stopClock(iso) {
   if (!iso) return "—";
@@ -42,7 +44,15 @@ export function buildDriverStopTimesRows({ stop, isFirstCarga, servicio }) {
   if (entrada) {
     rows.push({ kind: "clock", label: "Entrada muelle", value: stopClock(entrada) });
     const meta = getStopOperacionMeta(stop?.notas);
-    for (const line of formatDriverGeoTimelineLines(meta.entrada_geo)) {
+    const geoLines = formatDriverGeoTimelineLines(meta.entrada_geo);
+    if (isDemoApp()) {
+      traceMuelleGeo("entrada_muelle", "timeline_render", {
+        stopId: stop?.id,
+        entrada_geo: meta.entrada_geo ?? null,
+        timelineLines: geoLines,
+      });
+    }
+    for (const line of geoLines) {
       rows.push({ kind: "geo", label: line.label, value: line.value });
     }
   }
@@ -52,7 +62,15 @@ export function buildDriverStopTimesRows({ stop, isFirstCarga, servicio }) {
   if (salida) {
     rows.push({ kind: "clock", label: "Salida muelle", value: stopClock(salida) });
     const meta = getStopOperacionMeta(stop?.notas);
-    for (const line of formatDriverGeoTimelineLines(meta.salida_geo)) {
+    const geoLines = formatDriverGeoTimelineLines(meta.salida_geo);
+    if (isDemoApp()) {
+      traceMuelleGeo("salida_muelle", "timeline_render", {
+        stopId: stop?.id,
+        salida_geo: meta.salida_geo ?? null,
+        timelineLines: geoLines,
+      });
+    }
+    for (const line of geoLines) {
       rows.push({ kind: "geo", label: line.label, value: line.value });
     }
   }

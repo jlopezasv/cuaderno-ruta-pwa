@@ -5,6 +5,7 @@ import {
   SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
 } from "../fleet/serviceStatus.js";
 import { needsExpedienteClosure } from "./expedienteCierre.js";
+import { getStopOperacionMeta, mergeStopOperacionMeta } from "./stopOperacionMeta.js";
 
 /**
  * Prioridad del servicio principal del conductor.
@@ -75,6 +76,36 @@ export function pickNextAssignedService(candidates, currentServicioId, assignedA
   return pool[0];
 }
 
+function mergeStopOperationalGeoFromPrevious(prevStop, nextStop) {
+  if (!prevStop?.id || !nextStop?.id || prevStop.id !== nextStop.id) return nextStop;
+  const prevMeta = getStopOperacionMeta(prevStop.notas);
+  const nextMeta = getStopOperacionMeta(nextStop.notas);
+  const patch = {};
+  const prevEntradaLat = Number(prevMeta?.entrada_geo?.lat);
+  const nextEntradaLat = Number(nextMeta?.entrada_geo?.lat);
+  const nextEntradaUnavailable =
+    nextMeta?.entrada_geo?.source === "no_disponible" || !Number.isFinite(nextEntradaLat);
+  if (Number.isFinite(prevEntradaLat) && nextEntradaUnavailable) {
+    patch.entrada_geo = prevMeta.entrada_geo;
+  }
+  const prevSalidaLat = Number(prevMeta?.salida_geo?.lat);
+  const nextSalidaLat = Number(nextMeta?.salida_geo?.lat);
+  const nextSalidaUnavailable =
+    nextMeta?.salida_geo?.source === "no_disponible" || !Number.isFinite(nextSalidaLat);
+  if (Number.isFinite(prevSalidaLat) && nextSalidaUnavailable) {
+    patch.salida_geo = prevMeta.salida_geo;
+  }
+  if (!Object.keys(patch).length) return nextStop;
+  return { ...nextStop, notas: mergeStopOperacionMeta(nextStop.notas, patch) };
+}
+
+function mergeStopsPreservingRecentGeo(prevStops, nextStops) {
+  if (!Array.isArray(nextStops) || !nextStops.length) return nextStops;
+  if (!Array.isArray(prevStops) || !prevStops.length) return nextStops;
+  const prevById = new Map(prevStops.map((s) => [s.id, s]));
+  return nextStops.map((stop) => mergeStopOperationalGeoFromPrevious(prevById.get(stop.id), stop));
+}
+
 /**
  * Aplica resolución remota sin desincronizar servicio/paradas ni saltar el cierre documental.
  * @param {{ servicio: object|null, stops: object[], siguienteServicio: object|null, siguientesStops: object[] }} previous
@@ -131,7 +162,10 @@ export function mergeDriverActiveViewFromResolution(previous, resolved) {
   ) {
     return {
       servicio: { ...nextSvc, estado: SERVICIO_ESTADO_COMPLETADO },
-      stops: nextStops.length ? nextStops : prevStops,
+      stops: mergeStopsPreservingRecentGeo(
+        prevStops,
+        nextStops.length ? nextStops : prevStops,
+      ),
       siguienteServicio,
       siguientesStops,
     };
@@ -139,7 +173,7 @@ export function mergeDriverActiveViewFromResolution(previous, resolved) {
 
   return {
     servicio: nextSvc,
-    stops: nextStops,
+    stops: mergeStopsPreservingRecentGeo(prevStops, nextStops),
     siguienteServicio,
     siguientesStops,
   };
