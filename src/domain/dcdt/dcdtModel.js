@@ -14,6 +14,7 @@ import { buildDcdtVerifySnapshot } from "./dcdtVerifyPayload.js";
 import { generateDcdtVerifyToken, isDcdtQrEligible } from "./dcdtVerifyToken.js";
 import { resolveTransportistaDcdt } from "./empresaTransportistaDcdt.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
+import { buildDecaPreStartGapMeta, shouldWarnDecaMissingBeforeStart } from "./decaPreStartCompliance.js";
 
 const COLS_CORE =
   "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,created_at,updated_at";
@@ -555,6 +556,17 @@ export async function saveDcdtDatos(id, datos, estado = null) {
     });
   }
   return rowToDcdt(rows[0]);
+}
+
+/** Registra flag auditable si el servicio ya inició sin PDF DeCA (Paso 6a, sin bloqueo). */
+export async function recordDecaPreStartGapIfNeeded(dcdt, servicio) {
+  if (!dcdt?.id || !shouldWarnDecaMissingBeforeStart({ servicio, dcdt })) return dcdt;
+  if (dcdt.datos?.deca_pre_start_gap?.detected_at) return dcdt;
+  const datos = {
+    ...(dcdt.datos || {}),
+    deca_pre_start_gap: buildDecaPreStartGapMeta(servicio),
+  };
+  return saveDcdtDatos(dcdt.id, datos, dcdt.estado);
 }
 
 export async function attachQrVerificationToDcdt(id, snapshot) {

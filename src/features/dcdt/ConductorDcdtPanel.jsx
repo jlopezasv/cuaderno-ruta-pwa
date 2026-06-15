@@ -52,8 +52,11 @@ function phaseHint(phase) {
   if (phase === "validated") {
     return "Documento listo para inspección. Puedes mostrarlo sin depender de tráfico.";
   }
+  if (phase === "pdf_ready") {
+    return "PDF DeCA generado. Puedes descargarlo o mostrar el QR; tráfico puede validar después.";
+  }
   if (phase === "pending_validation") {
-    return "Tráfico debe validar el documento antes de que puedas mostrarlo en inspección.";
+    return "Datos completos. Tráfico debe generar el PDF DeCA antes o durante el viaje.";
   }
   return "Tráfico está completando los datos del documento de control del transporte.";
 }
@@ -128,11 +131,14 @@ export function ConductorDcdtPanel({
 
   const { doc, missing } = readiness;
   const validated = readiness.isValidated;
+  const hasPdf = readiness.hasPdfStorage;
   const phase = validated
     ? "validated"
-    : missing.length === 0 && String(dcdt?.estado || "").toLowerCase() === "pendiente_validacion"
-      ? "pending_validation"
-      : "incomplete";
+    : hasPdf
+      ? "pdf_ready"
+      : missing.length === 0 && String(dcdt?.estado || "").toLowerCase() === "pendiente_validacion"
+        ? "pending_validation"
+        : "incomplete";
   const statusLabel = readiness.statusLabel;
   const decaPublicId = dcdt?.decaPublicId || dcdt?.datos?.deca_public_id || null;
   const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
@@ -147,20 +153,24 @@ export function ConductorDcdtPanel({
   }, [servicio?.id, validated, load]);
 
   function openQr() {
-    if (!dcdt || !validated || !doc) {
-      showToast?.("No disponible hasta validar el DCDT.");
+    if (!dcdt || !doc) {
+      showToast?.("DCDT no disponible.");
+      return;
+    }
+    if (!hasPdf) {
+      showToast?.("Genera el PDF DeCA antes de mostrar el QR.");
       return;
     }
     if (!decaDownloadUrl) {
-      showToast?.("Genera el PDF DeCA antes de mostrar el QR.");
+      showToast?.("URL DeCA no disponible — regenera el PDF.");
       return;
     }
     setQrOpen(true);
   }
 
   async function descargarPdf() {
-    if (!validated) {
-      showToast?.("No disponible hasta validar el DCDT.");
+    if (!hasPdf) {
+      showToast?.("Genera el PDF DeCA antes de descargarlo.");
       return;
     }
     setBusy("pdf");

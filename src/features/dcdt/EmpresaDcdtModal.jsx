@@ -14,6 +14,7 @@ import {
   saveDcdtDatos,
   fetchDcdtByServicio,
   validarDcdtTrafico,
+  recordDecaPreStartGapIfNeeded,
 } from "../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
@@ -359,23 +360,46 @@ export function EmpresaDcdtModal({
   const puedeValidar = readiness.canValidate;
   const puedePdf = readiness.canGeneratePdf;
   const puedeDescargarPdf = readiness.canDownloadPdf;
+  const warnDecaPreStart = readiness.warnDecaMissingPdfBeforeStart;
+
+  useEffect(() => {
+    if (!dcdt?.id || !servicio?.id || !warnDecaPreStart) return;
+    let cancelled = false;
+    recordDecaPreStartGapIfNeeded(dcdt, servicio)
+      .then((next) => {
+        if (!cancelled && next?.id) setDcdt(next);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [dcdt, servicio, warnDecaPreStart]);
+
   const pdfBtnHint = !puedePdf
-    ? !isDcdtEstadoValidated(dcdt?.estado)
-      ? "Paso 2: valida el DCDT para habilitar la generación del PDF"
-      : missing.length
-        ? `Faltan datos obligatorios: ${missing.map((m) => m.label).join(" · ")}`
-        : ""
-    : dcdt?.pdfGeneradoAt
-      ? "Regenerar PDF DeCA (nueva versión con QR)"
-      : "Paso 3: generar PDF DeCA con QR embebido";
+    ? missing.length
+      ? `Faltan datos obligatorios: ${missing.map((m) => m.label).join(" · ")}`
+      : "Completa los campos del art. 6 antes de generar el DeCA"
+    : !readiness.hasPdfStorage && !readiness.isValidated
+      ? "Generar DeCA ahora (validación de tráfico puede ser posterior)"
+      : dcdt?.pdfGeneradoAt
+        ? "Regenerar PDF DeCA (nueva versión con QR)"
+        : "Generar PDF DeCA con QR embebido";
+  const pdfBtnLabel =
+    busy === "pdf"
+      ? "Generando PDF…"
+      : puedePdf && !readiness.hasPdfStorage && !readiness.isValidated
+        ? "Generar DeCA ahora"
+        : "Generar PDF DCDT";
   const downloadBtnHint = !puedeDescargarPdf
     ? puedePdf
       ? "Genera el PDF antes de descargarlo"
-      : pdfBtnHint || "Valida y genera el PDF primero"
+      : pdfBtnHint
     : "Descargar el PDF guardado en storage";
   const accionMensaje =
     actionFeedback?.text ||
-    (busy === "pdf"
+    (warnDecaPreStart
+      ? "DeCA no generado antes del inicio del servicio — generar ahora"
+      : busy === "pdf"
       ? "Generando PDF DeCA… (puede tardar unos segundos)"
       : busy === "validar"
         ? "Validando DCDT…"
@@ -387,7 +411,7 @@ export function EmpresaDcdtModal({
               ? "Paso 1: valida el DCDT cuando no queden pendientes"
               : pdfBtnHint || statusLabel);
   const accionColor =
-    actionFeedback?.kind === "error"
+    actionFeedback?.kind === "error" || warnDecaPreStart
       ? UI.red
       : actionFeedback?.kind === "ok"
         ? UI.green
@@ -573,6 +597,25 @@ export function EmpresaDcdtModal({
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (
             <>
+              {warnDecaPreStart ? (
+                <div
+                  style={{
+                    background: "#fef2f2",
+                    border: "2px solid #fca5a5",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    marginBottom: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 800, color: UI.red, lineHeight: 1.4 }}>
+                    DeCA no generado antes del inicio del servicio — generar ahora
+                  </div>
+                  <div style={{ fontSize: 11, color: "#991b1b", marginTop: 6, lineHeight: 1.45 }}>
+                    El servicio ya está en curso o ha alcanzado su fecha de inicio sin PDF DeCA.
+                    Genera el documento cuanto antes; la validación de tráfico puede completarse después.
+                  </div>
+                </div>
+              ) : null}
               {missing.length ? (
                 <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: UI.amber }}>Pendientes ({missing.length})</div>
@@ -695,7 +738,7 @@ export function EmpresaDcdtModal({
             title={pdfBtnHint}
             style={btn("#166534", "#fff", !puedePdf && !busy && !loading)}
           >
-            {busy === "pdf" ? "Generando PDF…" : "Generar PDF DCDT"}
+            {pdfBtnLabel}
           </button>
           <button
             type="button"
@@ -706,7 +749,13 @@ export function EmpresaDcdtModal({
           >
             Descargar PDF DCDT
           </button>
-          <button type="button" disabled={!!busy || loading || !decaDownloadUrl} onClick={() => setQrOpen(true)} style={btn("#0f766e", "#fff")}>
+          <button
+            type="button"
+            disabled={!!busy || loading || !puedeDescargarPdf}
+            onClick={() => setQrOpen(true)}
+            title={puedeDescargarPdf ? "QR con URL de descarga directa" : "Genera el PDF antes de mostrar el QR"}
+            style={btn("#0f766e", "#fff", !puedeDescargarPdf && !busy && !loading)}
+          >
             Mostrar QR DeCA
           </button>
           <button type="button" onClick={onClose} style={{ ...btn("#fff", UI.tx), marginLeft: "auto" }}>

@@ -8,6 +8,13 @@ import {
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
 const ESTADOS_DESCARGA = new Set(["validado", "incluido_en_expediente"]);
+
+function isDecaPubliclyDownloadable(row, datos) {
+  const estado = String(row?.estado || "").toLowerCase();
+  if (ESTADOS_DESCARGA.has(estado)) return true;
+  const hasPdf = !!(String(datos?.pdf_storage_path || "").trim() || row?.pdf_generado_at);
+  return hasPdf && estado === "pendiente_validacion";
+}
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -55,7 +62,7 @@ function resolvePdfFilename(datos, decaPublicId) {
 async function fetchDcdtByDecaPublicId(decaPublicId) {
   const { url } = getSupabaseServerEnv();
   const enc = encodeURIComponent(decaPublicId);
-  const select = "id,servicio_id,estado,datos,validado_at";
+  const select = "id,servicio_id,estado,datos,validado_at,pdf_generado_at";
   const filters = [
     `deca_public_id=eq.${enc}`,
     `datos->>deca_public_id=eq.${enc}`,
@@ -177,11 +184,11 @@ export default async function handler(req, res) {
     }
 
     const estado = String(row.estado || "").toLowerCase();
-    if (!ESTADOS_DESCARGA.has(estado)) {
-      return notFound(res, `DeCA: DCDT en estado «${estado || "?"}». Debe estar validado.`);
+    const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
+    if (!isDecaPubliclyDownloadable(row, datos)) {
+      return notFound(res, `DeCA: DCDT en estado «${estado || "?"}». Genera el PDF o valida el documento.`);
     }
 
-    const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
     const storage = await resolvePdfStorageLocation(row);
     if (!storage?.path || !storage?.bucket) {
       return notFound(res, "DeCA: PDF no registrado en storage. Pulsa «Generar PDF DCDT» en el modal.");

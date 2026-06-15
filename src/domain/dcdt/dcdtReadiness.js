@@ -10,6 +10,12 @@ import {
   resolveDcdtDocument,
 } from "./dcdtModel.js";
 import { buildMercanciaDatosPatch, mercanciaEditFromDatos } from "./dcdtModel.js";
+import {
+  hasDecaPdfGenerado,
+  isServicioInicioEfectivoAlcanzado,
+  resolveServicioInicioEfectivoAt,
+  shouldWarnDecaMissingBeforeStart,
+} from "./decaPreStartCompliance.js";
 
 /** Contexto unificado para resolver DCDT (empresa y conductor). */
 export async function fetchDcdtResolveContext({
@@ -134,6 +140,9 @@ export function validateDcdtReadiness({
       canDownloadPdf: false,
       statusLabel: "DCDT no disponible",
       hasPdfStorage: false,
+      warnDecaMissingPdfBeforeStart: false,
+      servicioInicioEfectivoAlcanzado: false,
+      inicioEfectivoAt: null,
     };
   }
 
@@ -161,7 +170,10 @@ export function validateDcdtReadiness({
     validacionSnapshot: dcdt.datos?.validacion_snapshot,
     validadoAt: dcdt.validadoAt,
   });
-  const hasPdfStorage = !!(dcdt.pdfGeneradoAt && dcdt.datos?.pdf_storage_path);
+  const hasPdfStorage = hasDecaPdfGenerado(dcdt);
+  const isComplete = missing.length === 0;
+  const servicioInicioEfectivoAlcanzado = isServicioInicioEfectivoAlcanzado(servicio);
+  const warnDecaMissingPdfBeforeStart = shouldWarnDecaMissingBeforeStart({ servicio, dcdt });
 
   const result = {
     doc,
@@ -170,16 +182,20 @@ export function validateDcdtReadiness({
     estado,
     estadoComputed,
     isValidated,
-    isComplete: missing.length === 0,
-    canValidate: missing.length === 0 && !isDcdtEstadoValidated(estado),
-    canGeneratePdf: isValidated,
-    canDownloadPdf: isValidated && hasPdfStorage,
+    isComplete,
+    canValidate: isComplete && !isDcdtEstadoValidated(estado),
+    /** Paso 6a: PDF con datos art. 6 completos, sin exigir validación tráfico previa. */
+    canGeneratePdf: isComplete,
+    canDownloadPdf: hasPdfStorage,
     statusLabel: dcdtStatusUxLabel({
       estado,
       missing,
       pdfGeneradoAt: dcdt.pdfGeneradoAt,
     }),
     hasPdfStorage,
+    warnDecaMissingPdfBeforeStart,
+    servicioInicioEfectivoAlcanzado,
+    inicioEfectivoAt: resolveServicioInicioEfectivoAt(servicio),
   };
 
   if (isDemoApp()) {

@@ -63,6 +63,23 @@ export function EmpresaServicioQuickActions({
             messagesUnread.markRead();
           }}
         />
+        {dcdtQuick.readiness?.warnDecaMissingPdfBeforeStart ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: "#fef2f2",
+              border: "1px solid #fca5a5",
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#b91c1c",
+              lineHeight: 1.4,
+            }}
+          >
+            DeCA no generado antes del inicio — abre DCDT y genera el PDF
+          </div>
+        ) : null}
       </div>
       <ServiceMessagesModal
         open={chatOpen}
