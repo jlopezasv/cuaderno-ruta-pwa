@@ -16,6 +16,7 @@ import {
   resolveServicioInicioEfectivoAt,
   shouldWarnDecaMissingBeforeStart,
 } from "./decaPreStartCompliance.js";
+import { isDcdtPdfStale } from "./decaPdfStale.js";
 
 /** Contexto unificado para resolver DCDT (empresa y conductor). */
 export async function fetchDcdtResolveContext({
@@ -143,6 +144,7 @@ export function validateDcdtReadiness({
       warnDecaMissingPdfBeforeStart: false,
       servicioInicioEfectivoAlcanzado: false,
       inicioEfectivoAt: null,
+      pdfStale: false,
     };
   }
 
@@ -196,6 +198,7 @@ export function validateDcdtReadiness({
     warnDecaMissingPdfBeforeStart,
     servicioInicioEfectivoAlcanzado,
     inicioEfectivoAt: resolveServicioInicioEfectivoAt(servicio),
+    pdfStale: isDcdtPdfStale(dcdt),
   };
 
   if (isDemoApp()) {

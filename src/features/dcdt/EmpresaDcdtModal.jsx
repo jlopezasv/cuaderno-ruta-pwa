@@ -20,6 +20,7 @@ import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcd
 import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
+import { isDcdtPdfStale } from "../../domain/dcdt/decaPdfStale.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
@@ -361,6 +362,7 @@ export function EmpresaDcdtModal({
   const puedePdf = readiness.canGeneratePdf;
   const puedeDescargarPdf = readiness.canDownloadPdf;
   const warnDecaPreStart = readiness.warnDecaMissingPdfBeforeStart;
+  const pdfStale = readiness.pdfStale;
 
   useEffect(() => {
     if (!dcdt?.id || !servicio?.id || !warnDecaPreStart) return;
@@ -397,7 +399,9 @@ export function EmpresaDcdtModal({
     : "Descargar el PDF guardado en storage";
   const accionMensaje =
     actionFeedback?.text ||
-    (warnDecaPreStart
+    (pdfStale
+      ? "Los datos han cambiado desde la última generación del PDF — regenera antes de que el conductor lo use"
+      : warnDecaPreStart
       ? "DeCA no generado antes del inicio del servicio — generar ahora"
       : busy === "pdf"
       ? "Generando PDF DeCA… (puede tardar unos segundos)"
@@ -411,7 +415,7 @@ export function EmpresaDcdtModal({
               ? "Paso 1: valida el DCDT cuando no queden pendientes"
               : pdfBtnHint || statusLabel);
   const accionColor =
-    actionFeedback?.kind === "error" || warnDecaPreStart
+    actionFeedback?.kind === "error" || pdfStale || warnDecaPreStart
       ? UI.red
       : actionFeedback?.kind === "ok"
         ? UI.green
@@ -518,8 +522,12 @@ export function EmpresaDcdtModal({
         dcdt,
       });
       const fresh = servicio?.id ? await fetchDcdtByServicio(servicio.id) : null;
-      setDcdt(fresh || next);
-      notifyAction("DCDT validado — ya puedes generar el PDF", "ok");
+      const resolved = fresh || next;
+      setDcdt(resolved);
+      const regenMsg = isDcdtPdfStale(dcdt) && !isDcdtPdfStale(resolved)
+        ? " — PDF DeCA actualizado con los datos corregidos"
+        : "";
+      notifyAction(`DCDT validado${regenMsg}`, "ok");
     } catch (e) {
       notifyAction(e?.message || "No se pudo validar", "error");
     } finally {
@@ -597,6 +605,46 @@ export function EmpresaDcdtModal({
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (
             <>
+              {pdfStale ? (
+                <div
+                  style={{
+                    background: "#fef2f2",
+                    border: "2px solid #fca5a5",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    marginBottom: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 800, color: UI.red, lineHeight: 1.4 }}>
+                    Los datos han cambiado desde la última generación del PDF — regenera antes de que el
+                    conductor lo use
+                  </div>
+                  <div style={{ fontSize: 11, color: "#991b1b", marginTop: 6, lineHeight: 1.45 }}>
+                    La URL pública sigue sirviendo la versión anterior hasta que pulses «Generar DeCA ahora» o
+                    valides en tráfico (regeneración automática al validar).
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!!busy || !puedePdf}
+                    onClick={generarPdf}
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      background: "#166534",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: busy || !puedePdf ? "not-allowed" : "pointer",
+                      opacity: busy || !puedePdf ? 0.55 : 1,
+                    }}
+                  >
+                    {busy === "pdf" ? "Regenerando PDF…" : "Regenerar PDF DeCA ahora"}
+                  </button>
+                </div>
+              ) : null}
               {warnDecaPreStart ? (
                 <div
                   style={{

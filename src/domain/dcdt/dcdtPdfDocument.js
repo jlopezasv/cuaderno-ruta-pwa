@@ -18,6 +18,7 @@ import {
   DECA_PUBLIC_DOWNLOAD_DAYS,
   retentionUntilIso,
 } from "./decaRetention.js";
+import { isDcdtPdfStale } from "./decaPdfStale.js";
 
 const TABLE = "servicio_documentos_extra";
 /** @deprecated Usar DCDT_MIN_RETENTION_DAYS */
@@ -331,4 +332,27 @@ export async function openDcdtStoredPdf(dcdt) {
   if (!url || typeof window === "undefined") return false;
   window.open(url, "_blank", "noopener,noreferrer");
   return true;
+}
+
+/** Regenera PDF si datos.pdf_stale (p. ej. tras validar tráfico). */
+export async function regenerateDcdtPdfIfStale({
+  servicio,
+  dcdt,
+  doc,
+  userId = null,
+  userLabel = null,
+  downloadAfter = false,
+}) {
+  if (!isDcdtPdfStale(dcdt) || !servicio?.id || !dcdt?.id || !doc) {
+    return { dcdt, regenerated: false };
+  }
+  const result = await generateAndPersistDcdtPdf({
+    servicio,
+    dcdt,
+    doc,
+    userId,
+    userLabel,
+    downloadAfter,
+  });
+  return { ...result, regenerated: true };
 }

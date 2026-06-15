@@ -15,6 +15,10 @@ import { generateDcdtVerifyToken, isDcdtQrEligible } from "./dcdtVerifyToken.js"
 import { resolveTransportistaDcdt } from "./empresaTransportistaDcdt.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { buildDecaPreStartGapMeta, shouldWarnDecaMissingBeforeStart } from "./decaPreStartCompliance.js";
+import {
+  shouldMarkPdfStaleOnDatosSave,
+  withPdfStaleFlags,
+} from "./decaPdfStale.js";
 
 const COLS_CORE =
   "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,created_at,updated_at";
@@ -517,8 +521,13 @@ export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] 
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
 
-export async function saveDcdtDatos(id, datos, estado = null) {
-  const body = { datos, updated_at: new Date().toISOString() };
+export async function saveDcdtDatos(id, datos, estado = null, options = {}) {
+  const current = await fetchDcdtById(id);
+  let payloadDatos = datos && typeof datos === "object" ? { ...datos } : {};
+  if (shouldMarkPdfStaleOnDatosSave(current, options)) {
+    payloadDatos = withPdfStaleFlags(payloadDatos);
+  }
+  const body = { datos: payloadDatos, updated_at: new Date().toISOString() };
   if (estado) body.estado = estado;
   if (isDemoApp()) {
     console.log("[DCDT mercancía] payload", { dcdt_id: id, datos: body.datos?.mercancia, estado: body.estado ?? null });
@@ -566,7 +575,7 @@ export async function recordDecaPreStartGapIfNeeded(dcdt, servicio) {
     ...(dcdt.datos || {}),
     deca_pre_start_gap: buildDecaPreStartGapMeta(servicio),
   };
-  return saveDcdtDatos(dcdt.id, datos, dcdt.estado);
+  return saveDcdtDatos(dcdt.id, datos, dcdt.estado, { skipPdfStale: true });
 }
 
 export async function attachQrVerificationToDcdt(id, snapshot) {
@@ -578,7 +587,7 @@ export async function attachQrVerificationToDcdt(id, snapshot) {
     qr_verificacion_token: token,
     qr_verificacion_snapshot: snapshot,
   };
-  return saveDcdtDatos(id, datos);
+  return saveDcdtDatos(id, datos, null, { skipPdfStale: true });
 }
 
 export async function fetchDcdtById(id) {
@@ -684,6 +693,24 @@ export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor,
       /* QR opcional; validación ya aplicada */
     }
   }
+  if (next?.datos?.pdf_stale && doc && servicio) {
+    try {
+      const { regenerateDcdtPdfIfStale } = await import("./dcdtPdfDocument.js");
+      const docForPdf = {
+        ...doc,
+        validado_at: next.validadoAt || new Date().toISOString(),
+      };
+      const refreshed = await regenerateDcdtPdfIfStale({
+        servicio,
+        dcdt: next,
+        doc: docForPdf,
+        userId,
+      });
+      if (refreshed?.dcdt) next = refreshed.dcdt;
+    } catch (e) {
+      if (isDemoApp()) console.error("[DCDT] PDF stale regen on validate failed", e?.message || e);
+    }
+  }
   return next;
 }
 
@@ -723,6 +750,8 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
       meta.decaQrPngStoragePath ?? current?.datos?.deca_qr_png_storage_path ?? null,
     pdf_size_bytes: meta.pdfSizeBytes ?? current?.datos?.pdf_size_bytes ?? null,
     pdf_has_qr: meta.pdfHasQr ?? current?.datos?.pdf_has_qr ?? null,
+    pdf_stale: false,
+    pdf_stale_at: null,
   };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",
