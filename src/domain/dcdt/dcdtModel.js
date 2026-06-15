@@ -15,8 +15,9 @@ import { generateDcdtVerifyToken, isDcdtQrEligible } from "./dcdtVerifyToken.js"
 import { resolveTransportistaDcdt } from "./empresaTransportistaDcdt.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 
-const COLS =
-  "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,deca_public_id,created_at,updated_at";
+const COLS_CORE =
+  "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,created_at,updated_at";
+const COLS = `${COLS_CORE},deca_public_id`;
 
 function emptyDatos() {
   return {
@@ -90,6 +91,19 @@ async function dcdtRequest(path, init) {
     }
   }
   return r;
+}
+
+async function dcdtSelectFirst(filterQuery) {
+  for (const cols of [COLS, COLS_CORE]) {
+    const r = await dcdtRequest(`${filterQuery}&select=${cols}&limit=1`);
+    if (r.ok) {
+      const rows = await r.json().catch(() => []);
+      return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+    }
+    const body = await r.text().catch(() => "");
+    if (!/deca_public_id|PGRST204|42703/i.test(body)) break;
+  }
+  return null;
 }
 
 export function buildStopBindingsFromStops(stops) {
@@ -336,7 +350,11 @@ export function isDcdtEstadoValidated(estado) {
 }
 
 /** DCDT listo para validar / mostrar como validado: sin pendientes obligatorios. */
-export function isDcdtFullyValidated({ estado, missing = [] }) {
+export function isDcdtFullyValidated({ estado, missing = [], validacionSnapshot = null, validadoAt = null }) {
+  const snap = validacionSnapshot && typeof validacionSnapshot === "object" ? validacionSnapshot : null;
+  if (snap && (isDcdtEstadoValidated(estado) || validadoAt)) {
+    return true;
+  }
   return missing.length === 0 && isDcdtEstadoValidated(estado);
 }
 
@@ -356,6 +374,10 @@ export function dcdtStatusUxLabel({ estado, missing = [], pdfGeneradoAt = null }
 /** Rebaja estado validado si faltan campos obligatorios y persiste. */
 export async function reconcileDcdtEstadoIfNeeded({ dcdt, missing, flotaEvs = {}, datos }) {
   if (!dcdt?.id) return dcdt;
+  // DCDT validado con snapshot: no rebajar por datos temporales (conductor aún no cargado, etc.).
+  if (isDcdtEstadoValidated(dcdt.estado) && dcdt.datos?.validacion_snapshot) {
+    return dcdt;
+  }
   const nextEstado = computeDcdtEstado({
     missing,
     evidenciasByStop: flotaEvs,
@@ -463,7 +485,9 @@ export function dcdtDocForExpediente(doc, meta = {}) {
 }
 
 export async function fetchDcdtByServicio(servicioId) {
-  const r = await dcdtRequest(`?servicio_id=eq.${servicioId}&select=${COLS}&limit=1`);
+  const row = await dcdtSelectFirst(`?servicio_id=eq.${servicioId}`);
+  if (row) return row;
+  const r = await dcdtRequest(`?servicio_id=eq.${servicioId}&select=${COLS_CORE}&limit=1`);
   if (!r.ok) {
     const body = await r.text().catch(() => "");
     if (/dcdt_servicio|carta_porte|42P01|PGRST205/i.test(body)) return null;
@@ -546,7 +570,9 @@ export async function attachQrVerificationToDcdt(id, snapshot) {
 }
 
 export async function fetchDcdtById(id) {
-  const r = await dcdtRequest(`?id=eq.${id}&select=${COLS}&limit=1`);
+  const row = await dcdtSelectFirst(`?id=eq.${id}`);
+  if (row) return row;
+  const r = await dcdtRequest(`?id=eq.${id}&select=${COLS_CORE}&limit=1`);
   if (!r.ok) return null;
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
@@ -557,9 +583,28 @@ export async function ensureDecaPublicId(dcdt) {
   if (String(dcdt?.decaPublicId || "").trim()) return dcdt;
   const fresh = await fetchDcdtById(dcdt?.id);
   if (String(fresh?.decaPublicId || "").trim()) return fresh;
-  throw new Error(
-    "deca_public_id no disponible en este DCDT. Aplica la migración demo DeCA (20260712120000).",
-  );
+
+  const newId =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `deca-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const r = await dcdtRequest(`?id=eq.${dcdt.id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ deca_public_id: newId }),
+  });
+  const body = await r.text().catch(() => "");
+  if (!r.ok) {
+    if (/deca_public_id|42703|PGRST204/i.test(body)) {
+      throw new Error(
+        "Falta la columna deca_public_id en demo. Aplica la migración 20260712120000_dcdt_deca_public_id_demo.sql",
+      );
+    }
+    throw new Error("No se pudo asignar identificador DeCA");
+  }
+  const rows = body ? JSON.parse(body) : [];
+  return rowToDcdt(Array.isArray(rows) ? rows[0] : null) || { ...dcdt, decaPublicId: newId };
 }
 
 export async function ensureDcdtQrVerification({ dcdt, doc, servicio, conductor = null, missing = [] }) {

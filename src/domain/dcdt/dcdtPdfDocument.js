@@ -145,7 +145,9 @@ export async function generateAndPersistDcdtPdf({
 
   const dcdtReady = await ensureDecaPublicId(dcdt);
   const decaPublicId = dcdtReady.decaPublicId;
-  const decaDownloadUrl = buildDecaDownloadUrl(decaPublicId);
+  const decaDownloadUrl = buildDecaDownloadUrl(decaPublicId, {
+    allowBrowserOriginFallback: typeof window !== "undefined",
+  });
 
   dcdtPdfDemoLog("deca_download_url", decaDownloadUrl);
 

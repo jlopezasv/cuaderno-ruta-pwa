@@ -12,6 +12,7 @@ import {
   persistDcdtPartesFromStops,
   reconcileDcdtEstadoIfNeeded,
   saveDcdtDatos,
+  fetchDcdtByServicio,
   validarDcdtTrafico,
 } from "../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
@@ -356,6 +357,20 @@ export function EmpresaDcdtModal({
   const puedeValidar = readiness.canValidate;
   const puedePdf = readiness.canGeneratePdf;
   const puedeDescargarPdf = readiness.canDownloadPdf;
+  const pdfBtnHint = !puedePdf
+    ? !isDcdtEstadoValidated(dcdt?.estado)
+      ? "Paso 2: valida el DCDT para habilitar la generación del PDF"
+      : missing.length
+        ? `Faltan datos obligatorios: ${missing.map((m) => m.label).join(" · ")}`
+        : ""
+    : dcdt?.pdfGeneradoAt
+      ? "Regenerar PDF DeCA (nueva versión con QR)"
+      : "Paso 3: generar PDF DeCA con QR embebido";
+  const downloadBtnHint = !puedeDescargarPdf
+    ? puedePdf
+      ? "Genera el PDF antes de descargarlo"
+      : pdfBtnHint || "Valida y genera el PDF primero"
+    : "Descargar el PDF guardado en storage";
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
   const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
 
@@ -448,8 +463,9 @@ export function EmpresaDcdtModal({
         missing,
         dcdt,
       });
-      setDcdt(next);
-      showToast?.("DCDT validado");
+      const fresh = servicio?.id ? await fetchDcdtByServicio(servicio.id) : null;
+      setDcdt(fresh || next);
+      showToast?.("DCDT validado — ya puedes generar el PDF");
     } catch (e) {
       showToast?.(e?.message || "No se pudo validar");
     } finally {
@@ -604,13 +620,31 @@ export function EmpresaDcdtModal({
           <button type="button" disabled={!!busy || loading} onClick={completarDesdeOcr} style={btn(UI.accent, "#fff")}>
             Completar desde OCR
           </button>
-          <button type="button" disabled={!!busy || loading || !puedeValidar} onClick={validarDcdt} style={btn(UI.green, "#fff")}>
+          <button
+            type="button"
+            disabled={!!busy || loading || !puedeValidar}
+            onClick={validarDcdt}
+            title={puedeValidar ? "Paso 1: congelar datos para tráfico" : missing.length ? `Completa: ${missing.map((m) => m.label).join(" · ")}` : "DCDT ya validado"}
+            style={btn(UI.green, "#fff")}
+          >
             Validar DCDT
           </button>
-          <button type="button" disabled={!!busy || loading || !puedePdf} onClick={generarPdf} style={btn("#166534", "#fff")}>
+          <button
+            type="button"
+            disabled={!!busy || loading || !puedePdf}
+            onClick={generarPdf}
+            title={pdfBtnHint}
+            style={btn("#166534", "#fff")}
+          >
             Generar PDF DCDT
           </button>
-          <button type="button" disabled={!!busy || loading || !puedeDescargarPdf} onClick={descargarPdfGuardado} style={btn(UI.accent, "#fff")}>
+          <button
+            type="button"
+            disabled={!!busy || loading || !puedeDescargarPdf}
+            onClick={descargarPdfGuardado}
+            title={downloadBtnHint}
+            style={btn(UI.accent, "#fff")}
+          >
             Descargar PDF DCDT
           </button>
           <button type="button" disabled={!!busy || loading || !decaDownloadUrl} onClick={() => setQrOpen(true)} style={btn("#0f766e", "#fff")}>

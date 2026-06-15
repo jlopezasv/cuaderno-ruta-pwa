@@ -155,7 +155,12 @@ export function validateDcdtReadiness({
     datos,
     currentEstado: estado,
   });
-  const isValidated = isDcdtFullyValidated({ estado, missing });
+  const isValidated = isDcdtFullyValidated({
+    estado,
+    missing,
+    validacionSnapshot: dcdt.datos?.validacion_snapshot,
+    validadoAt: dcdt.validadoAt,
+  });
   const hasPdfStorage = !!(dcdt.pdfGeneradoAt && dcdt.datos?.pdf_storage_path);
 
   const result = {
