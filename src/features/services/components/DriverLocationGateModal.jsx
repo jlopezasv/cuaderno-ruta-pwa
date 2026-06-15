@@ -52,12 +52,12 @@ export function DriverLocationGateModal({
         }}
       >
         <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx, marginBottom: 8 }}>
-          {isRequesting ? "Obteniendo ubicación…" : "Ubicación no disponible"}
+          {isRequesting ? "Obteniendo ubicación…" : "No se pudo obtener ubicación."}
         </div>
         <div style={{ fontSize: 13, color: UI.su, lineHeight: 1.5, marginBottom: 14 }}>
           {isRequesting
             ? `Solicitando permiso de ubicación para ${actionLabel}.`
-            : "No se pudo obtener ubicación. Puedes continuar sin ubicación."}
+            : "Puedes intentar de nuevo o continuar sin ubicación."}
         </div>
         {!isRequesting && error ? (
           <div
@@ -77,7 +77,7 @@ export function DriverLocationGateModal({
         ) : null}
         {!isRequesting ? (
           <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.45, marginBottom: 16 }}>
-            Activa la ubicación del navegador o PWA en ajustes del móvil si el permiso está bloqueado.
+            Activa la ubicación para esta app o navegador en ajustes del móvil si el permiso está bloqueado.
           </div>
         ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

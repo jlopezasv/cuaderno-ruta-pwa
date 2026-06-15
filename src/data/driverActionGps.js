@@ -1,8 +1,10 @@
-/** GPS para acciones del conductor (muelle, evidencias, etc.). */
+/** GPS unificado para acciones operativas del conductor (demo + prod). */
 
 import { isDemoApp } from "../config/appEnvironment.js";
 
 export const LOCATION_STATUS = Object.freeze({
+  CAPTURED: "captured",
+  CACHED: "cached",
   OK: "ok",
   DENIED: "denied",
   UNAVAILABLE: "unavailable",
@@ -10,15 +12,16 @@ export const LOCATION_STATUS = Object.freeze({
   UNSUPPORTED: "unsupported",
 });
 
-const RECENT_FALLBACK_MS = 120000;
+const CACHE_FALLBACK_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_MAXIMUM_AGE_MS = 60000;
 
 let lastGoodPoint = null;
 let lastGoodCapturedAt = 0;
 
-function gpsEventLog(payload) {
+function gpsActionLog(payload) {
   if (!isDemoApp()) return;
-  console.log("[GPS evento]", payload);
+  console.log("[GPS acción]", payload);
 }
 
 function gpsActionErrorMessage(error) {
@@ -35,12 +38,7 @@ function locationStatusFromError(error) {
   return LOCATION_STATUS.UNAVAILABLE;
 }
 
-function isMobileLike() {
-  if (typeof navigator === "undefined") return false;
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
-}
-
-function normalizePoint(pos, { fallback = false } = {}) {
+function normalizePoint(pos, { source = "gps", locationStatus = LOCATION_STATUS.CAPTURED } = {}) {
   const { latitude: lat, longitude: lng, accuracy, speed } = pos?.coords || pos || {};
   const lon = lng ?? pos?.lon;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -53,22 +51,26 @@ function normalizePoint(pos, { fallback = false } = {}) {
     speed,
     ts: capturedAt,
     location_captured_at: capturedAt,
-    location_status: LOCATION_STATUS.OK,
+    location_status: locationStatus,
     location_error: null,
-    source: fallback ? "gps_fallback" : "gps",
+    source,
   };
 }
 
 /**
- * @param {{ fresh?: boolean, timeoutMs?: number, highAccuracy?: boolean }} [opts]
+ * @param {{ fresh?: boolean, timeoutMs?: number, highAccuracy?: boolean, maximumAge?: number }} [opts]
  */
 export function getDriverActionGps(opts = {}) {
   const fresh = !!opts.fresh;
   const timeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.min(60000, Math.max(3000, opts.timeoutMs))
     : DEFAULT_TIMEOUT_MS;
-  const maximumAge = fresh ? 0 : 60000;
-  const enableHighAccuracy = opts.highAccuracy ?? isMobileLike();
+  const maximumAge = Number.isFinite(opts.maximumAge)
+    ? Math.min(300000, Math.max(0, opts.maximumAge))
+    : fresh
+      ? 0
+      : DEFAULT_MAXIMUM_AGE_MS;
+  const enableHighAccuracy = opts.highAccuracy !== false;
 
   if (typeof navigator === "undefined" || !navigator.geolocation) {
     return Promise.resolve({
@@ -95,7 +97,7 @@ export function getDriverActionGps(opts = {}) {
         resolve({
           ok: true,
           point,
-          location_status: LOCATION_STATUS.OK,
+          location_status: LOCATION_STATUS.CAPTURED,
         });
       },
       (error) => {
@@ -114,72 +116,56 @@ export function getDriverActionGps(opts = {}) {
 }
 
 /**
- * Solicita ubicación para un evento operativo (mismo flujo que inicio de servicio).
+ * Solicita ubicación para un evento operativo (único flujo para todas las acciones).
  * @param {string} eventType
- * @param {{ callingFunction?: string, timeoutMs?: number, highAccuracy?: boolean, allowRecentFallback?: boolean }} [opts]
+ * @param {{ callingFunction?: string, timeoutMs?: number, allowCacheFallback?: boolean }} [opts]
  */
 export async function requestActionLocation(eventType, opts = {}) {
   const callingFunction = opts.callingFunction || "requestActionLocation";
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const allowRecentFallback = opts.allowRecentFallback !== false;
+  const allowCacheFallback = opts.allowCacheFallback !== false;
 
-  gpsEventLog({
+  gpsActionLog({
     eventType: eventType || null,
     callingFunction,
     requested: true,
   });
 
+  let usedCache = false;
   let result = await getDriverActionGps({
-    fresh: true,
     timeoutMs,
-    highAccuracy: opts.highAccuracy,
+    highAccuracy: true,
+    maximumAge: DEFAULT_MAXIMUM_AGE_MS,
   });
 
   if (
     !result.ok &&
-    result.location_status !== LOCATION_STATUS.DENIED &&
-    result.location_status !== LOCATION_STATUS.UNSUPPORTED
-  ) {
-    const retry = await getDriverActionGps({
-      fresh: true,
-      timeoutMs: Math.min(8000, timeoutMs),
-      highAccuracy: false,
-    });
-    if (retry.ok) {
-      result = { ...retry, usedLowAccuracyRetry: true };
-    }
-  }
-
-  if (
-    !result.ok &&
-    allowRecentFallback &&
+    allowCacheFallback &&
     lastGoodPoint &&
-    Date.now() - lastGoodCapturedAt <= RECENT_FALLBACK_MS
+    Date.now() - lastGoodCapturedAt <= CACHE_FALLBACK_MS
   ) {
+    usedCache = true;
+    const cachedAt = lastGoodPoint.location_captured_at || lastGoodPoint.ts || new Date().toISOString();
     result = {
       ok: true,
-      point: { ...lastGoodPoint, source: "gps_fallback" },
-      location_status: LOCATION_STATUS.OK,
-      usedFallback: true,
+      point: {
+        ...lastGoodPoint,
+        source: "cached",
+        location_status: LOCATION_STATUS.CACHED,
+        location_captured_at: cachedAt,
+        ts: cachedAt,
+      },
+      location_status: LOCATION_STATUS.CACHED,
+      usedCache: true,
     };
-    gpsEventLog({
-      eventType: eventType || null,
-      callingFunction,
-      requested: true,
-      success: true,
-      fallback: true,
-      lat: lastGoodPoint.lat,
-      lng: lastGoodPoint.lng ?? lastGoodPoint.lon,
-      accuracy: lastGoodPoint.accuracy,
-    });
   }
 
-  if (result.ok && result.point) {
+  if (result.ok && result.point && !usedCache) {
     lastGoodPoint = result.point;
     lastGoodCapturedAt = Date.now();
   }
 
-  gpsEventLog({
+  gpsActionLog({
     eventType: eventType || null,
     callingFunction,
     requested: true,
@@ -187,16 +173,21 @@ export async function requestActionLocation(eventType, opts = {}) {
     lat: result.point?.lat ?? null,
     lng: result.point?.lng ?? result.point?.lon ?? null,
     accuracy: result.point?.accuracy ?? null,
+    status: result.location_status || null,
     error: result.ok ? null : result.error || result.location_error || null,
-    location_status: result.location_status || null,
+    usedCache,
   });
 
   return result;
 }
 
-/** Intenta GPS sin bloquear la acción principal. */
+/** Intenta GPS sin modal (solo fallback interno). */
 export async function tryDriverGeoSnapshot(opts = {}) {
-  const gps = await getDriverActionGps({ fresh: true, timeoutMs: opts.timeoutMs ?? 10000 });
+  const gps = await getDriverActionGps({
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    highAccuracy: true,
+    maximumAge: opts.maximumAge ?? DEFAULT_MAXIMUM_AGE_MS,
+  });
   return gps.ok ? gps.point : null;
 }
 
@@ -205,6 +196,10 @@ export function geoPayloadFromLocationResult(result) {
   if (result?.ok && result.point) {
     const p = result.point;
     const lng = p.lng ?? p.lon;
+    const status =
+      p.location_status === LOCATION_STATUS.CACHED
+        ? LOCATION_STATUS.CACHED
+        : LOCATION_STATUS.CAPTURED;
     return {
       lat: p.lat,
       lng,
@@ -212,8 +207,8 @@ export function geoPayloadFromLocationResult(result) {
       ts: p.ts || p.location_captured_at || new Date().toISOString(),
       location_captured_at: p.location_captured_at || p.ts || new Date().toISOString(),
       accuracy_m: p.accuracy != null ? Math.round(p.accuracy) : null,
-      source: p.source || "gps",
-      location_status: LOCATION_STATUS.OK,
+      source: p.source || (status === LOCATION_STATUS.CACHED ? "cached" : "gps"),
+      location_status: status,
       location_error: null,
     };
   }

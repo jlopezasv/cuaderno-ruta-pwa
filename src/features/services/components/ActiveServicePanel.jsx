@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { ServiceEmpresaDocumentsBlock } from "./ServiceEmpresaDocumentsBlock.jsx";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
@@ -381,6 +381,20 @@ function routeSecondaryBtnStyle(isDemo) {
         fontWeight: 700,
         cursor: "pointer",
       };
+}
+
+function muelleActionMeta(kind, stop) {
+  const tipo = String(stop?.tipo || "").toLowerCase();
+  if (kind === "entrada") {
+    return { eventType: "entrada_muelle", actionLabel: "entrada en muelle" };
+  }
+  if (tipo === "descarga") {
+    return { eventType: "completar_descarga", actionLabel: "completar descarga" };
+  }
+  if (tipo === "carga") {
+    return { eventType: "completar_carga", actionLabel: "completar carga" };
+  }
+  return { eventType: "salida_muelle", actionLabel: "salida de muelle" };
 }
 
 function stopTimelineIcon(group) {
@@ -1129,6 +1143,7 @@ function DriverRecorridoStops({
   servicioId,
   conductorNombre,
   onEvidenciaSaved,
+  acquireActionLocation,
 }) {
   if (!items.length) {
     return (
@@ -1154,6 +1169,7 @@ function DriverRecorridoStops({
               servicioId={servicioId}
               conductorNombre={conductorNombre}
               onEvidenciaSaved={onEvidenciaSaved}
+              acquireActionLocation={acquireActionLocation}
             />
           </div>
         ) : (
@@ -1296,6 +1312,7 @@ function OperationalStopCard({
   servicioId,
   conductorNombre,
   onEvidenciaSaved,
+  acquireActionLocation,
 }) {
   const { stop, label, group } = item;
   const entrada = !!stop.hora_llegada_real;
@@ -1426,6 +1443,7 @@ function OperationalStopCard({
                   conductorId={servicio?.conductor_id}
                   showToast={showToast}
                   onEvidenciaSaved={onEvidenciaSaved}
+                  acquireActionLocation={acquireActionLocation}
                 />
               ) : null}
               <button
@@ -1468,6 +1486,7 @@ function OperationalStops({
   servicioId,
   conductorNombre,
   onEvidenciaSaved,
+  acquireActionLocation,
 }) {
   if (!items.length) {
     return (
@@ -1495,6 +1514,7 @@ function OperationalStops({
             servicioId={servicioId}
             conductorNombre={conductorNombre}
             onEvidenciaSaved={onEvidenciaSaved}
+            acquireActionLocation={acquireActionLocation}
           />
         ) : (
           <div
@@ -1561,6 +1581,7 @@ export function ActiveServicePanel({
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
+  const muelleGpsRef = useRef(null);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [cierreSaving, setCierreSaving] = useState(false);
@@ -1624,30 +1645,23 @@ export function ActiveServicePanel({
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
   const activeTimelineItem = timelineItems.find((it) => it.stop.id === expandedStopId);
 
+  const handleMuelleRequest = async ({ kind, stopId }) => {
+    if (confirmMuelleSaving) return;
+    const stop = sortedStops.find((s) => s.id === stopId);
+    const { eventType, actionLabel } = muelleActionMeta(kind, stop);
+    const prefetchedGps = await acquireLocation(eventType, actionLabel);
+    if (prefetchedGps === null) return;
+    muelleGpsRef.current = prefetchedGps;
+    setConfirmMuelle({ kind, stopId });
+  };
+
   const handleConfirmMuelle = async () => {
     if (!confirmMuelle || confirmMuelleSaving) return;
     const { kind, stopId } = confirmMuelle;
-    const stop = sortedStops.find((s) => s.id === stopId);
-    const actionLabel =
-      kind === "entrada"
-        ? "entrada en muelle"
-        : String(stop?.tipo || "").toLowerCase() === "descarga"
-          ? "completar descarga"
-          : String(stop?.tipo || "").toLowerCase() === "carga"
-            ? "completar carga"
-            : "salida de muelle";
-    const eventType =
-      kind === "entrada"
-        ? "entrada_muelle"
-        : String(stop?.tipo || "").toLowerCase() === "descarga"
-          ? "completar_descarga"
-          : String(stop?.tipo || "").toLowerCase() === "carga"
-            ? "completar_carga"
-            : "salida_muelle";
+    const prefetchedGps = muelleGpsRef.current;
+    if (!prefetchedGps) return;
     setConfirmMuelleSaving(true);
     try {
-      const prefetchedGps = await acquireLocation(eventType, actionLabel);
-      if (prefetchedGps === null) return;
       if (kind === "entrada") {
         await marcarLlegado(stopId, { prefetchedGps });
         await recargar?.();
@@ -1655,6 +1669,7 @@ export function ActiveServicePanel({
         await marcarCompletado(stopId, { prefetchedGps });
       }
       setConfirmMuelle(null);
+      muelleGpsRef.current = null;
     } catch (error) {
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
@@ -1720,7 +1735,11 @@ export function ActiveServicePanel({
         justifyContent: "center",
         padding: 16,
       }}
-      onClick={() => !confirmMuelleSaving && setConfirmMuelle(null)}
+      onClick={() => {
+        if (confirmMuelleSaving) return;
+        muelleGpsRef.current = null;
+        setConfirmMuelle(null);
+      }}
     >
       <div
         role="dialog"
@@ -1749,7 +1768,10 @@ export function ActiveServicePanel({
           <button
             type="button"
             disabled={confirmMuelleSaving}
-            onClick={() => setConfirmMuelle(null)}
+            onClick={() => {
+              muelleGpsRef.current = null;
+              setConfirmMuelle(null);
+            }}
             style={{
               flex: 1,
               background: DRIVER_UI.surfaceHi,
@@ -1842,13 +1864,14 @@ export function ActiveServicePanel({
               firstCargaStopId={firstCargaStopId}
               evidenciasByStop={evidenciasByStop}
               canOperate={canOperateStops}
-              onConfirmMuelle={setConfirmMuelle}
+              onConfirmMuelle={handleMuelleRequest}
               EvidenciasStopComponent={EvidenciasStopComponent}
               showToast={showToast}
               servicio={servicio}
               servicioId={servicio?.id}
               conductorNombre={conductorNombre}
               onEvidenciaSaved={onEvidenciaSaved}
+              acquireActionLocation={acquireLocation}
             />
             <div style={{ padding: "0 16px" }}>
               <EnRutaHastaProximaEntrada servicio={servicio} stops={sortedStops} />
@@ -2151,13 +2174,14 @@ export function ActiveServicePanel({
             firstCargaStopId={firstCargaStopId}
             evidenciasByStop={evidenciasByStop}
             canOperate={canOperateStops}
-            onConfirmMuelle={setConfirmMuelle}
+            onConfirmMuelle={handleMuelleRequest}
             EvidenciasStopComponent={EvidenciasStopComponent}
             showToast={showToast}
             servicio={servicio}
             servicioId={servicio?.id}
             conductorNombre={conductorNombre}
             onEvidenciaSaved={onEvidenciaSaved}
+            acquireActionLocation={acquireLocation}
           />
           <EnRutaHastaProximaEntrada servicio={servicio} stops={sortedStops} />
         </div>

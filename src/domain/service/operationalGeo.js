@@ -2,6 +2,7 @@
 
 export const GEO_SOURCE_LABEL = Object.freeze({
   gps: "GPS",
+  cached: "caché reciente",
   browser: "navegador",
   manual: "manual",
   no_disponible: "no disponible",
@@ -24,6 +25,8 @@ const LOCATION_REASON_LABELS = {
   timeout: "timeout",
   unavailable: "ubicación desactivada",
   unsupported: "no soportado",
+  captured: "capturada",
+  cached: "caché reciente",
   ok: "ok",
 };
 
@@ -54,7 +57,8 @@ export function formatExpedienteUbicacionLine(geo) {
     geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))
       ? ` · precisión ${Math.round(Number(geo.accuracy_m))} m`
       : "";
-  return `Ubicación: ${lat}, ${lon}${acc}`;
+  const cacheNote = geo.location_status === "cached" || geo.source === "cached" ? " (caché)" : "";
+  return `Ubicación: ${lat}, ${lon}${acc}${cacheNote}`;
 }
 
 /** Detalle para timeline conductor. */
@@ -69,6 +73,9 @@ export function formatDriverGeoTimelineLines(geo) {
   ];
   if (geo.accuracy_m != null && Number.isFinite(Number(geo.accuracy_m))) {
     lines.push({ label: "Precisión", value: `${Math.round(Number(geo.accuracy_m))} m` });
+  }
+  if (geo.location_status === "cached" || geo.source === "cached") {
+    lines.push({ label: "Origen", value: "Ubicación reciente (caché)" });
   }
   return lines;
 }

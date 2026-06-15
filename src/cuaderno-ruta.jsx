@@ -213,7 +213,7 @@ import {
 import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForServicio.js";
 import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
-import { getDriverActionGps, eventGeoFromLocationResult } from "./data/driverActionGps.js";
+import { eventGeoFromLocationResult, requestActionLocation } from "./data/driverActionGps.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
 import { ServicioMercanciaBlock } from "./features/dcdt/ServicioMercanciaBlock.jsx";
@@ -5163,7 +5163,7 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
   let gps;
   if(prefetchedGps!=null){
     gps=prefetchedGps;
-    if(isDemoApp())console.log("[GPS evento]",{
+    if(isDemoApp())console.log("[GPS acción]",{
       eventType:eventType||null,
       callingFunction:"registerDriverOperationalPoint",
       requested:true,
@@ -5171,12 +5171,14 @@ async function registerDriverOperationalPoint({uid,servicio,stops,norma,eventTyp
       lat:gps.point?.lat??null,
       lng:gps.point?.lng??gps.point?.lon??null,
       accuracy:gps.point?.accuracy??null,
+      status:gps.location_status||null,
       error:gps.ok?null:gps.error||gps.location_error||null,
+      usedCache:gps.usedCache||gps.point?.source==="cached"||false,
     });
   }else{
     showToast?.("Obteniendo ubicación…","#64748B",3000);
     trackingLog("operativa flow_gps_wait",{uid,event:eventType||null});
-    gps=await getDriverActionGps({fresh:true,timeoutMs:10000,highAccuracy:true});
+    gps=await requestActionLocation(eventType||"operacion",{callingFunction:"registerDriverOperationalPoint"});
   }
   let point=null;
   if(!gps.ok){
@@ -17454,7 +17456,10 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const notasSalida=await patchStopOperacionGeo(stopId,stopSalidaRow?.notas,{salida_geo:geoSalida});
     updated=updated.map(s=>s.id===stopId?{...s,notas:notasSalida}:s);
 
-    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"salida_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
+    const stopTipo=String(stop?.tipo||"").toLowerCase();
+    const trackingEventType=
+      stopTipo==="descarga"?"completar_descarga":stopTipo==="carga"?"completar_carga":"salida_muelle";
+    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:trackingEventType,stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
 

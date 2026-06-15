@@ -635,6 +635,11 @@ function EmpresaFlotaServicioCardImpl({
                             {ev.detail}
                           </div>
                         ) : null}
+                        {ev.ubicacion ? (
+                          <div style={{ fontSize: 11, color: su, lineHeight: 1.35, marginTop: 2 }}>
+                            {ev.ubicacion}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   ))}

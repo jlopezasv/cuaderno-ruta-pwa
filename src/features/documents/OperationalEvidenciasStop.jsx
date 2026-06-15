@@ -12,7 +12,7 @@ import {
 } from "../../domain/documents/operationalDocumentTrace.js";
 import { getCameraInputProps, isMobileCaptureDevice } from "../../domain/documents/universalCamera.js";
 import { geoFromGpsPoint } from "../../domain/service/operationalGeo.js";
-import { tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
+import { geoPayloadFromLocationResult, tryDriverGeoSnapshot } from "../../data/driverActionGps.js";
 import { OperationalDocumentRow } from "./OperationalDocumentRow.jsx";
 import { notifyEvidenciaSaved, notifyIncidenciaSaved } from "../../domain/documents/operationalEvidenciaSync.js";
 import { createIncidencia, listIncidenciasByServicio } from "../../domain/incidencias/incidenciasApi.js";
@@ -47,6 +47,7 @@ export function OperationalEvidenciasStop({
   onEvidenciaSaved,
   tiposPermitidos = null,
   onOpenDocument = null,
+  acquireActionLocation = null,
 }) {
   const [evidencias, setEvidencias] = useState([]);
   const [incidencias, setIncidencias] = useState([]);
@@ -129,7 +130,14 @@ export function OperationalEvidenciasStop({
 
   const canTipo = (t) => !allowedTipos || allowedTipos.has(String(t || "").toLowerCase());
 
-  async function captureUploadGeo() {
+  async function captureUploadGeo(eventType, actionLabel) {
+    if (typeof acquireActionLocation === "function") {
+      const result = await acquireActionLocation(eventType, actionLabel);
+      if (result === null) {
+        throw new Error("Ubicación cancelada");
+      }
+      return geoPayloadFromLocationResult(result);
+    }
     const point = await tryDriverGeoSnapshot({ timeoutMs: 10000 });
     return geoFromGpsPoint(point) || geoFromGpsPoint(null, { recordUnavailable: true });
   }
@@ -247,7 +255,7 @@ export function OperationalEvidenciasStop({
         });
       }
       await preparePreview(file, { forFoto: true });
-      const geo = await captureUploadGeo();
+      const geo = await captureUploadGeo("documento_foto", "adjuntar foto");
       const { previewUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
@@ -335,7 +343,7 @@ export function OperationalEvidenciasStop({
             documentModeExpected: true,
           });
         }
-        const geo = await captureUploadGeo();
+        const geo = await captureUploadGeo("documento_cmr", "guardar CMR");
         const up = await uploadOperationalDocument(sourceFile, {
           folder: "cmr",
           tipo: "cmr",
@@ -379,7 +387,7 @@ export function OperationalEvidenciasStop({
     setSaving(true);
     setError("");
     try {
-      const incGeo = await captureUploadGeo();
+      const incGeo = await captureUploadGeo("incidencia_registrada", "registrar incidencia");
       const savedInc = await createIncidencia({
         servicio: servicio || (servicioId ? { id: servicioId } : null),
         stop,
@@ -390,7 +398,7 @@ export function OperationalEvidenciasStop({
       });
       const fotos = incFotos.slice(0, 6);
       for (const file of fotos) {
-        const geo = await captureUploadGeo();
+        const geo = await captureUploadGeo("documento_foto", "foto de incidencia");
         const up = await uploadOperationalDocument(file, {
           folder: `incidencias/${savedInc.id}`,
           tipo: "foto",
