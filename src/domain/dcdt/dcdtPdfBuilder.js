@@ -110,8 +110,26 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
   let page = pdfDoc.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - MARGIN;
 
+  const qrBytes = options.qrPngBytes;
+  const qrSize = 88;
+  const headerQrReserve = qrBytes?.length ? qrSize + 28 : 0;
+
+  if (qrBytes?.length) {
+    const qrImage = await pdfDoc.embedPng(qrBytes);
+    const qrX = PAGE_W - MARGIN - qrSize;
+    const qrY = PAGE_H - MARGIN - qrSize;
+    page.drawImage(qrImage, { x: qrX, y: qrY, width: qrSize, height: qrSize });
+    page.drawText("DeCA - escanee para descargar", {
+      x: qrX - 2,
+      y: qrY - 12,
+      size: 7,
+      font,
+      color: hexRgb("#64748b"),
+    });
+  }
+
   function ensure(h) {
-    if (y - h < MARGIN) {
+    if (y - h < MARGIN + (page === pdfDoc.getPages()[0] ? 0 : 0)) {
       page = pdfDoc.addPage([PAGE_W, PAGE_H]);
       y = PAGE_H - MARGIN;
     }
@@ -124,12 +142,14 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
       y -= LINE_H;
       return;
     }
+    const maxWidth = PAGE_W - MARGIN - x - (page === pdfDoc.getPages()[0] && headerQrReserve ? headerQrReserve + 12 : 0);
     page.drawText(text, {
       x,
       y: y - size,
       size,
       font: bold ? fontBold : font,
       color: hexRgb(color),
+      maxWidth: maxWidth > 80 ? maxWidth : undefined,
     });
     y -= LINE_H;
   }
@@ -196,24 +216,6 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
     if (doc.transportista?.nombre) {
       drawLines(`Empresa transportista: ${doc.transportista.nombre}`, MARGIN, 10, "#15803d");
     }
-  }
-
-  const qrBytes = options.qrPngBytes;
-  if (qrBytes?.length) {
-    const qrImage = await pdfDoc.embedPng(qrBytes);
-    const qrSize = 96;
-    const pages = pdfDoc.getPages();
-    const footerPage = pages[pages.length - 1];
-    const qrX = PAGE_W - MARGIN - qrSize;
-    const qrY = MARGIN + 18;
-    footerPage.drawImage(qrImage, { x: qrX, y: qrY, width: qrSize, height: qrSize });
-    footerPage.drawText("DeCA — escanee para descargar", {
-      x: MARGIN,
-      y: qrY + qrSize / 2 - 4,
-      size: 9,
-      font,
-      color: hexRgb("#475569"),
-    });
   }
 
   const pdfBytes = await pdfDoc.save();

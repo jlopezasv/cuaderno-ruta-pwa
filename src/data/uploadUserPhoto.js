@@ -136,9 +136,17 @@ export async function signStorageObjectPath(bucket, objectPath, expiresIn = SIGN
   });
 }
 
+function encodeStoragePathForUrl(objectPath) {
+  return String(objectPath || "")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 /**
  * Sube (o sobrescribe) un blob en una ruta fija de Storage (upsert).
- * Usado por DeCA para regenerar PDF en la misma pdf_storage_path.
+ * Usado por DeCA para regenerar PNG QR en ruta estable.
  */
 export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, options = {}) {
   const { requireHttpUrl = true } = options;
@@ -149,7 +157,8 @@ export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, op
   if (!blob || sizeBytes <= 0) throw new Error("Blob inválido o vacío");
 
   guardDemoCannotUseProduction(SB_URL, `storage:uploadAt:${bucket}`);
-  const uploadUrl = `${SB_URL}/storage/v1/object/${bucket}/${path}`;
+  const encPath = encodeStoragePathForUrl(path);
+  const uploadUrl = `${SB_URL}/storage/v1/object/${encodeURIComponent(bucket)}/${encPath}`;
   const res = await fetch(uploadUrl, {
     method: "POST",
     headers: {
@@ -171,7 +180,7 @@ export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, op
     throw new Error(STORAGE_URL_ERROR);
   }
 
-  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${path}`, {
+  const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${encPath}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

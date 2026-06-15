@@ -21,6 +21,7 @@ import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf } from "../../domain/d
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
+import { DcdtQrModal } from "./DcdtQrModal.jsx";
 
 const UI = {
   overlay: "rgba(15,23,42,.45)",
@@ -95,6 +96,7 @@ export function EmpresaDcdtModal({
   const [confirmRole, setConfirmRole] = useState(null);
   const [empresaOwnerProfile, setEmpresaOwnerProfile] = useState(null);
   const [conductorEmpresa, setConductorEmpresa] = useState(conductor);
+  const [qrOpen, setQrOpen] = useState(false);
   const mercanciaDirtyRef = useRef(false);
   const syncedPartesRef = useRef(false);
   const flotaEvsRef = useRef(flotaEvs);
@@ -355,6 +357,7 @@ export function EmpresaDcdtModal({
   const puedePdf = readiness.canGeneratePdf;
   const puedeDescargarPdf = readiness.canDownloadPdf;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
+  const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
 
   async function guardarMercancia() {
     if (!dcdt) return;
@@ -461,7 +464,7 @@ export function EmpresaDcdtModal({
     }
     setBusy("pdf");
     try {
-      const { dcdt: next } = await generateAndPersistDcdtPdf({
+      const { dcdt: next, pdfSizeBytes, generatedAt } = await generateAndPersistDcdtPdf({
         servicio,
         dcdt,
         doc,
@@ -469,7 +472,9 @@ export function EmpresaDcdtModal({
         downloadAfter: true,
       });
       setDcdt(next);
-      showToast?.("PDF DCDT generado y guardado en documentos del servicio");
+      const kb = pdfSizeBytes ? `${Math.round(pdfSizeBytes / 1024)} KB` : "";
+      const when = generatedAt ? new Date(generatedAt).toLocaleTimeString("es-ES") : "";
+      showToast?.(`PDF DeCA generado con QR${kb ? ` · ${kb}` : ""}${when ? ` · ${when}` : ""}`);
     } catch (e) {
       showToast?.(e?.message || "Error al generar PDF");
     } finally {
@@ -518,7 +523,7 @@ export function EmpresaDcdtModal({
                 <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, fontWeight: 700, color: UI.green }}>
                   {isDcdtEstadoValidated(dcdt?.estado)
                     ? dcdt?.pdfGeneradoAt
-                      ? "DCDT validado · PDF generado"
+                      ? `DCDT validado · PDF generado${dcdt?.datos?.pdf_size_bytes ? ` (${Math.round(dcdt.datos.pdf_size_bytes / 1024)} KB)` : ""}`
                       : "DCDT validado"
                     : "DCDT completo — listo para validar"}
                 </div>
@@ -608,11 +613,24 @@ export function EmpresaDcdtModal({
           <button type="button" disabled={!!busy || loading || !puedeDescargarPdf} onClick={descargarPdfGuardado} style={btn(UI.accent, "#fff")}>
             Descargar PDF DCDT
           </button>
+          <button type="button" disabled={!!busy || loading || !decaDownloadUrl} onClick={() => setQrOpen(true)} style={btn("#0f766e", "#fff")}>
+            Mostrar QR DeCA
+          </button>
           <button type="button" onClick={onClose} style={{ ...btn("#fff", UI.tx), marginLeft: "auto" }}>
             Cerrar
           </button>
         </div>
       </div>
+      {qrOpen ? (
+        <DcdtQrModal
+          decaPublicId={dcdt?.decaPublicId}
+          downloadUrl={decaDownloadUrl}
+          dcdt={dcdt}
+          numeroDcdt={serviceLabel}
+          showToast={showToast}
+          onClose={() => setQrOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

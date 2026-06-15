@@ -163,20 +163,10 @@ export async function generateAndPersistDcdtPdf({
   const filename = `dcdt-${serviceLabel}.pdf`;
   const folder = `dcdt/${servicio.empresa_id || "empresa"}/${servicio.id}`;
 
-  const existingPdfPath = String(dcdtReady.datos?.pdf_storage_path || "").trim();
-  const existingBucket = dcdtReady.datos?.pdf_storage_bucket || USER_PHOTOS_BUCKET;
-
-  let storage;
-  if (existingPdfPath) {
-    dcdtPdfDemoLog("storage_upsert_path", existingPdfPath);
-    storage = await uploadBlobAtStoragePath(blob, "application/pdf", existingBucket, existingPdfPath, {
-      requireHttpUrl: true,
-    });
-  } else {
-    storage = await uploadBlobToStorage(blob, "application/pdf", folder, filename, {
-      requireHttpUrl: true,
-    });
-  }
+  // Siempre nueva ruta con timestamp: cada «Generar PDF» sustituye el binario servido por /api/dcdt-download.
+  const storage = await uploadBlobToStorage(blob, "application/pdf", folder, filename, {
+    requireHttpUrl: true,
+  });
 
   const storagePath = storage?.path;
   const storageBucket = storage?.bucket || USER_PHOTOS_BUCKET;
@@ -223,6 +213,8 @@ export async function generateAndPersistDcdtPdf({
     deca_download_url: decaDownloadUrl,
     deca_qr_png_bucket: qrStorage.bucket,
     deca_qr_png_path: qrStorage.path,
+    pdf_size_bytes: blob.size,
+    pdf_has_qr: true,
   };
 
   const rowBody = {
@@ -260,6 +252,8 @@ export async function generateAndPersistDcdtPdf({
     decaDownloadUrl,
     decaQrPngStorageBucket: qrStorage.bucket,
     decaQrPngStoragePath: qrStorage.path,
+    pdfSizeBytes: blob.size,
+    pdfHasQr: true,
   });
 
   dcdtPdfDemoLog("generado", {
@@ -284,6 +278,8 @@ export async function generateAndPersistDcdtPdf({
     decaDownloadUrl,
     qrPngBlob,
     qrStoragePath,
+    pdfSizeBytes: blob.size,
+    generatedAt,
   };
 }
 

@@ -645,6 +645,8 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
       meta.decaQrPngStorageBucket ?? current?.datos?.deca_qr_png_storage_bucket ?? null,
     deca_qr_png_storage_path:
       meta.decaQrPngStoragePath ?? current?.datos?.deca_qr_png_storage_path ?? null,
+    pdf_size_bytes: meta.pdfSizeBytes ?? current?.datos?.pdf_size_bytes ?? null,
+    pdf_has_qr: meta.pdfHasQr ?? current?.datos?.pdf_has_qr ?? null,
   };
   const r = await dcdtRequest(`?id=eq.${id}`, {
     method: "PATCH",

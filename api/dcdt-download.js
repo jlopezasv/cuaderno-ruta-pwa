@@ -108,7 +108,7 @@ export default async function handler(req, res) {
     const filename = resolvePdfFilename(datos, decaPublicId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("Cache-Control", "no-store, max-age=0");
 
     if (req.method === "HEAD") {
       const pdf = await fetchStoragePdf(bucket, storagePath);
