@@ -15,7 +15,11 @@ import { getOperationalTripStartedAt } from "../service/serviceOperacionMeta.js"
 const ESTADOS_INICIADO = new Set(["en_curso", "completado", "cerrado"]);
 
 export function hasDecaPdfGenerado(dcdt) {
-  return !!(dcdt?.pdfGeneradoAt && dcdt?.datos?.pdf_storage_path);
+  if (!dcdt) return false;
+  if (dcdt.pdfGeneradoAt && dcdt.datos?.pdf_storage_path) return true;
+  const hasStorage = !!(dcdt.datos?.pdf_storage_path || dcdt.datos?.pdf_archivo_url);
+  const hasPublicDeCa = !!(dcdt.datos?.deca_public_id && dcdt.datos?.deca_download_url);
+  return hasStorage && (dcdt.pdfGeneradoAt || dcdt.datos?.pdf_generado_en || hasPublicDeCa);
 }
 
 export function isServicioInicioEfectivoAlcanzado(servicio, nowMs = Date.now()) {

@@ -25,6 +25,8 @@ import {
   buildRutaModFormFromDoc,
   canModificarDecaEnRuta,
   confirmDecaRouteModification,
+  getModificarEnRutaBlockedReason,
+  isDecaRouteModificationDemoSurface,
 } from "../../domain/dcdt/decaRouteModification.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
@@ -378,7 +380,12 @@ export function EmpresaDcdtModal({
   const puedeDescargarPdf = readiness.canDownloadPdf;
   const warnDecaPreStart = readiness.warnDecaMissingPdfBeforeStart;
   const pdfStale = readiness.pdfStale;
-  const puedeModificarEnRuta = isDemoApp() && canModificarDecaEnRuta({ servicio, dcdt });
+  const demoRutaSurface = isDecaRouteModificationDemoSurface();
+  const puedeModificarEnRuta = demoRutaSurface && canModificarDecaEnRuta({ servicio, dcdt });
+  const rutaModBlockedReason =
+    !puedeModificarEnRuta && dcdt?.id
+      ? getModificarEnRutaBlockedReason({ servicio, dcdt, demoSurface: demoRutaSurface })
+      : null;
   const modificacionesRuta = Array.isArray(dcdt?.datos?.modificaciones_ruta) ? dcdt.datos.modificaciones_ruta : [];
 
   useEffect(() => {
@@ -739,12 +746,34 @@ export function EmpresaDcdtModal({
               ) : (
                 <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, fontWeight: 700, color: UI.green }}>
                   {isDcdtEstadoValidated(dcdt?.estado)
-                    ? dcdt?.pdfGeneradoAt
+                    ? dcdt?.pdfGeneradoAt || dcdt?.datos?.pdf_storage_path
                       ? `DCDT validado · PDF generado${dcdt?.datos?.pdf_size_bytes ? ` (${Math.round(dcdt.datos.pdf_size_bytes / 1024)} KB)` : ""}`
                       : "DCDT validado"
                     : "DCDT completo — listo para validar"}
                 </div>
               )}
+              {rutaModBlockedReason && puedeDescargarPdf ? (
+                <div
+                  style={{
+                    background: "#fffbeb",
+                    border: "1px solid #fcd34d",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    marginBottom: 14,
+                    fontSize: 11,
+                    color: "#92400e",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong>Modificar en ruta no disponible:</strong> {rutaModBlockedReason}
+                  {isDemoApp() ? (
+                    <div style={{ marginTop: 4, fontSize: 10, color: UI.su }}>
+                      Servicio estado={String(servicio?.estado || "—")} · PDF=
+                      {dcdt?.datos?.pdf_storage_path || dcdt?.datos?.pdf_archivo_url ? "sí" : "no"}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 6 }}>DATOS ENCONTRADOS</div>
               {renderParteBlock(

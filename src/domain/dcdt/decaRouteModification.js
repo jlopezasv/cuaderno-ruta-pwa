@@ -1,10 +1,27 @@
+import { isDemoApp } from "../../config/appEnvironment.js";
+import {
+  SERVICIO_ESTADO_ASIGNADO,
+  SERVICIO_ESTADO_EN_CURSO,
+} from "../fleet/serviceStatus.js";
 import {
   buildMercanciaDatosPatch,
   resolveDcdtDocument,
   saveDcdtDatos,
 } from "./dcdtModel.js";
 import { generateAndPersistDcdtPdf } from "./dcdtPdfDocument.js";
-import { hasDecaPdfGenerado } from "./decaPreStartCompliance.js";
+import {
+  hasDecaPdfGenerado,
+  isServicioInicioEfectivoAlcanzado,
+} from "./decaPreStartCompliance.js";
+
+const ESTADOS_TERMINALES_RUTA = new Set(["completado", "cerrado", "cancelado", "anulado"]);
+
+/** Demo: VITE_APP_ENV=demo o host cuaderno-demo (Vercel). */
+export function isDecaRouteModificationDemoSurface() {
+  if (isDemoApp()) return true;
+  if (typeof window === "undefined") return false;
+  return /cuaderno-demo/i.test(window.location.hostname);
+}
 
 /** Campos art. 6 editables durante el servicio en curso (Paso 6b demo). */
 export const DECA_RUTA_FIELD_DEFS = Object.freeze([
@@ -87,11 +104,35 @@ export function applyRutaModFormToDatos(datos, form) {
   };
 }
 
-/** Servicio en curso con PDF DeCA ya generado. */
+/** Servicio operativo con PDF DeCA ya generado (asignado/en curso o viaje iniciado). */
 export function canModificarDecaEnRuta({ servicio, dcdt }) {
   if (!servicio?.id || !dcdt?.id) return false;
-  if (String(servicio.estado || "").toLowerCase() !== "en_curso") return false;
-  return hasDecaPdfGenerado(dcdt);
+  if (!hasDecaPdfGenerado(dcdt)) return false;
+  const st = String(servicio.estado || "").toLowerCase();
+  if (ESTADOS_TERMINALES_RUTA.has(st)) return false;
+  if (st === SERVICIO_ESTADO_EN_CURSO || st === SERVICIO_ESTADO_ASIGNADO) return true;
+  return isServicioInicioEfectivoAlcanzado(servicio);
+}
+
+/** Motivo por el que no aparece «Modificar en ruta» (null = debería mostrarse). */
+export function getModificarEnRutaBlockedReason({ servicio, dcdt, demoSurface = true }) {
+  if (!demoSurface) {
+    return "Solo en demo (https://cuaderno-demo-ab.vercel.app)";
+  }
+  if (!dcdt?.id) return "Cargando DCDT…";
+  if (!hasDecaPdfGenerado(dcdt)) return "Genera el PDF DeCA antes de modificar en ruta";
+  const st = String(servicio?.estado || "").toLowerCase() || "(sin estado)";
+  if (ESTADOS_TERMINALES_RUTA.has(st)) {
+    return `Servicio «${st}» — ya no admite cambios en ruta`;
+  }
+  if (
+    st !== SERVICIO_ESTADO_EN_CURSO &&
+    st !== SERVICIO_ESTADO_ASIGNADO &&
+    !isServicioInicioEfectivoAlcanzado(servicio)
+  ) {
+    return `Servicio «${st}» — debe estar asignado, en curso o con viaje iniciado`;
+  }
+  return null;
 }
 
 /**
