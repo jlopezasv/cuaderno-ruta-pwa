@@ -37,6 +37,8 @@ import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 import { logMuelleGps } from "../../../data/muelleGeoTrace.js";
+import { ServiceMessagesPanel } from "../../messages/ServiceMessagesPanel.jsx";
+import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -1903,6 +1905,18 @@ export function ActiveServicePanel({
               </div>
             ) : null}
           </DriverDemoSection>
+
+          {isServiceMessagesEnabled(servicio) ? (
+            <DriverDemoSection title="Mensajes">
+              <ServiceMessagesPanel
+                servicio={servicio}
+                audience="conductor"
+                senderName={conductorNombre}
+                senderRole="conductor"
+                showToast={showToast}
+              />
+            </DriverDemoSection>
+          ) : null}
 
           <DriverDemoSection style={{ padding: 0 }}>
             <DriverClienteDocumentosSection

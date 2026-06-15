@@ -43,6 +43,10 @@ import { normalizeServicioEmpresaId } from "./serviceOwnership.js";
 import { DEMO_FLEET_TENANT_LABELS } from "../../config/demoFleetTenantLabels.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { logMuelleGps } from "../../data/muelleGeoTrace.js";
+import {
+  filterCustomerReportMessages,
+  formatServiceMessageClock,
+} from "../messages/serviceMessagesApi.js";
 
 /** Nombre comercial de la empresa para la cabecera del expediente (solo UI). */
 function resolveExpedienteEmpresaNombre(servicio) {
@@ -410,6 +414,7 @@ export function buildServiceExpediente({
   entries = [],
   conductoresParticipantes = [],
   empresaExpedienteHeader = null,
+  serviceMessages = null,
 }) {
   const sortedStops = sortStopsByOrden(stops);
   const serviceMeta = getServicioOperacionMeta(servicio);
@@ -769,6 +774,14 @@ export function buildServiceExpediente({
     ...(extraDocumentos || []),
   ];
 
+  const comunicacionesCliente = filterCustomerReportMessages(serviceMessages).map((msg) => ({
+    id: msg.id,
+    autor: msg.sender_name || msg.sender_role || "—",
+    hora: formatServiceMessageClock(msg.created_at),
+    texto: msg.message,
+    created_at: msg.created_at,
+  }));
+
   return {
     id: servicio?.id,
     ref,
@@ -836,6 +849,7 @@ export function buildServiceExpediente({
     cmr,
     fotos,
     documentosExtra,
+    comunicacionesCliente,
   };
 }
 

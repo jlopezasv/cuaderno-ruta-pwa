@@ -276,6 +276,57 @@ async function assertCallerMayNotifyAssignment(supabase, callerUserId, servicioI
   return false;
 }
 
+/** Acceso operativo al servicio (conductor, empresa, oficina, jefe flota). */
+async function assertCallerMayAccessServicio(supabase, callerUserId, servicioId) {
+  if (!servicioId || !callerUserId) return false;
+  const { data: s, error } = await supabase
+    .from("servicios")
+    .select("id, conductor_id, empresa_id")
+    .eq("id", servicioId)
+    .maybeSingle();
+  if (error || !s) return false;
+  if (s.conductor_id === callerUserId) return true;
+  if (s.empresa_id) {
+    const { data: emp } = await supabase
+      .from("empresas")
+      .select("id, owner_id")
+      .eq("id", s.empresa_id)
+      .maybeSingle();
+    if (emp?.owner_id === callerUserId) return true;
+    const { data: office } = await supabase
+      .from("empresa_usuarios")
+      .select("id")
+      .eq("empresa_id", s.empresa_id)
+      .eq("user_id", callerUserId)
+      .eq("activo", true)
+      .maybeSingle();
+    if (office) return true;
+  }
+  if (s.conductor_id) {
+    return assertCallerMayNotifyAssignment(supabase, callerUserId, servicioId, s.conductor_id);
+  }
+  return false;
+}
+
+async function resolveServiceMessageRecipientId(supabase, servicioId, senderUserId) {
+  const { data: s } = await supabase
+    .from("servicios")
+    .select("conductor_id, empresa_id")
+    .eq("id", servicioId)
+    .maybeSingle();
+  if (!s) return null;
+  if (s.conductor_id && s.conductor_id !== senderUserId) return s.conductor_id;
+  if (s.empresa_id) {
+    const { data: emp } = await supabase
+      .from("empresas")
+      .select("owner_id")
+      .eq("id", s.empresa_id)
+      .maybeSingle();
+    if (emp?.owner_id && emp.owner_id !== senderUserId) return emp.owner_id;
+  }
+  return null;
+}
+
 function resolveActionAndPayload(req) {
   const raw = req.body && typeof req.body === "object" ? req.body : {};
   const action = req.query?.action || raw.action;
@@ -535,6 +586,115 @@ export default async function handler(req, res) {
         channel: delivery.channel,
         cleanup: delivery.cleanup,
         response: delivery.bodyText?.slice(0, 4000),
+      });
+    }
+
+    if (action === "notify_service_message") {
+      const servicioId = payload?.servicio_id ?? null;
+      const senderUserId = payload?.sender_user_id ?? null;
+      pushSendLog("notify_service_message start", { servicio_id: servicioId, sender_user_id: senderUserId });
+      if (!servicioId || !senderUserId) {
+        return res.status(400).json({ ok: false, error: "Missing servicio_id or sender_user_id", code: "PUSH_BAD_REQUEST" });
+      }
+      if (!sbServiceKey) {
+        return res.status(503).json({
+          ok: false,
+          error: "SUPABASE_SERVICE_ROLE_KEY not configured",
+          code: "PUSH_NOT_CONFIGURED",
+        });
+      }
+      const supabaseAuth = getServiceSupabase(sbUrl, sbServiceKey);
+      const accessToken = bearerToken(req);
+      const { userId: callerId, error: authErr } = await authUserIdFromBearer(supabaseAuth, accessToken);
+      if (!callerId) {
+        return res.status(401).json({
+          ok: false,
+          error: authErr || "Authorization: Bearer <access_token> requerido",
+          code: "PUSH_UNAUTHORIZED",
+        });
+      }
+      if (callerId !== senderUserId) {
+        return res.status(403).json({ ok: false, error: "sender_user_id no coincide con sesión", code: "PUSH_FORBIDDEN" });
+      }
+      const allowed = await assertCallerMayAccessServicio(supabaseAuth, callerId, servicioId);
+      if (!allowed) {
+        pushSendLog("notify_service_message forbidden", { caller_partial: String(callerId).slice(0, 8) });
+        return res.status(403).json({
+          ok: false,
+          error: "No autorizado para notificar este servicio",
+          code: "PUSH_FORBIDDEN",
+        });
+      }
+      const { method } = resolveFcmSendMethod();
+      if (!method) {
+        pushSendLog("notify_service_message abort — no FCM sender", envPresence());
+        return res.status(200).json({ ok: true, skipped: "no_fcm_configured" });
+      }
+      const supabase = getServiceSupabase(sbUrl, sbServiceKey);
+      const recipientId = await resolveServiceMessageRecipientId(supabase, servicioId, senderUserId);
+      if (!recipientId) {
+        pushSendLog("notify_service_message skipped — no recipient", { servicio_id: servicioId });
+        return res.status(200).json({ ok: true, skipped: "no_recipient" });
+      }
+      const { data: tokenRows, error: qErr } = await supabase
+        .from("push_tokens")
+        .select("token,updated_at")
+        .eq("user_id", recipientId)
+        .order("updated_at", { ascending: false })
+        .limit(10);
+      if (qErr) {
+        pushSendLog("notify_service_message tokens query failed", qErr.message);
+        return res.status(200).json({ ok: true, skipped: "token_query_failed" });
+      }
+      const tokens = (tokenRows || []).map((r) => r.token).filter(Boolean);
+      if (!tokens.length) {
+        pushSendLog("notify_service_message skipped — no token", { recipient_partial: String(recipientId).slice(0, 8) });
+        return res.status(200).json({ ok: true, skipped: "no_token" });
+      }
+      const token = tokens[0];
+      const senderName = String(payload?.sender_name || "Equipo").trim();
+      const preview = String(payload?.message_preview || "").trim();
+      const title = `Mensaje · ${senderName}`;
+      const bodyText = preview || "Nuevo mensaje en el servicio";
+      const data = {
+        url: "/?tab=servicio",
+        kind: "service_message",
+        servicio_id: String(servicioId),
+      };
+      const legacyPayload = {
+        to: token,
+        priority: "high",
+        notification: {
+          title,
+          body: bodyText,
+          click_action: "/?tab=servicio",
+          icon: "/icons/icon-192.png",
+        },
+        data,
+      };
+      const delivery = await deliverFcmNotification({
+        supabase,
+        token,
+        title,
+        bodyText,
+        data,
+        legacyPayload,
+      });
+      if (!delivery.success) {
+        pushSendLog("notify_service_message delivery failed", {
+          status: delivery.status,
+          channel: delivery.channel,
+        });
+        return res.status(200).json({
+          ok: true,
+          skipped: "send_failed",
+          channel: delivery.channel,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        channel: delivery.channel,
+        cleanup: delivery.cleanup,
       });
     }
 

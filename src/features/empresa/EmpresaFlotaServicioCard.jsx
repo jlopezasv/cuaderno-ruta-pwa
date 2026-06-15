@@ -19,6 +19,8 @@ import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
+import { ServiceMessagesPanel } from "../messages/ServiceMessagesPanel.jsx";
+import { isServiceMessagesEnabled } from "../../config/serviceMessages.js";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -762,6 +764,28 @@ function EmpresaFlotaServicioCardImpl({
               </div>
             )}
           </div>
+
+          {isServiceMessagesEnabled(servicio) ? (
+            <div
+              style={{
+                background: UI.surface,
+                borderRadius: 10,
+                padding: "12px 12px",
+                marginBottom: 10,
+                border: `1px solid ${UI.border}`,
+              }}
+            >
+              <ServiceMessagesPanel
+                servicio={servicio}
+                audience="empresa"
+                senderName={empresaNombre || "Tráfico"}
+                senderRole="traffic"
+                canMarkForCustomerReport
+                showToast={showToast}
+                compact
+              />
+            </div>
+          ) : null}
 
           <div style={{ marginBottom: 10 }}>
             <ServiceEmpresaDocumentsBlock
