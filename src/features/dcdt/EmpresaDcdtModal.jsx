@@ -31,6 +31,7 @@ import {
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { fetchConductorVehiculoForDcdt } from "../../domain/empresa/conductorVehiculoEmpresa.js";
+import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
@@ -323,7 +324,7 @@ export function EmpresaDcdtModal({
           setMercanciaEdit(hydrateMercanciaEdit(persisted?.datos?.mercancia, servicioRef.current));
         }
       } catch (e) {
-        if (!cancelled) showToastRef.current?.(e?.message || "No se pudo cargar DCDT");
+        if (!cancelled) showToastRef.current?.(e?.message || `No se pudo cargar ${DECA_SHORT_LABEL}`);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -411,7 +412,7 @@ export function EmpresaDcdtModal({
       ? "Generando PDF…"
       : puedePdf && !readiness.hasPdfStorage && !readiness.isValidated
         ? "Generar DeCA ahora"
-        : "Generar PDF DCDT";
+        : `Generar PDF ${DECA_SHORT_LABEL}`;
   const downloadBtnHint = !puedeDescargarPdf
     ? puedePdf
       ? "Genera el PDF antes de descargarlo"
@@ -426,13 +427,13 @@ export function EmpresaDcdtModal({
       : busy === "pdf"
       ? "Generando PDF DeCA… (puede tardar unos segundos)"
       : busy === "validar"
-        ? "Validando DCDT…"
+        ? `Validando ${DECA_SHORT_LABEL}…`
         : puedeDescargarPdf
           ? "PDF listo — puedes descargarlo o mostrar el QR DeCA"
           : puedePdf
             ? pdfBtnHint
             : puedeValidar
-              ? "Paso 1: valida el DCDT cuando no queden pendientes"
+              ? `Paso 1: valida el ${DECA_SHORT_LABEL} cuando no queden pendientes`
               : pdfBtnHint || statusLabel);
   const accionColor =
     actionFeedback?.kind === "error" || pdfStale || warnDecaPreStart
@@ -547,7 +548,7 @@ export function EmpresaDcdtModal({
       const regenMsg = isDcdtPdfStale(dcdt) && !isDcdtPdfStale(resolved)
         ? " — PDF DeCA actualizado con los datos corregidos"
         : "";
-      notifyAction(`DCDT validado${regenMsg}`, "ok");
+      notifyAction(`${DECA_SHORT_LABEL} validado${regenMsg}`, "ok");
     } catch (e) {
       notifyAction(e?.message || "No se pudo validar", "error");
     } finally {
@@ -557,11 +558,11 @@ export function EmpresaDcdtModal({
 
   async function generarPdf() {
     if (!dcdt || !doc) {
-      notifyAction("DCDT no cargado — cierra y vuelve a abrir el modal", "error");
+      notifyAction(`${DECA_SHORT_LABEL} no cargado — cierra y vuelve a abrir el modal`, "error");
       return;
     }
     if (!puedePdf) {
-      notifyAction(pdfBtnHint || "Valida el DCDT antes de generar el PDF", "error");
+      notifyAction(pdfBtnHint || `Valida el ${DECA_SHORT_LABEL} antes de generar el PDF`, "error");
       return;
     }
     setBusy("pdf");
@@ -595,13 +596,13 @@ export function EmpresaDcdtModal({
 
   async function descargarPdfGuardado() {
     if (!dcdt || !puedeDescargarPdf) {
-      showToast?.("Genera el PDF DCDT antes de descargarlo");
+      showToast?.(`Genera el PDF ${DECA_SHORT_LABEL} antes de descargarlo`);
       return;
     }
     try {
       const name = dcdt.datos?.pdf_archivo_nombre || `dcdt-${serviceLabel}.pdf`;
       await downloadDcdtStoredPdf(dcdt, name);
-      showToast?.("PDF DCDT descargado");
+      showToast?.(`PDF ${DECA_SHORT_LABEL} descargado`);
     } catch (e) {
       showToast?.(e?.message || "No se pudo descargar el PDF");
     }
@@ -661,9 +662,9 @@ export function EmpresaDcdtModal({
     <div style={{ position: "fixed", inset: 0, background: UI.overlay, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
       <div role="dialog" onClick={(e) => e.stopPropagation()} style={{ background: UI.surface, borderRadius: 16, width: "min(98vw, 1040px)", maxHeight: "96vh", minHeight: "min(88vh, 820px)", overflow: "hidden", display: "flex", flexDirection: "column", border: `1px solid ${UI.border}` }}>
         <div style={{ padding: "16px 18px", borderBottom: `1px solid ${UI.border}` }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>DCDT</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>{DECA_SHORT_LABEL}</div>
           <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
-            Documento de Control del Transporte · Orden FOM/2861/2012
+            {DECA_FULL_TITLE} · {DECA_LEGAL_REF}
           </div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4 }}>
             {serviceLabel} · {statusLabel}
@@ -743,9 +744,9 @@ export function EmpresaDcdtModal({
                 <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, fontWeight: 700, color: UI.green }}>
                   {isDcdtEstadoValidated(dcdt?.estado)
                     ? dcdt?.pdfGeneradoAt || dcdt?.datos?.pdf_storage_path
-                      ? `DCDT validado · PDF generado${dcdt?.datos?.pdf_size_bytes ? ` (${Math.round(dcdt.datos.pdf_size_bytes / 1024)} KB)` : ""}`
-                      : "DCDT validado"
-                    : "DCDT completo — listo para validar"}
+                      ? `${DECA_SHORT_LABEL} validado · PDF generado${dcdt?.datos?.pdf_size_bytes ? ` (${Math.round(dcdt.datos.pdf_size_bytes / 1024)} KB)` : ""}`
+                      : `${DECA_SHORT_LABEL} validado`
+                    : `${DECA_SHORT_LABEL} completo — listo para validar`}
                 </div>
               )}
               {rutaModBlockedReason && puedeDescargarPdf ? (
@@ -990,10 +991,10 @@ export function EmpresaDcdtModal({
             type="button"
             disabled={!!busy || loading}
             onClick={validarDcdt}
-            title={puedeValidar ? "Paso 1: congelar datos para tráfico" : missing.length ? `Completa: ${missing.map((m) => m.label).join(" · ")}` : "DCDT ya validado"}
+            title={puedeValidar ? "Paso 1: congelar datos para tráfico" : missing.length ? `Completa: ${missing.map((m) => m.label).join(" · ")}` : `${DECA_SHORT_LABEL} ya validado`}
             style={btn(UI.green, "#fff", !puedeValidar && !busy && !loading)}
           >
-            {busy === "validar" ? "Validando…" : "Validar DCDT"}
+            {busy === "validar" ? "Validando…" : `Validar ${DECA_SHORT_LABEL}`}
           </button>
           <button
             type="button"
@@ -1022,7 +1023,7 @@ export function EmpresaDcdtModal({
             title={downloadBtnHint}
             style={btn(UI.accent, "#fff", !puedeDescargarPdf && !busy && !loading)}
           >
-            Descargar PDF DCDT
+            Descargar PDF {DECA_SHORT_LABEL}
           </button>
           <button
             type="button"

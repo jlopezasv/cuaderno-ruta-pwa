@@ -1,3 +1,4 @@
+import { DECA_FULL_TITLE, DECA_LEGAL_REF } from "../../domain/dcdt/decaBranding.js";
 import { loadRemoteImageBlob } from "../../domain/documents/imageBlobLoad.js";
 import { groupAnnexByParada } from "./collectLiteAnnexItems.js";
 
@@ -254,7 +255,7 @@ export async function buildOperationalLitePdfBlob(doc) {
 
   // —— DCDT (primera sección si validado) ——
   if (doc.dcdt) {
-    section("Documento de Control del Transporte", "DCDT — Orden FOM/2861/2012");
+    section(DECA_FULL_TITLE, DECA_LEGAL_REF);
     const d = doc.dcdt;
     kv("Cargador contractual", d.cargador?.nombre);
     if (d.cargador?.nif) kv("NIF cargador", d.cargador.nif);

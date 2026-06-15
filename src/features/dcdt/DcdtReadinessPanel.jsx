@@ -1,3 +1,4 @@
+import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { useMemo } from "react";
 import {
   assessDcdtFormReadiness,
@@ -86,7 +87,7 @@ export function DcdtReadinessPanel({
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: tone.header, marginBottom: 4 }}>📄 DCDT — preparación</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: tone.header, marginBottom: 4 }}>📄 {DECA_SHORT_LABEL} — preparación</div>
           <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>
             🟢 {readiness.completeCount} completos · 🟠 {readiness.partialCount} parciales · 🔴{" "}
             {readiness.totalCount - readiness.completeCount - readiness.partialCount} pendientes

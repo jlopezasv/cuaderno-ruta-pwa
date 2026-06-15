@@ -5,6 +5,7 @@ import {
   isDecaPublicDownloadExpired,
   resolveServicioFinEfectivoAt,
 } from "../src/domain/dcdt/decaRetention.js";
+import { DECA_SHORT_LABEL } from "../src/domain/dcdt/decaBranding.js";
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
 const ESTADOS_DESCARGA = new Set(["validado", "incluido_en_expediente"]);
@@ -179,19 +180,19 @@ export default async function handler(req, res) {
     if (!row) {
       return notFound(
         res,
-        "DeCA: no hay DCDT con ese id. Genera el PDF de nuevo y usa la URL exacta del QR.",
+        `DeCA: no hay documento con ese id. Genera el PDF de nuevo y usa la URL exacta del QR.`,
       );
     }
 
     const estado = String(row.estado || "").toLowerCase();
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
     if (!isDecaPubliclyDownloadable(row, datos)) {
-      return notFound(res, `DeCA: DCDT en estado «${estado || "?"}». Genera el PDF o valida el documento.`);
+      return notFound(res, `DeCA: documento en estado «${estado || "?"}». Genera el PDF o valida el documento.`);
     }
 
     const storage = await resolvePdfStorageLocation(row);
     if (!storage?.path || !storage?.bucket) {
-      return notFound(res, "DeCA: PDF no registrado en storage. Pulsa «Generar PDF DCDT» en el modal.");
+      return notFound(res, `DeCA: PDF no registrado en storage. Pulsa «Generar PDF ${DECA_SHORT_LABEL}» en el modal.`);
     }
 
     const storagePath = storage.path;

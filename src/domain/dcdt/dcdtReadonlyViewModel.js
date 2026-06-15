@@ -1,3 +1,4 @@
+import { DECA_SHORT_LABEL } from "./decaBranding.js";
 import { DCDT_ESTADO, DCDT_ESTADO_LABELS } from "./dcdtConstants.js";
 import { formatDcdtDisplayValueOrDash } from "./dcdtDisplayText.js";
 
@@ -68,7 +69,7 @@ export function buildDcdtReadonlySections({ doc, dcdt = null, servicioReferencia
       {
         title: "Identificación",
         fields: [
-          { label: "Nº DCDT / referencia servicio", value: ref },
+          { label: `Nº ${DECA_SHORT_LABEL} / referencia servicio`, value: ref },
           { label: "Estado", value: validated ? "Validado" : DCDT_ESTADO_LABELS[estado] || estado || "—" },
           { label: "Fecha de validación", value: validated ? formatFechaHora(validadoAt) : "—" },
           { label: "Empresa transportista", value: formatDcdtDisplayValueOrDash(doc.transportista?.nombre) },

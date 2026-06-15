@@ -1,3 +1,4 @@
+import { DECA_TITLE_WITH_LEGAL } from "../../domain/dcdt/decaBranding.js";
 import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../../domain/fleet/serviceStatus.js";
 import { enrichEvidenciaDisplay } from "../../domain/documents/operationalDocumentRecord.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "../../domain/service/extraDocumentExpediente.js";
@@ -310,7 +311,7 @@ export function buildOperationalLiteModel({
   if (dcdt) {
     model.dcdt = {
       titulo: "Documento de Control del Transporte",
-      subtitulo: "DCDT — Orden FOM/2861/2012",
+      subtitulo: DECA_TITLE_WITH_LEGAL,
       ...dcdt,
     };
   }

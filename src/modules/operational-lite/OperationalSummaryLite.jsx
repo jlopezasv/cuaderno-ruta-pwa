@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { DECA_FULL_TITLE } from "../../domain/dcdt/decaBranding.js";
 import { loadOperationalLiteData } from "./loadOperationalLiteData.js";
 import { downloadOperationalLitePdf } from "./generateOperationalLitePdf.js";
 import { LITE_THEME } from "./operationalLiteTheme.js";
@@ -162,7 +163,7 @@ export function OperationalSummaryLite({
 
           {doc.dcdt ? (
             <div style={{ padding: "14px 16px", borderBottom: `1px solid ${LITE_THEME.line}`, background: "#f0f9ff" }}>
-              <SectionTitle>DCDT — Documento de Control del Transporte</SectionTitle>
+              <SectionTitle>{DECA_FULL_TITLE}</SectionTitle>
               <div style={{ fontSize: 12, color: LITE_THEME.su, marginBottom: 10 }}>Orden FOM/2861/2012</div>
               {[
                 ["Cargador", doc.dcdt.cargador?.nombre],

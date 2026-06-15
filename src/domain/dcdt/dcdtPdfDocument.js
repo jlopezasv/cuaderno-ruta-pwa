@@ -19,6 +19,7 @@ import {
   retentionUntilIso,
 } from "./decaRetention.js";
 import { isDcdtPdfStale } from "./decaPdfStale.js";
+import { DECA_FULL_TITLE, DECA_SHORT_LABEL } from "./decaBranding.js";
 
 const TABLE = "servicio_documentos_extra";
 /** @deprecated Usar DCDT_MIN_RETENTION_DAYS */
@@ -41,7 +42,7 @@ function resolveDecaQrStoragePath({ uid, empresaId, servicioId, pdfStoragePath, 
 
 async function postExtraDocRow(body) {
   const urlForInsert = body.archivo_url ?? body.url ?? null;
-  if (!isHttpStorageUrl(urlForInsert)) throw new Error("Error generando URL del PDF DCDT");
+  if (!isHttpStorageUrl(urlForInsert)) throw new Error(`Error generando URL del PDF ${DECA_SHORT_LABEL}`);
   const r = await sbFetch(`/rest/v1/${TABLE}`, {
     method: "POST",
     headers: { Prefer: "return=representation" },
@@ -50,11 +51,11 @@ async function postExtraDocRow(body) {
   const rawText = await r.text();
   if (!r.ok) {
     const err = parseSupabaseErrorBody(rawText);
-    throw new Error(err.message || `No se pudo guardar PDF DCDT (${r.status})`);
+    throw new Error(err.message || `No se pudo guardar PDF ${DECA_SHORT_LABEL} (${r.status})`);
   }
   const parsed = rawText ? JSON.parse(rawText) : null;
   const row = Array.isArray(parsed) ? parsed[0] : parsed;
-  if (!row?.id) throw new Error("El servidor no devolvió el documento DCDT");
+  if (!row?.id) throw new Error(`El servidor no devolvió el documento ${DECA_SHORT_LABEL}`);
   return row;
 }
 
@@ -67,7 +68,7 @@ async function patchExtraDocRow(id, body) {
   const rawText = await r.text();
   if (!r.ok) {
     const err = parseSupabaseErrorBody(rawText);
-    throw new Error(err.message || `No se pudo actualizar PDF DCDT (${r.status})`);
+    throw new Error(err.message || `No se pudo actualizar PDF ${DECA_SHORT_LABEL} (${r.status})`);
   }
   const parsed = rawText ? JSON.parse(rawText) : null;
   const row = Array.isArray(parsed) ? parsed[0] : parsed;
@@ -145,11 +146,11 @@ function triggerBlobDownload(blob, filename) {
 /** Descarga PDF guardado (renueva URL firmada). */
 export async function downloadDcdtStoredPdf(dcdt, filename = "dcdt.pdf") {
   const accessUrl = await resolveDcdtPdfAccessUrl(dcdt);
-  if (!accessUrl) throw new Error("PDF DCDT no disponible en storage");
+  if (!accessUrl) throw new Error(`PDF ${DECA_SHORT_LABEL} no disponible en storage`);
   const res = await fetch(accessUrl);
   if (!res.ok) throw new Error(`No se pudo descargar el PDF (${res.status})`);
   const blob = await res.blob();
-  if (!blob?.size) throw new Error("PDF DCDT vacío o corrupto");
+  if (!blob?.size) throw new Error(`PDF ${DECA_SHORT_LABEL} vacío o corrupto`);
   triggerBlobDownload(blob, filename);
   return { url: accessUrl, blob };
 }
@@ -180,7 +181,7 @@ export async function generateAndPersistDcdtPdf({
   userLabel = null,
   downloadAfter = false,
 }) {
-  if (!servicio?.id || !dcdt?.id || !doc) throw new Error("Datos DCDT incompletos");
+  if (!servicio?.id || !dcdt?.id || !doc) throw new Error(`Datos ${DECA_SHORT_LABEL} incompletos`);
   const uid = userId || getUserId();
   if (!uid) throw new Error("Sesión no válida");
 
@@ -200,7 +201,7 @@ export async function generateAndPersistDcdtPdf({
     creationDate: dcdtReady.createdAt || null,
     qrPngBytes,
   });
-  if (!blob?.size) throw new Error("No se pudo generar el PDF DCDT");
+  if (!blob?.size) throw new Error(`No se pudo generar el PDF ${DECA_SHORT_LABEL}`);
 
   const serviceLabel = String(doc.referencia || servicio.id).replace(/[^\w.\-áéíóúñ]+/gi, "_");
   const filename = `dcdt-${serviceLabel}.pdf`;
@@ -216,7 +217,7 @@ export async function generateAndPersistDcdtPdf({
 
   const storagePath = storage?.path;
   const storageBucket = storage?.bucket || USER_PHOTOS_BUCKET;
-  if (!storagePath) throw new Error("PDF DCDT: upload sin ruta en storage");
+  if (!storagePath) throw new Error(`PDF ${DECA_SHORT_LABEL}: upload sin ruta en storage`);
 
   const qrStoragePath = resolveDecaQrStoragePath({
     uid,
@@ -230,7 +231,7 @@ export async function generateAndPersistDcdtPdf({
   });
 
   const archivoUrl = storageUploadUrl(storage);
-  if (!isHttpStorageUrl(archivoUrl)) throw new Error("PDF DCDT: URL de storage inválida");
+  if (!isHttpStorageUrl(archivoUrl)) throw new Error(`PDF ${DECA_SHORT_LABEL}: URL de storage inválida`);
 
   dcdtPdfDemoLog("storage_path", storagePath);
   dcdtPdfDemoLog("qr_storage_path", qrStoragePath);
@@ -269,7 +270,7 @@ export async function generateAndPersistDcdtPdf({
     empresa_id: servicio.empresa_id ?? null,
     conductor_id: null,
     tipo: "dcdt",
-    descripcion: "Documento de Control del Transporte (DCDT)",
+    descripcion: DECA_FULL_TITLE,
     archivo_url: archivoUrl,
     url: archivoUrl,
     mime_type: "application/pdf",

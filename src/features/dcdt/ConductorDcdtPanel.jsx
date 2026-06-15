@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../domain/dcdt/dcdtModel.js";
+import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
@@ -58,7 +59,7 @@ function phaseHint(phase) {
   if (phase === "pending_validation") {
     return "Datos completos. Tráfico debe generar el PDF DeCA antes o durante el viaje.";
   }
-  return "Tráfico está completando los datos del documento de control del transporte.";
+  return "Tráfico está completando los datos del DeCA.";
 }
 
 export function ConductorDcdtPanel({
@@ -154,7 +155,7 @@ export function ConductorDcdtPanel({
 
   function openQr() {
     if (!dcdt || !doc) {
-      showToast?.("DCDT no disponible.");
+      showToast?.(`${DECA_SHORT_LABEL} no disponible.`);
       return;
     }
     if (!hasPdf) {
@@ -177,7 +178,7 @@ export function ConductorDcdtPanel({
     try {
       const name = dcdt.datos?.pdf_archivo_nombre || `dcdt-${serviceLabel}.pdf`;
       await downloadDcdtStoredPdf(dcdt, name);
-      showToast?.("PDF DCDT descargado");
+      showToast?.(`PDF ${DECA_SHORT_LABEL} descargado`);
     } catch (e) {
       showToast?.(e?.message || "No se pudo obtener el PDF");
     } finally {
@@ -190,7 +191,7 @@ export function ConductorDcdtPanel({
   if (loading && !dcdt) {
     return (
       <div style={{ padding: compact ? "10px 0" : "12px 14px", fontSize: 12, color: UI.su }}>
-        Cargando DCDT…
+        Cargando {DECA_SHORT_LABEL}…
       </div>
     );
   }
@@ -231,7 +232,7 @@ export function ConductorDcdtPanel({
           {validated ? (
             <>
               <button type="button" style={docBtnStyle("primary")} onClick={() => setViewOpen(true)} disabled={!doc}>
-                Ver DCDT
+                Ver {DECA_SHORT_LABEL}
               </button>
               <button
                 type="button"
@@ -242,7 +243,7 @@ export function ConductorDcdtPanel({
                 {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
               </button>
               <button type="button" disabled={!decaDownloadUrl} style={docBtnStyle("default")} onClick={openQr}>
-                Mostrar QR
+                Mostrar QR {DECA_SHORT_LABEL}
               </button>
             </>
           ) : (

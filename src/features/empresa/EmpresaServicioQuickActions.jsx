@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DECA_BTN_NONE } from "../../domain/dcdt/decaBranding.js";
 import { isServiceMessagesEnabled } from "../../config/serviceMessages.js";
 import { getAuthUid } from "../../data/supabaseClient.js";
 import { ServiceQuickActionsBar } from "../services/components/ServiceQuickActionsBar.jsx";
@@ -53,7 +54,7 @@ export function EmpresaServicioQuickActions({
           variant="empresa"
           showDcdt={showDcdtBtn}
           dcdtVisual={dcdtQuick.visual}
-          dcdtNoneLabel="— DCDT"
+          dcdtNoneLabel={DECA_BTN_NONE}
           onDcdtClick={() => onDcdt?.()}
           showChat={showChat}
           unreadCount={messagesUnread.unread}
@@ -77,7 +78,7 @@ export function EmpresaServicioQuickActions({
               lineHeight: 1.4,
             }}
           >
-            DeCA no generado antes del inicio — abre DCDT y genera el PDF
+            DeCA no generado antes del inicio — abre DeCA y genera el PDF
           </div>
         ) : null}
       </div>

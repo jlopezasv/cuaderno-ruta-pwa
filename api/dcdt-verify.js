@@ -1,6 +1,7 @@
-// api/dcdt-verify.js — Verificación pública DCDT (solo lectura, QR inspección)
+// api/dcdt-verify.js — Verificación pública DeCA (solo lectura, QR inspección)
 import { getSupabaseServiceRoleKey, getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
 import { formatDcdtVerifyPublicRow } from "../src/domain/dcdt/dcdtVerifyPayload.js";
+import { DECA_SHORT_LABEL } from "../src/domain/dcdt/decaBranding.js";
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
 const ESTADOS_QR = new Set(["validado", "incluido_en_expediente"]);
@@ -61,7 +62,7 @@ export default async function handler(req, res) {
 
     const estado = String(row.estado || "").toLowerCase();
     if (!ESTADOS_QR.has(estado)) {
-      return res.status(403).json({ ok: false, error: "DCDT no validado para verificación" });
+      return res.status(403).json({ ok: false, error: `${DECA_SHORT_LABEL} no validado para verificación` });
     }
 
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};

@@ -1,3 +1,4 @@
+import { DECA_SHORT_LABEL } from "../dcdt/decaBranding.js";
 import { resolveDcdtPdfAccessUrl } from "../dcdt/dcdtPdfDocument.js";
 import { fetchDcdtByServicio } from "../dcdt/dcdtModel.js";
 import {
@@ -189,10 +190,10 @@ export async function resolveDcdtCategoryPdfBlob({ servicioId, extraDocs = [] })
   }
   if (!servicioId) throw new Error("Sin servicio");
   const dcdt = await fetchDcdtByServicio(servicioId);
-  if (!dcdt) throw new Error("DCDT no disponible");
+  if (!dcdt) throw new Error(`${DECA_SHORT_LABEL} no disponible`);
   const pdfUrl = await resolveDcdtPdfAccessUrl(dcdt);
   if (pdfUrl) return fetchUrlAsBlob(pdfUrl);
-  throw new Error("Genera el PDF DCDT antes de descargarlo");
+  throw new Error(`Genera el PDF ${DECA_SHORT_LABEL} antes de descargarlo`);
 }
 
 export async function buildCategoryPdfBlob({
@@ -314,7 +315,7 @@ export async function loadServiceDocumentCategoryStatus({
     },
     [SERVICE_DOC_CATEGORY.DCDT]: {
       available: dcdtAvailable,
-      statusLabel: dcdtAvailable ? "PDF disponible" : "Sin DCDT / PDF",
+      statusLabel: dcdtAvailable ? "PDF disponible" : `Sin ${DECA_SHORT_LABEL} / PDF`,
       detail: dcdtExtra?.archivo_nombre || "—",
     },
     [SERVICE_DOC_CATEGORY.CHAT]: {

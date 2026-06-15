@@ -5,6 +5,12 @@ import { getServiceNumberForDisplay, resolveServiceRouteEndpoints } from "../ser
 import { resolveParteFields, suggestParteTipoForStop } from "./partesTransporteModel.js";
 import { formatDcdtDisplayValue } from "./dcdtDisplayText.js";
 import {
+  DECA_FULL_TITLE,
+  DECA_LEGAL_REF,
+  DECA_SHORT_LABEL,
+  DECA_TITLE_WITH_LEGAL,
+} from "./decaBranding.js";
+import {
   DCDT_ESTADO,
   DCDT_REQUIRED_FIELDS,
   DCDT_TABLE,
@@ -375,13 +381,13 @@ export function isDcdtFullyValidated({ estado, missing = [], validacionSnapshot 
 export function dcdtStatusUxLabel({ estado, missing = [], pdfGeneradoAt = null }) {
   if (missing.length > 0) {
     const e = computeDcdtEstado({ missing, evidenciasByStop: {}, datos: {}, currentEstado: estado });
-    if (e === DCDT_ESTADO.PENDIENTE_OCR) return "DCDT pendiente OCR";
-    if (e === DCDT_ESTADO.PENDIENTE_VALIDACION) return "DCDT completo — listo para validar";
-    return "DCDT incompleto";
+    if (e === DCDT_ESTADO.PENDIENTE_OCR) return `${DECA_SHORT_LABEL} pendiente OCR`;
+    if (e === DCDT_ESTADO.PENDIENTE_VALIDACION) return `${DECA_SHORT_LABEL} completo — listo para validar`;
+    return `${DECA_SHORT_LABEL} incompleto`;
   }
-  if (!isDcdtEstadoValidated(estado)) return "DCDT completo — listo para validar";
-  if (pdfGeneradoAt) return "DCDT validado · PDF generado";
-  return "DCDT validado";
+  if (!isDcdtEstadoValidated(estado)) return `${DECA_SHORT_LABEL} completo — listo para validar`;
+  if (pdfGeneradoAt) return `${DECA_SHORT_LABEL} validado · PDF generado`;
+  return `${DECA_SHORT_LABEL} validado`;
 }
 
 /** Rebaja estado validado si faltan campos obligatorios y persiste. */
@@ -481,7 +487,7 @@ export function dcdtDocForExpediente(doc, meta = {}) {
   if (!doc) return null;
   return {
     titulo: "Documento de Control del Transporte",
-    subtitulo: "DCDT — Orden FOM/2861/2012",
+    subtitulo: DECA_TITLE_WITH_LEGAL,
     referencia: doc.referencia,
     cargador: doc.cargador,
     transportista: doc.transportista,
@@ -504,7 +510,7 @@ export async function fetchDcdtByServicio(servicioId) {
   if (!r.ok) {
     const body = await r.text().catch(() => "");
     if (/dcdt_servicio|carta_porte|42P01|PGRST205/i.test(body)) return null;
-    throw new Error("No se pudo cargar DCDT");
+    throw new Error(`No se pudo cargar ${DECA_SHORT_LABEL}`);
   }
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
@@ -524,7 +530,7 @@ export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] 
       datos,
     }),
   });
-  if (!r.ok) throw new Error("No se pudo inicializar DCDT");
+  if (!r.ok) throw new Error(`No se pudo inicializar ${DECA_SHORT_LABEL}`);
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
@@ -550,7 +556,7 @@ export async function saveDcdtDatos(id, datos, estado = null, options = {}) {
     if (isDemoApp()) {
       console.log("[DCDT mercancía] error Supabase", { dcdt_id: id, status: r.status, body: resText });
     }
-    throw new Error(resText || "No se pudo guardar DCDT");
+    throw new Error(resText || `No se pudo guardar ${DECA_SHORT_LABEL}`);
   }
   let rows = [];
   try {
@@ -562,7 +568,7 @@ export async function saveDcdtDatos(id, datos, estado = null, options = {}) {
     if (isDemoApp()) {
       console.log("[DCDT mercancía] resultado update", { dcdt_id: id, ok: false, rows: 0, hint: "RLS o id inexistente" });
     }
-    throw new Error("DCDT: no se actualizó el registro (permisos RLS o fila no encontrada)");
+    throw new Error(`${DECA_SHORT_LABEL}: no se actualizó el registro (permisos RLS o fila no encontrada)`);
   }
   if (isDemoApp()) {
     console.log("[DCDT mercancía] resultado update", {
@@ -588,7 +594,7 @@ export async function recordDecaPreStartGapIfNeeded(dcdt, servicio) {
 
 export async function attachQrVerificationToDcdt(id, snapshot) {
   const current = await fetchDcdtById(id);
-  if (!current) throw new Error("DCDT no encontrado");
+  if (!current) throw new Error(`${DECA_SHORT_LABEL} no encontrado`);
   const token = current.datos?.qr_verificacion_token || generateDcdtVerifyToken();
   const datos = {
     ...current.datos,
@@ -690,7 +696,7 @@ export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor,
   });
   if (!r.ok) {
     const body = await r.text().catch(() => "");
-    throw new Error(body ? `No se pudo validar DCDT (${r.status})` : "No se pudo validar DCDT");
+    throw new Error(body ? `No se pudo validar ${DECA_SHORT_LABEL} (${r.status})` : `No se pudo validar ${DECA_SHORT_LABEL}`);
   }
   const rows = await r.json();
   let next = rowToDcdt(Array.isArray(rows) ? rows[0] : null);
@@ -738,7 +744,7 @@ export async function markDcdtIncluidoExpediente(id) {
 
 export async function markDcdtPdfGenerado(id, meta = {}) {
   if (!meta.pdfStoragePath) {
-    throw new Error("PDF DCDT: no se registró sin ruta en storage");
+    throw new Error(`PDF ${DECA_SHORT_LABEL}: no se registró sin ruta en storage`);
   }
   const current = await fetchDcdtById(id);
   const datos = {

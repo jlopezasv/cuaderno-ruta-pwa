@@ -8,6 +8,7 @@ import {
   parseSupabaseErrorBody,
 } from "../documents/extraDocumentUploadLog.js";
 import { isHttpStorageUrl } from "../documents/storageDocumentUploadLog.js";
+import { DECA_SHORT_LABEL } from "../dcdt/decaBranding.js";
 import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 
 const STORAGE_URL_ERROR = "Error generando URL del documento";
@@ -15,7 +16,7 @@ const STORAGE_URL_ERROR = "Error generando URL del documento";
 const TABLE = "servicio_documentos_extra";
 
 export const EXTRA_DOC_TIPOS = Object.freeze([
-  { id: "dcdt", label: "DCDT" },
+  { id: "dcdt", label: DECA_SHORT_LABEL },
   { id: "cmr", label: "CMR" },
   { id: "ticket", label: "Ticket" },
   { id: "factura", label: "Factura" },

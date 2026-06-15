@@ -9,6 +9,7 @@ import {
   saveDcdtDatos,
 } from "./dcdtModel.js";
 import { generateAndPersistDcdtPdf } from "./dcdtPdfDocument.js";
+import { DECA_SHORT_LABEL } from "./decaBranding.js";
 import {
   hasDecaPdfGenerado,
   isServicioInicioEfectivoAlcanzado,
@@ -119,7 +120,7 @@ export function getModificarEnRutaBlockedReason({ servicio, dcdt, demoSurface = 
   if (!demoSurface) {
     return "Solo en demo (https://cuaderno-demo-ab.vercel.app)";
   }
-  if (!dcdt?.id) return "Cargando DCDT…";
+  if (!dcdt?.id) return `Cargando ${DECA_SHORT_LABEL}…`;
   if (!hasDecaPdfGenerado(dcdt)) return "Genera el PDF DeCA antes de modificar en ruta";
   const st = String(servicio?.estado || "").toLowerCase() || "(sin estado)";
   if (ESTADOS_TERMINALES_RUTA.has(st)) {

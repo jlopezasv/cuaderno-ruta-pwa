@@ -1,21 +1,28 @@
+import {
+  DECA_BTN_NONE,
+  DECA_BTN_OK,
+  DECA_BTN_WARN,
+  DECA_SHORT_LABEL,
+} from "../../../domain/dcdt/decaBranding.js";
+
 const DCDT_STYLES = {
   validated: {
     bg: "#dcfce7",
     border: "#bbf7d0",
     color: "#166534",
-    label: "✓ DCDT",
+    label: DECA_BTN_OK,
   },
   incomplete: {
     bg: "#fffbeb",
     border: "#fde68a",
     color: "#92400e",
-    label: "⚠ DCDT",
+    label: DECA_BTN_WARN,
   },
   none: {
     bg: "#f1f5f9",
     border: "#e2e8f0",
     color: "#475569",
-    label: "— DCDT",
+    label: DECA_BTN_NONE,
   },
 };
 
@@ -58,7 +65,7 @@ export function ServiceQuickActionsBar({
   if (dcdtVisual === "none" && dcdtNoneLabel) {
     dcdtStyle.label = dcdtNoneLabel;
   } else if (dcdtVisual === "none" && !compact) {
-    dcdtStyle.label = "DCDT";
+    dcdtStyle.label = DECA_SHORT_LABEL;
   }
   const chatBadge = unreadCount > 0 ? (unreadCount > 99 ? "99+" : String(unreadCount)) : null;
   const chatHasUnread = unreadCount > 0;

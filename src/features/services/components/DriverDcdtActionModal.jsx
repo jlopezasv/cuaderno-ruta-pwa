@@ -1,4 +1,5 @@
 import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
+import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 
 const OVERLAY = {
   position: "fixed",
@@ -26,7 +27,7 @@ export function DriverDcdtActionModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="DCDT del servicio"
+      aria-label={`${DECA_SHORT_LABEL} del servicio`}
       style={OVERLAY}
       onClick={onClose}
     >
@@ -54,7 +55,7 @@ export function DriverDcdtActionModal({
             flexShrink: 0,
           }}
         >
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}>DCDT</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}>{DECA_SHORT_LABEL}</div>
           <button
             type="button"
             onClick={onClose}

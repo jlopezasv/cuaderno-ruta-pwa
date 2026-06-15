@@ -1,3 +1,4 @@
+import { DECA_FULL_TITLE, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { useEffect, useState } from "react";
 import { DcdtReadonlyContent } from "./DcdtReadonlyContent.jsx";
 
@@ -55,9 +56,9 @@ export function DcdtVerifyPublicPage({ token }) {
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: UI.brandDeep, letterSpacing: 1.2 }}>CUADERNO DE RUTA</div>
-          <div style={{ fontSize: 20, fontWeight: 800, marginTop: 6 }}>Verificación DCDT</div>
+          <div style={{ fontSize: 20, fontWeight: 800, marginTop: 6 }}>Verificación {DECA_SHORT_LABEL}</div>
           <div style={{ fontSize: 12, color: UI.su, marginTop: 6, lineHeight: 1.45 }}>
-            Documento de Control del Transporte · Orden FOM/2861/2012
+            {DECA_FULL_TITLE}
           </div>
           {sectionsModel ? (
             <div style={{ fontSize: 12, color: UI.su, marginTop: 8 }}>

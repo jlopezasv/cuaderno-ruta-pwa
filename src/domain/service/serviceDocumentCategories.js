@@ -1,3 +1,5 @@
+import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
+
 /** Categorías documentales independientes por servicio (gestor empresa). */
 
 export const SERVICE_DOC_CATEGORY = Object.freeze({
@@ -23,10 +25,10 @@ export const SERVICE_DOC_CATEGORY_META = Object.freeze({
   },
   [SERVICE_DOC_CATEGORY.DCDT]: {
     id: SERVICE_DOC_CATEGORY.DCDT,
-    label: "DCDT",
-    headerTitle: "DCDT",
-    headerSubtitle: "Documento de Control del Transporte — Orden FOM/2861/2012",
-    pdfFilename: "dcdt",
+    label: DECA_SHORT_LABEL,
+    headerTitle: DECA_FULL_TITLE,
+    headerSubtitle: `${DECA_FULL_TITLE} · ${DECA_LEGAL_REF}`,
+    pdfFilename: "deca",
     defaultSendToClient: true,
   },
   [SERVICE_DOC_CATEGORY.CHAT]: {

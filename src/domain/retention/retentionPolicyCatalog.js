@@ -1,4 +1,5 @@
 import { RETENTION_TIER } from "./retentionConstants.js";
+import { DECA_SHORT_LABEL } from "../dcdt/decaBranding.js";
 
 /**
  * Catálogo canónico de clases de dato (alineado con retention_asset_catalog en SQL).
@@ -55,7 +56,7 @@ export const RETENTION_ASSET_CATALOG = Object.freeze([
   },
   {
     asset_class: "dcdt_pdf",
-    label: "PDF DCDT (documento legal)",
+    label: `PDF ${DECA_SHORT_LABEL} (documento legal)`,
     tier: RETENTION_TIER.RETENIDO,
     includes: "servicio_documentos_extra.tipo=dcdt + storage",
     storage: true,

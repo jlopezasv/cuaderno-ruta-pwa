@@ -1,4 +1,5 @@
 import { buildDcdtReadonlySections } from "../../domain/dcdt/dcdtReadonlyViewModel.js";
+import { DECA_FULL_TITLE, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtReadonlyContent } from "./DcdtReadonlyContent.jsx";
 
@@ -44,7 +45,8 @@ export function DcdtReadonlyViewModal({ servicio, doc, dcdt, missing = [], onClo
         }}
       >
         <div style={{ padding: "16px 18px", borderBottom: `1px solid ${UI.border}` }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>DCDT</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>{DECA_SHORT_LABEL}</div>
+          <div style={{ fontSize: 11, color: UI.su, marginTop: 4, lineHeight: 1.35 }}>{DECA_FULL_TITLE}</div>
           <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
             {sectionsModel.referencia || serviceLabel} · {sectionsModel.estadoLabel || "—"}
           </div>

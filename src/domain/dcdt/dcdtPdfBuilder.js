@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "./decaBranding.js";
 
 /** Límite DeCA (Orden FOM/2861/2012 / requisito electrónico). */
 export const DECA_PDF_MAX_BYTES = 5 * 1024 * 1024;
@@ -98,11 +99,11 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
   const creationDate = parsePdfDate(options.creationDate) || new Date();
   const modificationDate = new Date();
 
-  pdfDoc.setTitle(`DeCA — ${referencia}`);
+  pdfDoc.setTitle(`${DECA_SHORT_LABEL} — ${referencia}`);
   pdfDoc.setAuthor("Cuaderno Ruta");
   pdfDoc.setCreator("Cuaderno Ruta");
   pdfDoc.setProducer("Cuaderno Ruta — DeCA");
-  pdfDoc.setSubject("Documento de Control del Transporte — Orden FOM/2861/2012");
+  pdfDoc.setSubject(DECA_FULL_TITLE);
   pdfDoc.setCreationDate(creationDate);
   pdfDoc.setModificationDate(modificationDate);
   pdfDoc.setKeywords(["DeCA", "DCDT", "FOM/2861/2012", referencia]);
@@ -164,8 +165,8 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
     drawLine(str, MARGIN, 12, "#0f172a", true);
   }
 
-  drawLine("Documento de Control del Transporte", MARGIN, 16, "#0f172a", true);
-  drawLine("DCDT - Orden FOM/2861/2012", MARGIN, 11, "#475569");
+  drawLine(DECA_FULL_TITLE, MARGIN, 16, "#0f172a", true);
+  drawLine(DECA_LEGAL_REF, MARGIN, 11, "#475569");
   y -= 6;
   drawLine(`Referencia servicio: ${doc.referencia || "—"}`, MARGIN, 10, "#64748b");
   y -= 10;
@@ -244,6 +245,6 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
 
 /** Bloque DCDT para insertar en expediente operacional PDF. */
 export function appendDcdtSectionToPdfCommands({ commands, yRef, margin, text, lines, section, kv, ensure }) {
-  section("Documento de Control del Transporte", "DCDT — Orden FOM/2861/2012");
+  section(DECA_FULL_TITLE, DECA_LEGAL_REF);
   return yRef;
 }

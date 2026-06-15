@@ -17,6 +17,8 @@ import {
   shouldWarnDecaMissingBeforeStart,
 } from "./decaPreStartCompliance.js";
 import { fetchConductorVehiculoForDcdt } from "../empresa/conductorVehiculoEmpresa.js";
+import { isDcdtPdfStale } from "./decaPdfStale.js";
+import { DECA_SHORT_LABEL } from "./decaBranding.js";
 
 /** Contexto unificado para resolver DCDT (empresa y conductor). */
 export async function fetchDcdtResolveContext({
@@ -133,7 +135,7 @@ export function validateDcdtReadiness({
       canValidate: false,
       canGeneratePdf: false,
       canDownloadPdf: false,
-      statusLabel: "DCDT no disponible",
+      statusLabel: `${DECA_SHORT_LABEL} no disponible`,
       hasPdfStorage: false,
       warnDecaMissingPdfBeforeStart: false,
       servicioInicioEfectivoAlcanzado: false,
