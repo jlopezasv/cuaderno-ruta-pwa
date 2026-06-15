@@ -18,7 +18,7 @@ import {
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
-import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
+import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
@@ -371,6 +371,18 @@ export function EmpresaDcdtModal({
       ? "Genera el PDF antes de descargarlo"
       : pdfBtnHint || "Valida y genera el PDF primero"
     : "Descargar el PDF guardado en storage";
+  const accionMensaje =
+    busy === "pdf"
+      ? "Generando PDF DeCA… (puede tardar unos segundos)"
+      : busy === "validar"
+        ? "Validando DCDT…"
+        : puedeDescargarPdf
+          ? "PDF listo — puedes descargarlo o mostrar el QR DeCA"
+          : puedePdf
+            ? pdfBtnHint
+            : puedeValidar
+              ? "Paso 1: valida el DCDT cuando no queden pendientes"
+              : pdfBtnHint || statusLabel;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
   const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
 
@@ -474,11 +486,16 @@ export function EmpresaDcdtModal({
   }
 
   async function generarPdf() {
-    if (!dcdt || !doc || !puedePdf) {
-      showToast?.("Valida el DCDT y completa los datos obligatorios antes de generar PDF");
+    if (!dcdt || !doc) {
+      showToast?.("DCDT no cargado — cierra y vuelve a abrir el modal");
+      return;
+    }
+    if (!puedePdf) {
+      showToast?.(pdfBtnHint || "Valida el DCDT y completa los datos obligatorios antes de generar PDF");
       return;
     }
     setBusy("pdf");
+    showToast?.("Generando PDF DeCA…");
     try {
       const { dcdt: next, pdfSizeBytes, generatedAt } = await generateAndPersistDcdtPdf({
         servicio,
@@ -490,7 +507,12 @@ export function EmpresaDcdtModal({
       setDcdt(next);
       const kb = pdfSizeBytes ? `${Math.round(pdfSizeBytes / 1024)} KB` : "";
       const when = generatedAt ? new Date(generatedAt).toLocaleTimeString("es-ES") : "";
-      showToast?.(`PDF DeCA generado con QR${kb ? ` · ${kb}` : ""}${when ? ` · ${when}` : ""}`);
+      showToast?.(`PDF DeCA generado${kb ? ` · ${kb}` : ""}${when ? ` · ${when}` : ""} — descarga iniciada`);
+      try {
+        await openDcdtStoredPdf(next);
+      } catch {
+        /* descarga directa del blob ya intentada */
+      }
     } catch (e) {
       showToast?.(e?.message || "Error al generar PDF");
     } finally {
@@ -616,34 +638,46 @@ export function EmpresaDcdtModal({
           )}
         </div>
 
-        <div style={{ padding: "12px 18px", borderTop: `1px solid ${UI.border}`, display: "flex", flexWrap: "wrap", gap: 8, background: UI.soft }}>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${UI.border}`, background: UI.soft }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: busy ? UI.accent : puedePdf && !puedeDescargarPdf ? "#166534" : UI.su,
+              marginBottom: 10,
+              lineHeight: 1.45,
+            }}
+          >
+            {accionMensaje}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           <button type="button" disabled={!!busy || loading} onClick={completarDesdeOcr} style={btn(UI.accent, "#fff")}>
             Completar desde OCR
           </button>
           <button
             type="button"
-            disabled={!!busy || loading || !puedeValidar}
+            disabled={!!busy || loading}
             onClick={validarDcdt}
             title={puedeValidar ? "Paso 1: congelar datos para tráfico" : missing.length ? `Completa: ${missing.map((m) => m.label).join(" · ")}` : "DCDT ya validado"}
-            style={btn(UI.green, "#fff")}
+            style={btn(UI.green, "#fff", !puedeValidar && !busy && !loading)}
           >
-            Validar DCDT
+            {busy === "validar" ? "Validando…" : "Validar DCDT"}
           </button>
           <button
             type="button"
-            disabled={!!busy || loading || !puedePdf}
+            disabled={!!busy || loading}
             onClick={generarPdf}
             title={pdfBtnHint}
-            style={btn("#166534", "#fff")}
+            style={btn("#166534", "#fff", !puedePdf && !busy && !loading)}
           >
-            Generar PDF DCDT
+            {busy === "pdf" ? "Generando PDF…" : "Generar PDF DCDT"}
           </button>
           <button
             type="button"
-            disabled={!!busy || loading || !puedeDescargarPdf}
+            disabled={!!busy || loading}
             onClick={descargarPdfGuardado}
             title={downloadBtnHint}
-            style={btn(UI.accent, "#fff")}
+            style={btn(UI.accent, "#fff", !puedeDescargarPdf && !busy && !loading)}
           >
             Descargar PDF DCDT
           </button>
@@ -653,6 +687,7 @@ export function EmpresaDcdtModal({
           <button type="button" onClick={onClose} style={{ ...btn("#fff", UI.tx), marginLeft: "auto" }}>
             Cerrar
           </button>
+          </div>
         </div>
       </div>
       {qrOpen ? (
@@ -669,6 +704,16 @@ export function EmpresaDcdtModal({
   );
 }
 
-function btn(bg, color) {
-  return { background: bg, color, border: bg === "#fff" ? `1px solid ${UI.border}` : "none", borderRadius: 9, padding: "10px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer" };
+function btn(bg, color, muted = false) {
+  return {
+    background: bg,
+    color,
+    border: bg === "#fff" ? `1px solid ${UI.border}` : "none",
+    borderRadius: 9,
+    padding: "10px 14px",
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: muted ? "not-allowed" : "pointer",
+    opacity: muted ? 0.55 : 1,
+  };
 }

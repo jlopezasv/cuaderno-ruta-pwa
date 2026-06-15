@@ -163,6 +163,9 @@ export async function generateAndPersistDcdtPdf({
 
   const serviceLabel = String(doc.referencia || servicio.id).replace(/[^\w.\-áéíóúñ]+/gi, "_");
   const filename = `dcdt-${serviceLabel}.pdf`;
+
+  // Descarga inmediata (antes del upload) para no perder el gesto del usuario en el navegador.
+  if (downloadAfter) triggerBlobDownload(blob, filename);
   const folder = `dcdt/${servicio.empresa_id || "empresa"}/${servicio.id}`;
 
   // Siempre nueva ruta con timestamp: cada «Generar PDF» sustituye el binario servido por /api/dcdt-download.
@@ -267,8 +270,6 @@ export async function generateAndPersistDcdtPdf({
     qr_storage_path: qrStoragePath,
     deca_download_url: decaDownloadUrl,
   });
-
-  if (downloadAfter) triggerBlobDownload(blob, filename);
 
   return {
     dcdt: nextDcdt,

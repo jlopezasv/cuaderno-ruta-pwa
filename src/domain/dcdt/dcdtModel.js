@@ -352,7 +352,7 @@ export function isDcdtEstadoValidated(estado) {
 /** DCDT listo para validar / mostrar como validado: sin pendientes obligatorios. */
 export function isDcdtFullyValidated({ estado, missing = [], validacionSnapshot = null, validadoAt = null }) {
   const snap = validacionSnapshot && typeof validacionSnapshot === "object" ? validacionSnapshot : null;
-  if (snap && (isDcdtEstadoValidated(estado) || validadoAt)) {
+  if (isDcdtEstadoValidated(estado) && (snap || validadoAt)) {
     return true;
   }
   return missing.length === 0 && isDcdtEstadoValidated(estado);
@@ -644,7 +644,10 @@ export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor,
       updated_at: new Date().toISOString(),
     }),
   });
-  if (!r.ok) throw new Error("No se pudo validar DCDT");
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(body ? `No se pudo validar DCDT (${r.status})` : "No se pudo validar DCDT");
+  }
   const rows = await r.json();
   let next = rowToDcdt(Array.isArray(rows) ? rows[0] : null);
   if (next && doc && servicio) {
