@@ -214,7 +214,7 @@ import { buildExpedienteForServicio } from "./domain/service/buildExpedienteForS
 import { resolveExpedienteEmpresaHeaderForServicio } from "./domain/service/expedienteEmpresaHeader.js";
 import { geoFromGpsPoint } from "./domain/service/operationalGeo.js";
 import { resolveEventGeoForPersist, requestActionLocation, seedLocationCacheFromGeo } from "./data/driverActionGps.js";
-import { traceMuelleGeo, traceMuelleGeoFromStop } from "./data/muelleGeoTrace.js";
+import { logMuelleGps } from "./data/muelleGeoTrace.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
 import { ServicioMercanciaBlock } from "./features/dcdt/ServicioMercanciaBlock.jsx";
@@ -5122,7 +5122,8 @@ async function persistServiceOperationalEta({
 async function patchStopOperacionGeo(stopId, notas, geoPatch, eventType = null) {
   const notasNext = mergeStopOperacionMeta(notas, geoPatch);
   if (isDemoApp()) {
-    traceMuelleGeo(eventType, "patch_stop_payload", {
+    logMuelleGps("payload before save", {
+      eventType,
       stopId,
       geoPatch,
       notasTail: String(notasNext || "").slice(-200),
@@ -5132,6 +5133,14 @@ async function patchStopOperacionGeo(stopId, notas, geoPatch, eventType = null) 
     method: "PATCH",
     body: JSON.stringify({ notas: notasNext }),
   });
+  if (isDemoApp()) {
+    logMuelleGps("supabase update result", {
+      eventType,
+      stopId,
+      ok: r.ok,
+      status: r.status,
+    });
+  }
   if (!r.ok) {
     let detail = "";
     try {
@@ -17358,28 +17367,25 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const geo=resolveEventGeoForPersist(opts.prefetchedGps??null,"entrada_muelle",{
       servicioInicioGeo:svcMeta?.inicio_servicio_geo,
     });
-    traceMuelleGeo("entrada_muelle","request_result",{
+    logMuelleGps("payload before save",{
+      eventType:"entrada_muelle",
+      stopId,
       prefetchedOk:!!opts.prefetchedGps?.ok,
       usedCache:!!opts.prefetchedGps?.usedCache,
       lat:opts.prefetchedGps?.point?.lat??geo.lat??null,
       lng:opts.prefetchedGps?.point?.lng??opts.prefetchedGps?.point?.lon??geo.lng??null,
       accuracy:opts.prefetchedGps?.point?.accuracy??geo.accuracy_m??null,
-      geoPayload:geo,
+      entrada_geo:geo,
     });
     const now=new Date().toISOString();
-    devLog("[TL1] click entrada_muelle",{
-      servicioId:servicio?.id||null,
+    const stopEntrada=stops.find(s=>s.id===stopId);
+    const notasEntrada=mergeStopOperacionMeta(stopEntrada?.notas,{entrada_geo:geo});
+    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now,notas:notasEntrada})});
+    logMuelleGps("supabase update result",{
+      eventType:"entrada_muelle",
       stopId,
-      now,
-      estadoServicio:servicio?.estado||null,
-    });
-    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"llegado",hora_llegada_real:now})});
-    devLog("[TL1] patch entrada_muelle",{
       ok:res.ok,
       status:res.status,
-      servicioId:servicio?.id||null,
-      stopId,
-      payload:{estado:"llegado",hora_llegada_real:now},
     });
     if(!res.ok){
       let detail="";
@@ -17392,37 +17398,23 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       });
       throw new Error("No se pudo guardar la entrada en muelle");
     }
-    try{
-      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
-      const verifyRows=verify.ok?await verify.json():null;
-      devLog("[TL1] verify entrada_muelle",{
-        ok:verify.ok,
-        status:verify.status,
-        row:verifyRows?.[0]||null,
-      });
-    }catch(e){
-      devWarn("[TL1] verify entrada_muelle failed",e?.message||e);
-    }
-    let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now}:s);
-    const stopEntrada=stops.find(s=>s.id===stopId);
-    const notasEntrada=await patchStopOperacionGeo(stopId,stopEntrada?.notas,{entrada_geo:geo},"entrada_muelle");
-    updated=updated.map(s=>s.id===stopId?{...s,notas:notasEntrada}:s);
+    let updated=stops.map(s=>s.id===stopId?{...s,estado:"llegado",hora_llegada_real:now,notas:notasEntrada}:s);
     if(isDemoApp()){
       try{
         const vr=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,notas&limit=1`);
         const vrows=vr.ok?await vr.json():[];
         const row=vrows?.[0]||null;
-        traceMuelleGeo("entrada_muelle","db_after_patch",{
-          ok:vr.ok,
+        const dbMeta=getStopOperacionMeta(row?.notas);
+        logMuelleGps("stop after save",{
+          eventType:"entrada_muelle",
           stopId,
-          entrada_geo:getStopOperacionMeta(row?.notas).entrada_geo??null,
+          entrada_geo:dbMeta.entrada_geo??null,
           notasTail:String(row?.notas||"").slice(-200),
         });
       }catch(e){
-        traceMuelleGeo("entrada_muelle","db_after_patch_error",{stopId,error:e?.message||String(e)});
+        logMuelleGps("stop after save",{eventType:"entrada_muelle",stopId,error:e?.message||String(e)});
       }
     }
-    traceMuelleGeoFromStop("entrada_muelle","timeline_local_state",updated.find((s)=>s.id===stopId));
     await autoTacografoTramoMuelle({ alEntrada: true, stop: stopEntrada });
     if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
@@ -17440,28 +17432,25 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const geoSalida=resolveEventGeoForPersist(opts.prefetchedGps??null,trackingEventType,{
       servicioInicioGeo:svcMeta?.inicio_servicio_geo,
     });
-    traceMuelleGeo(trackingEventType,"request_result",{
+    logMuelleGps("payload before save",{
+      eventType:trackingEventType,
+      stopId,
       prefetchedOk:!!opts.prefetchedGps?.ok,
       usedCache:!!opts.prefetchedGps?.usedCache,
       lat:opts.prefetchedGps?.point?.lat??geoSalida.lat??null,
       lng:opts.prefetchedGps?.point?.lng??opts.prefetchedGps?.point?.lon??geoSalida.lng??null,
       accuracy:opts.prefetchedGps?.point?.accuracy??geoSalida.accuracy_m??null,
-      geoPayload:geoSalida,
+      salida_geo:geoSalida,
     });
     const now=new Date().toISOString();
-    devLog("[TL1] click salida_muelle",{
-      servicioId:servicio?.id||null,
+    const stopSalidaRow=stops.find(s=>s.id===stopId);
+    const notasSalida=mergeStopOperacionMeta(stopSalidaRow?.notas,{salida_geo:geoSalida});
+    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now,notas:notasSalida})});
+    logMuelleGps("supabase update result",{
+      eventType:trackingEventType,
       stopId,
-      now,
-      estadoServicio:servicio?.estado||null,
-    });
-    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now})});
-    devLog("[TL1] patch salida_muelle",{
       ok:res.ok,
       status:res.status,
-      servicioId:servicio?.id||null,
-      stopId,
-      payload:{estado:"completado",hora_salida_real:now},
     });
     if(!res.ok){
       let detail="";
@@ -17474,20 +17463,9 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       });
       throw new Error("No se pudo guardar la salida de muelle");
     }
-    try{
-      const verify=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,servicio_id,estado,hora_llegada_real,hora_salida_real&limit=1`);
-      const verifyRows=verify.ok?await verify.json():null;
-      devLog("[TL1] verify salida_muelle",{
-        ok:verify.ok,
-        status:verify.status,
-        row:verifyRows?.[0]||null,
-      });
-    }catch(e){
-      devWarn("[TL1] verify salida_muelle failed",e?.message||e);
-    }
-    let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now}:s);
+    let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now,notas:notasSalida}:s);
 
-    const stop=stops.find(s=>s.id===stopId);
+    const stop=stopSalidaRow;
     await autoTacografoTramoMuelle({ alEntrada: false, stop });
     if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
 
@@ -17504,25 +17482,22 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       sbUpsert("entries",rows).catch(()=>{});
     }
 
-    const stopSalidaRow=updated.find(s=>s.id===stopId);
-    const notasSalida=await patchStopOperacionGeo(stopId,stopSalidaRow?.notas,{salida_geo:geoSalida},trackingEventType);
-    updated=updated.map(s=>s.id===stopId?{...s,notas:notasSalida}:s);
     if(isDemoApp()){
       try{
         const vr=await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=id,notas&limit=1`);
         const vrows=vr.ok?await vr.json():[];
         const row=vrows?.[0]||null;
-        traceMuelleGeo(trackingEventType,"db_after_patch",{
-          ok:vr.ok,
+        const dbMeta=getStopOperacionMeta(row?.notas);
+        logMuelleGps("stop after save",{
+          eventType:trackingEventType,
           stopId,
-          salida_geo:getStopOperacionMeta(row?.notas).salida_geo??null,
+          salida_geo:dbMeta.salida_geo??null,
           notasTail:String(row?.notas||"").slice(-200),
         });
       }catch(e){
-        traceMuelleGeo(trackingEventType,"db_after_patch_error",{stopId,error:e?.message||String(e)});
+        logMuelleGps("stop after save",{eventType:trackingEventType,stopId,error:e?.message||String(e)});
       }
     }
-    traceMuelleGeoFromStop(trackingEventType,"timeline_local_state",updated.find((s)=>s.id===stopId));
 
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:trackingEventType,stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
     let nextServicio=servicio;

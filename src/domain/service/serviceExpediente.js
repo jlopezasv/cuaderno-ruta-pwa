@@ -42,6 +42,7 @@ import { getFleetTenantDisplayFromServicio } from "./fleetTenantDisplay.js";
 import { normalizeServicioEmpresaId } from "./serviceOwnership.js";
 import { DEMO_FLEET_TENANT_LABELS } from "../../config/demoFleetTenantLabels.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
+import { logMuelleGps } from "../../data/muelleGeoTrace.js";
 
 /** Nombre comercial de la empresa para la cabecera del expediente (solo UI). */
 function resolveExpedienteEmpresaNombre(servicio) {
@@ -437,6 +438,7 @@ export function buildServiceExpediente({
       nombre: stop.nombre || label,
       direccion: stop.direccion || "",
       notas: formatStopNotesForDisplay(stop.notas) || "",
+      notasOperacion: stop.notas ?? null,
       entrada: stop.hora_llegada_real || null,
       salida: stop.hora_salida_real || null,
       entradaHora: fmtClock(llegadaMs),
@@ -517,26 +519,44 @@ export function buildServiceExpediente({
     });
   }
   for (const stop of stopRows) {
-    const stopMeta = getStopOperacionMeta(stop.notas);
+    const stopMeta = getStopOperacionMeta(stop.notasOperacion);
     if (stop.entrada) {
+      const ubicacion = formatExpedienteUbicacionLine(stopMeta.entrada_geo);
+      if (isDemoApp()) {
+        logMuelleGps("timeline event built", {
+          eventType: "entrada_muelle",
+          stopId: stop.id,
+          geo: stopMeta.entrada_geo ?? null,
+          expedienteLine: ubicacion,
+        });
+      }
       timeline.push({
         ts: stop.entrada,
         time: stop.entradaHora,
         type: "entrada_muelle",
         title: `Entrada muelle — ${stop.nombre}`,
         detail: stop.label,
-        ubicacion: formatExpedienteUbicacionLine(stopMeta.entrada_geo),
+        ubicacion,
         stopId: stop.id,
       });
     }
     if (stop.salida) {
+      const ubicacion = formatExpedienteUbicacionLine(stopMeta.salida_geo);
+      if (isDemoApp()) {
+        logMuelleGps("timeline event built", {
+          eventType: "salida_muelle",
+          stopId: stop.id,
+          geo: stopMeta.salida_geo ?? null,
+          expedienteLine: ubicacion,
+        });
+      }
       timeline.push({
         ts: stop.salida,
         time: stop.salidaHora,
         type: "salida_muelle",
         title: `${stop.label} finalizada`,
         detail: `${stop.nombre} · Espera ${stop.esperaLabel}`,
-        ubicacion: formatExpedienteUbicacionLine(stopMeta.salida_geo),
+        ubicacion,
         stopId: stop.id,
       });
     }
@@ -639,7 +659,7 @@ export function buildServiceExpediente({
 
   for (const stop of stopRows) {
     if (stop.entrada) {
-      const stopMeta = getStopOperacionMeta(stop.notas);
+      const stopMeta = getStopOperacionMeta(stop.notasOperacion);
       const geoLine = formatOperationalGeoLine(stopMeta.entrada_geo);
       integrityRecords.push(eventRecord({
         ts: stop.entrada,
@@ -667,7 +687,7 @@ export function buildServiceExpediente({
       }));
     }
     if (stop.salida) {
-      const stopMeta = getStopOperacionMeta(stop.notas);
+      const stopMeta = getStopOperacionMeta(stop.notasOperacion);
       const geoLine = formatOperationalGeoLine(stopMeta.salida_geo);
       integrityRecords.push(eventRecord({
         ts: stop.salida,

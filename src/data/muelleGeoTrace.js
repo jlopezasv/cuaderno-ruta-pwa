@@ -1,27 +1,26 @@
-/** Trazas demo para depurar GPS en eventos de muelle. */
+/** Trazas demo obligatorias para GPS en eventos de muelle. */
 
 import { isDemoApp } from "../config/appEnvironment.js";
 import { getStopOperacionMeta } from "../domain/service/stopOperacionMeta.js";
-import { formatDriverGeoTimelineLines } from "../domain/service/operationalGeo.js";
+import { formatDriverGeoTimelineLines, formatExpedienteUbicacionLine } from "../domain/service/operationalGeo.js";
 
-export function traceMuelleGeo(eventType, stage, payload = {}) {
+/** @param {"before request"|"result"|"payload before save"|"supabase update result"|"stop after save"|"timeline event built"} stage */
+export function logMuelleGps(stage, payload = {}) {
   if (!isDemoApp()) return;
-  console.log("[GPS muelle]", {
-    eventType: eventType || null,
-    stage,
-    ...payload,
-  });
+  console.log(`[MUELLE GPS] ${stage}`, payload);
 }
 
-export function traceMuelleGeoFromStop(eventType, stage, stop) {
+export function logMuelleGpsTimelineFromStop(eventType, stop, extra = {}) {
   if (!isDemoApp() || !stop) return;
-  const meta = getStopOperacionMeta(stop.notas);
-  traceMuelleGeo(eventType, stage, {
+  const meta = getStopOperacionMeta(stop.notasOperacion ?? stop.notas);
+  const isEntrada = eventType === "entrada_muelle";
+  const geo = isEntrada ? meta.entrada_geo : meta.salida_geo;
+  logMuelleGps("timeline event built", {
+    eventType,
     stopId: stop.id,
-    entrada_geo: meta.entrada_geo ?? null,
-    salida_geo: meta.salida_geo ?? null,
-    timelineEntrada: formatDriverGeoTimelineLines(meta.entrada_geo),
-    timelineSalida: formatDriverGeoTimelineLines(meta.salida_geo),
-    notasTail: String(stop.notas || "").slice(-160),
+    geo,
+    driverLines: formatDriverGeoTimelineLines(geo),
+    expedienteLine: formatExpedienteUbicacionLine(geo),
+    ...extra,
   });
 }

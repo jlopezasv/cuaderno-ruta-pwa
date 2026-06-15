@@ -36,7 +36,7 @@ import { getEtaPrevista } from "../../../domain/service/etaPrevista.js";
 import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
-import { traceMuelleGeo } from "../../../data/muelleGeoTrace.js";
+import { logMuelleGps } from "../../../data/muelleGeoTrace.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -1657,8 +1657,11 @@ export function ActiveServicePanel({
     const { kind, stopId } = confirmMuelle;
     const stop = sortedStops.find((s) => s.id === stopId);
     const { eventType, actionLabel } = muelleActionMeta(kind, stop);
+    logMuelleGps("before request", { eventType, stopId, kind, actionLabel });
     const prefetchedGps = await acquireLocation(eventType, actionLabel);
-    traceMuelleGeo(eventType, "confirm_acquire", {
+    logMuelleGps("result", {
+      eventType,
+      stopId,
       cancelled: prefetchedGps === null,
       ok: !!prefetchedGps?.ok,
       usedCache: !!prefetchedGps?.usedCache,
