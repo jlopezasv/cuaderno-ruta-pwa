@@ -45,14 +45,15 @@ function resolvePdfFilename(datos, decaPublicId) {
 async function fetchDcdtByDecaPublicId(decaPublicId) {
   const { url } = getSupabaseServerEnv();
   const enc = encodeURIComponent(decaPublicId);
+  const select = "id,servicio_id,estado,datos,validado_at";
   for (const table of DCDT_TABLES) {
-    const apiPath =
-      `${url}/rest/v1/${table}?deca_public_id=eq.${enc}` +
-      "&select=id,servicio_id,estado,datos,validado_at&limit=1";
-    const r = await fetch(apiPath, { headers: srJsonHeaders() });
-    if (!r.ok) continue;
-    const rows = await r.json();
-    if (Array.isArray(rows) && rows[0]) return rows[0];
+    for (const filter of [`deca_public_id=eq.${enc}`, `datos->>deca_public_id=eq.${enc}`]) {
+      const apiPath = `${url}/rest/v1/${table}?${filter}&select=${select}&limit=1`;
+      const r = await fetch(apiPath, { headers: srJsonHeaders() });
+      if (!r.ok) continue;
+      const rows = await r.json();
+      if (Array.isArray(rows) && rows[0]) return rows[0];
+    }
   }
   return null;
 }

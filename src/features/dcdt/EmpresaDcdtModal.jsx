@@ -21,6 +21,7 @@ import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.j
 import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 
@@ -98,6 +99,7 @@ export function EmpresaDcdtModal({
   const [empresaOwnerProfile, setEmpresaOwnerProfile] = useState(null);
   const [conductorEmpresa, setConductorEmpresa] = useState(conductor);
   const [qrOpen, setQrOpen] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState(null);
   const mercanciaDirtyRef = useRef(false);
   const syncedPartesRef = useRef(false);
   const flotaEvsRef = useRef(flotaEvs);
@@ -372,7 +374,8 @@ export function EmpresaDcdtModal({
       : pdfBtnHint || "Valida y genera el PDF primero"
     : "Descargar el PDF guardado en storage";
   const accionMensaje =
-    busy === "pdf"
+    actionFeedback?.text ||
+    (busy === "pdf"
       ? "Generando PDF DeCA… (puede tardar unos segundos)"
       : busy === "validar"
         ? "Validando DCDT…"
@@ -382,9 +385,24 @@ export function EmpresaDcdtModal({
             ? pdfBtnHint
             : puedeValidar
               ? "Paso 1: valida el DCDT cuando no queden pendientes"
-              : pdfBtnHint || statusLabel;
+              : pdfBtnHint || statusLabel);
+  const accionColor =
+    actionFeedback?.kind === "error"
+      ? UI.red
+      : actionFeedback?.kind === "ok"
+        ? UI.green
+        : actionFeedback?.kind === "progress" || busy
+          ? UI.accent
+          : puedePdf && !puedeDescargarPdf
+            ? "#166534"
+            : UI.su;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
   const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
+
+  function notifyAction(text, kind = "info") {
+    setActionFeedback({ text, kind });
+    showToast?.(text);
+  }
 
   async function guardarMercancia() {
     if (!dcdt) return;
@@ -477,9 +495,9 @@ export function EmpresaDcdtModal({
       });
       const fresh = servicio?.id ? await fetchDcdtByServicio(servicio.id) : null;
       setDcdt(fresh || next);
-      showToast?.("DCDT validado — ya puedes generar el PDF");
+      notifyAction("DCDT validado — ya puedes generar el PDF", "ok");
     } catch (e) {
-      showToast?.(e?.message || "No se pudo validar");
+      notifyAction(e?.message || "No se pudo validar", "error");
     } finally {
       setBusy("");
     }
@@ -487,15 +505,16 @@ export function EmpresaDcdtModal({
 
   async function generarPdf() {
     if (!dcdt || !doc) {
-      showToast?.("DCDT no cargado — cierra y vuelve a abrir el modal");
+      notifyAction("DCDT no cargado — cierra y vuelve a abrir el modal", "error");
       return;
     }
     if (!puedePdf) {
-      showToast?.(pdfBtnHint || "Valida el DCDT y completa los datos obligatorios antes de generar PDF");
+      notifyAction(pdfBtnHint || "Valida el DCDT antes de generar el PDF", "error");
       return;
     }
     setBusy("pdf");
-    showToast?.("Generando PDF DeCA…");
+    setActionFeedback({ text: "Generando PDF DeCA…", kind: "progress" });
+    notifyAction("Generando PDF DeCA…", "progress");
     try {
       const { dcdt: next, pdfSizeBytes, generatedAt } = await generateAndPersistDcdtPdf({
         servicio,
@@ -507,14 +526,16 @@ export function EmpresaDcdtModal({
       setDcdt(next);
       const kb = pdfSizeBytes ? `${Math.round(pdfSizeBytes / 1024)} KB` : "";
       const when = generatedAt ? new Date(generatedAt).toLocaleTimeString("es-ES") : "";
-      showToast?.(`PDF DeCA generado${kb ? ` · ${kb}` : ""}${when ? ` · ${when}` : ""} — descarga iniciada`);
+      notifyAction(`PDF DeCA generado${kb ? ` · ${kb}` : ""}${when ? ` · ${when}` : ""} — revisa tu carpeta de descargas`, "ok");
       try {
         await openDcdtStoredPdf(next);
       } catch {
         /* descarga directa del blob ya intentada */
       }
     } catch (e) {
-      showToast?.(e?.message || "Error al generar PDF");
+      const msg = e?.message || "Error al generar PDF";
+      notifyAction(msg, "error");
+      if (isDemoApp()) console.error("[DCDT PDF empresa]", e);
     } finally {
       setBusy("");
     }
@@ -643,9 +664,13 @@ export function EmpresaDcdtModal({
             style={{
               fontSize: 12,
               fontWeight: 700,
-              color: busy ? UI.accent : puedePdf && !puedeDescargarPdf ? "#166534" : UI.su,
+              color: accionColor,
               marginBottom: 10,
               lineHeight: 1.45,
+              padding: actionFeedback?.kind === "error" ? "8px 10px" : 0,
+              background: actionFeedback?.kind === "error" ? "#fef2f2" : "transparent",
+              borderRadius: actionFeedback?.kind === "error" ? 8 : 0,
+              border: actionFeedback?.kind === "error" ? "1px solid #fecaca" : "none",
             }}
           >
             {accionMensaje}

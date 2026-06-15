@@ -255,6 +255,7 @@ export async function generateAndPersistDcdtPdf({
     pdfStorageBucket: storageBucket,
     pdfStoragePath: storagePath,
     decaDownloadUrl,
+    decaPublicId,
     decaQrPngStorageBucket: qrStorage.bucket,
     decaQrPngStoragePath: qrStorage.path,
     pdfSizeBytes: blob.size,

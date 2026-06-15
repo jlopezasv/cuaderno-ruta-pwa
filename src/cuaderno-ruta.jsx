@@ -14459,7 +14459,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         await crearEmpresa(nombre,cif);
         await init();
       }} dark={dark}/>
-      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:300}}>{toast}</div>}
+      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:650,maxWidth:"min(92vw,520px)",textAlign:"center",boxShadow:"0 8px 24px rgba(15,23,42,.25)"}}>{toast}</div>}
     </div>
   );
 
@@ -14488,7 +14488,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           </div>
         </>
       )}
-      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:300}}>{toast}</div>}
+      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:650,maxWidth:"min(92vw,520px)",textAlign:"center",boxShadow:"0 8px 24px rgba(15,23,42,.25)"}}>{toast}</div>}
     </div>
   );
 
@@ -15693,7 +15693,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         />
       )}
 
-      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:300}}>{toast}</div>}
+      {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:card,color:"white",padding:"12px 20px",borderRadius:11,fontSize:14,fontWeight:700,zIndex:650,maxWidth:"min(92vw,520px)",textAlign:"center",boxShadow:"0 8px 24px rgba(15,23,42,.25)"}}>{toast}</div>}
     </div>
   );
 }

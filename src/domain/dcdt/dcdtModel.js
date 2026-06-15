@@ -48,7 +48,7 @@ function rowToDcdt(row) {
     validadoPor: row.validado_por,
     validadoAt: row.validado_at,
     pdfGeneradoAt: row.pdf_generado_at,
-    decaPublicId: row.deca_public_id || null,
+    decaPublicId: row.deca_public_id || datos.deca_public_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -597,9 +597,20 @@ export async function ensureDecaPublicId(dcdt) {
   const body = await r.text().catch(() => "");
   if (!r.ok) {
     if (/deca_public_id|42703|PGRST204/i.test(body)) {
-      throw new Error(
-        "Falta la columna deca_public_id en demo. Aplica la migración 20260712120000_dcdt_deca_public_id_demo.sql",
-      );
+      const datos = { ...(dcdt?.datos || emptyDatos()), deca_public_id: newId };
+      const r2 = await dcdtRequest(`?id=eq.${dcdt.id}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ datos, updated_at: new Date().toISOString() }),
+      });
+      const body2 = await r2.text().catch(() => "");
+      if (!r2.ok) {
+        throw new Error(
+          "No se pudo asignar identificador DeCA. Aplica la migración 20260712120000_dcdt_deca_public_id_demo.sql en Supabase demo.",
+        );
+      }
+      const rows2 = body2 ? JSON.parse(body2) : [];
+      return rowToDcdt(Array.isArray(rows2) ? rows2[0] : null) || { ...dcdt, decaPublicId: newId, datos };
     }
     throw new Error("No se pudo asignar identificador DeCA");
   }
@@ -689,6 +700,7 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
     pdf_storage_bucket: meta.pdfStorageBucket ?? current?.datos?.pdf_storage_bucket ?? null,
     pdf_storage_path: meta.pdfStoragePath ?? current?.datos?.pdf_storage_path ?? null,
     deca_download_url: meta.decaDownloadUrl ?? current?.datos?.deca_download_url ?? null,
+    deca_public_id: meta.decaPublicId ?? current?.datos?.deca_public_id ?? null,
     deca_qr_png_storage_bucket:
       meta.decaQrPngStorageBucket ?? current?.datos?.deca_qr_png_storage_bucket ?? null,
     deca_qr_png_storage_path:
@@ -705,7 +717,10 @@ export async function markDcdtPdfGenerado(id, meta = {}) {
       updated_at: new Date().toISOString(),
     }),
   });
-  if (!r.ok) throw new Error("No se pudo registrar PDF");
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(body ? `No se pudo registrar PDF (${r.status})` : "No se pudo registrar PDF");
+  }
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
 }
