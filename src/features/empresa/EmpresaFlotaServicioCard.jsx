@@ -19,8 +19,7 @@ import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
-import { ServiceMessagesPanel } from "../messages/ServiceMessagesPanel.jsx";
-import { isServiceMessagesEnabled } from "../../config/serviceMessages.js";
+import { EmpresaServicioQuickActions } from "./EmpresaServicioQuickActions.jsx";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -91,6 +90,7 @@ function EmpresaFlotaServicioCardImpl({
   asignadosCount = 0,
   asignadosNombresStr = "",
   empresaNombre = "Empresa",
+  empresaUserId = null,
   showToast,
   fmtDur,
   tx,
@@ -475,28 +475,15 @@ function EmpresaFlotaServicioCardImpl({
             </div>
           ) : null}
 
-          {onDcdt && !expanded ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDcdt();
-              }}
-              style={{
-                marginTop: 10,
-                background: "#fffbeb",
-                color: "#92400e",
-                border: "1px solid #fcd34d",
-                borderRadius: 8,
-                padding: "7px 10px",
-                fontSize: 12,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              DCDT
-            </button>
-          ) : null}
+          <EmpresaServicioQuickActions
+            servicio={servicio}
+            stops={stops}
+            empresaNombre={empresaNombre}
+            empresaUserId={empresaUserId}
+            showToast={showToast}
+            onDcdt={onDcdt}
+            showDcdt={!!onDcdt}
+          />
 
           {onAsignarConductor && !expanded && !servicio.conductor_id ? (
             <button
@@ -765,28 +752,6 @@ function EmpresaFlotaServicioCardImpl({
             )}
           </div>
 
-          {isServiceMessagesEnabled(servicio) ? (
-            <div
-              style={{
-                background: UI.surface,
-                borderRadius: 10,
-                padding: "12px 12px",
-                marginBottom: 10,
-                border: `1px solid ${UI.border}`,
-              }}
-            >
-              <ServiceMessagesPanel
-                servicio={servicio}
-                audience="empresa"
-                senderName={empresaNombre || "Tráfico"}
-                senderRole="traffic"
-                canMarkForCustomerReport
-                showToast={showToast}
-                compact
-              />
-            </div>
-          ) : null}
-
           <div style={{ marginBottom: 10 }}>
             <ServiceEmpresaDocumentsBlock
               servicio={servicio}
@@ -1054,29 +1019,7 @@ function EmpresaFlotaServicioCardImpl({
               </button>
             ) : null}
 
-            {onDcdt ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDcdt();
-                }}
-                style={{
-                  width: "100%",
-                  marginTop: 8,
-                  background: "#fffbeb",
-                  color: "#92400e",
-                  border: "1px solid #fcd34d",
-                  borderRadius: 9,
-                  padding: "10px 10px",
-                  fontSize: 12.5,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                DCDT
-              </button>
-            ) : null}
+          </div>
 
             {onAsignarConductor ? (
               <button
@@ -1125,7 +1068,6 @@ function EmpresaFlotaServicioCardImpl({
                 Anular servicio
               </button>
             ) : null}
-          </div>
         </div>
       ) : null}
     </div>

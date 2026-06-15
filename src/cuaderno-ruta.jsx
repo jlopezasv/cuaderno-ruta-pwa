@@ -14959,6 +14959,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   onEditarServicioId={handleEditarServicioId}
                   onDcdtServicioId={handleDcdtServicioId}
                   empresaNombre={empresa?.nombre || "Empresa"}
+                  empresaUserId={prof?.id || null}
                   showToast={showToast}
                   fmtDur={fmtDur}
                   tx={tx}

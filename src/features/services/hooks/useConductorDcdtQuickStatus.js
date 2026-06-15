@@ -8,7 +8,13 @@ import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../../domain/
  * Estado visual del botón DCDT (misma validación que ConductorDcdtPanel).
  * @returns {{ visual: DcdtQuickVisual, loading: boolean, hasDcdt: boolean, readiness: object|null }}
  */
-export function useConductorDcdtQuickStatus({ servicio, empresa, conductorUid, stops = [] }) {
+export function useConductorDcdtQuickStatus({
+  servicio,
+  empresa,
+  conductorUid,
+  stops = [],
+  pollWhileIncomplete = true,
+}) {
   const empresaId = servicio?.empresa_id || empresa?.id;
   const [dcdt, setDcdt] = useState(null);
   const [loading, setLoading] = useState(!!empresaId);
@@ -66,12 +72,12 @@ export function useConductorDcdtQuickStatus({ servicio, empresa, conductorUid, s
   }, [dcdt, servicio, resolveCtx]);
 
   useEffect(() => {
-    if (!servicio?.id || readiness.isValidated) return;
+    if (!pollWhileIncomplete || !servicio?.id || readiness.isValidated) return;
     const t = setInterval(() => {
       void load();
     }, 20000);
     return () => clearInterval(t);
-  }, [servicio?.id, readiness.isValidated, load]);
+  }, [pollWhileIncomplete, servicio?.id, readiness.isValidated, load]);
 
   const visual = useMemo(() => {
     if (!empresaId) return "none";
@@ -83,3 +89,5 @@ export function useConductorDcdtQuickStatus({ servicio, empresa, conductorUid, s
 
   return { visual, loading, hasDcdt: !!dcdt, readiness, reload: load };
 }
+
+export const useServiceDcdtQuickStatus = useConductorDcdtQuickStatus;

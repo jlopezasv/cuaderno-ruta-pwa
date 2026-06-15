@@ -45,6 +45,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
   asignadosCount,
   asignadosNombresStr,
   empresaNombre,
+  empresaUserId,
   showToast,
   fmtDur,
   tx,
@@ -99,6 +100,7 @@ const EmpresaFlotaServicioRow = memo(function EmpresaFlotaServicioRow({
       asignadosCount={asignadosCount}
       asignadosNombresStr={asignadosNombresStr}
       empresaNombre={empresaNombre}
+      empresaUserId={empresaUserId}
       showToast={showToast}
       fmtDur={fmtDur}
       tx={tx}
@@ -162,6 +164,7 @@ function EmpresaFlotaServiciosListImpl({
   onEditarServicioId,
   onDcdtServicioId,
   empresaNombre = "Empresa",
+  empresaUserId = null,
   showToast,
   fmtDur,
   tx,
@@ -227,6 +230,7 @@ function EmpresaFlotaServiciosListImpl({
             onEditarServicioId={onEditarServicioId}
             onDcdtServicioId={onDcdtServicioId}
             empresaNombre={empresaNombre}
+            empresaUserId={empresaUserId}
             showToast={showToast}
             fmtDur={fmtDur}
             tx={tx}

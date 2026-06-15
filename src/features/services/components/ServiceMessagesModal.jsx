@@ -15,6 +15,8 @@ export function ServiceMessagesModal({
   servicio,
   senderName,
   senderRole = "conductor",
+  audience = "conductor",
+  canMarkForCustomerReport = false,
   showToast,
 }) {
   if (!open) return null;
@@ -69,9 +71,10 @@ export function ServiceMessagesModal({
       >
         <ServiceMessagesPanel
           servicio={servicio}
-          audience="conductor"
+          audience={audience}
           senderName={senderName}
           senderRole={senderRole}
+          canMarkForCustomerReport={canMarkForCustomerReport}
           showToast={showToast}
           modalLayout
         />

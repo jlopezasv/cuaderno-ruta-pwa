@@ -37,7 +37,7 @@ import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 import { logMuelleGps } from "../../../data/muelleGeoTrace.js";
 import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
-import { DriverQuickActionsBar } from "./DriverQuickActionsBar.jsx";
+import { DriverQuickActionsBar } from "./ServiceQuickActionsBar.jsx";
 import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
 import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
