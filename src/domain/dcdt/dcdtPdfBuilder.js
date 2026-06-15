@@ -208,6 +208,21 @@ export async function buildDcdtPdfBlob(doc, options = {}) {
     y -= 4;
   }
 
+  const mods = Array.isArray(doc.modificaciones_ruta) ? doc.modificaciones_ruta : [];
+  if (mods.length) {
+    y -= 4;
+    drawSectionTitle("MODIFICACIONES EN RUTA");
+    for (const entry of mods) {
+      const campo = plain(entry?.campo || entry?.campo_key || "Campo");
+      drawLines(`${campo}: ${entry?.valor_anterior ?? "—"} → ${entry?.valor_nuevo ?? "—"}`, MARGIN, 10, "#334155", 78);
+      if (entry?.motivo) drawLines(`Motivo: ${entry.motivo}`, MARGIN + 8, 9, "#64748b", 78);
+      if (entry?.modificado_at) {
+        drawLines(`Fecha: ${formatFechaHora(entry.modificado_at)}`, MARGIN + 8, 9, "#64748b");
+      }
+      y -= 4;
+    }
+  }
+
   if (doc.validado_at) {
     y -= 6;
     const validado = formatFechaHora(doc.validado_at);

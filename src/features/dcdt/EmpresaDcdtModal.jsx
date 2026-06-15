@@ -21,6 +21,11 @@ import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanci
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 import { generateAndPersistDcdtPdf, downloadDcdtStoredPdf, openDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { isDcdtPdfStale } from "../../domain/dcdt/decaPdfStale.js";
+import {
+  buildRutaModFormFromDoc,
+  canModificarDecaEnRuta,
+  confirmDecaRouteModification,
+} from "../../domain/dcdt/decaRouteModification.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
@@ -101,6 +106,16 @@ export function EmpresaDcdtModal({
   const [empresaOwnerProfile, setEmpresaOwnerProfile] = useState(null);
   const [conductorEmpresa, setConductorEmpresa] = useState(conductor);
   const [qrOpen, setQrOpen] = useState(false);
+  const [rutaModOpen, setRutaModOpen] = useState(false);
+  const [rutaModForm, setRutaModForm] = useState({
+    matricula: "",
+    remolque: "",
+    descripcion: "",
+    peso_kg: "",
+    bultos: "",
+    palets: "",
+  });
+  const [rutaModMotivo, setRutaModMotivo] = useState("");
   const [actionFeedback, setActionFeedback] = useState(null);
   const mercanciaDirtyRef = useRef(false);
   const syncedPartesRef = useRef(false);
@@ -363,6 +378,8 @@ export function EmpresaDcdtModal({
   const puedeDescargarPdf = readiness.canDownloadPdf;
   const warnDecaPreStart = readiness.warnDecaMissingPdfBeforeStart;
   const pdfStale = readiness.pdfStale;
+  const puedeModificarEnRuta = isDemoApp() && canModificarDecaEnRuta({ servicio, dcdt });
+  const modificacionesRuta = Array.isArray(dcdt?.datos?.modificaciones_ruta) ? dcdt.datos.modificaciones_ruta : [];
 
   useEffect(() => {
     if (!dcdt?.id || !servicio?.id || !warnDecaPreStart) return;
@@ -587,6 +604,56 @@ export function EmpresaDcdtModal({
     }
   }
 
+  function abrirModificacionEnRuta() {
+    if (!doc) return;
+    setRutaModForm(buildRutaModFormFromDoc(doc));
+    setRutaModMotivo("");
+    setRutaModOpen(true);
+  }
+
+  function setRutaModField(field, value) {
+    setRutaModForm((p) => ({ ...p, [field]: value }));
+  }
+
+  async function confirmarModificacionEnRuta() {
+    if (!dcdt || !doc) return;
+    setBusy("ruta-mod");
+    setActionFeedback({ text: "Aplicando modificación en ruta y regenerando PDF…", kind: "progress" });
+    try {
+      const { dcdt: next, entries } = await confirmDecaRouteModification({
+        dcdt,
+        servicio,
+        docBefore: doc,
+        form: rutaModForm,
+        motivo: rutaModMotivo,
+        userId,
+        stops,
+        masterById,
+        empresa,
+        empresaOwnerProfile,
+        conductor: conductorEmpresa || conductor,
+      });
+      setDcdt(next);
+      setRutaModOpen(false);
+      setRutaModMotivo("");
+      setMercanciaEdit(mercanciaEditFromDatos(next?.datos?.mercancia));
+      mercanciaDirtyRef.current = false;
+      notifyAction(
+        `Modificación en ruta registrada (${entries.length} cambio${entries.length > 1 ? "s" : ""}) — PDF DeCA actualizado`,
+        "ok",
+      );
+      try {
+        await openDcdtStoredPdf(next);
+      } catch {
+        /* opcional */
+      }
+    } catch (e) {
+      notifyAction(e?.message || "No se pudo aplicar la modificación en ruta", "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <div style={{ position: "fixed", inset: 0, background: UI.overlay, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
       <div role="dialog" onClick={(e) => e.stopPropagation()} style={{ background: UI.surface, borderRadius: 16, width: "min(96vw, 720px)", maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column", border: `1px solid ${UI.border}` }}>
@@ -704,7 +771,131 @@ export function EmpresaDcdtModal({
               <FieldRow label="Origen" value={doc?.origen} missing={missingKeys.has("origen")} />
               <FieldRow label="Destino" value={doc?.destino} missing={missingKeys.has("destino")} />
               <FieldRow label="Matrícula" value={doc?.vehiculo?.matricula} missing={missingKeys.has("vehiculo.matricula")} />
+              {doc?.vehiculo?.remolque ? (
+                <FieldRow label="Remolque" value={doc?.vehiculo?.remolque} missing={false} />
+              ) : null}
               <FieldRow label="Fecha" value={doc?.fecha_transporte ? new Date(doc.fecha_transporte).toLocaleDateString("es-ES") : ""} missing={missingKeys.has("fecha_transporte")} />
+
+              {modificacionesRuta.length ? (
+                <div
+                  style={{
+                    background: "#eff6ff",
+                    border: "1px solid #bfdbfe",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    margin: "12px 0",
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, color: UI.accent, marginBottom: 6 }}>
+                    Modificaciones en ruta ({modificacionesRuta.length})
+                  </div>
+                  {modificacionesRuta.map((entry, idx) => (
+                    <div key={`${entry.modificado_at || idx}-${entry.campo_key || entry.campo}`} style={{ fontSize: 11, color: UI.tx, marginBottom: 6, lineHeight: 1.4 }}>
+                      <strong>{entry.campo}</strong>: {entry.valor_anterior} → {entry.valor_nuevo}
+                      <div style={{ color: UI.su, fontSize: 10 }}>
+                        {entry.motivo}
+                        {entry.modificado_at ? ` · ${new Date(entry.modificado_at).toLocaleString("es-ES")}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {rutaModOpen ? (
+                <div
+                  style={{
+                    background: "#fffbeb",
+                    border: "2px solid #fcd34d",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    marginBottom: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 800, color: UI.amber, marginBottom: 8 }}>
+                    Modificar en ruta (art. 6)
+                  </div>
+                  <div style={{ fontSize: 11, color: "#92400e", marginBottom: 10, lineHeight: 1.45 }}>
+                    Cambio durante el servicio en curso. El motivo es obligatorio; el PDF se regenera al instante
+                    con la misma URL pública y QR.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={MERC_LBL}>Matrícula tractora</div>
+                      <input
+                        value={rutaModForm.matricula}
+                        onChange={(e) => setRutaModField("matricula", e.target.value)}
+                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <div style={MERC_LBL}>Matrícula remolque</div>
+                      <input
+                        value={rutaModForm.remolque}
+                        onChange={(e) => setRutaModField("remolque", e.target.value)}
+                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                  </div>
+                  <div style={MERC_LBL}>Naturaleza de la mercancía</div>
+                  <input
+                    value={rutaModForm.descripcion}
+                    onChange={(e) => setRutaModField("descripcion", e.target.value)}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }}
+                  />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={MERC_LBL}>Peso (kg)</div>
+                      <input
+                        value={rutaModForm.peso_kg}
+                        onChange={(e) => setRutaModField("peso_kg", e.target.value)}
+                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <div style={MERC_LBL}>Bultos</div>
+                      <input
+                        value={rutaModForm.bultos}
+                        onChange={(e) => setRutaModField("bultos", e.target.value)}
+                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <div style={MERC_LBL}>Palets</div>
+                      <input
+                        value={rutaModForm.palets}
+                        onChange={(e) => setRutaModField("palets", e.target.value)}
+                        style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                  </div>
+                  <div style={MERC_LBL}>Motivo del cambio *</div>
+                  <textarea
+                    value={rutaModMotivo}
+                    onChange={(e) => setRutaModMotivo(e.target.value)}
+                    placeholder='Ej. cambio de vehículo por avería'
+                    rows={2}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 10, boxSizing: "border-box", resize: "vertical" }}
+                  />
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      disabled={!!busy}
+                      onClick={confirmarModificacionEnRuta}
+                      style={btn(UI.amber, "#fff")}
+                    >
+                      {busy === "ruta-mod" ? "Guardando y regenerando PDF…" : "Confirmar modificación en ruta"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => setRutaModOpen(false)}
+                      style={btn("#fff", UI.tx)}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, margin: "14px 0 6px" }}>MERCANCÍA (tráfico / OCR)</div>
               <div style={MERC_LBL}>Naturaleza de la mercancía</div>
@@ -788,6 +979,17 @@ export function EmpresaDcdtModal({
           >
             {pdfBtnLabel}
           </button>
+          {puedeModificarEnRuta ? (
+            <button
+              type="button"
+              disabled={!!busy || loading || rutaModOpen}
+              onClick={abrirModificacionEnRuta}
+              title="Cambio en ruta con motivo obligatorio — regenera PDF al instante (misma URL/QR)"
+              style={btn(UI.amber, "#fff", rutaModOpen && !busy && !loading)}
+            >
+              {busy === "ruta-mod" ? "Modificando…" : "Modificar en ruta"}
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={!!busy || loading}

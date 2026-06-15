@@ -234,9 +234,16 @@ function buildValidacionSnapshot(doc) {
 
 function applyValidacionSnapshot(doc, dcdt) {
   const snap = dcdt?.datos?.validacion_snapshot;
-  if (!snap || !isDcdtEstadoValidated(dcdt?.estado)) return doc;
-  return {
+  const mods = dcdt?.datos?.modificaciones_ruta;
+  const withMods = {
     ...doc,
+    modificaciones_ruta: Array.isArray(mods) ? mods : [],
+  };
+  // Paso 6b: tras modificación en ruta, el DeCA/PDF refleja datos vivos (no el snapshot congelado).
+  if (Array.isArray(mods) && mods.length > 0) return withMods;
+  if (!snap || !isDcdtEstadoValidated(dcdt?.estado)) return withMods;
+  return {
+    ...withMods,
     cargador: snap.cargador || doc.cargador,
     destinatario: snap.destinatario || doc.destinatario,
     transportista: snap.transportista || doc.transportista,
@@ -273,7 +280,8 @@ export function resolveDcdtDocument({
   if (!matricula && datos.vehiculo?.use_conductor_matricula !== false) {
     matricula = conductor?.matricula || null;
   }
-  const remolque = String(conductor?.remolque || "").trim() || null;
+  let remolque = String(datos.vehiculo?.remolque_override || "").trim() || null;
+  if (!remolque) remolque = String(conductor?.remolque || "").trim() || null;
 
   const routeEndpoints = resolveServiceRouteEndpoints(servicio, stops);
   const fecha = servicio?.fecha_inicio || servicio?.created_at || null;
