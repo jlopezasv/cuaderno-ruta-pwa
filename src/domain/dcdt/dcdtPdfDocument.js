@@ -70,7 +70,10 @@ async function patchExtraDocRow(id, body) {
     throw new Error(err.message || `No se pudo actualizar PDF DCDT (${r.status})`);
   }
   const parsed = rawText ? JSON.parse(rawText) : null;
-  return Array.isArray(parsed) ? parsed[0] : parsed;
+  const row = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (row?.id) return row;
+  // RLS puede aplicar el PATCH sin devolver representación — reutilizar id conocido.
+  return { id: String(id) };
 }
 
 async function trySignDcdtStorageUrl(bucket, path) {
@@ -283,10 +286,13 @@ export async function generateAndPersistDcdtPdf({
     extraDoc = await postExtraDocRow(rowBody);
   }
 
-  dcdtPdfDemoLog("documento_id", extraDoc.id);
+  const extraDocId = extraDoc?.id || existingId;
+  if (!extraDocId) throw new Error("No se registró el documento PDF del servicio");
+
+  dcdtPdfDemoLog("documento_id", extraDocId);
 
   const nextDcdt = await markDcdtPdfGenerado(dcdtReady.id, {
-    pdfDocumentoExtraId: extraDoc.id,
+    pdfDocumentoExtraId: extraDocId,
     pdfArchivoUrl: archivoUrl,
     pdfArchivoNombre: filename,
     pdfRetentionUntil: retentionUntil,

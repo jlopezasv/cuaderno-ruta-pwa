@@ -16,7 +16,7 @@ import {
   resolveServicioInicioEfectivoAt,
   shouldWarnDecaMissingBeforeStart,
 } from "./decaPreStartCompliance.js";
-import { isDcdtPdfStale } from "./decaPdfStale.js";
+import { fetchConductorVehiculoForDcdt } from "../empresa/conductorVehiculoEmpresa.js";
 
 /** Contexto unificado para resolver DCDT (empresa y conductor). */
 export async function fetchDcdtResolveContext({
@@ -63,13 +63,7 @@ export async function fetchDcdtResolveContext({
 
   let conductor = null;
   if (uid) {
-    const cr = await sbFetch(
-      `/rest/v1/conductor_empresa?user_id=eq.${uid}&select=matricula,remolque,nombre,user_id&limit=1`,
-    );
-    if (cr.ok) {
-      const rows = await cr.json().catch(() => []);
-      conductor = Array.isArray(rows) ? rows[0] : null;
-    }
+    conductor = await fetchConductorVehiculoForDcdt(uid, empresaId);
   }
 
   const partes = empresaId ? await fetchPartesTransporte(empresaId) : [];

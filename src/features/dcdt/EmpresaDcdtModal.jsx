@@ -30,6 +30,7 @@ import {
 } from "../../domain/dcdt/decaRouteModification.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { fetchConductorVehiculoForDcdt } from "../../domain/empresa/conductorVehiculoEmpresa.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
@@ -153,17 +154,12 @@ export function EmpresaDcdtModal({
 
   useEffect(() => {
     const uid = servicio?.conductor_id || conductor?.user_id;
-    if (!uid || conductor?.matricula) return;
+    if (!uid) return;
     let cancelled = false;
     (async () => {
       try {
-        const r = await sbFetch(
-          `/rest/v1/conductor_empresa?user_id=eq.${uid}&select=matricula,remolque,nombre,user_id&limit=1`,
-        );
-        if (!r.ok || cancelled) return;
-        const rows = await r.json();
-        const row = Array.isArray(rows) ? rows[0] : null;
-        if (row && !cancelled) setConductorEmpresa(row);
+        const row = await fetchConductorVehiculoForDcdt(uid, empresaId);
+        if (!cancelled && row) setConductorEmpresa(row);
       } catch {
         /* perfil opcional */
       }
@@ -171,7 +167,7 @@ export function EmpresaDcdtModal({
     return () => {
       cancelled = true;
     };
-  }, [servicio?.conductor_id, conductor?.user_id, conductor?.matricula]);
+  }, [servicio?.conductor_id, conductor?.user_id, empresaId]);
 
   async function seleccionarParte(role, parteId, parteNueva = null) {
     if (!dcdt || !parteId) return;
@@ -663,7 +659,7 @@ export function EmpresaDcdtModal({
 
   return (
     <div style={{ position: "fixed", inset: 0, background: UI.overlay, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div role="dialog" onClick={(e) => e.stopPropagation()} style={{ background: UI.surface, borderRadius: 16, width: "min(96vw, 720px)", maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column", border: `1px solid ${UI.border}` }}>
+      <div role="dialog" onClick={(e) => e.stopPropagation()} style={{ background: UI.surface, borderRadius: 16, width: "min(98vw, 1040px)", maxHeight: "96vh", minHeight: "min(88vh, 820px)", overflow: "hidden", display: "flex", flexDirection: "column", border: `1px solid ${UI.border}` }}>
         <div style={{ padding: "16px 18px", borderBottom: `1px solid ${UI.border}` }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>DCDT</div>
           <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
@@ -674,7 +670,7 @@ export function EmpresaDcdtModal({
           </div>
         </div>
 
-        <div style={{ flex: 1, overflow: "auto", padding: "14px 18px" }}>
+        <div style={{ flex: 1, overflow: "auto", padding: "14px 20px", minHeight: 0 }}>
           {loading ? (
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (

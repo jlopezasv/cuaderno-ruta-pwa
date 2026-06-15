@@ -54,6 +54,8 @@ import {
 import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
 import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
+import { ConductorVehiculoEmpresaFields } from "./features/empresa/ConductorVehiculoEmpresaFields.jsx";
+import { guardarConductorVehiculoEmpresa } from "./domain/empresa/conductorVehiculoEmpresa.js";
 import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
@@ -13423,6 +13425,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           if(perfil[0]?.is_archived)return null;
           const nombreReal=perfil[0]?.nombre||r.nombre||"Conductor";
           const matriculaReal=perfil[0]?.matricula||r.matricula||"";
+          const remolqueReal=perfil[0]?.remolque||r.remolque||"";
           const entries=await sbSelect("entries",`user_id=eq.${r.user_id}&order=ts.asc&limit=2000`);
           const ents=entries.map(e=>({...e,ts:new Date(e.ts)}));
           const normaC=calcNorma(ents,new Date(),false);
@@ -13430,6 +13433,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             ...r,
             nombre:nombreReal,
             matricula:matriculaReal,
+            remolque:remolqueReal,
             telefono_movil:r.telefono_movil||"",
             telefono:perfil[0]?.telefono||"",
             norma:normaC,
@@ -13464,6 +13468,13 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
     if(!res.ok)throw new Error(`No se pudo guardar el teléfono (${res.status})`);
     setConductores(prev=>prev.map(c=>c.id===conductorEmpresaId?{...c,telefono_movil:valor||""}:c));
     showToast("Teléfono móvil guardado");
+  }
+
+  async function guardarVehiculoConductor(conductorEmpresaId,{matricula,remolque}){
+    if(!conductorEmpresaId)return;
+    await guardarConductorVehiculoEmpresa(conductorEmpresaId,{matricula,remolque});
+    setConductores(prev=>prev.map(c=>c.id===conductorEmpresaId?{...c,matricula:matricula||"",remolque:remolque||""}:c));
+    showToast("Matrículas del conductor guardadas");
   }
 
   async function resolveFlotaConductorUids(){
@@ -14753,7 +14764,17 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                           <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
                           <span style={{fontSize:11,background:empresaTone(journey.open?sem.col:"#94A3B8").bg,color:empresaTone(journey.open?sem.col:"#94A3B8").fg,border:`1px solid ${empresaTone(journey.open?sem.col:"#94A3B8").border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>{c.pendiente?"Sin vincular":journey.open?sem.label:"Fuera jornada"}</span>
                         </div>
-                        {c.matricula&&<div style={{fontSize:12,color:su}}>Unidad {c.matricula}</div>}
+                        {!c.pendiente&&(
+                          <ConductorVehiculoEmpresaFields
+                            conductorId={c.id}
+                            matricula={c.matricula||""}
+                            remolque={c.remolque||""}
+                            editable
+                            compact={conductoresDemoUi}
+                            ui={EMPRESA_UI}
+                            onSave={guardarVehiculoConductor}
+                          />
+                        )}
                         {!c.pendiente&&(
                           <ConductorTelefonoMovilField
                             conductorId={c.id}
