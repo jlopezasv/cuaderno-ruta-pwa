@@ -276,6 +276,7 @@ import {
   mergeEvidenciaIntoByStop,
 } from "./domain/documents/operationalEvidenciaSync.js";
 import { ExpedienteDocumentsPanel } from "./features/documents/ExpedienteDocumentsPanel.jsx";
+import { ServicioDocumentosGestor } from "./features/documents/ServicioDocumentosGestor.jsx";
 import { resolveEvidenciaDisplayImageUrl } from "./domain/documents/operationalDocumentRecord.js";
 import {
   EMPRESA_ETA_VISUAL_TICK_MS,
@@ -15075,6 +15076,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                   <button type="button" onClick={()=>setExpedientePreview(null)} style={{background:"#e2e8f0",border:"1px solid #cbd5e1",borderRadius:9,width:32,height:32,color:"#334155",cursor:"pointer",fontWeight:800}}>×</button>
                 </div>
                 <div style={{padding:20}}>
+                  <ServicioDocumentosGestor
+                    servicio={flotaServicios.find((s) => s.id === expedientePreview.id) || { id: expedientePreview.id }}
+                    expediente={expedientePreview}
+                    extraDocs={flotaExtraDocs[expedientePreview.id] || []}
+                    empresaNombre={expedientePreview.header?.empresa || empresa?.nombre}
+                    empresaCif={expedientePreview.header?.empresaCif || empresa?.cif}
+                    showToast={showToast}
+                    onSendToCliente={
+                      clienteMailEnabled
+                        ? ({ selection }) => {
+                            const sv = flotaServicios.find((s) => s.id === expedientePreview.id);
+                            if (!sv) return;
+                            const svStops = flotaStops[sv.id] || [];
+                            setMailExpediente({
+                              servicio: sv,
+                              stops: svStops,
+                              evidenciasByStop: evidenciasForServicioStops(sv.id, flotaStops, flotaEvs),
+                              extraDocs: flotaExtraDocs[sv.id] || [],
+                              categoryMailSelection: selection,
+                              expedienteModel: expedientePreview,
+                            });
+                          }
+                        : undefined
+                    }
+                  />
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:16}}>
                     {[
                       ["Conductor",expedientePreview.header.conductor],
@@ -15196,11 +15222,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ))}
                     </div>
                   </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                    <button type="button" onClick={()=>descargarExpediente(expedientePreview)}
-                      style={{background:"#0f172a",color:"white",border:"none",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
-                      Descargar PDF
-                    </button>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr",gap:10}}>
                     <button type="button" onClick={()=>archivarMetadataExpediente(expedientePreview)}
                       style={{background:"#f1f5f9",color:"#334155",border:"1px solid #cbd5e1",borderRadius:10,padding:"11px 12px",fontSize:13,fontWeight:800,cursor:"pointer"}}>
                       Archivar y liberar espacio
@@ -15653,8 +15675,11 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           onBuildExpediente={buildExpedienteCompleto}
           onEnvioLogged={()=>void refreshMailEnviosDocumentos()}
           empresaNombre={empresa?.nombre}
+          empresaCif={empresa?.cif}
           empresaId={empresa?.id}
           replyToEmail={prof?.emailEmpresa}
+          categoryMailSelection={mailExpediente.categoryMailSelection || null}
+          expedienteModel={mailExpediente.expedienteModel || null}
         />
       )}
 

@@ -13,6 +13,11 @@ import { uploadUserFile } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../../domain/documents/mediaStorageV2.js";
 import { isClienteMailEnhancedUiEnabled } from "../../config/productFeatures.js";
 import { CLIENTE_MAIL_SIMULACION_OK_MSG } from "../../config/clienteMail.js";
+import {
+  SERVICE_DOC_CATEGORY_META,
+  SERVICE_DOC_CATEGORY_ORDER,
+} from "../../domain/service/serviceDocumentCategories.js";
+import { categoryPdfToBase64Attachment } from "../../domain/service/serviceCategoryPdf.js";
 
 const LS_HINTS = "cuaderno_cliente_email_hints";
 
@@ -203,9 +208,14 @@ export function SendDocumentationModal({
   onBuildExpediente,
   onEnvioLogged,
   empresaNombre = "",
+  empresaCif = null,
   empresaId = null,
   replyToEmail = "",
+  /** @type {{ expediente?: boolean, dcdt?: boolean, chat?: boolean }|null} */
+  categoryMailSelection = null,
+  expedienteModel = null,
 }) {
+  const useCategoryMode = !!categoryMailSelection;
   const serviceRef = useMemo(() => getServiceNumberForDisplay(servicio) || "SERV-000", [servicio]);
   const clienteNombre = useMemo(() => getServiceClient(servicio) || "—", [servicio]);
   const clienteKey = useMemo(() => String(clienteNombre || serviceRef || "").slice(0, 80), [clienteNombre, serviceRef]);
@@ -247,7 +257,7 @@ export function SendDocumentationModal({
   }, [open, servicio, clienteKey, extraDocsProp]);
 
   useEffect(() => {
-    if (!open || !servicio) return;
+    if (!open || !servicio || useCategoryMode) return;
     const list = [];
     (stops || []).forEach((st) => {
       const evs = evidenciasByStop?.[st.id] || [];
@@ -279,10 +289,61 @@ export function SendDocumentationModal({
       });
     });
     setItems(list);
-  }, [open, servicio, stops, evidenciasByStop, extraDocs]);
+  }, [open, servicio, stops, evidenciasByStop, extraDocs, useCategoryMode]);
 
   useEffect(() => {
-    if (!open || !servicio?.id || !onBuildExpediente || preparingPdf) return;
+    if (!open || !servicio?.id || !useCategoryMode) return;
+    let cancelled = false;
+    (async () => {
+      setPreparingPdf(true);
+      try {
+        const built = [];
+        for (const cat of SERVICE_DOC_CATEGORY_ORDER) {
+          if (!categoryMailSelection?.[cat]) continue;
+          const att = await categoryPdfToBase64Attachment({
+            categoryId: cat,
+            expediente: expedienteModel,
+            servicio,
+            extraDocs,
+            empresaNombre,
+            empresaCif,
+          });
+          if (cancelled) return;
+          built.push({
+            id: `cat:${cat}`,
+            key: cat,
+            label: SERVICE_DOC_CATEGORY_META[cat].label,
+            filename: att.filename,
+            content: att.content,
+            selected: true,
+            kind: att.kind,
+            required: true,
+          });
+        }
+        setItems(built);
+      } catch (e) {
+        if (!cancelled) showToast?.(e?.message || "No se pudieron preparar los PDF");
+      } finally {
+        if (!cancelled) setPreparingPdf(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    servicio?.id,
+    useCategoryMode,
+    categoryMailSelection,
+    expedienteModel,
+    extraDocs,
+    empresaNombre,
+    empresaCif,
+    showToast,
+  ]);
+
+  useEffect(() => {
+    if (!open || !servicio?.id || !onBuildExpediente || preparingPdf || useCategoryMode) return;
     let cancelled = false;
     (async () => {
       setPreparingPdf(true);
@@ -539,6 +600,7 @@ export function SendDocumentationModal({
 
   const expedienteItem = items.find((x) => x.kind === "expediente_pdf");
   const otrosItems = items.filter((x) => x.kind !== "expediente_pdf");
+  const categoryItems = items.filter((x) => String(x.kind || "").startsWith("category_"));
   const demoMailUi = isClienteMailEnhancedUiEnabled();
   const ui = demoMailUi ? DEMO_UI : PROD_UI;
   const sectionStyle = {
@@ -744,6 +806,40 @@ export function SendDocumentationModal({
             <div style={{ ...sectionStyle, borderBottom: "none", paddingBottom: demoMailUi ? 40 : 32 }}>
               <div style={ui.sectionTitleStyle}>Documentos adjuntos</div>
 
+              {useCategoryMode ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 12, lineHeight: 1.45 }}>
+                    Categorías independientes · cada PDF con cabecera propia (sin mezclar en expediente salvo selección explícita)
+                  </div>
+                  {preparingPdf ? (
+                    <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>Generando PDFs…</div>
+                  ) : categoryItems.length === 0 ? (
+                    <div style={{ fontSize: 14, color: "#9ca3af", marginBottom: 20, lineHeight: 1.5 }}>
+                      Ningún PDF de categoría disponible para enviar.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: demoMailUi ? 14 : 12,
+                        marginBottom: 24,
+                      }}
+                    >
+                      {categoryItems.map((it) => (
+                        <AttachmentCard
+                          key={it.id}
+                          item={it}
+                          onToggle={toggle}
+                          onRemove={removeItem}
+                          variant={demoMailUi ? "demo" : "prod"}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
               {demoMailUi ? (
                 <div
                   style={{
@@ -874,6 +970,8 @@ export function SendDocumentationModal({
                   />
                 </label>
               </div>
+                </>
+              )}
             </div>
           </div>
 
