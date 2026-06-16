@@ -1,19 +1,21 @@
 -- =============================================================================
--- DEMO: fix user_can_manage_dcdt_trafico — STABLE + SET LOCAL no permitido (0A000)
--- Recrear como SQL VOLATILE sin SET dentro de la función.
--- Solo owner o jefe_flota/trafico activos (sin administrativo).
+-- Fix user_can_manage_dcdt_trafico — STABLE + SET LOCAL no permitido (0A000)
+-- CREATE OR REPLACE (sin DROP): las políticas RLS siguen enlazadas a la función.
+-- Misma lógica; solo VOLATILE y sin SET LOCAL dentro del cuerpo.
 -- =============================================================================
-
-DROP FUNCTION IF EXISTS public.user_can_manage_dcdt_trafico(uuid);
 
 CREATE OR REPLACE FUNCTION public.user_can_manage_dcdt_trafico(p_empresa_id uuid)
 RETURNS boolean
-LANGUAGE sql
+LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT EXISTS (
+BEGIN
+  IF p_empresa_id IS NULL OR auth.uid() IS NULL THEN
+    RETURN false;
+  END IF;
+  RETURN EXISTS (
     SELECT 1
     FROM public.empresas e
     WHERE e.id = p_empresa_id
@@ -27,6 +29,7 @@ AS $$
       AND eu.activo = true
       AND eu.rol IN ('jefe_flota', 'trafico')
   );
+END;
 $$;
 
 REVOKE ALL ON FUNCTION public.user_can_manage_dcdt_trafico(uuid) FROM PUBLIC;
