@@ -24,7 +24,7 @@ import {
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
 } from "./data/session";
-import { DEMO_LOGIN_HINT, isDemoApp, isPublicRegistrationAllowed } from "./config/appEnvironment.js";
+import { isDemoApp, isPublicRegistrationAllowed } from "./config/appEnvironment.js";
 import { isPlanificadorMapaBetaEnabled } from "./config/productFeatures.js";
 import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
 import {
@@ -643,14 +643,6 @@ function AuthScreen({ onAuth }) {
       <BrandMark size={64} rounded={16} />
       <div style={{ fontSize:24, fontWeight:800, color:"#F1F5F9", marginTop:12, marginBottom:4, letterSpacing:.4 }}>CUADERNO DE RUTA{demoMode?" · DEMO":""}</div>
       <div style={{ fontSize:13, color:"#94A3B8", marginBottom:demoMode&&mode==="login"?16:32 }}>El copiloto del transportista · EU 561/2006</div>
-
-      {demoMode && mode === "login" && (
-        <div style={{ width:"100%", maxWidth:390, background:"#172554", border:"1px solid #3B82F6", borderRadius:12, padding:"12px 16px", marginBottom:16, fontSize:12, color:"#BFDBFE", lineHeight:1.55 }}>
-          <div style={{ fontWeight:700, color:"#93C5FD", marginBottom:6 }}>Acceso demo — Panel propietario</div>
-          <div><strong>{DEMO_LOGIN_HINT.propietario}</strong></div>
-          <div>Contraseña: <strong>{DEMO_LOGIN_HINT.password}</strong></div>
-        </div>
-      )}
 
       <div style={{ width:"100%", maxWidth:390, background:"#1E293B", borderRadius:18, padding:"28px 24px", boxShadow:"0 10px 36px rgba(2,6,23,.45)", border:"1px solid #334155" }}>
 
