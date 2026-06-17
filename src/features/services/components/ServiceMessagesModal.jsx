@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { ServiceMessagesPanel } from "../../messages/ServiceMessagesPanel.jsx";
 
 const OVERLAY = {
@@ -21,7 +22,7 @@ export function ServiceMessagesModal({
 }) {
   if (!open) return null;
 
-  return (
+  const modal = (
     <div role="dialog" aria-modal="true" aria-label="Chat del servicio" style={OVERLAY}>
       <header
         style={{
@@ -81,4 +82,6 @@ export function ServiceMessagesModal({
       </div>
     </div>
   );
+
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }

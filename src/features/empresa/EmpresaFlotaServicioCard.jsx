@@ -240,6 +240,13 @@ function EmpresaFlotaServicioCardImpl({
         tabIndex={0}
         onClick={toggle}
         onKeyDown={(e) => {
+          const target = e.target;
+          if (
+            target instanceof HTMLElement &&
+            target.closest('textarea, input, select, [contenteditable="true"], [role="dialog"]')
+          ) {
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggle();
