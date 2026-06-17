@@ -99,6 +99,17 @@ async function readResponseBody(res) {
   return { text, json: parseStorageJson(text), status: res.status, ok: res.ok };
 }
 
+/** Detalle HTTP de Storage para errores visibles en prod (DeCA PDF, docs extra). */
+function storageUrlErrorDetail(status, body, phase = "storage") {
+  const detail =
+    body?.json?.message ||
+    body?.json?.error ||
+    (typeof body?.text === "string" && body.text.trim() ? body.text.trim().slice(0, 240) : null);
+  const statusPart = status ? `HTTP ${status}` : null;
+  const pieces = [STORAGE_URL_ERROR, phase, statusPart, detail].filter(Boolean);
+  return pieces.join(" · ");
+}
+
 /** JWT de usuario (rol authenticated). La anon key no cumple stor_uph_ins. */
 function requireStorageAuth() {
   const uid = getUserId();
@@ -125,10 +136,12 @@ export async function signStorageObjectPath(bucket, objectPath, expiresIn = SIGN
   });
   const signBody = await readResponseBody(signRes);
   if (!signRes.ok) {
-    throw new Error(`No se pudo firmar URL de storage (${signRes.status})`);
+    throw new Error(storageUrlErrorDetail(signRes.status, signBody, "sign"));
   }
   const finalUrl = signedUrlFromSignBody(signBody.json);
-  if (!isHttpStorageUrl(finalUrl)) throw new Error(STORAGE_URL_ERROR);
+  if (!isHttpStorageUrl(finalUrl)) {
+    throw new Error(storageUrlErrorDetail(signRes.status, signBody, "sign sin URL"));
+  }
   return buildStorageUploadResult({
     url: finalUrl,
     bucket,
@@ -178,7 +191,7 @@ export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, op
       status: res.status,
       supabaseResponse: uploadBody.json ?? uploadBody.text,
     });
-    throw new Error(STORAGE_URL_ERROR);
+    throw new Error(storageUrlErrorDetail(res.status, uploadBody, "upload"));
   }
 
   const signRes = await fetch(`${SB_URL}/storage/v1/object/sign/${bucket}/${encPath}`, {
@@ -192,10 +205,12 @@ export async function uploadBlobAtStoragePath(blob, mime, bucket, objectPath, op
   });
   const signBody = await readResponseBody(signRes);
   if (!signRes.ok) {
-    throw new Error(`No se pudo firmar URL de storage (${signRes.status})`);
+    throw new Error(storageUrlErrorDetail(signRes.status, signBody, "sign"));
   }
   const finalUrl = signedUrlFromSignBody(signBody.json);
-  if (requireHttpUrl && !isHttpStorageUrl(finalUrl)) throw new Error(STORAGE_URL_ERROR);
+  if (requireHttpUrl && !isHttpStorageUrl(finalUrl)) {
+    throw new Error(storageUrlErrorDetail(signRes.status, signBody, "sign sin URL"));
+  }
   return buildStorageUploadResult({
     url: finalUrl,
     bucket,
@@ -281,7 +296,9 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
         status: res.status,
         supabaseResponse: uploadBody.json ?? uploadBody.text,
       });
-      if (requireHttpUrl || !allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
+      if (requireHttpUrl || !allowBase64Fallback) {
+        throw new Error(storageUrlErrorDetail(res.status, uploadBody, "upload"));
+      }
       logStorageDoc("DOCUMENT_STORAGE_FINAL_URL", { kind: "base64_fallback_after_upload_fail" });
       return buildDataUrlStorageResult(await fileToBase64(blob));
     }
@@ -381,7 +398,10 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
     }
   } catch (e) {
     logStorageDocFail("DOCUMENT_STORAGE_UPLOAD_FAIL", e, { bucket, path: objectPath });
-    if (requireHttpUrl || !allowBase64Fallback) throw new Error(STORAGE_URL_ERROR);
+    if (requireHttpUrl || !allowBase64Fallback) {
+      if (e?.message && e.message !== STORAGE_URL_ERROR) throw e;
+      throw new Error(storageUrlErrorDetail(null, null, "upload"));
+    }
     if (import.meta.env.DEV) console.warn("Storage upload failed, using base64:", e.message);
   }
 
@@ -390,7 +410,7 @@ export async function uploadBlobToStorage(blob, mime, folder, originalName, opti
       bucket,
       path: objectPath,
     });
-    throw new Error(STORAGE_URL_ERROR);
+    throw new Error(storageUrlErrorDetail(null, null, "upload OK pero sin URL firmada"));
   }
 
   const dataUrl = await fileToBase64(blob);

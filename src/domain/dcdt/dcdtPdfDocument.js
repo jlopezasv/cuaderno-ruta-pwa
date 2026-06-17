@@ -1,7 +1,6 @@
 import { getUserId, sbFetch } from "../../data/supabaseClient.js";
 import {
   uploadBlobToStorage,
-  uploadBlobAtStoragePath,
   signStorageObjectPath,
   USER_PHOTOS_BUCKET,
 } from "../../data/uploadUserPhoto.js";
@@ -32,11 +31,12 @@ function dcdtPdfDemoLog(phase, extra) {
 }
 
 function resolveDecaQrStoragePath({ uid, empresaId, servicioId, pdfStoragePath, existingQrPath }) {
-  if (existingQrPath) return existingQrPath;
+  // Al regenerar PDF, colocar QR junto al binario nuevo (INSERT), no reutilizar ruta fija (upsert).
   if (pdfStoragePath) {
     const dir = String(pdfStoragePath).replace(/\/[^/]+\.pdf$/i, "");
     if (dir) return `${dir}/deca-qr.png`;
   }
+  if (existingQrPath) return existingQrPath;
   return `${uid}/dcdt/${empresaId || "empresa"}/${servicioId}/deca-qr.png`;
 }
 
@@ -219,22 +219,22 @@ export async function generateAndPersistDcdtPdf({
   const storageBucket = storage?.bucket || USER_PHOTOS_BUCKET;
   if (!storagePath) throw new Error(`PDF ${DECA_SHORT_LABEL}: upload sin ruta en storage`);
 
-  const qrStoragePath = resolveDecaQrStoragePath({
-    uid,
-    empresaId: servicio.empresa_id,
-    servicioId: servicio.id,
-    pdfStoragePath: storagePath,
-    existingQrPath: dcdtReady.datos?.deca_qr_png_storage_path,
-  });
-  const qrStorage = await uploadBlobAtStoragePath(qrPngBlob, "image/png", storageBucket, qrStoragePath, {
-    requireHttpUrl: true,
-  });
+  let qrStorage = null;
+  try {
+    // Mismo flujo que el PDF (ruta con timestamp, INSERT) — evita upsert en deca-qr.png fijo.
+    qrStorage = await uploadBlobToStorage(qrPngBlob, "image/png", folder, "deca-qr.png", {
+      requireHttpUrl: true,
+    });
+  } catch (e) {
+    // El QR va embebido en el PDF; el PNG suelto es opcional (descarga QR en modal).
+    dcdtPdfDemoLog("qr_png_upload_fail", e?.message || e);
+  }
 
   const archivoUrl = storageUploadUrl(storage);
   if (!isHttpStorageUrl(archivoUrl)) throw new Error(`PDF ${DECA_SHORT_LABEL}: URL de storage inválida`);
 
   dcdtPdfDemoLog("storage_path", storagePath);
-  dcdtPdfDemoLog("qr_storage_path", qrStoragePath);
+  dcdtPdfDemoLog("qr_storage_path", qrStorage?.path ?? null);
   dcdtPdfDemoLog("public_url", archivoUrl);
 
   const generatedAt = new Date().toISOString();
@@ -259,8 +259,8 @@ export async function generateAndPersistDcdtPdf({
     path: storagePath,
     deca_public_id: decaPublicId,
     deca_download_url: decaDownloadUrl,
-    deca_qr_png_bucket: qrStorage.bucket,
-    deca_qr_png_path: qrStorage.path,
+    deca_qr_png_bucket: qrStorage?.bucket ?? null,
+    deca_qr_png_path: qrStorage?.path ?? null,
     pdf_size_bytes: blob.size,
     pdf_has_qr: true,
   };
@@ -302,8 +302,8 @@ export async function generateAndPersistDcdtPdf({
     pdfStoragePath: storagePath,
     decaDownloadUrl,
     decaPublicId,
-    decaQrPngStorageBucket: qrStorage.bucket,
-    decaQrPngStoragePath: qrStorage.path,
+    decaQrPngStorageBucket: qrStorage?.bucket ?? null,
+    decaQrPngStoragePath: qrStorage?.path ?? null,
     pdfSizeBytes: blob.size,
     pdfHasQr: true,
   });
@@ -314,7 +314,7 @@ export async function generateAndPersistDcdtPdf({
     deca_public_id: decaPublicId,
     documento_id: extraDoc.id,
     storage_path: storagePath,
-    qr_storage_path: qrStoragePath,
+    qr_storage_path: qrStorage?.path ?? null,
     deca_download_url: decaDownloadUrl,
   });
 
@@ -327,7 +327,7 @@ export async function generateAndPersistDcdtPdf({
     storagePath,
     decaDownloadUrl,
     qrPngBlob,
-    qrStoragePath,
+    qrStoragePath: qrStorage?.path ?? null,
     pdfSizeBytes: blob.size,
     generatedAt,
   };
