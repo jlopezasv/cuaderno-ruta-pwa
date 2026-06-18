@@ -27,7 +27,7 @@ import {
 } from "./decaPdfStale.js";
 
 const COLS_CORE =
-  "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,created_at,updated_at";
+  "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,fecha_inicio_efectivo,created_at,updated_at";
 const COLS = `${COLS_CORE},deca_public_id`;
 
 function emptyDatos() {
@@ -60,6 +60,7 @@ function rowToDcdt(row) {
     validadoAt: row.validado_at,
     pdfGeneradoAt: row.pdf_generado_at,
     decaPublicId: row.deca_public_id || datos.deca_public_id || null,
+    fechaInicioEfectivo: row.fecha_inicio_efectivo || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -615,6 +616,69 @@ export async function fetchDcdtByServicio(servicioId) {
   }
   const rows = await r.json();
   return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+}
+
+/** Todas las filas DeCA de un servicio (1:N por cargador en demo). */
+export async function fetchAllDcdtByServicio(servicioId) {
+  if (!servicioId) return [];
+  for (const cols of [COLS, COLS_CORE]) {
+    const r = await dcdtRequest(`?servicio_id=eq.${servicioId}&select=${cols}&order=created_at.asc`);
+    if (r.ok) {
+      const rows = await r.json().catch(() => []);
+      return (Array.isArray(rows) ? rows : []).map(rowToDcdt).filter(Boolean);
+    }
+    const body = await r.text().catch(() => "");
+    if (!/deca_public_id|fecha_inicio_efectivo|PGRST204|42703/i.test(body)) break;
+  }
+  return [];
+}
+
+export async function createDcdtForServicioCargador({
+  servicioId,
+  empresaId,
+  cargadorId = null,
+  stops = [],
+}) {
+  const datos = syncParteIdsFromStops(emptyDatos(), stops);
+  if (cargadorId) {
+    datos.partes = { ...(datos.partes || {}), cargador_id: cargadorId };
+  }
+  const r = await dcdtRequest("", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      servicio_id: servicioId,
+      empresa_id: empresaId,
+      estado: DCDT_ESTADO.BORRADOR,
+      datos,
+    }),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    console.error("[DCDT create] createDcdtForServicioCargador POST failed", {
+      status: r.status,
+      statusText: r.statusText,
+      servicioId,
+      cargadorId,
+      body,
+    });
+    throw new Error(body || `No se pudo crear ${DECA_SHORT_LABEL} (HTTP ${r.status})`);
+  }
+  const rows = await r.json();
+  return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+}
+
+/** Solo si fecha_inicio_efectivo sigue NULL (inmutable tras fijarse). */
+export async function patchDcdtFechaInicioEfectivoIfNull(dcdtId, isoTimestamp) {
+  if (!dcdtId || !isoTimestamp) return false;
+  const r = await dcdtRequest(`?id=eq.${dcdtId}&fecha_inicio_efectivo=is.null`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ fecha_inicio_efectivo: isoTimestamp }),
+  });
+  if (!r.ok) return false;
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] }) {

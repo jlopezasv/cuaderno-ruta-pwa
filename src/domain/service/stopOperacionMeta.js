@@ -57,6 +57,8 @@ const META_SKIP_KEYS = new Set([
   "parte_transporte_id",
   "parte_transporte_tipo",
   "parte_transporte_overrides",
+  "cargador_parte_id",
+  "dcdt_servicio_id",
 ]);
 
 const META_LABELS = {

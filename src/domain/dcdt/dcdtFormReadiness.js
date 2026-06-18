@@ -1,6 +1,11 @@
 import { DCDT_ESTADO } from "./dcdtConstants.js";
 import { buildMercanciaDatosPatch, resolveDcdtDocument } from "./dcdtModel.js";
 import { suggestParteTipoForStop } from "./partesTransporteModel.js";
+import {
+  collectDistinctCargadorIdsFromStops,
+  descargaCargadorLinkPending,
+  isDescargaStop,
+} from "./descargaCargadorLink.js";
 import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
 
 function hasText(val) {
@@ -161,6 +166,21 @@ export function assessDcdtFormReadiness(args) {
       triState(hasText(fechaInicio) || hasText(doc?.fecha_transporte), missingHas(missing, "fecha_transporte")),
     ),
   ];
+
+  const descargas = (stops || []).filter(isDescargaStop);
+  if (collectDistinctCargadorIdsFromStops(stops).length >= 2 && descargas.length) {
+    const pending = descargas.filter((s) => descargaCargadorLinkPending(s, stops));
+    items.push(
+      item(
+        "Descargas vinculadas a cargador",
+        pending.length === 0
+          ? "completo"
+          : pending.length < descargas.length
+            ? "parcial"
+            : "pendiente",
+      ),
+    );
+  }
 
   return {
     items,

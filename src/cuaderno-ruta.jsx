@@ -235,6 +235,8 @@ import {
   buildServicioMercanciaMetaPatch,
   emptyServicioMercancia,
 } from "./domain/dcdt/servicioMercanciaMeta.js";
+import { syncDcdtServiciosAfterStopsPersisted, onStopEstadoOperativoChange } from "./domain/dcdt/dcdtServicioSync.js";
+import { normalizeDescargaCargadorLinks } from "./domain/dcdt/descargaCargadorLink.js";
 import { stopContractualTitle } from "./domain/dcdt/dcdtFormReadiness.js";
 import { fetchPartesTransporte } from "./domain/dcdt/partesTransporteModel.js";
 import {
@@ -12024,7 +12026,7 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
     }else{
       devLog(`[OP3] create stops ok (${logTag})`,{servicioId,rows:result.rows?.length||stops?.length});
     }
-    return;
+    return result.rows||null;
   }
   devWarn(`[OP3] create stops failed (${logTag})`,{
     servicioId,
@@ -12036,7 +12038,7 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   try{
     await ensureServicioHasStops({servicioId,origen,destino});
     devLog(`[OP3] create stops fallback ok (${logTag})`,{servicioId});
-    return;
+    return null;
   }catch(fallbackErr){
     devWarn(`[OP3] create stops fallback failed (${logTag})`,{
       servicioId,
@@ -12049,6 +12051,29 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   err.pgCode=result.pgCode||"";
   err.raw=result.detail||null;
   throw err;
+}
+
+async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, logTag }) {
+  if (!servicioId || !empresaId) return;
+  try {
+    await syncDcdtServiciosAfterStopsPersisted({ servicioId, empresaId, servicio });
+  } catch (e) {
+    const message = e?.message || String(e);
+    const detail = {
+      servicioId,
+      logTag,
+      message,
+      stack: e?.stack || null,
+      name: e?.name || null,
+    };
+    console.error(`[DCDT sync] FAILED (${logTag})`, detail);
+    if (typeof window !== "undefined") {
+      window.alert(
+        `[DCDT sync — diagnóstico temporal]\n\nOrigen: ${logTag}\nServicio: ${servicioId}\n\n${message}`,
+      );
+    }
+    devWarn(`[DCDT sync] failed (${logTag})`, detail);
+  }
 }
 
 async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,referenciaCliente,referencia}){
@@ -12484,6 +12509,9 @@ function AsignarServicioModal({
   function changeStop(i,field,val){
     setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));
   }
+  function patchStop(i,patch){
+    setStops(prev=>prev.map((s,idx)=>idx===i?{...s,...patch}:s));
+  }
 
   const rutaDesdeParadas=useMemo(()=>routeTextFromStops(stops),[stops]);
 
@@ -12552,12 +12580,18 @@ function AsignarServicioModal({
           skipEnsureStops:true,
         });
       }
-      const stopsPrepared=prepareStopsGeoForPersist(stops);
+      const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
       await persistServicioStopsTrasCrear({
         servicioId:sv.id,
         stops:stopsPrepared,
         origen:origenRuta,
         destino:destinoRuta,
+        logTag:"AsignarServicioModal",
+      });
+      await syncDcdtTrasPersistirParadas({
+        servicioId:sv.id,
+        empresaId:sv.empresa_id||empresaId,
+        servicio:sv,
         logTag:"AsignarServicioModal",
       });
       if(!sinConductor){
@@ -12631,11 +12665,14 @@ function AsignarServicioModal({
       stop={stop}
       index={i}
       onChange={changeStop}
+      onPatchStop={patchStop}
       themeKey="empresa"
       layout="servicio-grid"
       showGeoStatus={false}
       empresaId={empresaId}
       onPartesChange={setPartesCatalog}
+      allStops={stops}
+      partesCatalog={partesCatalog}
     />
   );
 
@@ -17460,6 +17497,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
     patchDriverView({stops:updated,servicio:nextServicio});
+    const stopLlegado=updated.find((s)=>s.id===stopId);
+    void onStopEstadoOperativoChange({
+      stop:{...stopLlegado,servicio_id:servicio?.id},
+      allStops:updated,
+    });
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function marcarCompletado(stopId,opts={}){
@@ -17548,6 +17590,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       nextServicio={...nextServicio,estado:"completado"};
     }
     patchDriverView({stops:updated,servicio:nextServicio});
+    const stopCompletado=updated.find((s)=>s.id===stopId);
+    void onStopEstadoOperativoChange({
+      stop:{...stopCompletado,servicio_id:servicio?.id},
+      allStops:updated,
+    });
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   }
   async function iniciarServicio(servicioId,opts={}){
@@ -17801,12 +17848,18 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
         { servicioId: sv.id, stopCount: stops.length },
         () => persistServicioStopsTrasCrear({
           servicioId:sv.id,
-          stops:prepareStopsGeoForPersist(stops),
+          stops:prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops)),
           origen:origen.trim(),
           destino:destino.trim(),
           logTag:"CrearServicioModal",
         }),
       );
+      await syncDcdtTrasPersistirParadas({
+        servicioId:sv.id,
+        empresaId:sv.empresa_id,
+        servicio:sv,
+        logTag:"CrearServicioModal",
+      });
       const referenciaBoot=await traceServiceCreateStep(
         "PATCH servicios.bootstrap",
         { servicioId: sv.id },

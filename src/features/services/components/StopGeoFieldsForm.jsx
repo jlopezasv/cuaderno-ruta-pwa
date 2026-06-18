@@ -7,6 +7,7 @@ import {
 import { stopGeoToPlace, stopMissingPostalWarning } from "../../../domain/geo/stopGeoModel.js";
 import { geocodeQueryFromPlace } from "../../../domain/service/serviceOperationalPlaces.js";
 import { ContratoParteStopBlock } from "../../dcdt/ContratoParteStopBlock.jsx";
+import { DescargaCargadorOrigenField } from "../../dcdt/DescargaCargadorOrigenField.jsx";
 
 const THEMES = {
   empresa: {
@@ -115,6 +116,8 @@ export function StopGeoFieldsForm({
   showGeoStatus = true,
   empresaId = null,
   onPartesChange = null,
+  allStops = [],
+  partesCatalog = [],
 }) {
   const theme = THEMES[themeKey] || THEMES.empresa;
   const isGrid = layout === "servicio-grid" || !compact;
@@ -300,15 +303,26 @@ export function StopGeoFieldsForm({
         <style>{GRID_CSS}</style>
         {ubicacionBlock}
         {empresaId ? (
-          <ContratoParteStopBlock
-            stop={stop}
-            index={index}
-            onChange={onChange}
-            onPatchStop={onPatchStop}
-            empresaId={empresaId}
-            themeKey={themeKey}
-            onPartesChange={onPartesChange}
-          />
+          <>
+            <ContratoParteStopBlock
+              stop={stop}
+              index={index}
+              onChange={onChange}
+              onPatchStop={onPatchStop}
+              empresaId={empresaId}
+              themeKey={themeKey}
+              onPartesChange={onPartesChange}
+            />
+            <DescargaCargadorOrigenField
+              stop={stop}
+              index={index}
+              allStops={allStops}
+              partesCatalog={partesCatalog}
+              onPatchStop={onPatchStop}
+              onChange={onChange}
+              themeKey={themeKey}
+            />
+          </>
         ) : null}
       </div>
     );
@@ -318,14 +332,24 @@ export function StopGeoFieldsForm({
     <div>
       {ubicacionBlock}
       {empresaId ? (
-        <ContratoParteStopBlock
-          stop={stop}
-          index={index}
-          onChange={onChange}
-          empresaId={empresaId}
-          themeKey={themeKey}
-          onPartesChange={onPartesChange}
-        />
+        <>
+          <ContratoParteStopBlock
+            stop={stop}
+            index={index}
+            onChange={onChange}
+            empresaId={empresaId}
+            themeKey={themeKey}
+            onPartesChange={onPartesChange}
+          />
+          <DescargaCargadorOrigenField
+            stop={stop}
+            index={index}
+            allStops={allStops}
+            partesCatalog={partesCatalog}
+            onChange={onChange}
+            themeKey={themeKey}
+          />
+        </>
       ) : null}
     </div>
   );

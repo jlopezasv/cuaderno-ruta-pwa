@@ -20,6 +20,7 @@ export function emptyStopGeoForm(overrides = {}) {
     lon: null,
     parte_transporte_id: null,
     parte_transporte_tipo: null,
+    cargador_parte_id: null,
     ...overrides,
   };
 }
@@ -46,6 +47,7 @@ export function stopRowToGeoForm(row) {
     lon: lon == null || lon === "" ? null : Number(lon),
     parte_transporte_id: meta.parte_transporte_id || null,
     parte_transporte_tipo: meta.parte_transporte_tipo || null,
+    cargador_parte_id: meta.cargador_parte_id || null,
   };
 }
 
@@ -65,6 +67,7 @@ export function stopGeoToPlace(stop) {
 /** Fusiona campos geo en `notas` (meta) antes de persistir. */
 export function prepareStopRowForPersist(stop) {
   const detalles = String(stop.detalles ?? stop.notas ?? "").trim();
+  const isDescarga = String(stop?.tipo || "").toLowerCase() === "descarga";
   const metaPatch = {
     pais: String(stop.pais || "").trim() || null,
     codigo_postal: String(stop.codigo_postal || "").trim() || null,
@@ -74,6 +77,7 @@ export function prepareStopRowForPersist(stop) {
     geo_lon: stop.lon != null && stop.lon !== "" ? Number(stop.lon) : null,
     parte_transporte_id: stop.parte_transporte_id || null,
     parte_transporte_tipo: stop.parte_transporte_tipo || null,
+    cargador_parte_id: isDescarga ? stop.cargador_parte_id || null : null,
   };
   const notas = mergeStopOperacionMeta(detalles, metaPatch);
   return {

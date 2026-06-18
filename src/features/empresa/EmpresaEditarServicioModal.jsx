@@ -16,6 +16,7 @@ import { replaceStopsForServicio } from "../../domain/fleet/servicioStopsInsert.
 import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
+import { normalizeDescargaCargadorLinks } from "../../domain/dcdt/descargaCargadorLink.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
 import {
@@ -31,6 +32,7 @@ import {
   getServicioMercanciaFromMeta,
 } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
+import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 import {
   getStopTone,
@@ -304,7 +306,7 @@ export function EmpresaEditarServicioModal({
           pushAudit("fecha_inicio", fi0, fi1);
         }
 
-        const stopsPayload = prepareStopsGeoForPersist(stops);
+        const stopsPayload = prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
         if (isDemoApp()) {
           const carga = stops.find((s) => String(s.tipo).toLowerCase() === "carga");
           const descarga = [...stops].reverse().find((s) => String(s.tipo).toLowerCase() === "descarga");
@@ -327,6 +329,17 @@ export function EmpresaEditarServicioModal({
           });
         }
         if (!stopsResult.ok) throw new Error(stopsResult.error || "No se pudieron guardar las paradas");
+        try {
+          await syncDcdtServiciosAfterStopsPersisted({
+            servicioId: servicio.id,
+            empresaId: servicio.empresa_id,
+            servicio,
+          });
+        } catch (syncErr) {
+          if (isDemoApp()) {
+            console.warn("[DEMO editar-servicio] DCDT sync", syncErr?.message || syncErr);
+          }
+        }
       }
 
       const sn0 = String(servicio.service_number ?? "").trim();
@@ -636,6 +649,8 @@ export function EmpresaEditarServicioModal({
                         showGeoStatus={false}
                         empresaId={servicio?.empresa_id}
                         onPartesChange={handlePartesCatalog}
+                        allStops={stops}
+                        partesCatalog={partesCatalog}
                       />
                     </div>
                   );
