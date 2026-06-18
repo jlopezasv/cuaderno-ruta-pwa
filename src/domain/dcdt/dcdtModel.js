@@ -143,6 +143,23 @@ export function syncParteIdsFromStops(datos, stops) {
   return out;
 }
 
+/** Catálogo DCDT (partes.*_id guardados) prima sobre sync automático desde paradas. */
+function mergeDcdtPartesPersisted(persistedPartes = {}, syncedPartes = {}) {
+  return {
+    ...syncedPartes,
+    cargador_id: persistedPartes.cargador_id ?? syncedPartes.cargador_id ?? null,
+    destinatario_id: persistedPartes.destinatario_id ?? syncedPartes.destinatario_id ?? null,
+    cargador_overrides: {
+      ...(syncedPartes.cargador_overrides || {}),
+      ...(persistedPartes.cargador_overrides || {}),
+    },
+    destinatario_overrides: {
+      ...(syncedPartes.destinatario_overrides || {}),
+      ...(persistedPartes.destinatario_overrides || {}),
+    },
+  };
+}
+
 function partesIdsChanged(before, after) {
   const a = before?.partes || {};
   const b = after?.partes || {};
@@ -271,8 +288,10 @@ export function resolveDcdtDocument({
   empresaOwnerProfile = null,
   conductor = null,
 }) {
-  const datos = syncParteIdsFromStops(dcdt?.datos || emptyDatos(), stops);
-  const partes = datos.partes || {};
+  const rawDatos = dcdt?.datos || emptyDatos();
+  const syncedDatos = syncParteIdsFromStops(rawDatos, stops);
+  const partes = mergeDcdtPartesPersisted(rawDatos.partes, syncedDatos.partes);
+  const datos = { ...syncedDatos, partes };
 
   const cargador = resolveParteFields(masterById[partes.cargador_id], partes.cargador_overrides);
   const destinatario = resolveParteFields(
