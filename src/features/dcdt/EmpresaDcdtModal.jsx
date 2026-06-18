@@ -4,7 +4,6 @@ import {
   assignDcdtParte,
   buildMercanciaDatosPatch,
   computeDcdtEstado,
-  ensureDcdtForServicio,
   extractLatestOcrFromEvidencias,
   isDcdtEstadoValidated,
   mergeOcrIntoDcdtDatos,
@@ -13,10 +12,18 @@ import {
   reconcileDcdtEstadoIfNeeded,
   refreshValidacionSnapshotIfStale,
   saveDcdtDatos,
-  fetchDcdtByServicio,
+  fetchAllDcdtByServicio,
+  fetchDcdtById,
   validarDcdtTrafico,
   recordDecaPreStartGapIfNeeded,
 } from "../../domain/dcdt/dcdtModel.js";
+import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
+import { decaSelectorLabel, stopsLinkedToDcdt } from "../../domain/dcdt/dcdtMultiDeCaUi.js";
+import {
+  getStopMercanciaFromStop,
+  mergeMercanciaIntoStopNotas,
+  primaryCargaStopForCargador,
+} from "../../domain/dcdt/stopMercanciaMeta.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
@@ -60,7 +67,7 @@ function FieldRow({ label, value, missing }) {
   );
 }
 
-function hydrateMercanciaEdit(dcdtMercancia, servicio) {
+function hydrateMercanciaEdit(dcdtMercancia, servicio, stops, dcdt, multiDeca) {
   const fromDcdt = mercanciaEditFromDatos(dcdtMercancia);
   const hasDcdt =
     fromDcdt.descripcion ||
@@ -68,6 +75,15 @@ function hydrateMercanciaEdit(dcdtMercancia, servicio) {
     fromDcdt.bultos ||
     fromDcdt.palets;
   if (hasDcdt) return fromDcdt;
+  const cargaStop = primaryCargaStopForCargador(stops, dcdt?.datos?.partes?.cargador_id);
+  const fromStop = getStopMercanciaFromStop(cargaStop);
+  const hasStop =
+    fromStop.descripcion ||
+    fromStop.peso_kg ||
+    fromStop.bultos ||
+    fromStop.palets;
+  if (hasStop) return fromStop;
+  if (multiDeca) return { descripcion: "", peso_kg: "", bultos: "", palets: "" };
   const fromSvc = getServicioMercanciaFromMeta(servicio);
   return {
     descripcion: fromSvc.descripcion || "",
@@ -102,6 +118,8 @@ export function EmpresaDcdtModal({
 }) {
   const [stops, setStops] = useState(stopsProp || []);
   const [dcdt, setDcdt] = useState(null);
+  const [allDcdts, setAllDcdts] = useState([]);
+  const [selectedDcdtId, setSelectedDcdtId] = useState(null);
   const [partes, setPartes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -124,6 +142,8 @@ export function EmpresaDcdtModal({
   const [actionFeedback, setActionFeedback] = useState(null);
   const mercanciaDirtyRef = useRef(false);
   const syncedPartesRef = useRef(false);
+  const allDcdtsRef = useRef([]);
+  allDcdtsRef.current = allDcdts;
   const flotaEvsRef = useRef(flotaEvs);
   flotaEvsRef.current = flotaEvs;
   const servicioRef = useRef(servicio);
@@ -177,18 +197,21 @@ export function EmpresaDcdtModal({
     try {
       const masterMap = { ...masterById };
       if (parteNueva?.id) masterMap[parteNueva.id] = parteNueva;
+      const linked = stopsLinkedToDcdt(stops, dcdt);
+      const scope = linked.length ? linked : stops;
       const next = await assignDcdtParte({
         dcdt,
         role,
         parteId,
         servicio,
-        stops,
+        stops: scope,
         flotaEvs,
         empresa,
         conductor: conductorEmpresa || conductor,
         masterById: masterMap,
       });
       setDcdt(next);
+      setAllDcdts((prev) => prev.map((r) => (r.id === next.id ? next : r)));
       if (parteNueva) setPartes((prev) => (prev.some((p) => p.id === parteNueva.id) ? prev : [...prev, parteNueva]));
       setPickingRole(null);
       setConfirmRole(role);
@@ -252,6 +275,9 @@ export function EmpresaDcdtModal({
     mercanciaDirtyRef.current = false;
     syncedPartesRef.current = false;
     setLoading(true);
+    setSelectedDcdtId(null);
+    setAllDcdts([]);
+    setDcdt(null);
 
     (async () => {
       try {
@@ -263,12 +289,10 @@ export function EmpresaDcdtModal({
           stopRows = sr.ok ? await sr.json() : [];
         }
         if (cancelled) return;
-        setStops(Array.isArray(stopRows) ? stopRows : []);
+        const normalizedStops = Array.isArray(stopRows) ? stopRows : [];
+        setStops(normalizedStops);
 
-        const [row, master] = await Promise.all([
-          ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops: stopRows }),
-          fetchPartesTransporte(empresaId),
-        ]);
+        const [master] = await Promise.all([fetchPartesTransporte(empresaId)]);
         if (cancelled) return;
 
         let ownerProfile = null;
@@ -285,32 +309,77 @@ export function EmpresaDcdtModal({
         if (cancelled) return;
         setEmpresaOwnerProfile(ownerProfile);
 
-        const masterMap = {};
-        for (const p of master || []) masterMap[p.id] = p;
-
-        let persisted = row;
-        if (!syncedPartesRef.current) {
-          syncedPartesRef.current = true;
-          persisted = await persistDcdtPartesFromStops({
-            dcdt: row,
-            servicio: servicioRef.current,
-            stops: stopRows,
-            flotaEvs: flotaEvsRef.current,
-            empresa: empresaRef.current,
-            conductor: conductorRef.current,
-            masterById: masterMap,
-          });
-        }
+        await syncDcdtServiciosAfterStopsPersisted({
+          servicioId: servicio.id,
+          empresaId,
+          servicio: servicioRef.current,
+          stops: normalizedStops,
+        });
         if (cancelled) return;
 
-        const mercanciaForReadiness = hydrateMercanciaEdit(persisted?.datos?.mercancia, servicioRef.current);
+        const rows = await fetchAllDcdtByServicio(servicio.id);
+        if (cancelled) return;
+        setAllDcdts(rows);
+        setPartes(master);
+        if (!rows.length) {
+          throw new Error(`No se pudo cargar ningún ${DECA_SHORT_LABEL} para este servicio`);
+        }
+        setSelectedDcdtId(rows[0].id);
+      } catch (e) {
+        if (!cancelled) showToastRef.current?.(e?.message || `No se pudo cargar ${DECA_SHORT_LABEL}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [servicio?.id, empresaId]);
+
+  useEffect(() => {
+    if (!selectedDcdtId || !servicio?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      try {
+        const row = await fetchDcdtById(selectedDcdtId);
+        if (!row || cancelled) return;
+
+        const masterMap = {};
+        for (const p of partes) masterMap[p.id] = p;
+
+        const linkedStops = stopsLinkedToDcdt(stops, row);
+        const scopeStops = linkedStops.length ? linkedStops : stops;
+        const multiDeca = allDcdtsRef.current.length > 1;
+
+        let persisted = await persistDcdtPartesFromStops({
+          dcdt: row,
+          servicio: servicioRef.current,
+          stops: scopeStops,
+          cargadorId: row?.datos?.partes?.cargador_id,
+          flotaEvs: flotaEvsRef.current,
+          empresa: empresaRef.current,
+          conductor: conductorRef.current,
+          masterById: masterMap,
+        });
+        if (cancelled) return;
+
+        const mercanciaForReadiness = hydrateMercanciaEdit(
+          persisted?.datos?.mercancia,
+          servicioRef.current,
+          stops,
+          persisted,
+          multiDeca,
+        );
         const readinessPreview = validateDcdtReadiness({
           servicio: servicioRef.current,
           dcdt: persisted,
-          stops: stopRows,
+          stops: scopeStops,
           masterById: masterMap,
           empresa: empresaRef.current,
-          empresaOwnerProfile: ownerProfile,
+          empresaOwnerProfile,
           conductor: conductorRef.current,
           mercanciaEdit: mercanciaForReadiness,
           flotaEvs: flotaEvsRef.current,
@@ -329,9 +398,9 @@ export function EmpresaDcdtModal({
         if (cancelled) return;
 
         setDcdt(persisted);
-        setPartes(master);
+        setAllDcdts((prev) => prev.map((r) => (r.id === persisted.id ? persisted : r)));
         if (!mercanciaDirtyRef.current) {
-          setMercanciaEdit(hydrateMercanciaEdit(persisted?.datos?.mercancia, servicioRef.current));
+          setMercanciaEdit(mercanciaForReadiness);
         }
       } catch (e) {
         if (!cancelled) showToastRef.current?.(e?.message || `No se pudo cargar ${DECA_SHORT_LABEL}`);
@@ -343,13 +412,19 @@ export function EmpresaDcdtModal({
     return () => {
       cancelled = true;
     };
-  }, [servicio?.id, empresaId]);
+  }, [selectedDcdtId, stops, partes, empresaOwnerProfile, servicio?.id]);
 
   const masterById = useMemo(() => {
     const m = {};
     for (const p of partes) m[p.id] = p;
     return m;
   }, [partes]);
+
+  const scopeStops = useMemo(() => {
+    if (!dcdt) return stops;
+    const linked = stopsLinkedToDcdt(stops, dcdt);
+    return linked.length ? linked : stops;
+  }, [dcdt, stops]);
 
   const readiness = useMemo(() => {
     if (!dcdt) {
@@ -358,7 +433,7 @@ export function EmpresaDcdtModal({
     return validateDcdtReadiness({
       servicio,
       dcdt,
-      stops,
+      stops: scopeStops,
       masterById,
       empresa,
       empresaOwnerProfile,
@@ -366,7 +441,7 @@ export function EmpresaDcdtModal({
       mercanciaEdit,
       flotaEvs,
     });
-  }, [dcdt, servicio, stops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit, flotaEvs]);
+  }, [dcdt, servicio, scopeStops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit, flotaEvs]);
 
   const { doc, missing, datos } = readiness;
   const missingKeys = useMemo(() => new Set(missing.map((f) => f.key)), [missing]);
@@ -475,7 +550,7 @@ export function EmpresaDcdtModal({
         missing: validateDcdtReadiness({
           servicio,
           dcdt: { ...dcdt, datos: nextDatos },
-          stops,
+          stops: scopeStops,
           masterById,
           empresa,
           empresaOwnerProfile,
@@ -488,7 +563,20 @@ export function EmpresaDcdtModal({
         currentEstado: dcdt.estado,
       });
       const next = await saveDcdtDatos(dcdt.id, nextDatos, estado);
+      const cargaStop = primaryCargaStopForCargador(stops, dcdt?.datos?.partes?.cargador_id);
+      if (cargaStop?.id) {
+        const notas = mergeMercanciaIntoStopNotas(cargaStop.notas, mercanciaEdit);
+        await sbFetch(`/rest/v1/stops?id=eq.${cargaStop.id}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ notas }),
+        });
+        setStops((prev) =>
+          prev.map((s) => (s.id === cargaStop.id ? { ...s, notas } : s)),
+        );
+      }
       setDcdt(next);
+      setAllDcdts((prev) => prev.map((r) => (r.id === next.id ? next : r)));
       setMercanciaEdit(mercanciaEditFromDatos(next?.datos?.mercancia));
       mercanciaDirtyRef.current = false;
       showToast?.("Mercancía guardada");
@@ -552,9 +640,10 @@ export function EmpresaDcdtModal({
         missing,
         dcdt,
       });
-      const fresh = servicio?.id ? await fetchDcdtByServicio(servicio.id) : null;
+      const fresh = dcdt?.id ? await fetchDcdtById(dcdt.id) : null;
       const resolved = fresh || next;
       setDcdt(resolved);
+      setAllDcdts((prev) => prev.map((r) => (r.id === resolved.id ? resolved : r)));
       const regenMsg = isDcdtPdfStale(dcdt) && !isDcdtPdfStale(resolved)
         ? " — PDF DeCA actualizado con los datos corregidos"
         : "";
@@ -678,6 +767,7 @@ export function EmpresaDcdtModal({
           </div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4 }}>
             {serviceLabel} · {statusLabel}
+            {allDcdts.length > 1 ? ` · ${allDcdts.length} documentos` : ""}
           </div>
         </div>
 
@@ -686,6 +776,42 @@ export function EmpresaDcdtModal({
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (
             <>
+              {allDcdts.length > 1 ? (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>
+                    DOCUMENTO DeCA
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {allDcdts.map((row, idx) => {
+                      const active = row.id === selectedDcdtId;
+                      const label = decaSelectorLabel(row, idx, masterById);
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          disabled={!!busy}
+                          onClick={() => {
+                            mercanciaDirtyRef.current = false;
+                            setSelectedDcdtId(row.id);
+                          }}
+                          style={{
+                            background: active ? UI.accent : UI.soft,
+                            color: active ? "#fff" : UI.tx,
+                            border: `1px solid ${active ? UI.accent : UI.border}`,
+                            borderRadius: 10,
+                            padding: "8px 12px",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: busy ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               {pdfStale ? (
                 <div
                   style={{

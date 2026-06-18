@@ -24,13 +24,12 @@ import {
   validateOfficeResponsableOnCreate,
 } from "../../domain/empresa/empresaOfficeUsers.js";
 import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField.jsx";
-import { ServicioMercanciaBlock } from "../dcdt/ServicioMercanciaBlock.jsx";
 import { DcdtReadinessPanel } from "../dcdt/DcdtReadinessPanel.jsx";
+import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
 import {
-  buildServicioMercanciaMetaPatch,
-  emptyServicioMercancia,
-  getServicioMercanciaFromMeta,
-} from "../../domain/dcdt/servicioMercanciaMeta.js";
+  getStopMercanciaFromStop,
+  mercanciaPreviewFromStops,
+} from "../../domain/dcdt/stopMercanciaMeta.js";
 import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
@@ -57,6 +56,29 @@ function toDTL(d) {
 
 function stopRowToForm(row) {
   return stopRowToGeoForm(row);
+}
+
+function stopsFromRowsWithMercanciaMigration(rows, servicio) {
+  const forms = (Array.isArray(rows) ? rows : []).map(stopRowToForm);
+  const svcMerc = getServicioMercanciaFromMeta(servicio);
+  const hasSvc =
+    svcMerc.descripcion ||
+    svcMerc.peso_kg ||
+    svcMerc.bultos ||
+    svcMerc.palets;
+  if (!hasSvc) return forms;
+  const idx = forms.findIndex((s) => String(s.tipo || "").toLowerCase() === "carga");
+  if (idx < 0) return forms;
+  const cur = getStopMercanciaFromStop(forms[idx]);
+  const hasStop =
+    cur.descripcion ||
+    cur.peso_kg ||
+    cur.bultos ||
+    cur.palets;
+  if (hasStop) return forms;
+  const next = [...forms];
+  next[idx] = { ...next[idx], mercancia: svcMerc };
+  return next;
 }
 
 const EMPRESA_UI = {
@@ -102,7 +124,6 @@ export function EmpresaEditarServicioModal({
   const [adminNotas, setAdminNotas] = useState("");
   const [conductorSel, setConductorSel] = useState("");
   const [responsableSel, setResponsableSel] = useState("");
-  const [mercancia, setMercancia] = useState(emptyServicioMercancia);
   const [partesCatalog, setPartesCatalog] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -110,6 +131,7 @@ export function EmpresaEditarServicioModal({
   const stopsLoadedRef = useRef(null);
 
   const rutaDesdeParadas = useMemo(() => routeTextFromStops(stops), [stops]);
+  const mercanciaPreview = useMemo(() => mercanciaPreviewFromStops(stops), [stops]);
 
   useEffect(() => {
     if (!servicio?.id) return;
@@ -124,7 +146,6 @@ export function EmpresaEditarServicioModal({
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
     const resp = servicio.responsable_user_id ? servicio.responsable_user_id : "";
     setResponsableSel(responsableLockedUid || resp);
-    setMercancia(getServicioMercanciaFromMeta(servicio));
     setError("");
   }, [servicio?.id, responsableLockedUid]);
 
@@ -158,7 +179,7 @@ export function EmpresaEditarServicioModal({
         if (cancelled) return;
         stopsLoadedRef.current = servicio.id;
         if (Array.isArray(rows) && rows.length) {
-          setStops(rows.map(stopRowToForm));
+          setStops(stopsFromRowsWithMercanciaMigration(rows, servicio));
         } else {
           setStops([
             emptyStopGeoForm({ orden: 1, tipo: "carga" }),
@@ -174,7 +195,7 @@ export function EmpresaEditarServicioModal({
     return () => {
       cancelled = true;
     };
-  }, [servicio?.id, wide]);
+  }, [servicio?.id, wide, servicio]);
 
   const listaConductores = (conductores || []).filter((c) => c.user_id);
 
@@ -210,10 +231,6 @@ export function EmpresaEditarServicioModal({
       if (a.length === b.length && a.every((p, i) => p?.id === b[i]?.id)) return prev;
       return b;
     });
-  }, []);
-
-  const handleMercanciaChange = useCallback((next) => {
-    setMercancia(next);
   }, []);
 
   const guardar = useCallback(async () => {
@@ -315,7 +332,7 @@ export function EmpresaEditarServicioModal({
             stops_payload: stopsPayload,
             cargador_parte_id: carga?.parte_transporte_id ?? null,
             destinatario_parte_id: descarga?.parte_transporte_id ?? null,
-            mercancia_payload: buildServicioMercanciaMetaPatch(mercancia),
+            mercancia_payload: mercanciaPreviewFromStops(stops),
             servicio_patch_keys: Object.keys(patch),
           });
         }
@@ -336,9 +353,8 @@ export function EmpresaEditarServicioModal({
             servicio,
           });
         } catch (syncErr) {
-          if (isDemoApp()) {
-            console.warn("[DEMO editar-servicio] DCDT sync", syncErr?.message || syncErr);
-          }
+          console.error("[DCDT sync] editar-servicio", syncErr?.message || syncErr);
+          throw syncErr;
         }
       }
 
@@ -366,22 +382,13 @@ export function EmpresaEditarServicioModal({
       const prevMeta = getServicioOperacionMeta(servicio).admin_notas;
       const prevAdm = prevMeta == null ? "" : String(prevMeta).trim();
       const adm1 = String(adminNotas || "").trim();
-      const mercanciaPatch = buildServicioMercanciaMetaPatch(mercancia);
-      const prevMerc = getServicioMercanciaFromMeta(servicio);
-      const mercChanged =
-        String(prevMerc.descripcion) !== String(mercancia.descripcion || "") ||
-        String(prevMerc.palets) !== String(mercancia.palets ?? "") ||
-        String(prevMerc.bultos) !== String(mercancia.bultos ?? "") ||
-        String(prevMerc.peso_kg) !== String(mercancia.peso_kg ?? "");
 
-      if (adm1 !== prevAdm || mercChanged) {
-        const refMetaPatch = { ...mercanciaPatch };
-        if (adm1 !== prevAdm) refMetaPatch.admin_notas = adm1 || null;
+      if (adm1 !== prevAdm) {
         patch.referencia = mergeReferenciaOperacional(
           (patch.referencia ?? servicio.referencia) || "",
-          refMetaPatch,
+          { admin_notas: adm1 || null },
         );
-        if (adm1 !== prevAdm) pushAudit("admin_notas", prevAdm, adm1);
+        pushAudit("admin_notas", prevAdm, adm1);
       }
 
       if (canEditResponsable) {
@@ -468,7 +475,6 @@ export function EmpresaEditarServicioModal({
     cliente,
     refCliente,
     adminNotas,
-    mercancia,
     conductorSel,
     responsableSel,
     canEditResponsable,
@@ -585,7 +591,7 @@ export function EmpresaEditarServicioModal({
               </div>
               <DcdtReadinessPanel
                 stops={stops}
-                mercancia={mercancia}
+                mercancia={mercanciaPreview}
                 partesCatalog={partesCatalog}
                 fechaInicio={fechaInicioLocal}
                 matricula={conductorVehiculo.matricula || null}
@@ -656,7 +662,6 @@ export function EmpresaEditarServicioModal({
                   );
                   })}
                   </div>
-                  <ServicioMercanciaBlock value={mercancia} onChange={handleMercanciaChange} />
                   <button
                     type="button"
                     onClick={addStop}

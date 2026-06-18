@@ -1,5 +1,6 @@
 import { defaultStopCountry } from "./postalCodeLookup.js";
 import { formatStopNotesForDisplay, getStopOperacionMeta, mergeStopOperacionMeta } from "../service/stopOperacionMeta.js";
+import { emptyStopMercancia, getStopMercanciaFromStop, stopMercanciaFormPatch } from "../dcdt/stopMercanciaMeta.js";
 
 const GEO_META_KEYS = ["pais", "codigo_postal", "provincia", "geo_lat", "geo_lon", "empresa_logistica"];
 
@@ -21,6 +22,7 @@ export function emptyStopGeoForm(overrides = {}) {
     parte_transporte_id: null,
     parte_transporte_tipo: null,
     cargador_parte_id: null,
+    mercancia: emptyStopMercancia(),
     ...overrides,
   };
 }
@@ -48,6 +50,7 @@ export function stopRowToGeoForm(row) {
     parte_transporte_id: meta.parte_transporte_id || null,
     parte_transporte_tipo: meta.parte_transporte_tipo || null,
     cargador_parte_id: meta.cargador_parte_id || null,
+    mercancia: getStopMercanciaFromStop(row),
   };
 }
 
@@ -68,6 +71,7 @@ export function stopGeoToPlace(stop) {
 export function prepareStopRowForPersist(stop) {
   const detalles = String(stop.detalles ?? stop.notas ?? "").trim();
   const isDescarga = String(stop?.tipo || "").toLowerCase() === "descarga";
+  const isCarga = String(stop?.tipo || "").toLowerCase() === "carga";
   const metaPatch = {
     pais: String(stop.pais || "").trim() || null,
     codigo_postal: String(stop.codigo_postal || "").trim() || null,
@@ -78,6 +82,7 @@ export function prepareStopRowForPersist(stop) {
     parte_transporte_id: stop.parte_transporte_id || null,
     parte_transporte_tipo: stop.parte_transporte_tipo || null,
     cargador_parte_id: isDescarga ? stop.cargador_parte_id || null : null,
+    ...(isCarga ? stopMercanciaFormPatch(stop) : {}),
   };
   const notas = mergeStopOperacionMeta(detalles, metaPatch);
   return {

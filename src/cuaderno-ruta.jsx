@@ -219,7 +219,6 @@ import { resolveEventGeoForPersist, requestActionLocation, seedLocationCacheFrom
 import { logMuelleGps } from "./data/muelleGeoTrace.js";
 import { ActiveServicePanel } from "./features/services/components/ActiveServicePanel";
 import { StopGeoFieldsForm } from "./features/services/components/StopGeoFieldsForm.jsx";
-import { ServicioMercanciaBlock } from "./features/dcdt/ServicioMercanciaBlock.jsx";
 import { DcdtReadinessPanel } from "./features/dcdt/DcdtReadinessPanel.jsx";
 import {
   getStopTone,
@@ -231,10 +230,7 @@ import {
 import { ServicioStopToolbar } from "./features/services/components/ServicioStopToolbar.jsx";
 import { MatriculaVehiculoBadge } from "./features/services/components/MatriculaVehiculoBadge.jsx";
 import { EmpresaDcdtModal } from "./features/dcdt/EmpresaDcdtModal.jsx";
-import {
-  buildServicioMercanciaMetaPatch,
-  emptyServicioMercancia,
-} from "./domain/dcdt/servicioMercanciaMeta.js";
+import { mercanciaPreviewFromStops } from "./domain/dcdt/stopMercanciaMeta.js";
 import { syncDcdtServiciosAfterStopsPersisted, onStopEstadoOperativoChange } from "./domain/dcdt/dcdtServicioSync.js";
 import { normalizeDescargaCargadorLinks } from "./domain/dcdt/descargaCargadorLink.js";
 import { stopContractualTitle } from "./domain/dcdt/dcdtFormReadiness.js";
@@ -12058,21 +12054,12 @@ async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, l
   try {
     await syncDcdtServiciosAfterStopsPersisted({ servicioId, empresaId, servicio });
   } catch (e) {
-    const message = e?.message || String(e);
-    const detail = {
+    console.error(`[DCDT sync] FAILED (${logTag})`, {
       servicioId,
-      logTag,
-      message,
+      message: e?.message || String(e),
       stack: e?.stack || null,
-      name: e?.name || null,
-    };
-    console.error(`[DCDT sync] FAILED (${logTag})`, detail);
-    if (typeof window !== "undefined") {
-      window.alert(
-        `[DCDT sync — diagnóstico temporal]\n\nOrigen: ${logTag}\nServicio: ${servicioId}\n\n${message}`,
-      );
-    }
-    devWarn(`[DCDT sync] failed (${logTag})`, detail);
+    });
+    throw e;
   }
 }
 
@@ -12448,7 +12435,6 @@ function AsignarServicioModal({
     emptyStopGeoForm({orden:2,tipo:"descarga"}),
   ]);
   const[responsableId,setResponsableId]=useState("");
-  const[mercancia,setMercancia]=useState(()=>emptyServicioMercancia());
   const[partesCatalog,setPartesCatalog]=useState([]);
   const[saving,setSaving]=useState(false);
   const[error,setError]=useState("");
@@ -12470,6 +12456,7 @@ function AsignarServicioModal({
   },[conductorSelId,conductoresFlota,conductorNombre]);
   const sinConductor=!conductorSelId;
   const conductorVehiculo=resolveConductorVehiculo(conductoresFlota, conductorSelId);
+  const mercanciaPreview=useMemo(()=>mercanciaPreviewFromStops(stops),[stops]);
   const desktopModalStyle=isMobile?modalStyle:{
     position:"relative",
     width:SERVICIO_MODAL_SHELL.width,
@@ -12561,7 +12548,6 @@ function AsignarServicioModal({
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
         operationalPlaces,
-        servicioMetaExtras: buildServicioMercanciaMetaPatch(mercancia),
         fecha_inicio:new Date(fechaInicio).toISOString(),
         ...responsablePayload,
       });
@@ -12764,7 +12750,7 @@ function AsignarServicioModal({
 
           <DcdtReadinessPanel
             stops={stops}
-            mercancia={mercancia}
+            mercancia={mercanciaPreview}
             partesCatalog={partesCatalog}
             fechaInicio={fechaInicio}
             matricula={conductorVehiculo.matricula||null}
@@ -12831,8 +12817,6 @@ function AsignarServicioModal({
               </button>
             </div>
           )}
-
-          <ServicioMercanciaBlock value={mercancia} onChange={setMercancia} />
 
           {error&&<div style={{background:EMPRESA_UI.redSoft,border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",fontSize:12,color:EMPRESA_UI.red,marginBottom:8}}>{error}</div>}
         </div>

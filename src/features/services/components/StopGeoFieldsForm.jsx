@@ -8,6 +8,7 @@ import { stopGeoToPlace, stopMissingPostalWarning } from "../../../domain/geo/st
 import { geocodeQueryFromPlace } from "../../../domain/service/serviceOperationalPlaces.js";
 import { ContratoParteStopBlock } from "../../dcdt/ContratoParteStopBlock.jsx";
 import { DescargaCargadorOrigenField } from "../../dcdt/DescargaCargadorOrigenField.jsx";
+import { CargaMercanciaFields } from "../../dcdt/CargaMercanciaFields.jsx";
 
 const THEMES = {
   empresa: {
@@ -322,6 +323,7 @@ export function StopGeoFieldsForm({
               onChange={onChange}
               themeKey={themeKey}
             />
+            <CargaMercanciaFields stop={stop} index={index} onChange={onChange} themeKey={themeKey} />
           </>
         ) : null}
       </div>
@@ -349,6 +351,7 @@ export function StopGeoFieldsForm({
             onChange={onChange}
             themeKey={themeKey}
           />
+          <CargaMercanciaFields stop={stop} index={index} onChange={onChange} themeKey={themeKey} />
         </>
       ) : null}
     </div>

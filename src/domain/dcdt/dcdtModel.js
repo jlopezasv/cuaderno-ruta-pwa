@@ -25,6 +25,9 @@ import {
   shouldMarkPdfStaleOnDatosSave,
   withPdfStaleFlags,
 } from "./decaPdfStale.js";
+import { mercanciaDatosFromCargaStops } from "./stopMercanciaMeta.js";
+
+export { buildMercanciaDatosPatch, mercanciaEditFromDatos } from "./mercanciaPatch.js";
 
 const COLS_CORE =
   "id,servicio_id,empresa_id,estado,datos,validado_por,validado_at,pdf_generado_at,fecha_inicio_efectivo,created_at,updated_at";
@@ -66,40 +69,28 @@ function rowToDcdt(row) {
   };
 }
 
-function parseMercanciaNumber(val) {
-  if (val == null || val === "") return null;
-  const n = Number(String(val).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-}
-
-export function buildMercanciaDatosPatch(mercanciaEdit) {
-  return {
-    descripcion: String(mercanciaEdit?.descripcion || "").trim() || null,
-    peso_kg: parseMercanciaNumber(mercanciaEdit?.peso_kg),
-    bultos: parseMercanciaNumber(mercanciaEdit?.bultos),
-    palets: parseMercanciaNumber(mercanciaEdit?.palets),
-  };
-}
-
-export function mercanciaEditFromDatos(mercancia = {}) {
-  return {
-    descripcion: formatDcdtDisplayValue(mercancia.descripcion) || "",
-    peso_kg: mercancia.peso_kg != null ? String(mercancia.peso_kg) : "",
-    bultos: mercancia.bultos != null ? String(mercancia.bultos) : "",
-    palets: mercancia.palets != null ? String(mercancia.palets) : "",
-  };
-}
-
 function getNested(obj, path) {
   return path.split(".").reduce((o, k) => (o && o[k] != null ? o[k] : null), obj);
+}
+
+function responseWithText(original, bodyText) {
+  return new Response(bodyText, {
+    status: original.status,
+    statusText: original.statusText,
+    headers: original.headers,
+  });
 }
 
 async function dcdtRequest(path, init) {
   let r = await sbFetch(`/rest/v1/${DCDT_TABLE}${path}`, init);
   if (!r.ok) {
     const body = await r.text().catch(() => "");
-    if (/42P01|PGRST205|dcdt_servicio/i.test(body)) {
+    const legacyTableMissing =
+      /42P01|PGRST205/i.test(body) || /relation .* does not exist/i.test(body);
+    if (legacyTableMissing) {
       r = await sbFetch(`/rest/v1/${DCDT_TABLE_LEGACY}${path}`, init);
+    } else {
+      return responseWithText(r, body);
     }
   }
   return r;
@@ -133,13 +124,25 @@ export function buildStopBindingsFromStops(stops) {
   });
 }
 
-export function syncParteIdsFromStops(datos, stops) {
+export function syncParteIdsFromStops(datos, stops, options = {}) {
+  const { cargadorId = null, destinatarioId = null } = options;
   const out = { ...datos, partes: { ...(datos?.partes || {}) } };
   out.stops = buildStopBindingsFromStops(stops);
-  for (const b of out.stops) {
-    if (!b.parte_id) continue;
-    if (b.grupo === "carga") out.partes.cargador_id = b.parte_id;
-    if (b.grupo === "descarga") out.partes.destinatario_id = b.parte_id;
+  if (cargadorId) {
+    out.partes.cargador_id = cargadorId;
+  } else {
+    for (const b of out.stops) {
+      if (!b.parte_id) continue;
+      if (b.grupo === "carga") out.partes.cargador_id = b.parte_id;
+    }
+  }
+  if (destinatarioId) {
+    out.partes.destinatario_id = destinatarioId;
+  } else {
+    for (const b of out.stops) {
+      if (!b.parte_id) continue;
+      if (b.grupo === "descarga") out.partes.destinatario_id = b.parte_id;
+    }
   }
   return out;
 }
@@ -167,19 +170,27 @@ function partesIdsChanged(before, after) {
   return a.cargador_id !== b.cargador_id || a.destinatario_id !== b.destinatario_id;
 }
 
-/** Sincroniza cargador/destinatario desde paradas y persiste si cambió. */
+/** Sincroniza cargador/destinatario/mercancía desde paradas y persiste si cambió. */
 export async function persistDcdtPartesFromStops({
   dcdt,
   servicio,
   stops = [],
+  cargadorId = null,
   flotaEvs = {},
   empresa = null,
   conductor = null,
   masterById = {},
 }) {
   if (!dcdt?.id) return dcdt;
-  const syncedDatos = syncParteIdsFromStops(dcdt.datos, stops);
-  if (!partesIdsChanged(dcdt.datos, syncedDatos)) return dcdt;
+  const effectiveCargadorId = cargadorId || dcdt?.datos?.partes?.cargador_id || null;
+  const syncedDatos = syncParteIdsFromStops(dcdt.datos, stops, {
+    cargadorId: effectiveCargadorId,
+  });
+  syncedDatos.mercancia = mercanciaDatosFromCargaStops(stops, effectiveCargadorId);
+  const partesChanged = partesIdsChanged(dcdt.datos, syncedDatos);
+  const mercBefore = JSON.stringify(dcdt.datos?.mercancia || {});
+  const mercAfter = JSON.stringify(syncedDatos.mercancia || {});
+  if (!partesChanged && mercBefore === mercAfter) return dcdt;
   const { doc, missing } = resolveDcdtDocument({
     servicio,
     stops,
@@ -639,10 +650,8 @@ export async function createDcdtForServicioCargador({
   cargadorId = null,
   stops = [],
 }) {
-  const datos = syncParteIdsFromStops(emptyDatos(), stops);
-  if (cargadorId) {
-    datos.partes = { ...(datos.partes || {}), cargador_id: cargadorId };
-  }
+  const datos = syncParteIdsFromStops(emptyDatos(), stops, { cargadorId });
+  datos.mercancia = mercanciaDatosFromCargaStops(stops, cargadorId);
   const r = await dcdtRequest("", {
     method: "POST",
     headers: { Prefer: "return=representation" },
