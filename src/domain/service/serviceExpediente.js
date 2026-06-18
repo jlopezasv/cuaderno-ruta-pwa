@@ -28,6 +28,7 @@ import {
 } from "../documents/operationalDocumentTrace.js";
 import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
+import { resolveExtraDocAccessUrl } from "./serviceExtraDocuments.js";
 import {
   appendGeoToDetail,
   formatExpedienteUbicacionLine,
@@ -1508,6 +1509,36 @@ async function fetchBytes(url) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+async function resolveExpedienteAttachmentUrl(ev) {
+  if (!ev) return null;
+  const datos = ev?.datos && typeof ev.datos === "object" ? ev.datos : {};
+  const needsSigned =
+    ev.source === "servicio_documentos_extra" ||
+    ev.tipo === "dcdt" ||
+    ev.bucket === "dcdt" ||
+    !!(datos.path || datos.pdf_storage_path);
+  if (needsSigned) {
+    try {
+      const signed = await resolveExtraDocAccessUrl({
+        archivo_url: ev.url,
+        url: ev.url,
+        datos,
+        mime_type: ev.mime_type,
+        archivo_nombre: ev.archivo_nombre,
+      });
+      if (signed) return signed;
+    } catch {
+      /* usar URL legacy */
+    }
+  }
+  return ev.url || ev.previewUrl || null;
+}
+
+/** ZIP en memoria (p. ej. descarga conjunta de categorías documentales). */
+export function buildExpedienteZipBlob(entries) {
+  return zipBlob(entries);
+}
+
 export async function downloadServiceExpedienteZip(expediente) {
   const entries = [];
   const pdf = await makePdfBlob(expediente);
@@ -1522,11 +1553,12 @@ export async function downloadServiceExpedienteZip(expediente) {
     const folder = ev.bucket;
     const base = `${folder}/${fileSafe(`${ev.stopLabel}-${ev.titulo}-${ev.id || ev.hora}`, "documento")}`;
     entries.push({ path: `${base}.json`, data: JSON.stringify(ev, null, 2) });
-    if (ev.url) {
+    const attachmentUrl = await resolveExpedienteAttachmentUrl(ev);
+    if (attachmentUrl) {
       try {
-        entries.push({ path: `${base}.${extFromUrl(ev.url)}`, data: await fetchBytes(ev.url) });
+        entries.push({ path: `${base}.${extFromUrl(attachmentUrl)}`, data: await fetchBytes(attachmentUrl) });
       } catch {
-        entries.push({ path: `${base}.url.txt`, data: ev.url });
+        entries.push({ path: `${base}.url.txt`, data: attachmentUrl });
       }
     }
   }

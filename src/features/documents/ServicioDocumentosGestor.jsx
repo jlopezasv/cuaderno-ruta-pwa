@@ -8,6 +8,7 @@ import {
 } from "../../domain/service/serviceDocumentCategories.js";
 import {
   downloadCategoryPdf,
+  downloadSelectedCategoryZip,
   loadServiceDocumentCategoryStatus,
 } from "../../domain/service/serviceCategoryPdf.js";
 
@@ -100,22 +101,34 @@ export function ServicioDocumentosGestor({
       showToast?.("Marca al menos una categoría con PDF disponible", "#b45309", 2800);
       return;
     }
-    for (const id of ids) {
-      try {
+    setDownloadingId("bulk");
+    try {
+      if (ids.length === 1) {
         await downloadCategoryPdf({
-          categoryId: id,
+          categoryId: ids[0],
           expediente,
           servicio,
           extraDocs,
           empresaNombre,
           empresaCif,
         });
-      } catch (e) {
-        showToast?.(e?.message || `Error en ${SERVICE_DOC_CATEGORY_META[id].label}`, "#b91c1c", 3200);
+        showToast?.("PDF descargado", "#166534", 2400);
         return;
       }
+      await downloadSelectedCategoryZip({
+        categoryIds: ids,
+        expediente,
+        servicio,
+        extraDocs,
+        empresaNombre,
+        empresaCif,
+      });
+      showToast?.(`ZIP con ${ids.length} PDFs descargado`, "#166534", 2400);
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo descargar la selección", "#b91c1c", 3200);
+    } finally {
+      setDownloadingId(null);
     }
-    showToast?.(ids.length === 1 ? "PDF descargado" : `${ids.length} PDFs descargados`, "#166534", 2400);
   };
 
   const selectedForMail = SERVICE_DOC_CATEGORY_ORDER.filter((id) => selection[id] && status?.[id]?.available);
@@ -310,9 +323,8 @@ export function ServicioDocumentosGestor({
               color: UI.muted,
               fontWeight: 600,
             }}
-            title="ZIP multiadjunto en desarrollo"
           >
-            ZIP conjunto · próximamente
+            Varios PDFs → un ZIP
           </span>
         </div>
       </div>

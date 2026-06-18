@@ -14,6 +14,7 @@ import {
 import {
   downloadServiceExpedientePdf,
   makeServiceExpedientePdfBlob,
+  buildExpedienteZipBlob,
 } from "./serviceExpediente.js";
 
 const enc = new TextEncoder();
@@ -247,6 +248,40 @@ export async function downloadCategoryPdf({
   const base = meta?.pdfFilename || categoryId;
   const ref = servicio?.referencia ? String(servicio.referencia).replace(/\s+/g, "_") : servicio?.id?.slice(0, 8) || "servicio";
   triggerBlobDownload(blob, `${base}_${ref}.pdf`);
+}
+
+/** Descarga conjunta: un ZIP con el blob PDF de cada categoría seleccionada (incl. DeCA). */
+export async function downloadSelectedCategoryZip({
+  categoryIds,
+  expediente,
+  servicio,
+  extraDocs,
+  messages,
+  empresaNombre,
+  empresaCif,
+}) {
+  const ids = (Array.isArray(categoryIds) ? categoryIds : []).filter(Boolean);
+  if (!ids.length) throw new Error("Sin categorías seleccionadas");
+  const ref = servicio?.referencia ? String(servicio.referencia).replace(/\s+/g, "_") : servicio?.id?.slice(0, 8) || "servicio";
+  const entries = [];
+  for (const categoryId of ids) {
+    const meta = SERVICE_DOC_CATEGORY_META[categoryId];
+    const blob = await buildCategoryPdfBlob({
+      categoryId,
+      expediente,
+      servicio,
+      extraDocs,
+      messages,
+      empresaNombre,
+      empresaCif,
+    });
+    const pdfBytes = new Uint8Array(await blob.arrayBuffer());
+    entries.push({
+      path: `${meta?.pdfFilename || categoryId}_${ref}.pdf`,
+      data: pdfBytes,
+    });
+  }
+  triggerBlobDownload(buildExpedienteZipBlob(entries), `${ref}_documentos.zip`);
 }
 
 export async function categoryPdfToBase64Attachment({
