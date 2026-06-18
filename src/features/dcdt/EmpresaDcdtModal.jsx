@@ -14,11 +14,12 @@ import {
   saveDcdtDatos,
   fetchAllDcdtByServicio,
   fetchDcdtById,
+  filterDcdtRowsForUiSelector,
   validarDcdtTrafico,
   recordDecaPreStartGapIfNeeded,
 } from "../../domain/dcdt/dcdtModel.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
-import { decaSelectorLabel, stopsLinkedToDcdt } from "../../domain/dcdt/dcdtMultiDeCaUi.js";
+import { decaSelectorLabel, resolveScopeStopsForDcdt } from "../../domain/dcdt/dcdtMultiDeCaUi.js";
 import {
   getStopMercanciaFromStop,
   mergeMercanciaIntoStopNotas,
@@ -144,6 +145,8 @@ export function EmpresaDcdtModal({
   const syncedPartesRef = useRef(false);
   const allDcdtsRef = useRef([]);
   allDcdtsRef.current = allDcdts;
+
+  const visibleDcdts = useMemo(() => filterDcdtRowsForUiSelector(allDcdts), [allDcdts]);
   const flotaEvsRef = useRef(flotaEvs);
   flotaEvsRef.current = flotaEvs;
   const servicioRef = useRef(servicio);
@@ -197,8 +200,7 @@ export function EmpresaDcdtModal({
     try {
       const masterMap = { ...masterById };
       if (parteNueva?.id) masterMap[parteNueva.id] = parteNueva;
-      const linked = stopsLinkedToDcdt(stops, dcdt);
-      const scope = linked.length ? linked : stops;
+      const scope = resolveScopeStopsForDcdt(stops, dcdt);
       const next = await assignDcdtParte({
         dcdt,
         role,
@@ -322,10 +324,11 @@ export function EmpresaDcdtModal({
         if (cancelled) return;
         setAllDcdts(rows);
         setPartes(master);
-        if (!rows.length) {
+        const visible = filterDcdtRowsForUiSelector(rows);
+        if (!visible.length) {
           throw new Error(`No se pudo cargar ningún ${DECA_SHORT_LABEL} para este servicio`);
         }
-        setSelectedDcdtId(rows[0].id);
+        setSelectedDcdtId(visible[0].id);
       } catch (e) {
         if (!cancelled) showToastRef.current?.(e?.message || `No se pudo cargar ${DECA_SHORT_LABEL}`);
       } finally {
@@ -351,9 +354,8 @@ export function EmpresaDcdtModal({
         const masterMap = {};
         for (const p of partes) masterMap[p.id] = p;
 
-        const linkedStops = stopsLinkedToDcdt(stops, row);
-        const scopeStops = linkedStops.length ? linkedStops : stops;
-        const multiDeca = allDcdtsRef.current.length > 1;
+        const scopeStops = resolveScopeStopsForDcdt(stops, row);
+        const multiDeca = filterDcdtRowsForUiSelector(allDcdtsRef.current).length > 1;
 
         let persisted = await persistDcdtPartesFromStops({
           dcdt: row,
@@ -364,13 +366,14 @@ export function EmpresaDcdtModal({
           empresa: empresaRef.current,
           conductor: conductorRef.current,
           masterById: masterMap,
+          skipPdfStale: true,
         });
         if (cancelled) return;
 
         const mercanciaForReadiness = hydrateMercanciaEdit(
           persisted?.datos?.mercancia,
           servicioRef.current,
-          stops,
+          scopeStops,
           persisted,
           multiDeca,
         );
@@ -388,6 +391,7 @@ export function EmpresaDcdtModal({
         persisted = await refreshValidacionSnapshotIfStale({
           dcdt: persisted,
           doc: readinessPreview.doc,
+          skipPdfStale: true,
         });
         if (cancelled) return;
         persisted = await reconcileDcdtEstadoIfNeeded({
@@ -415,6 +419,13 @@ export function EmpresaDcdtModal({
     };
   }, [selectedDcdtId, stops, partes, empresaOwnerProfile, servicio?.id]);
 
+  useEffect(() => {
+    if (!visibleDcdts.length) return;
+    if (!visibleDcdts.some((r) => r.id === selectedDcdtId)) {
+      setSelectedDcdtId(visibleDcdts[0].id);
+    }
+  }, [visibleDcdts, selectedDcdtId]);
+
   const masterById = useMemo(() => {
     const m = {};
     for (const p of partes) m[p.id] = p;
@@ -423,8 +434,7 @@ export function EmpresaDcdtModal({
 
   const scopeStops = useMemo(() => {
     if (!dcdt) return stops;
-    const linked = stopsLinkedToDcdt(stops, dcdt);
-    return linked.length ? linked : stops;
+    return resolveScopeStopsForDcdt(stops, dcdt);
   }, [dcdt, stops]);
 
   const readiness = useMemo(() => {
@@ -770,7 +780,7 @@ export function EmpresaDcdtModal({
           </div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4 }}>
             {serviceLabel} · {statusLabel}
-            {allDcdts.length > 1 ? ` · ${allDcdts.length} documentos` : ""}
+            {visibleDcdts.length > 1 ? ` · ${visibleDcdts.length} documentos` : ""}
           </div>
         </div>
 
@@ -779,13 +789,13 @@ export function EmpresaDcdtModal({
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (
             <>
-              {allDcdts.length > 1 ? (
+              {visibleDcdts.length > 1 ? (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>
                     DOCUMENTO DeCA
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {allDcdts.map((row, idx) => {
+                    {visibleDcdts.map((row, idx) => {
                       const active = row.id === selectedDcdtId;
                       const label = decaSelectorLabel(row, idx, masterById);
                       return (

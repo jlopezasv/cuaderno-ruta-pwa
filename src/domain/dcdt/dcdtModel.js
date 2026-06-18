@@ -164,10 +164,42 @@ function mergeDcdtPartesPersisted(persistedPartes = {}, syncedPartes = {}) {
   };
 }
 
-function partesIdsChanged(before, after) {
-  const a = before?.partes || {};
-  const b = after?.partes || {};
-  return a.cargador_id !== b.cargador_id || a.destinatario_id !== b.destinatario_id;
+function dcdtPartesEquivalent(beforeDatos, afterDatos) {
+  const a = beforeDatos?.partes || {};
+  const b = afterDatos?.partes || {};
+  return (
+    String(a.cargador_id ?? "") === String(b.cargador_id ?? "") &&
+    String(a.destinatario_id ?? "") === String(b.destinatario_id ?? "")
+  );
+}
+
+function parseMercanciaNorm(m) {
+  const parseNum = (v) => {
+    if (v == null || v === "") return null;
+    const n = Number(String(v).replace(",", "."));
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    descripcion: String(m?.descripcion ?? "").trim() || null,
+    peso_kg: parseNum(m?.peso_kg),
+    bultos: parseNum(m?.bultos),
+    palets: parseNum(m?.palets),
+  };
+}
+
+function mercanciaDatosEquivalent(a, b) {
+  return JSON.stringify(parseMercanciaNorm(a)) === JSON.stringify(parseMercanciaNorm(b));
+}
+
+function validacionSnapshotContentEquivalent(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  const stripAt = (snap) => {
+    if (!snap || typeof snap !== "object") return snap;
+    const { at: _at, ...rest } = snap;
+    return rest;
+  };
+  return JSON.stringify(stripAt(a)) === JSON.stringify(stripAt(b));
 }
 
 /** Sincroniza cargador/destinatario/mercancía desde paradas y persiste si cambió. */
@@ -180,6 +212,7 @@ export async function persistDcdtPartesFromStops({
   empresa = null,
   conductor = null,
   masterById = {},
+  skipPdfStale = false,
 }) {
   if (!dcdt?.id) return dcdt;
   const effectiveCargadorId = cargadorId || dcdt?.datos?.partes?.cargador_id || null;
@@ -187,10 +220,12 @@ export async function persistDcdtPartesFromStops({
     cargadorId: effectiveCargadorId,
   });
   syncedDatos.mercancia = mercanciaDatosFromCargaStops(stops, effectiveCargadorId);
-  const partesChanged = partesIdsChanged(dcdt.datos, syncedDatos);
-  const mercBefore = JSON.stringify(dcdt.datos?.mercancia || {});
-  const mercAfter = JSON.stringify(syncedDatos.mercancia || {});
-  if (!partesChanged && mercBefore === mercAfter) return dcdt;
+  if (
+    dcdtPartesEquivalent(dcdt.datos, syncedDatos) &&
+    mercanciaDatosEquivalent(dcdt.datos?.mercancia, syncedDatos.mercancia)
+  ) {
+    return dcdt;
+  }
   const { doc, missing } = resolveDcdtDocument({
     servicio,
     stops,
@@ -201,7 +236,21 @@ export async function persistDcdtPartesFromStops({
   });
   const datosToSave = { ...syncedDatos };
   if (isDcdtEstadoValidated(dcdt.estado)) {
-    datosToSave.validacion_snapshot = buildValidacionSnapshot(doc);
+    const nextSnap = buildValidacionSnapshot(doc);
+    const prevSnap = dcdt.datos?.validacion_snapshot;
+    if (validacionSnapshotContentEquivalent(prevSnap, nextSnap)) {
+      datosToSave.validacion_snapshot = prevSnap;
+    } else {
+      datosToSave.validacion_snapshot = nextSnap;
+    }
+  }
+  if (
+    dcdtPartesEquivalent(dcdt.datos, datosToSave) &&
+    mercanciaDatosEquivalent(dcdt.datos?.mercancia, datosToSave.mercancia) &&
+    (!isDcdtEstadoValidated(dcdt.estado) ||
+      validacionSnapshotContentEquivalent(dcdt.datos?.validacion_snapshot, datosToSave.validacion_snapshot))
+  ) {
+    return dcdt;
   }
   const estado = computeDcdtEstado({
     missing,
@@ -209,7 +258,10 @@ export async function persistDcdtPartesFromStops({
     datos: datosToSave,
     currentEstado: dcdt.estado,
   });
-  return saveDcdtDatos(dcdt.id, datosToSave, estado);
+  if (estado === dcdt.estado && skipPdfStale) {
+    return saveDcdtDatos(dcdt.id, datosToSave, null, { skipPdfStale: true });
+  }
+  return saveDcdtDatos(dcdt.id, datosToSave, estado, { skipPdfStale });
 }
 
 export async function assignDcdtParte({
@@ -343,12 +395,14 @@ export function isValidacionSnapshotStale(snap, doc) {
 }
 
 /** Repara snapshots validados con cargador/destinatario vacíos cuando el catálogo ya resuelve datos. */
-export async function refreshValidacionSnapshotIfStale({ dcdt, doc }) {
+export async function refreshValidacionSnapshotIfStale({ dcdt, doc, skipPdfStale = false } = {}) {
   if (!dcdt?.id || !isDcdtEstadoValidated(dcdt.estado)) return dcdt;
   const snap = dcdt.datos?.validacion_snapshot;
   if (!snap || !isValidacionSnapshotStale(snap, doc)) return dcdt;
-  const datosToSave = { ...dcdt.datos, validacion_snapshot: buildValidacionSnapshot(doc) };
-  return saveDcdtDatos(dcdt.id, datosToSave, dcdt.estado);
+  const nextSnap = buildValidacionSnapshot(doc);
+  if (validacionSnapshotContentEquivalent(snap, nextSnap)) return dcdt;
+  const datosToSave = { ...dcdt.datos, validacion_snapshot: nextSnap };
+  return saveDcdtDatos(dcdt.id, datosToSave, dcdt.estado, { skipPdfStale });
 }
 
 function applyValidacionSnapshot(doc, dcdt) {
@@ -616,17 +670,28 @@ export function dcdtDocForExpediente(doc, meta = {}) {
   };
 }
 
+export function dcdtRowCargadorId(dcdt) {
+  const id = dcdt?.datos?.partes?.cargador_id;
+  return id != null && String(id).trim() !== "" ? String(id) : null;
+}
+
+/** Sin cargador y sin validar — fila vacía creada por ensure legacy. */
+export function isDcdtOrphanRow(dcdt) {
+  if (dcdtRowCargadorId(dcdt)) return false;
+  return !isDcdtEstadoValidated(dcdt?.estado);
+}
+
+/** Oculta huérfanas en UI cuando ya hay DeCA con cargador asignado. */
+export function filterDcdtRowsForUiSelector(rows) {
+  const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+  const withCargador = list.filter((r) => !!dcdtRowCargadorId(r));
+  if (!withCargador.length) return list;
+  return list.filter((r) => !isDcdtOrphanRow(r));
+}
+
 export async function fetchDcdtByServicio(servicioId) {
-  const row = await dcdtSelectFirst(`?servicio_id=eq.${servicioId}`);
-  if (row) return row;
-  const r = await dcdtRequest(`?servicio_id=eq.${servicioId}&select=${COLS_CORE}&limit=1`);
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    if (/dcdt_servicio|carta_porte|42P01|PGRST205/i.test(body)) return null;
-    throw new Error(`No se pudo cargar ${DECA_SHORT_LABEL}`);
-  }
-  const rows = await r.json();
-  return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+  const rows = await fetchAllDcdtByServicio(servicioId);
+  return rows[0] ?? null;
 }
 
 /** Todas las filas DeCA de un servicio (1:N por cargador en demo). */
@@ -706,8 +771,8 @@ export async function patchDcdtFechaInicioEfectivoIfNull(dcdtId, isoTimestamp) {
 }
 
 export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] }) {
-  let row = await fetchDcdtByServicio(servicioId);
-  if (row) return row;
+  const existing = await fetchAllDcdtByServicio(servicioId);
+  if (existing.length > 0) return existing[0];
   const datos = syncParteIdsFromStops(emptyDatos(), stops);
   const r = await dcdtRequest("", {
     method: "POST",

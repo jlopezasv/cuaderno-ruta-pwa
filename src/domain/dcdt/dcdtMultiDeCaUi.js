@@ -1,5 +1,6 @@
 import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
 import { cargadorIdFromStop } from "./dcdtCargadorGroups.js";
+import { buildStopsByCargadorSegment } from "./dcdtServicioSync.js";
 import { isCargaStopTipo, isDescargaStop, resolveDescargaCargadorParteId } from "./descargaCargadorLink.js";
 
 function sortStops(stops) {
@@ -21,6 +22,23 @@ export function stopsLinkedToDcdt(allStops, dcdt) {
     }
     return false;
   });
+}
+
+/**
+ * Paradas del segmento de un DeCA (carga/descarga del cargador).
+ * Nunca mezcla paradas de otro cargador si el vínculo explícito falla.
+ */
+export function resolveScopeStopsForDcdt(allStops, dcdt) {
+  const linked = stopsLinkedToDcdt(allStops, dcdt);
+  if (linked.length) return linked;
+
+  const cargadorId = dcdt?.datos?.partes?.cargador_id
+    ? String(dcdt.datos.partes.cargador_id)
+    : null;
+  if (!cargadorId) return [];
+
+  const segments = buildStopsByCargadorSegment(allStops);
+  return segments.get(cargadorId) || [];
 }
 
 export function decaSelectorLabel(dcdt, index, masterById = {}) {

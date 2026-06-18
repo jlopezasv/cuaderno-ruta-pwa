@@ -289,6 +289,7 @@ export async function syncDcdtServiciosAfterStopsPersisted({
       empresa: null,
       conductor: null,
       masterById: {},
+      skipPdfStale: true,
     }).catch((e) => {
       console.error("[DCDT sync] STEP 7 persistDcdtPartesFromStops failed", {
         servicioId,
