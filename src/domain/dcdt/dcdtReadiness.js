@@ -109,7 +109,8 @@ export function mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit = null)
 }
 
 /**
- * Única comprobación compartida empresa/conductor.
+ * Única comprobación compartida empresa/conductor (persistido + resolveDcdtDocument).
+ * El formulario de creación usa resolveDcdtReadinessFromForm() → misma resolución con DCDT sintético.
  * @returns {{ doc, missing, datos, estado, estadoComputed, isValidated, isComplete, canValidate, canGeneratePdf, canDownloadPdf, statusLabel, hasPdfStorage }}
  */
 export function validateDcdtReadiness({

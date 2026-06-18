@@ -30,7 +30,10 @@ export const DCDT_ESTADO_LABELS = Object.freeze({
   incluido_en_expediente: "Incluido en expediente",
 });
 
-/** Campos esenciales DCDT (FOM/2861/2012). */
+/**
+ * Campos esenciales DeCA (Orden FOM/2861/2012, art. 6).
+ * El destinatario contractual no es obligatorio para validar; se muestra como dato opcional en UI/PDF.
+ */
 export const DCDT_REQUIRED_FIELDS = Object.freeze([
   { key: "cargador.nombre", label: "Cargador — razón social" },
   { key: "cargador.nif", label: "Cargador — NIF/CIF" },

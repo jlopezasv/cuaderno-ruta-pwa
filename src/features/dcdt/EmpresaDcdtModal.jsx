@@ -11,6 +11,7 @@ import {
   mercanciaEditFromDatos,
   persistDcdtPartesFromStops,
   reconcileDcdtEstadoIfNeeded,
+  refreshValidacionSnapshotIfStale,
   saveDcdtDatos,
   fetchDcdtByServicio,
   validarDcdtTrafico,
@@ -199,8 +200,8 @@ export function EmpresaDcdtModal({
     }
   }
 
-  function renderParteBlock(role, label, lineValue, missingField) {
-    const isMissing = missingField || lineValue === "—";
+  function renderParteBlock(role, label, lineValue, missingField, { optional = false } = {}) {
+    const isMissing = optional ? false : missingField || lineValue === "—";
     const showPicker = pickingRole === role;
     return (
       <div key={role}>
@@ -234,7 +235,11 @@ export function EmpresaDcdtModal({
               cursor: "pointer",
             }}
           >
-            {isMissing ? "Completar dato" : "Cambiar"}
+            {optional && lineValue === "—"
+              ? "Añadir (opcional)"
+              : isMissing
+                ? "Completar dato"
+                : "Cambiar"}
           </button>
         )}
       </div>
@@ -310,6 +315,11 @@ export function EmpresaDcdtModal({
           mercanciaEdit: mercanciaForReadiness,
           flotaEvs: flotaEvsRef.current,
         });
+        persisted = await refreshValidacionSnapshotIfStale({
+          dcdt: persisted,
+          doc: readinessPreview.doc,
+        });
+        if (cancelled) return;
         persisted = await reconcileDcdtEstadoIfNeeded({
           dcdt: persisted,
           missing: readinessPreview.missing,
@@ -790,9 +800,10 @@ export function EmpresaDcdtModal({
               />
               {renderParteBlock(
                 "destinatario",
-                "Destinatario",
+                "Destinatario (opcional)",
                 parteLine(doc?.destinatario),
-                !doc?.destinatario?.nombre,
+                false,
+                { optional: true },
               )}
               <FieldRow label="Origen" value={doc?.origen} missing={missingKeys.has("origen")} />
               <FieldRow label="Destino" value={doc?.destino} missing={missingKeys.has("destino")} />

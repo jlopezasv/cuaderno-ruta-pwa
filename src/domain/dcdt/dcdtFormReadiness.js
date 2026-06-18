@@ -1,4 +1,7 @@
+import { DCDT_ESTADO } from "./dcdtConstants.js";
+import { buildMercanciaDatosPatch, resolveDcdtDocument } from "./dcdtModel.js";
 import { suggestParteTipoForStop } from "./partesTransporteModel.js";
+import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
 
 function hasText(val) {
   return Boolean(String(val || "").trim());
@@ -23,10 +26,13 @@ function lastStopOfTipo(stops, tipo) {
   return hits.length ? hits[hits.length - 1] : null;
 }
 
-function parteFromCatalog(partesById, stop) {
-  const id = stop?.parte_transporte_id;
-  if (!id) return null;
-  return partesById?.[id] || null;
+function stopParteTransporteId(stop) {
+  if (!stop) return null;
+  return stop.parte_transporte_id || getStopOperacionMeta(stop.notas)?.parte_transporte_id || null;
+}
+
+function missingHas(missing, key) {
+  return (missing || []).some((m) => m.key === key);
 }
 
 function ubicacionState(stop) {
@@ -36,10 +42,9 @@ function ubicacionState(stop) {
 }
 
 /**
- * Indicador visual de datos para futuro DCDT (no bloquea guardado).
- * status: completo | parcial | pendiente
+ * Misma resolución que validateDcdtReadiness / EmpresaDcdtModal, con DCDT sintético en formulario.
  */
-export function assessDcdtFormReadiness({
+export function resolveDcdtReadinessFromForm({
   stops = [],
   mercancia = {},
   partesById = {},
@@ -47,58 +52,120 @@ export function assessDcdtFormReadiness({
   matricula = null,
   remolque = null,
   tipoVehiculo = "articulado",
+  empresa = null,
+  empresaOwnerProfile = null,
+  dcdt = null,
+  servicio = null,
 }) {
-  const carga = firstStopOfTipo(stops, "carga");
-  const descarga = lastStopOfTipo(stops, "descarga");
-  const cargador = parteFromCatalog(partesById, carga);
-  const destinatario = parteFromCatalog(partesById, descarga);
+  const syntheticServicio = servicio || { fecha_inicio: fechaInicio || null };
+  const syntheticDcdt =
+    dcdt ||
+    ({
+      estado: DCDT_ESTADO.BORRADOR,
+      datos: {
+        partes: {
+          cargador_id: null,
+          cargador_overrides: {},
+          destinatario_id: null,
+          destinatario_overrides: {},
+        },
+        mercancia: buildMercanciaDatosPatch(mercancia),
+        transportista: { use_empresa: true },
+        vehiculo: { use_conductor_matricula: true, matricula_override: null },
+        stops: [],
+      },
+    });
+
+  return resolveDcdtDocument({
+    servicio: syntheticServicio,
+    stops,
+    dcdt: syntheticDcdt,
+    masterById: partesById,
+    empresa,
+    empresaOwnerProfile,
+    conductor: { matricula, remolque },
+  });
+}
+
+/**
+ * Indicador visual de datos para futuro DCDT (no bloquea guardado).
+ * status: completo | parcial | pendiente
+ */
+export function assessDcdtFormReadiness(args) {
+  const {
+    stops = [],
+    mercancia = {},
+    partesById = {},
+    fechaInicio = null,
+    matricula = null,
+    remolque = null,
+    tipoVehiculo = "articulado",
+  } = args;
+
+  const { doc, missing, datos } = resolveDcdtReadinessFromForm(args);
   const rigido = String(tipoVehiculo || "").toLowerCase() === "rigido";
 
-  const hasCargadorLink = Boolean(carga?.parte_transporte_id);
-  const hasDestLink = Boolean(descarga?.parte_transporte_id);
-
+  const carga = firstStopOfTipo(stops, "carga");
+  const descarga = lastStopOfTipo(stops, "descarga");
+  const hasCargadorLink = Boolean(datos?.partes?.cargador_id || stopParteTransporteId(carga));
   const items = [
-    item("Cargador contractual", triState(hasCargadorLink, false)),
+    item(
+      "Cargador contractual",
+      triState(
+        !missingHas(missing, "cargador.nombre"),
+        hasCargadorLink &&
+          (missingHas(missing, "cargador.nombre") ||
+            missingHas(missing, "cargador.nif") ||
+            missingHas(missing, "cargador.domicilio")),
+      ),
+    ),
     item(
       "CIF cargador",
-      triState(hasText(cargador?.nif), hasCargadorLink && !hasText(cargador?.nif)),
+      triState(
+        hasText(doc?.cargador?.nif),
+        hasCargadorLink && missingHas(missing, "cargador.nif"),
+      ),
     ),
     item(
       "Domicilio cargador",
       triState(
-        hasText(cargador?.domicilioFiscal) || hasText(cargador?.direccionOperativa),
-        hasCargadorLink && !(hasText(cargador?.domicilioFiscal) || hasText(cargador?.direccionOperativa)),
-      ),
-    ),
-    item("Destinatario", triState(hasDestLink, false)),
-    item(
-      "CIF destinatario",
-      triState(hasText(destinatario?.nif), hasDestLink && !hasText(destinatario?.nif)),
-    ),
-    item(
-      "Domicilio destinatario",
-      triState(
-        hasText(destinatario?.domicilioFiscal) || hasText(destinatario?.direccionOperativa),
-        hasDestLink && !(hasText(destinatario?.domicilioFiscal) || hasText(destinatario?.direccionOperativa)),
+        hasText(doc?.cargador?.domicilio),
+        hasCargadorLink && missingHas(missing, "cargador.domicilio"),
       ),
     ),
     item("Origen", ubicacionState(carga)),
     item("Destino", ubicacionState(descarga)),
-    item("Mercancía", triState(hasText(mercancia?.descripcion), false)),
+    item(
+      "Mercancía",
+      triState(hasText(doc?.mercancia?.descripcion), missingHas(missing, "mercancia.descripcion")),
+    ),
     item(
       "Peso",
-      triState(hasText(mercancia?.peso_kg), hasText(mercancia?.descripcion) && !hasText(mercancia?.peso_kg)),
+      triState(
+        doc?.mercancia?.peso_kg != null && doc?.mercancia?.peso_kg !== "",
+        hasText(doc?.mercancia?.descripcion) && missingHas(missing, "mercancia.peso_kg"),
+      ),
     ),
-    item("Matrícula tractora", triState(hasText(matricula), false)),
+    item("Matrícula tractora", triState(hasText(doc?.vehiculo?.matricula), missingHas(missing, "vehiculo.matricula"))),
     item(
       "Matrícula remolque",
-      rigido ? "completo" : triState(hasText(remolque), hasText(matricula) && !hasText(remolque)),
+      rigido
+        ? "completo"
+        : triState(
+            hasText(doc?.vehiculo?.remolque),
+            hasText(doc?.vehiculo?.matricula) && !hasText(doc?.vehiculo?.remolque),
+          ),
     ),
-    item("Fecha transporte", triState(hasText(fechaInicio), false)),
+    item(
+      "Fecha transporte",
+      triState(hasText(fechaInicio) || hasText(doc?.fecha_transporte), missingHas(missing, "fecha_transporte")),
+    ),
   ];
 
   return {
     items,
+    doc,
+    missing,
     completeCount: items.filter((i) => i.status === "completo").length,
     partialCount: items.filter((i) => i.status === "parcial").length,
     totalCount: items.length,
