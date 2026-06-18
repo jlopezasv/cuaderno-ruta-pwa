@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../domain/dcdt/dcdtModel.js";
+import {
+  ensureDcdtForServicio,
+  fetchAllDcdtByServicio,
+  filterDcdtRowsForUiSelector,
+} from "../../domain/dcdt/dcdtModel.js";
 import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
+import { decaSelectorLabel, resolveScopeStopsForDcdt } from "../../domain/dcdt/dcdtMultiDeCaUi.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
@@ -70,7 +75,8 @@ export function ConductorDcdtPanel({
   showToast,
   compact = false,
 }) {
-  const [dcdt, setDcdt] = useState(null);
+  const [allDcdts, setAllDcdts] = useState([]);
+  const [selectedDcdtId, setSelectedDcdtId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
@@ -85,18 +91,35 @@ export function ConductorDcdtPanel({
 
   const empresaId = servicio?.empresa_id || empresa?.id;
 
+  const visibleDcdts = useMemo(() => filterDcdtRowsForUiSelector(allDcdts), [allDcdts]);
+
+  const dcdt = useMemo(() => {
+    if (!visibleDcdts.length) return null;
+    return visibleDcdts.find((r) => r.id === selectedDcdtId) || visibleDcdts[0];
+  }, [visibleDcdts, selectedDcdtId]);
+
   const load = useCallback(async () => {
     if (!servicio?.id || !empresaId) {
-      setDcdt(null);
+      setAllDcdts([]);
+      setSelectedDcdtId(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const [row, ctx] = await Promise.all([
-        fetchDcdtByServicio(servicio.id).then(
-          (r) => r || ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops: stopsProp }),
-        ),
+      const [rows, ctx] = await Promise.all([
+        fetchAllDcdtByServicio(servicio.id).then(async (all) => {
+          let list = filterDcdtRowsForUiSelector(all);
+          if (!list.length) {
+            const created = await ensureDcdtForServicio({
+              servicioId: servicio.id,
+              empresaId,
+              stops: stopsProp,
+            });
+            list = filterDcdtRowsForUiSelector(created ? [created] : []);
+          }
+          return list;
+        }),
         fetchDcdtResolveContext({
           servicio,
           stops: stopsProp,
@@ -105,13 +128,27 @@ export function ConductorDcdtPanel({
         }),
       ]);
       setResolveCtx(ctx);
-      setDcdt(row);
+      setAllDcdts(rows);
+      setSelectedDcdtId((prev) => (rows.some((r) => r.id === prev) ? prev : rows[0]?.id || null));
     } catch {
-      setDcdt(null);
+      setAllDcdts([]);
+      setSelectedDcdtId(null);
     } finally {
       setLoading(false);
     }
   }, [servicio, empresaId, stopsProp, empresa, conductorUid]);
+
+  useEffect(() => {
+    if (!visibleDcdts.length) return;
+    if (!visibleDcdts.some((r) => r.id === selectedDcdtId)) {
+      setSelectedDcdtId(visibleDcdts[0].id);
+    }
+  }, [visibleDcdts, selectedDcdtId]);
+
+  const scopeStops = useMemo(() => {
+    if (!dcdt) return resolveCtx.stops;
+    return resolveScopeStopsForDcdt(resolveCtx.stops, dcdt);
+  }, [dcdt, resolveCtx.stops]);
 
   useEffect(() => {
     load();
@@ -122,13 +159,13 @@ export function ConductorDcdtPanel({
     return validateDcdtReadiness({
       servicio,
       dcdt,
-      stops: resolveCtx.stops,
+      stops: scopeStops,
       masterById: resolveCtx.masterById,
       empresa: resolveCtx.empresa,
       empresaOwnerProfile: resolveCtx.empresaOwnerProfile,
       conductor: resolveCtx.conductor,
     });
-  }, [dcdt, servicio, resolveCtx]);
+  }, [dcdt, servicio, resolveCtx, scopeStops]);
 
   const { doc, missing } = readiness;
   const validated = readiness.isValidated;
@@ -152,6 +189,12 @@ export function ConductorDcdtPanel({
     }, 20000);
     return () => clearInterval(t);
   }, [servicio?.id, validated, load]);
+
+  function selectDcdt(id) {
+    setSelectedDcdtId(id);
+    setViewOpen(false);
+    setQrOpen(false);
+  }
 
   function openQr() {
     if (!dcdt || !doc) {
@@ -222,6 +265,40 @@ export function ConductorDcdtPanel({
         <div style={{ fontSize: 12, fontWeight: 800, color: validated ? "#166534" : UI.amberTx, marginBottom: 6 }}>
           {statusLabel}
         </div>
+        {visibleDcdts.length > 1 ? (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 6, letterSpacing: 0.4 }}>
+              ELIGE DOCUMENTO DeCA
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {visibleDcdts.map((row, idx) => {
+                const active = row.id === dcdt?.id;
+                const label = decaSelectorLabel(row, idx, resolveCtx.masterById);
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => selectDcdt(row.id)}
+                    style={{
+                      width: "100%",
+                      background: active ? (validated ? "#bbf7d0" : "#fde68a") : UI.surface,
+                      color: active ? UI.tx : UI.doc,
+                      border: `1px solid ${active ? (validated ? "#86efac" : UI.amberBorder) : UI.border}`,
+                      borderRadius: 10,
+                      padding: "9px 12px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         <div style={{ fontSize: 11, color: UI.su, marginBottom: 10, lineHeight: 1.4 }}>{phaseHint(phase)}</div>
         {!validated && missing.length ? (
           <div style={{ fontSize: 10, color: UI.amberTx, marginBottom: 10, lineHeight: 1.35 }}>
