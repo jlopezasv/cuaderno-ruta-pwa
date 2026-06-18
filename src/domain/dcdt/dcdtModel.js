@@ -126,7 +126,7 @@ export function buildStopBindingsFromStops(stops) {
       orden: st.orden,
       tipo: st.tipo,
       grupo: group,
-      parte_id: meta.parte_transporte_id || null,
+      parte_id: meta.parte_transporte_id || st.parte_transporte_id || null,
       parte_tipo: meta.parte_transporte_tipo || suggestParteTipoForStop(st.tipo),
     };
   });
@@ -179,7 +179,7 @@ export async function persistDcdtPartesFromStops({
   if (!dcdt?.id) return dcdt;
   const syncedDatos = syncParteIdsFromStops(dcdt.datos, stops);
   if (!partesIdsChanged(dcdt.datos, syncedDatos)) return dcdt;
-  const { missing } = resolveDcdtDocument({
+  const { doc, missing } = resolveDcdtDocument({
     servicio,
     stops,
     dcdt: { ...dcdt, datos: syncedDatos },
@@ -187,13 +187,17 @@ export async function persistDcdtPartesFromStops({
     empresa,
     conductor,
   });
+  const datosToSave = { ...syncedDatos };
+  if (isDcdtEstadoValidated(dcdt.estado)) {
+    datosToSave.validacion_snapshot = buildValidacionSnapshot(doc);
+  }
   const estado = computeDcdtEstado({
     missing,
     evidenciasByStop: flotaEvs,
-    datos: syncedDatos,
+    datos: datosToSave,
     currentEstado: dcdt.estado,
   });
-  return saveDcdtDatos(dcdt.id, syncedDatos, estado);
+  return saveDcdtDatos(dcdt.id, datosToSave, estado);
 }
 
 export async function assignDcdtParte({
@@ -255,6 +259,86 @@ function buildValidacionSnapshot(doc) {
   };
 }
 
+function dcdtFieldFilled(val) {
+  return val != null && String(val).trim() !== "";
+}
+
+/** Prefer snapshot when tiene dato; si el snapshot quedó vacío (validación prematura), usar resolución viva. */
+function mergeSnapshotParteBlock(snapParte, liveParte) {
+  if (!snapParte && !liveParte) return liveParte;
+  const pick = (key, altKey) => {
+    const snapVal = snapParte?.[key] ?? (altKey ? snapParte?.[altKey] : null);
+    const liveVal = liveParte?.[key] ?? (altKey ? liveParte?.[altKey] : null);
+    if (dcdtFieldFilled(snapVal)) return snapVal;
+    if (dcdtFieldFilled(liveVal)) return liveVal;
+    return snapVal ?? liveVal ?? null;
+  };
+  return {
+    nombre: pick("nombre"),
+    nif: pick("nif"),
+    domicilio: pick("domicilio", "direccion"),
+  };
+}
+
+function mergeSnapshotScalar(snapVal, liveVal) {
+  if (dcdtFieldFilled(snapVal)) return snapVal;
+  if (dcdtFieldFilled(liveVal)) return liveVal;
+  return snapVal ?? liveVal ?? null;
+}
+
+function mergeSnapshotMercancia(snapMerc, liveMerc) {
+  if (!snapMerc && !liveMerc) return liveMerc;
+  const pick = (key) => {
+    const snapVal = snapMerc?.[key];
+    const liveVal = liveMerc?.[key];
+    if (snapVal != null && snapVal !== "") return snapVal;
+    if (liveVal != null && liveVal !== "") return liveVal;
+    return snapVal ?? liveVal ?? null;
+  };
+  return {
+    descripcion: pick("descripcion"),
+    peso_kg: pick("peso_kg"),
+    bultos: pick("bultos"),
+    palets: pick("palets"),
+  };
+}
+
+function mergeSnapshotVehiculo(snapVeh, liveVeh) {
+  if (!snapVeh && !liveVeh) return liveVeh;
+  return {
+    matricula: mergeSnapshotScalar(snapVeh?.matricula, liveVeh?.matricula),
+    remolque: mergeSnapshotScalar(snapVeh?.remolque, liveVeh?.remolque),
+  };
+}
+
+function validacionSnapshotParteIsEmpty(parte) {
+  if (!parte || typeof parte !== "object") return true;
+  return (
+    !dcdtFieldFilled(parte.nombre) &&
+    !dcdtFieldFilled(parte.nif) &&
+    !dcdtFieldFilled(parte.domicilio) &&
+    !dcdtFieldFilled(parte.direccion)
+  );
+}
+
+export function isValidacionSnapshotStale(snap, doc) {
+  if (!snap || !doc) return false;
+  if (validacionSnapshotParteIsEmpty(snap.cargador) && !validacionSnapshotParteIsEmpty(doc.cargador)) return true;
+  if (validacionSnapshotParteIsEmpty(snap.destinatario) && !validacionSnapshotParteIsEmpty(doc.destinatario)) {
+    return true;
+  }
+  return false;
+}
+
+/** Repara snapshots validados con cargador/destinatario vacíos cuando el catálogo ya resuelve datos. */
+export async function refreshValidacionSnapshotIfStale({ dcdt, doc }) {
+  if (!dcdt?.id || !isDcdtEstadoValidated(dcdt.estado)) return dcdt;
+  const snap = dcdt.datos?.validacion_snapshot;
+  if (!snap || !isValidacionSnapshotStale(snap, doc)) return dcdt;
+  const datosToSave = { ...dcdt.datos, validacion_snapshot: buildValidacionSnapshot(doc) };
+  return saveDcdtDatos(dcdt.id, datosToSave, dcdt.estado);
+}
+
 function applyValidacionSnapshot(doc, dcdt) {
   const snap = dcdt?.datos?.validacion_snapshot;
   const mods = dcdt?.datos?.modificaciones_ruta;
@@ -267,14 +351,14 @@ function applyValidacionSnapshot(doc, dcdt) {
   if (!snap || !isDcdtEstadoValidated(dcdt?.estado)) return withMods;
   return {
     ...withMods,
-    cargador: snap.cargador || doc.cargador,
-    destinatario: snap.destinatario || doc.destinatario,
-    transportista: snap.transportista || doc.transportista,
-    origen: snap.origen || doc.origen,
-    destino: snap.destino || doc.destino,
-    mercancia: snap.mercancia || doc.mercancia,
-    fecha_transporte: snap.fecha_transporte || doc.fecha_transporte,
-    vehiculo: snap.vehiculo || doc.vehiculo,
+    cargador: mergeSnapshotParteBlock(snap.cargador, doc.cargador),
+    destinatario: mergeSnapshotParteBlock(snap.destinatario, doc.destinatario),
+    transportista: mergeSnapshotParteBlock(snap.transportista, doc.transportista),
+    origen: mergeSnapshotScalar(snap.origen, doc.origen),
+    destino: mergeSnapshotScalar(snap.destino, doc.destino),
+    mercancia: mergeSnapshotMercancia(snap.mercancia, doc.mercancia),
+    fecha_transporte: mergeSnapshotScalar(snap.fecha_transporte, doc.fecha_transporte),
+    vehiculo: mergeSnapshotVehiculo(snap.vehiculo, doc.vehiculo),
   };
 }
 
@@ -389,11 +473,9 @@ export function isDcdtEstadoValidated(estado) {
 
 /** DCDT listo para validar / mostrar como validado: sin pendientes obligatorios. */
 export function isDcdtFullyValidated({ estado, missing = [], validacionSnapshot = null, validadoAt = null }) {
+  if (!isDcdtEstadoValidated(estado) || missing.length > 0) return false;
   const snap = validacionSnapshot && typeof validacionSnapshot === "object" ? validacionSnapshot : null;
-  if (isDcdtEstadoValidated(estado) && (snap || validadoAt)) {
-    return true;
-  }
-  return missing.length === 0 && isDcdtEstadoValidated(estado);
+  return Boolean(snap || validadoAt);
 }
 
 /** Etiqueta UX unificada empresa/conductor. */

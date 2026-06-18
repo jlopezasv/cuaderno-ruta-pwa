@@ -235,21 +235,27 @@ export function parteToDisplayLine(parte) {
   return loc ? `${parte.nombre} · ${loc}` : parte.nombre;
 }
 
+function pickParteField(overrideVal, masterVal) {
+  if (overrideVal != null && String(overrideVal).trim() !== "") return String(overrideVal).trim();
+  if (masterVal != null && String(masterVal).trim() !== "") return String(masterVal).trim();
+  return "";
+}
+
 export function resolveParteFields(parte, overrides = {}) {
-  if (!parte && !overrides?.nombre) return null;
+  const nombre = pickParteField(overrides?.nombre, parte?.nombre);
+  if (!parte && !nombre) return null;
+  const domicilio = pickParteField(
+    overrides?.domicilio ?? overrides?.domicilio_fiscal,
+    parte?.domicilioFiscal ?? parte?.direccionOperativa,
+  );
   return {
     id: parte?.id || null,
-    nombre: overrides.nombre ?? parte?.nombre ?? "",
-    nif: overrides.nif ?? parte?.nif ?? "",
-    domicilio:
-      overrides.domicilio ??
-      overrides.domicilio_fiscal ??
-      parte?.domicilioFiscal ??
-      parte?.direccionOperativa ??
-      "",
-    direccion: overrides.direccion ?? parte?.direccionOperativa ?? "",
-    ciudad: overrides.ciudad ?? parte?.ciudad ?? "",
-    codigoPostal: overrides.codigo_postal ?? parte?.codigoPostal ?? "",
-    pais: overrides.pais ?? parte?.pais ?? "",
+    nombre,
+    nif: pickParteField(overrides?.nif, parte?.nif),
+    domicilio,
+    direccion: pickParteField(overrides?.direccion, parte?.direccionOperativa),
+    ciudad: pickParteField(overrides?.ciudad, parte?.ciudad),
+    codigoPostal: pickParteField(overrides?.codigo_postal, parte?.codigoPostal),
+    pais: pickParteField(overrides?.pais, parte?.pais),
   };
 }
