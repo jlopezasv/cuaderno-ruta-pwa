@@ -27,6 +27,7 @@ import {
   traceOperationalDoc,
 } from "../documents/operationalDocumentTrace.js";
 import { loadRemoteImageBlob } from "../documents/imageBlobLoad.js";
+import { mergePdfBlobs } from "../documents/mergePdfBlobs.js";
 import { mergeExtraDocsIntoExpedienteEvidencias } from "./extraDocumentExpediente.js";
 import { resolveExtraDocAccessUrl } from "./serviceExtraDocuments.js";
 import {
@@ -923,6 +924,53 @@ function evidenceMimeForPdf(ev) {
   return ev.mime_type || getDocMeta(ev)?.mime_type || ev?.datos?.mime_type || "";
 }
 
+export function isDecaExpedienteEvidence(ev) {
+  const tipo = String(ev?.tipo || "").toLowerCase();
+  return tipo === "dcdt" || ev?.bucket === "dcdt";
+}
+
+/** DeCA(s) del servicio para incrustar al final del PDF compuesto (multi-DeCA incluido). */
+export function findDecaExpedienteEvidencias(expediente) {
+  return (expediente?.evidencias || [])
+    .filter(isDecaExpedienteEvidence)
+    .sort((a, b) => (parseTs(a.created_at) ?? 0) - (parseTs(b.created_at) ?? 0));
+}
+
+async function fetchDecaPdfBlobsForExpediente(decaEvidencias) {
+  const blobs = [];
+  for (const ev of decaEvidencias) {
+    const url = await resolveExpedienteAttachmentUrl(ev);
+    if (!url) continue;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const mime = blob.type || evidenceMimeForPdf(ev) || "";
+      const name = String(ev.archivo_nombre || url).toLowerCase();
+      if (mime.includes("pdf") || name.endsWith(".pdf")) blobs.push(blob);
+    } catch {
+      /* omitir DeCA no descargable */
+    }
+  }
+  return blobs;
+}
+
+/** Desglose de integrity.eventCount por tipo (depuración / auditoría). */
+export function summarizeExpedienteIntegrityByType(expediente) {
+  const rows = expediente?.integrity?.records || [];
+  const byType = {};
+  for (const row of rows) {
+    const t = String(row.type || "unknown");
+    byType[t] = (byType[t] || 0) + 1;
+  }
+  return {
+    total: rows.length,
+    byType: Object.entries(byType)
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => ({ type, count })),
+  };
+}
+
 function expedienteEvidenceIsImageLike(ev) {
   if (!ev?.url) return false;
   if (isIncidenciaLinkedEvidence(ev)) return false;
@@ -1016,7 +1064,8 @@ function imageObject(bytesData, width, height) {
   ]);
 }
 
-export async function makeServiceExpedientePdfBlob(expediente) {
+export async function makeServiceExpedientePdfBlob(expediente, options = {}) {
+  const { embedDecaPdfs = true, decaEvidencias = null } = options;
   const imageMap = await fetchEvidenceImages(expediente);
   const cierreFirmaMap = expediente.cierreDocumental
     ? await fetchCierreFirmaForPdf(expediente.cierreDocumental)
@@ -1295,6 +1344,7 @@ export async function makeServiceExpedientePdfBlob(expediente) {
     });
   }
   const extraPdfDocs = expediente.evidencias.filter((ev) => {
+    if (isDecaExpedienteEvidence(ev)) return false;
     if (!ev.url || ev.source !== "servicio_documentos_extra") return false;
     if (expedienteEvidenceAnnexA4(ev)) return false;
     const mime = evidenceMimeForPdf(ev);
@@ -1413,7 +1463,15 @@ export async function makeServiceExpedientePdfBlob(expediente) {
   });
   xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
   parts.push(bytes(xref));
-  return new Blob([concat(parts)], { type: "application/pdf" });
+  const baseBlob = new Blob([concat(parts)], { type: "application/pdf" });
+  if (!embedDecaPdfs) return baseBlob;
+
+  const decaEvs = decaEvidencias ?? findDecaExpedienteEvidencias(expediente);
+  if (!decaEvs.length) return baseBlob;
+
+  const decaBlobs = await fetchDecaPdfBlobsForExpediente(decaEvs);
+  if (!decaBlobs.length) return baseBlob;
+  return mergePdfBlobs(baseBlob, decaBlobs);
 }
 
 async function makePdfBlob(expediente) {

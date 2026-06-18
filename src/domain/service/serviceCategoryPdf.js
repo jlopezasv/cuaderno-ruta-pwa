@@ -13,6 +13,7 @@ import {
 } from "./serviceDocumentCategories.js";
 import {
   downloadServiceExpedientePdf,
+  findDecaExpedienteEvidencias,
   makeServiceExpedientePdfBlob,
   buildExpedienteZipBlob,
 } from "./serviceExpediente.js";
@@ -209,7 +210,10 @@ export async function buildCategoryPdfBlob({
   if (categoryId === SERVICE_DOC_CATEGORY.EXPEDIENTE) {
     const exp = expedienteForOperacionalCategory(expediente);
     if (!exp) throw new Error("Expediente no disponible");
-    return makeServiceExpedientePdfBlob(exp);
+    return makeServiceExpedientePdfBlob(exp, {
+      embedDecaPdfs: true,
+      decaEvidencias: findDecaExpedienteEvidencias(expediente),
+    });
   }
   if (categoryId === SERVICE_DOC_CATEGORY.DCDT) {
     return resolveDcdtCategoryPdfBlob({ servicioId: servicio?.id, extraDocs });
@@ -361,7 +365,7 @@ export async function loadServiceDocumentCategoryStatus({
   };
 }
 
-/** Descarga expediente operacional (categoría pura, sin DCDT embebido). */
+/** Descarga expediente operacional (informe + páginas DeCA fusionadas al final). */
 export async function downloadExpedienteOperacionalCategory(expediente) {
   const exp = expedienteForOperacionalCategory(expediente);
   if (!exp) throw new Error("Expediente no disponible");

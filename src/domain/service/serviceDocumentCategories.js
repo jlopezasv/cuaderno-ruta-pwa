@@ -89,7 +89,7 @@ export function defaultServiceDocMailSelection(prefs = null) {
   };
 }
 
-/** Expediente sin DCDT ni chat embebidos (categorías separadas). */
+/** Expediente sin DeCA en listado del informe (las páginas DeCA se fusionan al final del PDF). */
 export function expedienteForOperacionalCategory(expediente) {
   if (!expediente) return null;
   const evidencias = (expediente.evidencias || []).filter((ev) => {
