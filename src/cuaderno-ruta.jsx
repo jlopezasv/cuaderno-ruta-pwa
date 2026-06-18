@@ -12049,7 +12049,7 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   throw err;
 }
 
-async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, stops = null, logTag, onWarning }) {
+async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, logTag, onWarning }) {
   const effectiveEmpresaId = empresaId || servicio?.empresa_id || null;
   console.error("[DCDT sync] STEP 0 syncDcdtTrasPersistirParadas", {
     logTag,
@@ -12057,7 +12057,7 @@ async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, s
     empresaIdProp: empresaId ?? null,
     servicioEmpresaId: servicio?.empresa_id ?? null,
     effectiveEmpresaId,
-    stopsPassed: Array.isArray(stops) ? stops.length : 0,
+    refetchStopsFromDb: true,
   });
   if (!servicioId || !effectiveEmpresaId) {
     console.error("[DCDT sync] STEP 0 SKIP missing servicioId or empresaId", {
@@ -12072,7 +12072,6 @@ async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, s
       servicioId,
       empresaId: effectiveEmpresaId,
       servicio,
-      stops,
     });
     console.error("[DCDT sync] STEP 0 OK", { logTag, servicioId, result });
     return { ok: true, ...result };
@@ -12597,7 +12596,7 @@ function AsignarServicioModal({
         });
       }
       const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
-      const insertedStops=await persistServicioStopsTrasCrear({
+      await persistServicioStopsTrasCrear({
         servicioId:sv.id,
         stops:stopsPrepared,
         origen:origenRuta,
@@ -12608,7 +12607,6 @@ function AsignarServicioModal({
         servicioId:sv.id,
         empresaId:sv.empresa_id||empresaId,
         servicio:sv,
-        stops:insertedStops?.length?insertedStops:stopsPrepared,
         logTag:"AsignarServicioModal",
         onWarning:onDcdtSyncWarning,
       });
@@ -17862,7 +17860,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
       const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
-      const insertedStops=await traceServiceCreateStep(
+      await traceServiceCreateStep(
         "INSERT stops",
         { servicioId: sv.id, stopCount: stops.length },
         () => persistServicioStopsTrasCrear({
@@ -17877,7 +17875,6 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
         servicioId:sv.id,
         empresaId:sv.empresa_id,
         servicio:sv,
-        stops:insertedStops?.length?insertedStops:stopsPrepared,
         logTag:"CrearServicioModal",
         onWarning:onDcdtSyncWarning,
       });
