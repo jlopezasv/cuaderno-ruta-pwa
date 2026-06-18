@@ -12049,17 +12049,24 @@ async function persistServicioStopsTrasCrear({servicioId,stops,origen,destino,lo
   throw err;
 }
 
-async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, logTag }) {
-  if (!servicioId || !empresaId) return;
+async function syncDcdtTrasPersistirParadas({ servicioId, empresaId, servicio, logTag, onWarning }) {
+  if (!servicioId || !empresaId) return { ok: true };
   try {
     await syncDcdtServiciosAfterStopsPersisted({ servicioId, empresaId, servicio });
+    return { ok: true };
   } catch (e) {
+    const message = e?.message || String(e);
     console.error(`[DCDT sync] FAILED (${logTag})`, {
       servicioId,
-      message: e?.message || String(e),
+      message,
       stack: e?.stack || null,
     });
-    throw e;
+    const aviso =
+      "El servicio se guardó, pero no se sincronizaron todos los DeCA. " +
+      "Ábrelo desde el modal DeCA para reparar." +
+      (message ? ` (${message})` : "");
+    onWarning?.(aviso);
+    return { ok: false, error: message };
   }
 }
 
@@ -12423,6 +12430,7 @@ function AsignarServicioModal({
   officeResponsables=[],
   onClose,
   onCreado,
+  onDcdtSyncWarning=null,
 }){
   const officeUser=getOfficeUserFromSession();
   const[conductorSelId,setConductorSelId]=useState(conductorId||"");
@@ -12579,6 +12587,7 @@ function AsignarServicioModal({
         empresaId:sv.empresa_id||empresaId,
         servicio:sv,
         logTag:"AsignarServicioModal",
+        onWarning:onDcdtSyncWarning,
       });
       if(!sinConductor){
         void sendAssignmentPush({conductorId:conductorSelId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
@@ -15596,6 +15605,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           empresaId={officeUserPanel?.empresaId||empresa?.id||null}
           officeResponsables={officeResponsables}
           onClose={()=>setAsignarModal(null)}
+          onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)}
           onCreado={(merged)=>{
             const sinCond=!merged?.conductor_id;
             setAsignarModal(null);
@@ -15632,6 +15642,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             void refreshFlotaLigeraRef.current?.({instantFeedback:true});
           }}
           onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
+          onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)}
         />
       )}
 
@@ -17752,7 +17763,7 @@ function StopFormRow({stop,index,total,onChange,onRemove,onMoveUp,onMoveDown}){
 // ─────────────────────────────────────────────────────────────
 //  CREAR SERVICIO PROPIO — con pasos y geocodificación
 // ─────────────────────────────────────────────────────────────
-function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
+function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,onDcdtSyncWarning=null}){
   const[origen,setOrigen]=useState("");
   const[destino,setDestino]=useState("");
   const[ref,setRef]=useState("");
@@ -17843,6 +17854,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado}){
         empresaId:sv.empresa_id,
         servicio:sv,
         logTag:"CrearServicioModal",
+        onWarning:onDcdtSyncWarning,
       });
       const referenciaBoot=await traceServiceCreateStep(
         "PATCH servicios.bootstrap",
@@ -18757,7 +18769,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         <button onClick={()=>setCreando(true)} style={{width:"100%",background:"#2563EB",color:"#FFFFFF",border:"none",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer"}}>Crear servicio</button>
         )}
       </div>
-      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </div>
   );
 
@@ -18768,7 +18780,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         {canCreateServices&&(
         <button onClick={()=>setCreando(true)} style={{width:"100%",marginTop:14,background:"#16a34a",color:"#FFFFFF",border:"1px solid #86efac",borderRadius:13,padding:"14px",fontSize:15,fontWeight:750,cursor:"pointer",boxShadow:"0 2px 6px rgba(22,163,74,.2)"}}>+ Nuevo servicio</button>
         )}
-        {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+        {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
       </div>
     );
   }
@@ -18810,7 +18822,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         onFinalizarParticipacion={finalizarParticipacion}
         conductorUid={uid}
       />
-      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
+      {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>
     );
   }

@@ -102,6 +102,7 @@ export function EmpresaEditarServicioModal({
   onClose,
   onApplied,
   onNotifyAssignment,
+  onDcdtSyncWarning = null,
 }) {
   const mode = servicio ? servicioAdminEditMode(servicio.estado) : null;
   const canEditResponsable =
@@ -353,8 +354,13 @@ export function EmpresaEditarServicioModal({
             servicio,
           });
         } catch (syncErr) {
-          console.error("[DCDT sync] editar-servicio", syncErr?.message || syncErr);
-          throw syncErr;
+          const message = syncErr?.message || String(syncErr);
+          console.error("[DCDT sync] editar-servicio", message);
+          onDcdtSyncWarning?.(
+            "El servicio se guardó, pero no se sincronizaron todos los DeCA. " +
+              "Ábrelo desde el modal DeCA para reparar." +
+              (message ? ` (${message})` : ""),
+          );
         }
       }
 
