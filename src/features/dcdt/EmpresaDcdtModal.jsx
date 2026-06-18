@@ -315,6 +315,7 @@ export function EmpresaDcdtModal({
           servicio: servicioRef.current,
           stops: normalizedStops,
         });
+        console.error("[DCDT sync] EmpresaDcdtModal open sync done", { servicioId: servicio.id });
         if (cancelled) return;
 
         const rows = await fetchAllDcdtByServicio(servicio.id);
@@ -866,7 +867,7 @@ export function EmpresaDcdtModal({
                     DeCA no generado antes del inicio del servicio — generar ahora
                   </div>
                   <div style={{ fontSize: 11, color: "#991b1b", marginTop: 6, lineHeight: 1.45 }}>
-                    El servicio ya está en curso o ha alcanzado su fecha de inicio sin PDF DeCA.
+                    La fecha planificada de inicio ya pasó y aún no hay PDF DeCA generado.
                     Genera el documento cuanto antes; la validación de tráfico puede completarse después.
                   </div>
                 </div>

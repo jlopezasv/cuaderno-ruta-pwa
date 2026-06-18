@@ -22,18 +22,31 @@ export function hasDecaPdfGenerado(dcdt) {
   return hasStorage && (dcdt.pdfGeneradoAt || dcdt.datos?.pdf_generado_en || hasPublicDeCa);
 }
 
+const ESTADOS_PLANIFICADOS = new Set(["pendiente_asignacion", "asignado", "planificado"]);
+
+/** Solo `servicios.fecha_inicio` (columna planificada), nunca meta operacional en referencia. */
+export function resolveServicioFechaInicioMs(servicio) {
+  const raw = servicio?.fecha_inicio;
+  if (!raw) return null;
+  const ms = Date.parse(String(raw));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+export function isServicioFechaInicioPlanificadaPasada(servicio, nowMs = Date.now()) {
+  const fiMs = resolveServicioFechaInicioMs(servicio);
+  return fiMs != null && fiMs <= nowMs;
+}
+
 export function isServicioInicioEfectivoAlcanzado(servicio, nowMs = Date.now()) {
   if (!servicio) return false;
   const estado = String(servicio.estado || "").toLowerCase();
-  if (ESTADOS_INICIADO.has(estado)) return true;
 
-  const fechaInicio = servicio.fecha_inicio;
-  if (fechaInicio) {
-    const fiMs = Date.parse(String(fechaInicio));
-    if (Number.isFinite(fiMs) && fiMs <= nowMs) return true;
+  if (ESTADOS_PLANIFICADOS.has(estado)) {
+    return isServicioFechaInicioPlanificadaPasada(servicio, nowMs);
   }
 
-  return false;
+  if (ESTADOS_INICIADO.has(estado)) return true;
+  return isServicioFechaInicioPlanificadaPasada(servicio, nowMs);
 }
 
 /** ISO del inicio efectivo (para logs / flag deca_pre_start_gap). */
@@ -57,10 +70,20 @@ export function resolveServicioInicioEfectivoAt(servicio, nowMs = Date.now()) {
   return null;
 }
 
-export function shouldWarnDecaMissingBeforeStart({ servicio, dcdt }) {
+export function shouldWarnDecaMissingBeforeStart({ servicio, dcdt, nowMs = Date.now() }) {
   if (!servicio?.id || !dcdt) return false;
-  if (!isServicioInicioEfectivoAlcanzado(servicio)) return false;
-  return !hasDecaPdfGenerado(dcdt);
+  if (hasDecaPdfGenerado(dcdt)) return false;
+
+  const estado = String(servicio.estado || "").toLowerCase();
+  const fiMs = resolveServicioFechaInicioMs(servicio);
+
+  // Servicio recién planificado: solo avisar si la fecha planificada ya pasó.
+  if (ESTADOS_PLANIFICADOS.has(estado)) {
+    return fiMs != null && fiMs <= nowMs;
+  }
+
+  if (ESTADOS_INICIADO.has(estado)) return true;
+  return fiMs != null && fiMs <= nowMs;
 }
 
 export function buildDecaPreStartGapMeta(servicio) {

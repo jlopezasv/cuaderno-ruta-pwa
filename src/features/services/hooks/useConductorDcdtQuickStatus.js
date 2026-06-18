@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ensureDcdtForServicio, fetchDcdtByServicio } from "../../../domain/dcdt/dcdtModel.js";
+import { fetchAllDcdtByServicio, fetchDcdtByServicio } from "../../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../../domain/dcdt/dcdtReadiness.js";
 
 /** @typedef {"validated"|"incomplete"|"none"} DcdtQuickVisual */
@@ -34,10 +34,8 @@ export function useConductorDcdtQuickStatus({
     }
     setLoading(true);
     try {
-      const [row, ctx] = await Promise.all([
-        fetchDcdtByServicio(servicio.id).then(
-          (r) => r || ensureDcdtForServicio({ servicioId: servicio.id, empresaId, stops }),
-        ),
+      const [rows, ctx] = await Promise.all([
+        fetchAllDcdtByServicio(servicio.id).then((all) => all[0] || fetchDcdtByServicio(servicio.id)),
         fetchDcdtResolveContext({
           servicio,
           stops,
@@ -46,7 +44,7 @@ export function useConductorDcdtQuickStatus({
         }),
       ]);
       setResolveCtx(ctx);
-      setDcdt(row);
+      setDcdt(rows);
     } catch {
       setDcdt(null);
     } finally {

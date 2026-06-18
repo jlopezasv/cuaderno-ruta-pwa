@@ -652,6 +652,14 @@ export async function createDcdtForServicioCargador({
 }) {
   const datos = syncParteIdsFromStops(emptyDatos(), stops, { cargadorId });
   datos.mercancia = mercanciaDatosFromCargaStops(stops, cargadorId);
+  console.error("[DCDT sync] createDcdtForServicioCargador payload", {
+    servicioId,
+    empresaId,
+    cargadorId,
+    partes: datos.partes,
+    mercancia: datos.mercancia,
+    stopBindings: datos.stops?.length ?? 0,
+  });
   const r = await dcdtRequest("", {
     method: "POST",
     headers: { Prefer: "return=representation" },
@@ -664,7 +672,7 @@ export async function createDcdtForServicioCargador({
   });
   if (!r.ok) {
     const body = await r.text().catch(() => "");
-    console.error("[DCDT create] createDcdtForServicioCargador POST failed", {
+    console.error("[DCDT sync] createDcdtForServicioCargador POST failed", {
       status: r.status,
       statusText: r.statusText,
       servicioId,
@@ -674,7 +682,14 @@ export async function createDcdtForServicioCargador({
     throw new Error(body || `No se pudo crear ${DECA_SHORT_LABEL} (HTTP ${r.status})`);
   }
   const rows = await r.json();
-  return rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+  const row = rowToDcdt(Array.isArray(rows) ? rows[0] : null);
+  console.error("[DCDT sync] createDcdtForServicioCargador OK", {
+    servicioId,
+    dcdtId: row?.id,
+    cargador_id: row?.datos?.partes?.cargador_id ?? null,
+    mercancia: row?.datos?.mercancia ?? null,
+  });
+  return row;
 }
 
 /** Solo si fecha_inicio_efectivo sigue NULL (inmutable tras fijarse). */

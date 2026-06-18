@@ -32,6 +32,21 @@ import { mercanciaDatosFromCargaStops } from "./stopMercanciaMeta.js";
 
 const UNASSIGNED_KEY = "__unassigned__";
 
+function logSyncStep(step, payload) {
+  console.error(`[DCDT sync] ${step}`, payload);
+}
+
+function stopCargadorDebug(stop) {
+  const meta = getStopOperacionMeta(stop?.notas);
+  return {
+    id: stop?.id ?? null,
+    orden: stop?.orden ?? null,
+    tipo: stop?.tipo ?? null,
+    parte_transporte_id: stop?.parte_transporte_id || meta?.parte_transporte_id || null,
+    mercancia: meta?.mercancia ?? stop?.mercancia ?? null,
+  };
+}
+
 function isCargaStop(stop) {
   return isCargaStopTipo(stop);
 }
@@ -153,36 +168,110 @@ export async function syncDcdtServiciosAfterStopsPersisted({
   servicio = null,
   stops = null,
 }) {
-  if (!servicioId || !empresaId) return { synced: 0, dcdtIds: [], ungrouped: 0 };
+  logSyncStep("STEP 1 enter syncDcdtServiciosAfterStopsPersisted", {
+    servicioId,
+    empresaId,
+    stopsPassed: Array.isArray(stops) ? stops.length : 0,
+  });
 
-  const stopRows = Array.isArray(stops) && stops.length ? sortStops(stops) : await fetchPersistedStops(servicioId);
-  if (!stopRows.length) return { synced: 0, dcdtIds: [], ungrouped: 0 };
+  if (!servicioId || !empresaId) {
+    logSyncStep("STEP 1 ABORT missing servicioId or empresaId", { servicioId, empresaId });
+    return { synced: 0, dcdtIds: [], ungrouped: 0 };
+  }
+
+  const stopRows =
+    Array.isArray(stops) && stops.length ? sortStops(stops) : await fetchPersistedStops(servicioId);
+
+  logSyncStep("STEP 2 stopRows resolved", {
+    servicioId,
+    count: stopRows.length,
+    cargadores: stopRows.map(stopCargadorDebug),
+  });
+
+  if (!stopRows.length) {
+    logSyncStep("STEP 2 ABORT no stops", { servicioId });
+    return { synced: 0, dcdtIds: [], ungrouped: 0 };
+  }
+
+  const cargaGrouping = groupCargaStopsByCargador(servicioId, stopRows);
+  logSyncStep("STEP 3 carga groups", {
+    servicioId,
+    group_count: cargaGrouping.group_count,
+    groups: cargaGrouping.groups?.map((g) => ({
+      cargador_id: g.cargador_id,
+      stop_count: g.stop_count,
+    })),
+    ungrouped_carga: cargaGrouping.ungrouped_carga_stops?.length ?? 0,
+  });
 
   const segments = buildStopsByCargadorSegment(stopRows);
   const ungroupedCount = (segments.get(UNASSIGNED_KEY) || []).length;
 
   const targets = resolveSyncTargets(stopRows);
+  logSyncStep("STEP 4 sync targets", {
+    servicioId,
+    targetCount: targets.length,
+    targets: targets.map((t) => ({
+      cargadorId: t.cargadorId,
+      stopCount: t.stops?.length ?? 0,
+      stopIds: (t.stops || []).map((s) => s.id).filter(Boolean),
+    })),
+    ungrouped_descargas: ungroupedCount,
+  });
+
   let existing = await fetchAllDcdtByServicio(servicioId);
+  logSyncStep("STEP 5 existing dcdt rows", {
+    servicioId,
+    count: existing.length,
+    rows: existing.map((r) => ({
+      id: r.id,
+      cargador_id: r?.datos?.partes?.cargador_id ?? null,
+      mercancia: r?.datos?.mercancia ?? null,
+    })),
+  });
+
   const legacyPool = existing.filter((r) => !dcdtCargadorId(r));
   const touchedIds = [];
 
   for (const target of targets) {
     let row = findDcdtForCargador(existing, target.cargadorId, legacyPool);
     if (!row) {
+      logSyncStep("STEP 6a createDcdtForServicioCargador", {
+        servicioId,
+        cargadorId: target.cargadorId,
+        stopCount: target.stops?.length ?? 0,
+      });
       row = await createDcdtForServicioCargador({
         servicioId,
         empresaId,
         cargadorId: target.cargadorId,
         stops: target.stops,
       });
+      logSyncStep("STEP 6a created", {
+        servicioId,
+        dcdtId: row?.id,
+        cargador_id: row?.datos?.partes?.cargador_id ?? null,
+        mercancia: row?.datos?.mercancia ?? null,
+      });
       existing = [...existing, row];
     } else {
+      logSyncStep("STEP 6b update existing dcdt", {
+        servicioId,
+        dcdtId: row.id,
+        cargadorId: target.cargadorId,
+      });
       const syncedDatos = syncParteIdsFromStops(row.datos, target.stops, {
         cargadorId: target.cargadorId,
       });
       syncedDatos.mercancia = mercanciaDatosFromCargaStops(target.stops, target.cargadorId);
       syncedDatos.stops = syncedDatos.stops || [];
       row = await saveDcdtDatos(row.id, syncedDatos, row.estado, { skipPdfStale: true });
+      logSyncStep("STEP 6b updated", {
+        servicioId,
+        dcdtId: row?.id,
+        cargador_id: row?.datos?.partes?.cargador_id ?? null,
+        mercancia: row?.datos?.mercancia ?? null,
+      });
     }
 
     touchedIds.push(row.id);
@@ -195,25 +284,29 @@ export async function syncDcdtServiciosAfterStopsPersisted({
       dcdt: row,
       servicio: servicio || { id: servicioId, empresa_id: empresaId },
       stops: target.stops,
+      cargadorId: target.cargadorId,
       flotaEvs: {},
       empresa: null,
       conductor: null,
       masterById: {},
     }).catch((e) => {
-      if (isDemoApp()) console.warn("[DCDT sync] persistDcdtPartesFromStops", e?.message || e);
+      console.error("[DCDT sync] STEP 7 persistDcdtPartesFromStops failed", {
+        servicioId,
+        dcdtId: row?.id,
+        cargadorId: target.cargadorId,
+        message: e?.message || String(e),
+      });
     });
   }
 
-  if (isDemoApp()) {
-    console.log("[DCDT sync] after stops", {
-      servicio_id: servicioId,
-      group_count: targets.length,
-      dcdt_ids: touchedIds,
-      cargadores: targets.map((t) => t.cargadorId),
-      ungrouped_descargas: ungroupedCount,
-      cargadores_distintos: collectDistinctCargadorIdsFromStops(stopRows).length,
-    });
-  }
+  logSyncStep("STEP 8 sync complete", {
+    servicio_id: servicioId,
+    group_count: targets.length,
+    dcdt_ids: touchedIds,
+    cargadores: targets.map((t) => t.cargadorId),
+    ungrouped_descargas: ungroupedCount,
+    cargadores_distintos: collectDistinctCargadorIdsFromStops(stopRows).length,
+  });
 
   return { synced: touchedIds.length, dcdtIds: touchedIds, ungrouped: ungroupedCount };
 }

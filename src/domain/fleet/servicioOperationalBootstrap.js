@@ -5,7 +5,6 @@ import { formatOperationalEtaLabel } from "../service/etaFormatter.js";
 import {
   getOperationalPlanConfirmedAt,
   getOperationalPlanSnapshot,
-  getOperationalTripStartedAt,
   mergeReferenciaOperacional,
 } from "../service/serviceOperacionMeta.js";
 
@@ -157,10 +156,8 @@ export async function bootstrapOperationalFlowOnConductorAssign({
     conductor_assigned_label: conductorNombre ? String(conductorNombre).trim() : null,
   };
 
-  if (!getOperationalTripStartedAt(servicio)) {
-    metaPatch.operational_trip_started_at =
-      fechaInicio || servicio.fecha_inicio || assignedAt;
-  }
+  // No fijar inicio operacional en asignación: el viaje aún no arrancó (usa servicios.fecha_inicio).
+  // operational_trip_started_at se persiste al iniciar la conducción operacional (PR-30).
 
   const existingPlan = getOperationalPlanSnapshot(servicio);
   if (!planReadyForFlota(existingPlan)) {

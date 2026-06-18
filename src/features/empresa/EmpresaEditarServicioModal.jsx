@@ -352,6 +352,7 @@ export function EmpresaEditarServicioModal({
             servicioId: servicio.id,
             empresaId: servicio.empresa_id,
             servicio,
+            stops: stopsResult.rows?.length ? stopsResult.rows : stopsPayload,
           });
         } catch (syncErr) {
           const message = syncErr?.message || String(syncErr);
