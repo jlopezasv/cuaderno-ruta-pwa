@@ -2,6 +2,7 @@ import { formatStorageBytes } from "./operationalDocumentPipeline.js";
 import { docMetaV2StorageFields, storageUploadUrl, traceMediaV2DocMeta } from "./mediaStorageV2.js";
 import { isOperationalDocTraceEnabled, traceOperationalDoc } from "./operationalDocumentTrace.js";
 import { operationalGroupFromStopTipo } from "../service/tripOperationalDossier.js";
+import { DECA_SHORT_LABEL } from "../dcdt/decaBranding.js";
 
 /** Lectura legacy (filas antiguas). Escritura nueva: {@link DOC_META_SCHEMA_V2}. */
 export const DOC_META_SCHEMA = 1;
@@ -105,6 +106,7 @@ function tipoHeadline(tipo, meta, ev) {
   if (tipo === "foto") return `Foto ${stopKindLabel({ tipo: meta?.stop_tipo })}`;
   if (tipo === "incidencia") return `Incidencia · ${meta?.ciudad || "operativa"}`;
   if (ev?.datos?.num_cmr) return `CMR ${ev.datos.num_cmr}`;
+  if (tipo === "dcdt") return DECA_SHORT_LABEL;
   return (tipo || "documento").toUpperCase();
 }
 
@@ -217,9 +219,11 @@ export function enrichEvidenciaDisplay(ev, { stop = null, conductorName = null }
   const sizeBytes = meta?.size_preview_bytes ?? meta?.size_bytes ?? null;
   const mime = meta?.mime_type || (ev?.url?.includes(".pdf") ? "application/pdf" : "image/jpeg");
 
-  const title = meta?.display_name
-    ? meta.display_name.replace(/_/g, " · ").replace(/\s+/g, " ").trim()
-    : tipoHeadline(tipo, { ...meta, stop_tipo: stop?.tipo, ciudad: meta?.ciudad || stop?.nombre }, ev);
+  const title =
+    ev?.displayTitle ||
+    (meta?.display_name
+      ? meta.display_name.replace(/_/g, " · ").replace(/\s+/g, " ").trim()
+      : tipoHeadline(tipo, { ...meta, stop_tipo: stop?.tipo, ciudad: meta?.ciudad || stop?.nombre }, ev));
 
   const subtitleParts = [
     dateLabel,
