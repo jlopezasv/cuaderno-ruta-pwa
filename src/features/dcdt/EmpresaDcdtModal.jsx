@@ -465,6 +465,8 @@ export function EmpresaDcdtModal({
   const pdfStale = readiness.pdfStale;
   const demoRutaSurface = isDecaRouteModificationDemoSurface();
   const puedeModificarEnRuta = demoRutaSurface && canModificarDecaEnRuta({ servicio, dcdt });
+  const puedeEditarMercanciaSimple =
+    !readiness.hasPdfStorage && !isDcdtEstadoValidated(dcdt?.estado);
   const rutaModBlockedReason =
     !puedeModificarEnRuta && dcdt?.id
       ? getModificarEnRutaBlockedReason({ servicio, dcdt, demoSurface: demoRutaSurface })
@@ -1061,6 +1063,8 @@ export function EmpresaDcdtModal({
                 </div>
               ) : null}
 
+              {puedeEditarMercanciaSimple ? (
+                <>
               <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, margin: "14px 0 6px" }}>MERCANCÍA (tráfico / OCR)</div>
               <div style={MERC_LBL}>Naturaleza de la mercancía</div>
               <input
@@ -1101,6 +1105,8 @@ export function EmpresaDcdtModal({
               <button type="button" disabled={busy === "save"} onClick={guardarMercancia} style={{ fontSize: 11, fontWeight: 700, marginBottom: 12, cursor: "pointer" }}>
                 Guardar mercancía
               </button>
+                </>
+              ) : null}
             </>
           )}
         </div>
