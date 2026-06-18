@@ -748,6 +748,20 @@ export function buildServiceExpediente({
   }
 
   sortOperationalIntegrityRecords(integrityRecords);
+
+  const integrityDebug = buildIntegrityDebugSnapshot({
+    servicio,
+    stopRows,
+    evidenciasWithExtra: evidencias,
+    extraDocumentos,
+    entries,
+    integrityRecords,
+    ref,
+  });
+  if (isDemoApp() || import.meta.env.DEV) {
+    publishIntegrityDebug(integrityDebug);
+  }
+
   const chronologyConsistent = integrityRecords.every((row, idx, arr) => idx === 0 || parseTs(row.timestamp_utc) >= parseTs(arr[idx - 1].timestamp_utc));
   const geoAvailable = integrityRecords.some((row) => !!row.location_label);
   const integrity = {
@@ -758,6 +772,7 @@ export function buildServiceExpediente({
     timestampsVerified: integrityRecords.every((row) => Number.isFinite(parseTs(row.timestamp_utc))),
     geoAvailable,
     records: integrityRecords,
+    debug: isDemoApp() || import.meta.env.DEV ? integrityDebug : undefined,
   };
 
   const fechaDocumento = servicio?.fecha_inicio || servicio?.created_at || new Date().toISOString();
@@ -969,6 +984,131 @@ export function summarizeExpedienteIntegrityByType(expediente) {
       .sort((a, b) => b[1] - a[1])
       .map(([type, count]) => ({ type, count })),
   };
+}
+
+function countTacografoEntriesInWindow(entries, window) {
+  let n = 0;
+  for (const entry of entries || []) {
+    const ms = parseTs(entry.ts);
+    if (ms == null || !importantEntry(entry.type)) continue;
+    if (window.start != null && ms < window.start) continue;
+    if (window.end != null && ms > window.end) continue;
+    n += 1;
+  }
+  return n;
+}
+
+/** Snapshot de inputs/outputs de integrityRecords (depuración demo). */
+export function buildIntegrityDebugSnapshot({
+  servicio,
+  stopRows,
+  evidenciasWithExtra,
+  extraDocumentos,
+  entries,
+  integrityRecords,
+  ref,
+}) {
+  const stopEvidenciasOnly = stopRows.flatMap((st) => st.evidencias || []);
+  const windowApp = serviceWindow(servicio, stopRows, evidenciasWithExtra);
+  const windowOpsOnly = serviceWindow(servicio, stopRows, stopEvidenciasOnly);
+
+  const byType = {};
+  const byOrigin = {};
+  for (const row of integrityRecords || []) {
+    const t = String(row.type || "unknown");
+    byType[t] = (byType[t] || 0) + 1;
+    const o = String(row.origin || "unknown");
+    byOrigin[o] = (byOrigin[o] || 0) + 1;
+  }
+
+  const extraTs = (extraDocumentos || [])
+    .map((d) => parseTs(d?.created_at))
+    .filter((v) => v != null);
+  const tacografoByType = {};
+  for (const row of integrityRecords || []) {
+    if (!String(row.type || "").startsWith("tacografo_")) continue;
+    tacografoByType[row.type] = (tacografoByType[row.type] || 0) + 1;
+  }
+
+  return {
+    servicioId: servicio?.id || null,
+    ref: ref || null,
+    estado: servicio?.estado || null,
+    total: integrityRecords?.length || 0,
+    byType,
+    byOrigin,
+    tacografoByType,
+    windowApp: {
+      start: windowApp.start != null ? new Date(windowApp.start).toISOString() : null,
+      end: windowApp.end != null ? new Date(windowApp.end).toISOString() : null,
+      endSource:
+        servicio?.estado === "completado" || servicio?.estado === "anulado"
+          ? "max(operativa + docs extra)"
+          : "Date.now()",
+    },
+    windowOpsOnly: {
+      start: windowOpsOnly.start != null ? new Date(windowOpsOnly.start).toISOString() : null,
+      end: windowOpsOnly.end != null ? new Date(windowOpsOnly.end).toISOString() : null,
+      endSource: "max(solo paradas/evidencias parada)",
+    },
+    tacografoInAppWindow: countTacografoEntriesInWindow(entries, windowApp),
+    tacografoInOpsWindow: countTacografoEntriesInWindow(entries, windowOpsOnly),
+    tacografoExtraFromExtendedWindow:
+      countTacografoEntriesInWindow(entries, windowApp) -
+      countTacografoEntriesInWindow(entries, windowOpsOnly),
+    stopsCount: stopRows.length,
+    stopsMuelle: stopRows.map((st) => ({
+      id: st.id,
+      label: st.label,
+      tipo: st.tipo,
+      entrada: !!st.entrada,
+      salida: !!st.salida,
+      evidencias: (st.evidencias || []).length,
+      evidenciaTipos: (st.evidencias || []).map((ev) => ev.tipo),
+    })),
+    extraDocumentosCount: (extraDocumentos || []).length,
+    extraDocumentosLatest:
+      extraTs.length > 0 ? new Date(Math.max(...extraTs)).toISOString() : null,
+    entriesLoaded: (entries || []).length,
+    records: (integrityRecords || []).map((r) => ({
+      type: r.type,
+      origin: r.origin,
+      stop_id: r.stop_id,
+      timestamp_utc: r.timestamp_utc,
+    })),
+  };
+}
+
+function publishIntegrityDebug(snapshot) {
+  if (!snapshot) return;
+  try {
+    console.group(`[EXPEDIENTE integrity] ${snapshot.ref || snapshot.servicioId} → ${snapshot.total} eventos`);
+    console.table(
+      Object.entries(snapshot.byType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([type, count]) => ({ type, count })),
+    );
+    console.log("byOrigin", snapshot.byOrigin);
+    console.log("windowApp", snapshot.windowApp);
+    console.log("windowOpsOnly", snapshot.windowOpsOnly);
+    console.log("tacografo", {
+      app: snapshot.tacografoInAppWindow,
+      opsOnly: snapshot.tacografoInOpsWindow,
+      extraFromExtendedWindow: snapshot.tacografoExtraFromExtendedWindow,
+    });
+    console.log("stopsMuelle", snapshot.stopsMuelle);
+    console.log("extraDocumentos", {
+      count: snapshot.extraDocumentosCount,
+      latest: snapshot.extraDocumentosLatest,
+    });
+    console.groupEnd();
+    if (typeof window !== "undefined") {
+      window.__expedienteIntegrityDebug = snapshot;
+      window.__expedienteIntegrityByType = snapshot.byType;
+    }
+  } catch {
+    /* no bloquear expediente */
+  }
 }
 
 function expedienteEvidenceIsImageLike(ev) {
