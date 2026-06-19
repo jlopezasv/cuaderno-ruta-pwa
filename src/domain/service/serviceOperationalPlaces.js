@@ -144,6 +144,32 @@ export function routePointTextFromStop(stop) {
   return routePointTextFromPlace(pickPlaceFromStop(stop));
 }
 
+/**
+ * Línea de lugar para tarjetas conductor: "Empresa · Ciudad" o solo ciudad.
+ * Usa empresa de la parada (meta/notas) y fallback a carga_empresa/descarga_empresa del servicio.
+ */
+export function formatStopLugarDisplay(stop, servicio = null, allStops = null) {
+  const place = pickPlaceFromStop(stop);
+  let empresa = place.empresa;
+  const ciudad = String(place.nombre || "").trim();
+  if (!empresa && servicio) {
+    const places = getServiceOperationalPlaces(servicio, allStops);
+    const t = String(stop?.tipo || "").toLowerCase();
+    if (/\bcarga\b/.test(t) && !/\bdescarga\b/.test(t)) {
+      empresa = places.carga_empresa;
+    } else if (/\bdescarga\b/.test(t)) {
+      empresa = places.descarga_empresa;
+    }
+  }
+  empresa = String(empresa || "").trim();
+  const empKey = empresa.toLowerCase();
+  const cityKey = ciudad.toLowerCase();
+  if (empresa && ciudad && empKey !== cityKey && !cityKey.includes(empKey)) {
+    return `${empresa} · ${ciudad}`;
+  }
+  return ciudad || empresa || "—";
+}
+
 function placeFromLegacyColumn(value) {
   const t = String(value || "").trim();
   if (!t) return { nombre: "", direccion: "" };

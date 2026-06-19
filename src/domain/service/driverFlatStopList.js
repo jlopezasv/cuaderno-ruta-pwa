@@ -12,9 +12,32 @@ import {
   sortDriverOperationalCandidates,
 } from "./driverServiceQueue.js";
 import { getServiceNumberForDisplay } from "./serviceIdentity.js";
-import { getStopOperacionMeta } from "./stopOperacionMeta.js";
+import { formatStopLugarDisplay } from "./serviceOperationalPlaces.js";
 
 const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR = "en_curso,asignado,completado,pendiente_asignacion";
+
+/** Paleta estable por conductor_id (mismo conductor = mismo color en toda la sesión). */
+const TRIP_VISUAL_PALETTE = [
+  { stripe: "#2563eb", chipBg: "#dbeafe", chipFg: "#1e40af" },
+  { stripe: "#7c3aed", chipBg: "#ede9fe", chipFg: "#5b21b6" },
+  { stripe: "#059669", chipBg: "#d1fae5", chipFg: "#047857" },
+  { stripe: "#d97706", chipBg: "#fef3c7", chipFg: "#b45309" },
+  { stripe: "#db2777", chipBg: "#fce7f3", chipFg: "#be185d" },
+  { stripe: "#0891b2", chipBg: "#cffafe", chipFg: "#0e7490" },
+];
+
+export function tripVisualForConductor(conductorId, conductorName = "") {
+  if (!conductorId) {
+    return { stripe: "#94a3b8", chipBg: "#f1f5f9", chipFg: "#475569", initial: "?" };
+  }
+  let h = 0;
+  for (let i = 0; i < conductorId.length; i++) {
+    h = (h * 31 + conductorId.charCodeAt(i)) >>> 0;
+  }
+  const base = TRIP_VISUAL_PALETTE[h % TRIP_VISUAL_PALETTE.length];
+  const initial = String(conductorName || "").trim().charAt(0).toUpperCase() || "?";
+  return { ...base, initial, conductorId };
+}
 
 export async function fetchDriverOperationalCandidates(uid) {
   if (!uid) return { candidates: [], assignedAtById: {}, participacionBySvId: {}, participacionTipoBySvId: {} };
@@ -137,10 +160,7 @@ export function tripLabelForServicio(servicio, conductorNameById = {}) {
 
 export function buildFlatStopCardLabel(stop, servicio, conductorNameById = {}) {
   const tipo = labelForStopType(stop);
-  const lugar =
-    String(stop?.nombre || "").trim() ||
-    String(getStopOperacionMeta(stop?.notas)?.empresa_logistica || "").trim() ||
-    "Sin lugar";
+  const lugar = formatStopLugarDisplay(stop, servicio);
   const viaje = tripLabelForServicio(servicio, conductorNameById);
   return `${tipo} · ${lugar} · ${viaje}`;
 }
@@ -166,9 +186,13 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
     const stops = await fetchStopsForServicioId(sv.id);
     const sortedStops = [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
     const assignmentMs = driverQueueAssignmentTimeMs(sv, assignedAtById);
+    const cid = sv?.conductor_id || null;
+    const conductorNombre = cid ? conductorNameById[cid] || null : null;
+    const tripVisual = tripVisualForConductor(cid, conductorNombre);
     for (const stop of sortedStops) {
       if (isStopOperationallyComplete(stop)) continue;
       if (filterByParticipacionTipo && !stopMatchesParticipacionTipo(stop, participacionTipo)) continue;
+      const lugarDisplay = formatStopLugarDisplay(stop, sv, sortedStops);
       items.push({
         servicio: sv,
         stop,
@@ -177,10 +201,11 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
         cardLabel: buildFlatStopCardLabel(stop, sv, conductorNameById),
         tripLabel: tripLabelForServicio(sv, conductorNameById),
         tipoLabel: labelForStopType(stop),
-        lugar:
-          String(stop?.nombre || "").trim() ||
-          String(getStopOperacionMeta(stop?.notas)?.empresa_logistica || "").trim() ||
-          "—",
+        lugar: lugarDisplay,
+        lugarDisplay,
+        conductorId: cid,
+        conductorNombre,
+        tripVisual,
       });
     }
   }

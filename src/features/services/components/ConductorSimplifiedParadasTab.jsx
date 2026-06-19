@@ -89,6 +89,7 @@ export function ConductorSimplifiedParadasTab({
   const [finalizarSavingId, setFinalizarSavingId] = useState(null);
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
   const [chatModalOpen, setChatModalOpen] = useState(false);
+  const [detailReadOnly, setDetailReadOnly] = useState(false);
   const muelleGpsRef = useRef(null);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -115,10 +116,11 @@ export function ConductorSimplifiedParadasTab({
     enabled: !!active && showChatQuick && !!detailServicio?.id,
   });
 
-  const openItem = useCallback((item) => {
+  const openItem = useCallback((item, { readOnly = false } = {}) => {
     setActive(item);
     setLocalServicio(item.servicio);
     setLocalStops(item.stops);
+    setDetailReadOnly(!!readOnly);
   }, []);
 
   const closeDetail = useCallback(() => {
@@ -128,6 +130,7 @@ export function ConductorSimplifiedParadasTab({
     setConfirmMuelle(null);
     setDcdtModalOpen(false);
     setChatModalOpen(false);
+    setDetailReadOnly(false);
     void reload();
   }, [reload]);
 
@@ -170,7 +173,9 @@ export function ConductorSimplifiedParadasTab({
   }, [timelineItems]);
 
   const canOperate =
-    localServicio?.estado === "en_curso" && !isStopOperationallyComplete(active?.stop);
+    !detailReadOnly &&
+    localServicio?.estado === "en_curso" &&
+    !isStopOperationallyComplete(active?.stop);
 
   const handleEvidenciaSaved = useCallback((ev) => {
     const stopId = ev?.stop_id;
@@ -250,7 +255,8 @@ export function ConductorSimplifiedParadasTab({
 
   if (active && timelineItem) {
     const servicioNoIniciado = localServicio?.estado === "asignado" || !localServicio?.fecha_inicio;
-    const lugarTitulo = active.lugar || timelineItem.label || "Parada";
+    const lugarTitulo = active.lugarDisplay || active.lugar || timelineItem.label || "Parada";
+    const tripVis = active.tripVisual;
     return (
       <div style={{ padding: "0 0 88px", background: PAGE, minHeight: "70vh" }}>
         <div
@@ -261,8 +267,26 @@ export function ConductorSimplifiedParadasTab({
             background: "#fff",
             borderBottom: `1px solid ${DRIVER_UI.line}`,
             padding: "12px 14px 14px",
+            borderLeft: tripVis ? `4px solid ${tripVis.stripe}` : undefined,
           }}
         >
+          {detailReadOnly ? (
+            <div
+              style={{
+                background: "#f0f9ff",
+                border: "1px solid #bae6fd",
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                color: "#0369a1",
+                fontWeight: 600,
+                marginBottom: 10,
+                lineHeight: 1.4,
+              }}
+            >
+              Solo consulta — no registras tiempos hasta que pulses EMPEZAR o CONTINUAR en la lista.
+            </div>
+          ) : null}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: "#b45309", letterSpacing: 0.5, marginBottom: 6 }}>
@@ -319,7 +343,7 @@ export function ConductorSimplifiedParadasTab({
         </div>
 
         <div style={{ padding: "14px" }}>
-          {servicioNoIniciado ? (
+          {servicioNoIniciado && !detailReadOnly ? (
             <div style={{ marginBottom: 12 }}>
               <div
                 style={{
@@ -511,19 +535,36 @@ export function ConductorSimplifiedParadasTab({
           {items.map((item) => {
             const status = flatStopListStatus(item.stop);
             const enMuelle = status.phase === "en_muelle";
+            const vis = item.tripVisual;
+            const ref = getServiceNumberForDisplay(item.servicio);
             return (
             <article
               key={`${item.servicio?.id}-${item.stop?.id}`}
               style={{
+                position: "relative",
                 background: enMuelle ? "#fffbeb" : "#fff",
                 border: `1px solid ${enMuelle ? "#fcd34d" : DRIVER_UI.line}`,
                 borderRadius: 14,
-                padding: "14px",
+                padding: "14px 14px 14px 16px",
                 boxShadow: enMuelle ? "0 2px 10px rgba(180,83,9,.08)" : "0 2px 8px rgba(15,23,42,.04)",
+                overflow: "hidden",
               }}
             >
+              {vis ? (
+                <div
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: 5,
+                    background: vis.stripe,
+                  }}
+                />
+              ) : null}
               <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                <span style={{ fontSize: 24 }} aria-hidden>
+                <span style={{ fontSize: 24, marginLeft: 2 }} aria-hidden>
                   {stopGroupIcon(item.tipoLabel)}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -545,31 +586,87 @@ export function ConductorSimplifiedParadasTab({
                       {status.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginTop: 4, lineHeight: 1.25 }}>
-                    {item.lugar}
+                  <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, marginTop: 5, lineHeight: 1.25 }}>
+                    {item.lugarDisplay || item.lugar}
                   </div>
-                  <div style={{ fontSize: 12, color: DRIVER_UI.su, marginTop: 6, fontWeight: 600 }}>{item.tripLabel}</div>
+                  {vis ? (
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginTop: 8,
+                        background: vis.chipBg,
+                        border: `1px solid ${vis.stripe}33`,
+                        borderRadius: 999,
+                        padding: "4px 10px 4px 4px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: "50%",
+                          background: vis.stripe,
+                          color: "#fff",
+                          fontSize: 11,
+                          fontWeight: 900,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {vis.initial}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: vis.chipFg, lineHeight: 1.2 }}>
+                        {ref}
+                        {item.conductorNombre ? ` · ${item.conductorNombre}` : ""}
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: DRIVER_UI.su, marginTop: 6, fontWeight: 600 }}>{item.tripLabel}</div>
+                  )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => openItem(item)}
-                style={{
-                  width: "100%",
-                  marginTop: 14,
-                  background: enMuelle ? DRIVER_UI.amber : DRIVER_UI.green,
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 12,
-                  padding: "14px",
-                  fontSize: 15,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  letterSpacing: 0.4,
-                }}
-              >
-                {status.actionLabel}
-              </button>
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <button
+                  type="button"
+                  onClick={() => openItem(item, { readOnly: false })}
+                  style={{
+                    flex: 2,
+                    background: enMuelle ? DRIVER_UI.amber : DRIVER_UI.green,
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 12,
+                    padding: "14px 10px",
+                    fontSize: 15,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  {status.actionLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openItem(item, { readOnly: true })}
+                  style={{
+                    flex: 1,
+                    background: "#fff",
+                    color: DRIVER_UI.su,
+                    border: `1px solid ${DRIVER_UI.line}`,
+                    borderRadius: 12,
+                    padding: "14px 8px",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    lineHeight: 1.25,
+                  }}
+                >
+                  Ver detalles
+                </button>
+              </div>
             </article>
             );
           })}
