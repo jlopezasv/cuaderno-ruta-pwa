@@ -1,8 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
-import { getServiceClient, getServiceNumber } from "../../domain/service/serviceIdentity.js";
-import { mergeReferenciaOperacional, getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+import {
+  getServiceClient,
+  getServiceClientReference,
+  getServiceNumber,
+} from "../../domain/service/serviceIdentity.js";
+import {
+  mergeReferenciaOperacional,
+  getServicioOperacionMeta,
+  stripServicioOperacionDisplay,
+} from "../../domain/service/serviceOperacionMeta.js";
 import {
   buildOperationalPlacesMetaPatch,
   operationalPlacesFromStops,
@@ -140,9 +148,12 @@ export function EmpresaEditarServicioModal({
     formInitRef.current = servicio.id;
     stopsLoadedRef.current = null;
     setFechaInicioLocal(servicio.fecha_inicio ? toDTL(servicio.fecha_inicio) : "");
-    setServiceNumber(String(servicio.service_number ?? "").trim());
+    setServiceNumber(
+      stripServicioOperacionDisplay(servicio.referencia || "") ||
+        String(servicio.service_number ?? "").trim(),
+    );
     setCliente(String(getServiceClient(servicio) || "").trim());
-    setRefCliente(String(servicio.referencia_cliente ?? "").trim());
+    setRefCliente(String(getServiceClientReference(servicio) || "").trim());
     setAdminNotas(String(getServicioOperacionMeta(servicio).admin_notas ?? "").trim());
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
     const resp = servicio.responsable_user_id ? servicio.responsable_user_id : "";
@@ -365,25 +376,46 @@ export function EmpresaEditarServicioModal({
         }
       }
 
-      const sn0 = String(servicio.service_number ?? "").trim();
+      const sn0 =
+        stripServicioOperacionDisplay(servicio.referencia || "") ||
+        String(servicio.service_number ?? "").trim();
       const sn1 = String(serviceNumber || "").trim();
+      const cl0 = String(getServiceClient(servicio) || "").trim();
+      const cl1 = String(cliente || "").trim();
+      const rc0 = String(getServiceClientReference(servicio) || "").trim();
+      const rc1 = String(refCliente || "").trim();
+
+      const identityMetaPatch = {};
+      if (cl1 !== cl0) {
+        identityMetaPatch.cliente = cl1 || null;
+        identityMetaPatch.cliente_nombre = cl1 || null;
+      }
+      if (rc1 !== rc0) {
+        identityMetaPatch.referencia_cliente = rc1 || null;
+      }
+
+      const referenciaBeforeIdentity = patch.referencia ?? servicio.referencia ?? "";
+      let referenciaAfterIdentity = referenciaBeforeIdentity;
+
       if (sn1 !== sn0) {
-        patch.service_number = sn1 || null;
+        referenciaAfterIdentity = mergeReferenciaOperacional(
+          sn1,
+          getServicioOperacionMeta(referenciaAfterIdentity),
+        );
         pushAudit("service_number", sn0, sn1);
       }
 
-      const cl0 = String(servicio.cliente ?? "").trim();
-      const cl1 = String(cliente || "").trim();
-      if (cl1 !== cl0) {
-        patch.cliente = cl1 || null;
-        pushAudit("cliente", cl0, cl1);
+      if (Object.keys(identityMetaPatch).length) {
+        referenciaAfterIdentity = mergeReferenciaOperacional(
+          referenciaAfterIdentity,
+          identityMetaPatch,
+        );
+        if (cl1 !== cl0) pushAudit("cliente", cl0, cl1);
+        if (rc1 !== rc0) pushAudit("referencia_cliente", rc0, rc1);
       }
 
-      const rc0 = String(servicio.referencia_cliente ?? "").trim();
-      const rc1 = String(refCliente || "").trim();
-      if (rc1 !== rc0) {
-        patch.referencia_cliente = rc1 || null;
-        pushAudit("referencia_cliente", rc0, rc1);
+      if (referenciaAfterIdentity !== referenciaBeforeIdentity) {
+        patch.referencia = referenciaAfterIdentity;
       }
 
       const prevMeta = getServicioOperacionMeta(servicio).admin_notas;
