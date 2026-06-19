@@ -1,6 +1,7 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { bootstrapOperationalFlowOnConductorAssign } from "./servicioOperationalBootstrap.js";
 import { insertStopsForServicio } from "./servicioStopsInsert.js";
+import { normalizeParticipacionTipo, PARTICIPACION_TIPO } from "./participacionTipo.js";
 
 /** Servicio planificado en empresa, sin chófer aún. */
 export const SERVICIO_ESTADO_PENDIENTE_ASIGNACION = "pendiente_asignacion";
@@ -228,6 +229,7 @@ export async function assignConductorPrincipalToServicio({
     conductor_id: conductorId,
     stop_id: null,
     tipo_asignacion: "principal",
+    participacion_tipo: PARTICIPACION_TIPO.TODO,
   };
 
   await sbFetch("/rest/v1/servicio_asignaciones", {
@@ -267,17 +269,56 @@ export async function fetchServicioConductorIds(servicioId) {
 }
 
 /**
- * Sincroniza los conductores COLABORADORES de un servicio (multi-conductor V1).
- * NO toca el conductor principal (servicios.conductor_id) ni el estado ni la cola FIFO.
- * Inserta filas servicio_asignaciones (tipo 'colaborador') para los nuevos y elimina
- * las filas 'colaborador' que ya no estén seleccionadas.
- * @param {string} servicioId
- * @param {string|null} principalId — conductor principal (nunca se añade/elimina aquí)
- * @param {string[]} colaboradorIds — conductores adicionales deseados
- * @returns {Promise<{added:string[],removed:string[]}>}
+ * Lee participacion_tipo por conductor en un servicio (demo).
+ * @returns {Promise<Record<string,string>>} conductor_id → participacion_tipo
  */
-export async function syncServicioColaboradores(servicioId, principalId, colaboradorIds) {
+export async function fetchParticipacionTipoByConductorForServicio(servicioId) {
+  if (!servicioId) return {};
+  const r = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,participacion_tipo`,
+  );
+  if (!r.ok) return {};
+  const rows = await r.json().catch(() => []);
+  const map = {};
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (row?.conductor_id) map[row.conductor_id] = normalizeParticipacionTipo(row.participacion_tipo);
+  });
+  return map;
+}
+
+/**
+ * @param {string} servicioId
+ * @param {Record<string,string>} participacionTipoByConductorId
+ */
+export async function patchParticipacionTiposForServicio(servicioId, participacionTipoByConductorId = {}) {
+  if (!servicioId) return;
+  const entries = Object.entries(participacionTipoByConductorId || {}).filter(([cid]) => cid);
+  for (const [conductorId, rawTipo] of entries) {
+    const participacion_tipo = normalizeParticipacionTipo(rawTipo);
+    await sbFetch(
+      `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}`,
+      {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ participacion_tipo }),
+      },
+    ).catch(() => {});
+  }
+}
+
+/**
+ * Sincroniza los conductores COLABORADORES de un servicio (multi-conductor V1).
+ * @param {object} [opts]
+ * @param {Record<string,string>} [opts.participacionTipoByConductorId]
+ */
+export async function syncServicioColaboradores(
+  servicioId,
+  principalId,
+  colaboradorIds,
+  opts = {},
+) {
   if (!servicioId) return { added: [], removed: [] };
+  const participacionTipoByConductorId = opts.participacionTipoByConductorId || {};
   const desired = [...new Set((colaboradorIds || []).filter((id) => id && id !== principalId))];
 
   const r = await sbFetch(
@@ -300,6 +341,7 @@ export async function syncServicioColaboradores(servicioId, principalId, colabor
         conductor_id: id,
         stop_id: null,
         tipo_asignacion: "colaborador",
+        participacion_tipo: normalizeParticipacionTipo(participacionTipoByConductorId[id]),
       }),
     }).catch(() => {});
   }

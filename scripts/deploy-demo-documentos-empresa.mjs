@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const migration = resolve(root, "supabase/migrations/20260531140000_servicio_documentos_empresa_demo.sql");
+const migration = resolve(root, "supabase/migrations/20260605180000_servicio_asignaciones_participacion_tipo_demo.sql");
 const skipSql = process.argv.includes("--skip-sql");
 const skipVercel = process.argv.includes("--skip-vercel");
 

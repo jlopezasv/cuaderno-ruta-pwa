@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { asignarConductorEnServicioCreado } from "../../domain/fleet/servicioCreateFlow.js";
 import {
+  fetchParticipacionTipoByConductorForServicio,
   fetchServicioConductorIds,
+  patchParticipacionTiposForServicio,
   syncServicioColaboradores,
 } from "../../domain/fleet/servicioAssignment.js";
+import {
+  normalizeParticipacionTipo,
+  PARTICIPACION_TIPO,
+  PARTICIPACION_TIPO_OPTIONS,
+} from "../../domain/fleet/participacionTipo.js";
 import { getFixedServiceRoute } from "../../domain/service/serviceIdentity.js";
 import {
   buildAsignarConductorPickerRows,
@@ -213,6 +221,8 @@ export function AsignarConductorServicioModal({
   const [selected, setSelected] = useState(() => new Set());
   const [loadingExisting, setLoadingExisting] = useState(true);
   const [pendingConfirm, setPendingConfirm] = useState(null);
+  const [participacionTipoByUid, setParticipacionTipoByUid] = useState({});
+  const demoParticipacionTipo = isDemoApp();
   const { overlayStyle, panelStyle } = useModalLayout();
 
   useEffect(() => {
@@ -263,6 +273,7 @@ export function AsignarConductorServicioModal({
     setLoadingExisting(true);
     setSearch("");
     setPendingConfirm(null);
+    setParticipacionTipoByUid({});
     setSelected(new Set(principalId ? [principalId] : []));
     if (!servicio?.id) {
       setLoadingExisting(false);
@@ -271,13 +282,23 @@ export function AsignarConductorServicioModal({
     (async () => {
       const ids = await fetchServicioConductorIds(servicio.id);
       if (cancelled) return;
-      setSelected(new Set([...(principalId ? [principalId] : []), ...ids]));
+      const allIds = [...new Set([...(principalId ? [principalId] : []), ...ids])];
+      setSelected(new Set(allIds));
+      if (demoParticipacionTipo) {
+        const tipos = await fetchParticipacionTipoByConductorForServicio(servicio.id);
+        if (cancelled) return;
+        const merged = {};
+        allIds.forEach((id) => {
+          merged[id] = tipos[id] || PARTICIPACION_TIPO.TODO;
+        });
+        setParticipacionTipoByUid(merged);
+      }
       setLoadingExisting(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [servicio?.id, principalId]);
+  }, [servicio?.id, principalId, demoParticipacionTipo]);
 
   const toggle = (uid) => {
     if (!uid || uid === principalId || saving) return;
@@ -287,6 +308,20 @@ export function AsignarConductorServicioModal({
       else next.add(uid);
       return next;
     });
+    if (demoParticipacionTipo) {
+      setParticipacionTipoByUid((prev) => {
+        if (prev[uid]) return prev;
+        return { ...prev, [uid]: PARTICIPACION_TIPO.TODO };
+      });
+    }
+  };
+
+  const setParticipacionTipo = (uid, value) => {
+    if (!uid) return;
+    setParticipacionTipoByUid((prev) => ({
+      ...prev,
+      [uid]: normalizeParticipacionTipo(value),
+    }));
   };
 
   const selCount = selected.size;
@@ -319,7 +354,17 @@ export function AsignarConductorServicioModal({
     }
 
     const colaboradorIds = ids.filter((id) => id !== principal);
-    const sync = await syncServicioColaboradores(servicio.id, principal, colaboradorIds);
+    const tipoMap = demoParticipacionTipo
+      ? Object.fromEntries(
+          ids.map((id) => [id, normalizeParticipacionTipo(participacionTipoByUid[id])]),
+        )
+      : {};
+    const sync = await syncServicioColaboradores(servicio.id, principal, colaboradorIds, {
+      participacionTipoByConductorId: tipoMap,
+    });
+    if (demoParticipacionTipo) {
+      await patchParticipacionTiposForServicio(servicio.id, tipoMap);
+    }
     for (const id of sync?.added || []) {
       onNotifyAssignment?.({
         conductorId: id,
@@ -552,8 +597,8 @@ export function AsignarConductorServicioModal({
                   const isPrincipal = row.uid === principalId;
                   const checked = selected.has(row.uid);
                   return (
+                    <div key={row.uid} style={{ marginBottom: 8 }}>
                     <button
-                      key={row.uid}
                       type="button"
                       disabled={busy || isPrincipal}
                       onClick={() => toggle(row.uid)}
@@ -565,13 +610,12 @@ export function AsignarConductorServicioModal({
                         gap: 12,
                         background: checked ? EMPRESA_UI.accentSoft : EMPRESA_UI.surfaceSoft,
                         border: `1px solid ${checked ? "#bfdbfe" : EMPRESA_UI.border}`,
-                        borderRadius: 10,
+                        borderRadius: demoParticipacionTipo && checked ? "10px 10px 0 0" : 10,
                         padding: "12px 14px",
                         fontSize: 14,
                         fontWeight: 700,
                         color: EMPRESA_UI.tx,
                         cursor: busy || isPrincipal ? "default" : "pointer",
-                        marginBottom: 8,
                       }}
                     >
                       <span
@@ -630,6 +674,53 @@ export function AsignarConductorServicioModal({
                         </span>
                       ) : null}
                     </button>
+                    {demoParticipacionTipo && checked ? (
+                      <div
+                        style={{
+                          background: checked ? "#f0f7ff" : EMPRESA_UI.surfaceSoft,
+                          border: `1px solid ${checked ? "#bfdbfe" : EMPRESA_UI.border}`,
+                          borderTop: "none",
+                          borderRadius: "0 0 10px 10px",
+                          padding: "8px 14px 10px",
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "block",
+                            fontSize: 10,
+                            fontWeight: 800,
+                            color: EMPRESA_UI.muted,
+                            letterSpacing: 0.4,
+                            marginBottom: 4,
+                          }}
+                        >
+                          Participa en
+                        </label>
+                        <select
+                          value={participacionTipoByUid[row.uid] || PARTICIPACION_TIPO.TODO}
+                          disabled={busy}
+                          onChange={(e) => setParticipacionTipo(row.uid, e.target.value)}
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            border: `1px solid ${EMPRESA_UI.border}`,
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: EMPRESA_UI.tx,
+                            background: "#fff",
+                          }}
+                        >
+                          {PARTICIPACION_TIPO_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                    </div>
                   );
                 })
               )}
