@@ -17,13 +17,26 @@ function mercanciaFromMetaObject(m) {
   };
 }
 
+function mercanciaHasData(m) {
+  return !!(
+    String(m?.descripcion || "").trim() ||
+    String(m?.peso_kg ?? "").trim() ||
+    String(m?.bultos ?? "").trim() ||
+    String(m?.palets ?? "").trim()
+  );
+}
+
 /** Mercancía embebida en __CUADERNO_OP__.mercancia de una parada. */
 export function getStopMercanciaFromStop(stop) {
   if (!stop) return emptyServicioMercancia();
-  if (stop.mercancia && typeof stop.mercancia === "object") {
-    return mercanciaFromMetaObject(stop.mercancia);
-  }
-  return mercanciaFromMetaObject(getStopOperacionMeta(stop.notas)?.mercancia);
+  const fromField =
+    stop.mercancia && typeof stop.mercancia === "object"
+      ? mercanciaFromMetaObject(stop.mercancia)
+      : emptyServicioMercancia();
+  const fromNotas = mercanciaFromMetaObject(getStopOperacionMeta(stop.notas)?.mercancia);
+  if (mercanciaHasData(fromField)) return fromField;
+  if (mercanciaHasData(fromNotas)) return fromNotas;
+  return fromField;
 }
 
 export function emptyStopMercancia() {

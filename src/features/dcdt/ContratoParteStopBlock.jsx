@@ -112,7 +112,7 @@ export function ContratoParteStopBlock({
   const theme = themeKey === "dark" ? { ...UI, bg: "#0f172a", tx: "#f1f5f9", card: "#1e293b" } : UI;
   const blockLabel = stopContractualBlockLabel(stop);
   const parteTipo = stop?.parte_transporte_tipo || suggestParteTipoForStop(stop?.tipo);
-  const parteId = stop?.parte_transporte_id || "";
+  const parteId = stop?.parte_transporte_id ? String(stop.parte_transporte_id) : "";
 
   const [partes, setPartes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -135,8 +135,9 @@ export function ContratoParteStopBlock({
   );
 
   useEffect(() => {
-    if (mode !== "select") setPendingParteId("");
-  }, [mode, parteId]);
+    if (parteId) setPendingParteId(parteId);
+    else if (mode !== "select") setPendingParteId("");
+  }, [parteId, mode]);
 
   useEffect(() => {
     if (!empresaId) return;
@@ -158,7 +159,7 @@ export function ContratoParteStopBlock({
   }, [empresaId]);
 
   const filtered = useMemo(() => filterPartesForStop(partes, stop), [partes, stop]);
-  const selected = partes.find((p) => p.id === parteId);
+  const selected = partes.find((p) => String(p.id) === parteId);
 
   const inp = {
     width: "100%",

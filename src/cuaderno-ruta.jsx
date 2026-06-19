@@ -15649,6 +15649,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
         <EmpresaEditarServicioModal
           key={editarServicioModal.id}
           servicio={editarServicioModal}
+          stops={flotaStops[editarServicioModal.id]}
           conductores={conductores}
           officeResponsables={officeResponsables}
           officeUser={getOfficeUserFromSession()}

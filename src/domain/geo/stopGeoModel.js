@@ -1,5 +1,6 @@
 import { defaultStopCountry } from "./postalCodeLookup.js";
 import { formatStopNotesForDisplay, getStopOperacionMeta, mergeStopOperacionMeta } from "../service/stopOperacionMeta.js";
+import { getServicioMercanciaFromMeta } from "../dcdt/servicioMercanciaMeta.js";
 import { emptyStopMercancia, getStopMercanciaFromStop, stopMercanciaFormPatch } from "../dcdt/stopMercanciaMeta.js";
 
 const GEO_META_KEYS = ["pais", "codigo_postal", "provincia", "geo_lat", "geo_lon", "empresa_logistica"];
@@ -34,7 +35,10 @@ export function stopRowToGeoForm(row) {
   const detalles = formatStopNotesForDisplay(row?.notas) || "";
   const lat = row.lat ?? meta.geo_lat ?? null;
   const lon = row.lon ?? meta.geo_lon ?? null;
+  const parteId = meta.parte_transporte_id || null;
+  const cargadorParteId = meta.cargador_parte_id || null;
   return {
+    id: row.id || null,
     orden: Number(row.orden) || 0,
     tipo: row.tipo || "parada",
     pais: String(meta.pais || "").trim() || defaultStopCountry(),
@@ -47,11 +51,38 @@ export function stopRowToGeoForm(row) {
     notas: detalles,
     lat: lat == null || lat === "" ? null : Number(lat),
     lon: lon == null || lon === "" ? null : Number(lon),
-    parte_transporte_id: meta.parte_transporte_id || null,
+    parte_transporte_id: parteId ? String(parteId) : null,
     parte_transporte_tipo: meta.parte_transporte_tipo || null,
-    cargador_parte_id: meta.cargador_parte_id || null,
+    cargador_parte_id: cargadorParteId ? String(cargadorParteId) : null,
     mercancia: getStopMercanciaFromStop(row),
   };
+}
+
+/**
+ * Hidrata formularios de parada desde filas persistidas (+ migración mercancía legacy en servicio).
+ */
+export function hydrateStopFormsFromRows(rows, servicio = null) {
+  const forms = (Array.isArray(rows) ? rows : []).map(stopRowToGeoForm);
+  if (!servicio) return forms;
+  const svcMerc = getServicioMercanciaFromMeta(servicio);
+  const hasSvc =
+    svcMerc.descripcion ||
+    svcMerc.peso_kg ||
+    svcMerc.bultos ||
+    svcMerc.palets;
+  if (!hasSvc) return forms;
+  const idx = forms.findIndex((s) => String(s.tipo || "").toLowerCase() === "carga");
+  if (idx < 0) return forms;
+  const cur = getStopMercanciaFromStop(forms[idx]);
+  const hasStop =
+    cur.descripcion ||
+    cur.peso_kg ||
+    cur.bultos ||
+    cur.palets;
+  if (hasStop) return forms;
+  const next = [...forms];
+  next[idx] = { ...next[idx], mercancia: svcMerc };
+  return next;
 }
 
 /** Objeto lugar para geocodificación / mapas. */

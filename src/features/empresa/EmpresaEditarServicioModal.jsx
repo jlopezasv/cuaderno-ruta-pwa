@@ -23,7 +23,7 @@ import { insertServicioCambiosRows, fmtAuditVal } from "../../domain/fleet/servi
 import { replaceStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
 import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
-import { emptyStopGeoForm, prepareStopsGeoForPersist, stopRowToGeoForm } from "../../domain/geo/stopGeoModel.js";
+import { emptyStopGeoForm, hydrateStopFormsFromRows, prepareStopsGeoForPersist } from "../../domain/geo/stopGeoModel.js";
 import { normalizeDescargaCargadorLinks } from "../../domain/dcdt/descargaCargadorLink.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
@@ -33,11 +33,7 @@ import {
 } from "../../domain/empresa/empresaOfficeUsers.js";
 import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField.jsx";
 import { DcdtReadinessPanel } from "../dcdt/DcdtReadinessPanel.jsx";
-import { getServicioMercanciaFromMeta } from "../../domain/dcdt/servicioMercanciaMeta.js";
-import {
-  getStopMercanciaFromStop,
-  mercanciaPreviewFromStops,
-} from "../../domain/dcdt/stopMercanciaMeta.js";
+import { mercanciaPreviewFromStops } from "../../domain/dcdt/stopMercanciaMeta.js";
 import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
@@ -62,33 +58,6 @@ function toDTL(d) {
   return `${D.getFullYear()}-${p2(D.getMonth() + 1)}-${p2(D.getDate())}T${p2(D.getHours())}:${p2(D.getMinutes())}`;
 }
 
-function stopRowToForm(row) {
-  return stopRowToGeoForm(row);
-}
-
-function stopsFromRowsWithMercanciaMigration(rows, servicio) {
-  const forms = (Array.isArray(rows) ? rows : []).map(stopRowToForm);
-  const svcMerc = getServicioMercanciaFromMeta(servicio);
-  const hasSvc =
-    svcMerc.descripcion ||
-    svcMerc.peso_kg ||
-    svcMerc.bultos ||
-    svcMerc.palets;
-  if (!hasSvc) return forms;
-  const idx = forms.findIndex((s) => String(s.tipo || "").toLowerCase() === "carga");
-  if (idx < 0) return forms;
-  const cur = getStopMercanciaFromStop(forms[idx]);
-  const hasStop =
-    cur.descripcion ||
-    cur.peso_kg ||
-    cur.bultos ||
-    cur.palets;
-  if (hasStop) return forms;
-  const next = [...forms];
-  next[idx] = { ...next[idx], mercancia: svcMerc };
-  return next;
-}
-
 const EMPRESA_UI = {
   border: "#dbe4ee",
   surface: "#ffffff",
@@ -107,6 +76,7 @@ export function EmpresaEditarServicioModal({
   officeResponsables = [],
   officeUser = null,
   userId = null,
+  stops: stopsProp = null,
   onClose,
   onApplied,
   onNotifyAssignment,
@@ -178,6 +148,20 @@ export function EmpresaEditarServicioModal({
 
   useEffect(() => {
     if (!servicio?.id || !wide) return;
+    const cachedRows = Array.isArray(stopsProp) ? stopsProp.filter(Boolean) : [];
+
+    const applyRows = (rows) => {
+      if (!Array.isArray(rows) || !rows.length) return false;
+      setStops(hydrateStopFormsFromRows(rows, servicio));
+      stopsLoadedRef.current = servicio.id;
+      return true;
+    };
+
+    if (applyRows(cachedRows)) {
+      setStopsLoading(false);
+      return;
+    }
+
     if (stopsLoadedRef.current === servicio.id) return;
     let cancelled = false;
     setStopsLoading(true);
@@ -189,10 +173,7 @@ export function EmpresaEditarServicioModal({
         if (!res.ok) throw new Error(`Error ${res.status}`);
         const rows = await res.json().catch(() => []);
         if (cancelled) return;
-        stopsLoadedRef.current = servicio.id;
-        if (Array.isArray(rows) && rows.length) {
-          setStops(stopsFromRowsWithMercanciaMigration(rows, servicio));
-        } else {
+        if (!applyRows(rows)) {
           setStops([
             emptyStopGeoForm({ orden: 1, tipo: "carga" }),
             emptyStopGeoForm({ orden: 2, tipo: "descarga" }),
@@ -207,7 +188,7 @@ export function EmpresaEditarServicioModal({
     return () => {
       cancelled = true;
     };
-  }, [servicio?.id, wide, servicio]);
+  }, [servicio?.id, wide, servicio, stopsProp]);
 
   const listaConductores = (conductores || []).filter((c) => c.user_id);
 

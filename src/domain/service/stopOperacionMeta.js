@@ -1,30 +1,52 @@
 /** Metadatos operativos embebidos al final de `stops.notas` (sin columnas nuevas). */
 
-const MARK = "\n\n__CUADERNO_OP__:";
+const BARE_MARK = "__CUADERNO_OP__:";
+const MARK = `\n\n${BARE_MARK}`;
+
+function findStopMetaMark(notas) {
+  if (notas == null || notas === "") return null;
+  const s = String(notas);
+  const withDoubleBreak = s.indexOf(MARK);
+  if (withDoubleBreak !== -1) return { index: withDoubleBreak, length: MARK.length };
+  const withSingleBreak = s.indexOf(`\n${BARE_MARK}`);
+  if (withSingleBreak !== -1) return { index: withSingleBreak, length: `\n${BARE_MARK}`.length };
+  const bare = s.indexOf(BARE_MARK);
+  if (bare !== -1) return { index: bare, length: BARE_MARK.length };
+  return null;
+}
+
+function parseMetaPayload(raw) {
+  try {
+    const o = JSON.parse(String(raw || "").trim());
+    return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Texto visible para el conductor (sin payload JSON).
  */
 export function stripOperacionMetaDisplay(notas) {
   if (notas == null || String(notas) === "") return "";
+  if (typeof notas === "object" && !Array.isArray(notas)) return "";
   const s = String(notas);
-  const i = s.indexOf(MARK);
-  if (i === -1) return s.trim();
-  return s.slice(0, i).trim();
+  const mark = findStopMetaMark(s);
+  if (!mark) return s.trim();
+  return s.slice(0, mark.index).trim();
 }
 
 export function getStopOperacionMeta(notas) {
-  if (notas == null || String(notas) === "") return {};
-  const s = String(notas);
-  const i = s.indexOf(MARK);
-  if (i === -1) return {};
-  try {
-    const raw = s.slice(i + MARK.length).trim();
-    const o = JSON.parse(raw);
-    return o && typeof o === "object" ? o : {};
-  } catch {
-    return {};
+  if (notas == null || notas === "") return {};
+  if (typeof notas === "object" && !Array.isArray(notas)) {
+    return { ...notas };
   }
+  const s = String(notas);
+  const mark = findStopMetaMark(s);
+  if (!mark) {
+    return parseMetaPayload(s);
+  }
+  return parseMetaPayload(s.slice(mark.index + mark.length));
 }
 
 /**
@@ -34,7 +56,8 @@ export function mergeStopOperacionMeta(notas, patch) {
   const base = stripOperacionMetaDisplay(notas);
   const prev = getStopOperacionMeta(notas);
   const next = { ...prev, ...patch };
-  return base + MARK + JSON.stringify(next);
+  const payload = MARK + JSON.stringify(next);
+  return base ? `${base}${payload}` : BARE_MARK + JSON.stringify(next);
 }
 
 export function getInicioOperacionMs(stop) {
@@ -103,7 +126,7 @@ export function formatStopNotesForDisplay(notas) {
   if (visible) {
     const asJson = tryParseJsonObject(visible);
     if (asJson) return readableFromOperacionMeta(asJson);
-    if (!visible.startsWith("{") && !visible.includes("__CUADERNO_OP__")) return visible;
+    if (!visible.startsWith("{") && !visible.includes(BARE_MARK)) return visible;
   }
   return readableFromOperacionMeta(getStopOperacionMeta(notas));
 }
