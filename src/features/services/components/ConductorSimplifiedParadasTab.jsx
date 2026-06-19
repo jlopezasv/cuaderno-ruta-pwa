@@ -23,6 +23,9 @@ import { sbFetch } from "../../../data/supabaseClient.js";
 import { tripLabelForServicio } from "../../../domain/service/driverFlatStopList.js";
 
 const PAGE = "#F8FAFC";
+/** Referencias estables — evitar bucle infinito en hooks (useEmpresaOriginLookup / useConductorDcdtQuickStatus). */
+const NO_STOPS = [];
+const NO_SERVICIOS = [];
 
 function muelleActionMeta(kind, stop) {
   const tipo = String(stop?.tipo || "").toLowerCase();
@@ -90,8 +93,12 @@ export function ConductorSimplifiedParadasTab({
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
   const detailServicio = active ? localServicio : null;
-  const detailStops = active ? localStops : [];
-  const empresaById = useEmpresaOriginLookup(detailServicio ? [detailServicio] : []);
+  const detailStops = active ? localStops : NO_STOPS;
+  const serviciosForEmpresaLookup = useMemo(
+    () => (detailServicio ? [detailServicio] : NO_SERVICIOS),
+    [detailServicio],
+  );
+  const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicio?.empresa_id ? empresaById[detailServicio.empresa_id] : null;
   const showDcdtQuick = !!detailServicio?.empresa_id;
   const showChatQuick = isServiceMessagesEnabled(detailServicio);
@@ -100,11 +107,12 @@ export function ConductorSimplifiedParadasTab({
     empresa: empresaServicio,
     conductorUid: uid,
     stops: detailStops,
+    pollWhileIncomplete: !!active,
   });
   const messagesUnread = useServiceMessagesUnread({
     servicioId: detailServicio?.id,
     userId: uid,
-    enabled: showChatQuick && !!detailServicio?.id,
+    enabled: !!active && showChatQuick && !!detailServicio?.id,
   });
 
   const openItem = useCallback((item) => {
@@ -126,8 +134,7 @@ export function ConductorSimplifiedParadasTab({
   const stopsSig = useMemo(() => stopsOperativaSig(localStops), [localStops]);
 
   useEffect(() => {
-    if (!localServicio?.id || !stopsSig) {
-      setEvidenciasByStop({});
+    if (!active || !localServicio?.id || !stopsSig) {
       return;
     }
     let cancelled = false;
@@ -147,7 +154,7 @@ export function ConductorSimplifiedParadasTab({
     return () => {
       cancelled = true;
     };
-  }, [localServicio?.id, stopsSig, localStops]);
+  }, [active, localServicio?.id, stopsSig, localStops]);
 
   const timelineItems = useMemo(() => buildTimelineItems(localStops), [localStops]);
   const activeStopId = active?.stop?.id;
