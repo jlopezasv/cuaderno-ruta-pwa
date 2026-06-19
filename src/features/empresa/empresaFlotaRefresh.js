@@ -28,8 +28,8 @@ export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
 
 export function filterServiciosForEmpresaVistaTab(servicios, tab, ctx = {}) {
   const list = Array.isArray(servicios) ? servicios : [];
-  if (!tab || tab === "todos") return [...list];
-  return list.filter((sv) => servicioMatchesEmpresaVistaTab(sv, tab, ctx));
+  const effectiveTab = tab || "todos";
+  return list.filter((sv) => servicioMatchesEmpresaVistaTab(sv, effectiveTab, ctx));
 }
 
 /** Si el servicio ya no encaja en la pestaña, usar "todos" para no desmontar la card expandida. */

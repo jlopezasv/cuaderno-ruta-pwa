@@ -166,7 +166,10 @@ export function deriveOperationalPlacesFromStops(stops) {
   let carga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
   let descarga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
   for (const st of sorted) {
-    if (isCargaTipo(st.tipo)) carga = pickPlaceFromStop(st);
+    if (isCargaTipo(st.tipo)) {
+      carga = pickPlaceFromStop(st);
+      break;
+    }
   }
   for (const st of sorted) {
     if (isDescargaTipo(st.tipo)) {
@@ -185,7 +188,7 @@ export function deriveOperationalPlacesFromStops(stops) {
   return { carga, descarga };
 }
 
-/** Origen/destino para columnas servicio y calculador (última carga, primera descarga). */
+/** Origen/destino para columnas servicio y calculador (primera carga, primera descarga). */
 export function routeTextFromStops(stops) {
   const { carga, descarga } = deriveOperationalPlacesFromStops(stops);
   return {
@@ -243,17 +246,22 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
       };
   const legacyCarga = placeFromLegacyColumn(servicio?.origen);
   const legacyDescarga = placeFromLegacyColumn(servicio?.destino);
+  const preferStopsRoute = Array.isArray(stops) && stops.length > 0;
 
   const cliente_nombre =
     String(lugares.cliente_nombre || meta.cliente_nombre || "").trim() ||
     String(servicio?.cliente_nombre || servicio?.cliente || meta.cliente || "").trim() ||
     "";
 
-  const carga_nombre =
-    String(lugares.carga_nombre || "").trim() ||
-    fromStops.carga.nombre ||
-    legacyCarga.nombre ||
-    "";
+  const carga_nombre = preferStopsRoute
+    ? String(fromStops.carga.nombre || "").trim() ||
+      String(lugares.carga_nombre || "").trim() ||
+      legacyCarga.nombre ||
+      ""
+    : String(lugares.carga_nombre || "").trim() ||
+      fromStops.carga.nombre ||
+      legacyCarga.nombre ||
+      "";
   const carga_direccion =
     String(lugares.carga_direccion || "").trim() ||
     fromStops.carga.direccion ||
@@ -275,11 +283,15 @@ export function getServiceOperationalPlaces(servicio, stops = null) {
     String(lugares.carga_provincia || "").trim() ||
     fromStops.carga.provincia ||
     "";
-  const descarga_nombre =
-    String(lugares.descarga_nombre || "").trim() ||
-    fromStops.descarga.nombre ||
-    legacyDescarga.nombre ||
-    "";
+  const descarga_nombre = preferStopsRoute
+    ? String(fromStops.descarga.nombre || "").trim() ||
+      String(lugares.descarga_nombre || "").trim() ||
+      legacyDescarga.nombre ||
+      ""
+    : String(lugares.descarga_nombre || "").trim() ||
+      fromStops.descarga.nombre ||
+      legacyDescarga.nombre ||
+      "";
   const descarga_direccion =
     String(lugares.descarga_direccion || "").trim() ||
     fromStops.descarga.direccion ||
