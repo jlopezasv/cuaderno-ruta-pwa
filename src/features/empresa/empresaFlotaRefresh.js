@@ -9,7 +9,8 @@ const EMPRESA_VISTA_ESTADOS_COMPLETADOS = Object.freeze(["completado", "cerrado"
  * @param {object} ctx — { archivedExpedienteIds, flotaStops, flotaEvs, countIncidencias(servicioId, flotaStops, flotaEvs) }
  */
 export function servicioMatchesEmpresaVistaTab(servicio, tab, ctx = {}) {
-  if (!servicio?.id || !tab || tab === "todos") return true;
+  if (!servicio?.id || !tab) return true;
+  if (tab === "todos") return servicio.estado !== "anulado";
 
   const archived = ctx.archivedExpedienteIds;
   const archSet =
@@ -34,6 +35,7 @@ export function filterServiciosForEmpresaVistaTab(servicios, tab, ctx = {}) {
 /** Si el servicio ya no encaja en la pestaña, usar "todos" para no desmontar la card expandida. */
 export function resolveEmpresaVistaTabKeepingExpandedServicio(currentTab, servicio, ctx = {}) {
   if (servicioMatchesEmpresaVistaTab(servicio, currentTab, ctx)) return currentTab;
+  if (servicio?.estado === "anulado") return "anulados";
   return "todos";
 }
 
