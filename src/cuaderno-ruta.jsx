@@ -371,6 +371,8 @@ import { formatStopNotesForDisplay, getInicioOperacionMs, getStopOperacionMeta, 
 import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
+import { ConductorSimplifiedParadasTab } from "./features/services/components/ConductorSimplifiedParadasTab.jsx";
+import { ConductorMasHub, ConductorMasBackBar } from "./features/services/components/ConductorMasHub.jsx";
 import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
 import {
@@ -2157,18 +2159,20 @@ function QrMuelleModal({onClose,showToast,setDb}){
 }
 
 function AppInner(){
+  const conductorSimplified = isDemoApp();
   const[db,setDb]=useState({entries:[],docs:[]});
   const[prof,setProf]=useState(PROF0);
   const[loaded,setLoaded]=useState(false);
   const[authChecked,setAuthChecked]=useState(false);
   const[user,setUser]=useState(null);
-  const[tab,setTab]=useState("servicio");
+  const[tab,setTab]=useState(()=>(isDemoApp()?"paradas":"servicio"));
+  const[masSub,setMasSub]=useState(null);
   const[viajeActivo,setViajeActivo]=useState(()=>{try{const v=localStorage.getItem("viaje_activo");return v?JSON.parse(v):null;}catch{return null;}});
   useEffect(()=>{
     if(!navigator.serviceWorker)return;
     function onSwMessage(e){
       if(e?.data?.type==="OPEN_TAB"&&e?.data?.payload?.tab==="servicio"){
-        setTab("servicio");
+        setTab(isDemoApp()?"paradas":"servicio");
       }
     }
     navigator.serviceWorker.addEventListener("message",onSwMessage);
@@ -3279,6 +3283,17 @@ function AppInner(){
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
     !authSession?.capabilities?.empresa;
+  const openServicioTab=()=>setTab(conductorSimplified?"paradas":"servicio");
+  const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
+  const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
+  const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
+  const showResumen=tab==="resumen"||(conductorSimplified&&tab==="mas"&&masSub==="resumen");
+  const showRuta=tab==="ruta"||(conductorSimplified&&tab==="mas"&&masSub==="ruta");
+  const showDocs=tab==="docs"||(conductorSimplified&&tab==="mas"&&masSub==="docs");
+  const showPerfil=tab==="perfil"||(conductorSimplified&&tab==="mas"&&masSub==="perfil");
+  const showServicio=tab==="servicio"&&!conductorSimplified;
+  const masBack=conductorSimplified&&tab==="mas"&&!!masSub?()=>setMasSub(null):null;
+  const masTitles={servicio:"Servicio",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3350,8 +3365,8 @@ function AppInner(){
       )}
 
       <nav style={s.nav}>
-        {getConductorTabs({T}).map(t=>(
-          <button key={t.id} onClick={()=>{setTab(t.id);if(t.id==="docs")setDocsTab("home");}}
+        {getConductorTabs({T,simplified:conductorSimplified}).map(t=>(
+          <button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="mas")setMasSub(null);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
               background:tab===t.id?"rgba(245,158,11,.10)":"transparent",
               borderRadius:10,transition:"all .15s",
@@ -3364,11 +3379,25 @@ function AppInner(){
       </nav>
 
       <main style={s.main}>
-        {tab==="hoy"&&(
+        {conductorSimplified&&tab==="paradas"&&(
+          <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast}/>
+        )}
+
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub}/>}
+
+        {showMasServicio&&(
+          <>
+            <ConductorMasBackBar title={masTitles.servicio} onBack={masBack}/>
+            <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} onRecalculateOperationalRoute={recalculateOperationalRouteFromCurrentGps} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite} hideRecorrido/>
+          </>
+        )}
+
+        {showHoy&&(
           <div className="pw">
-            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={()=>setTab("servicio")}/><Alerts alerts={norma.alerts}/></div>}
+            {masBack?<ConductorMasBackBar title={masTitles.hoy} onBack={masBack}/>:null}
+            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={openServicioTab}/><Alerts alerts={norma.alerts}/></div>}
             <div className="mc">
-              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={()=>setTab("servicio")}/><Alerts alerts={norma.alerts}/></>}
+              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={openServicioTab}/><Alerts alerts={norma.alerts}/></>}
               <div style={{ padding: "0 14px 14px" }}>
                 {todayEnts.length > 0 ? (
                   <div
@@ -3434,12 +3463,13 @@ function AppInner(){
           </div>
         )}
 
-        {tab==="servicio"&&(
+        {showServicio&&(
           <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} onRecalculateOperationalRoute={recalculateOperationalRouteFromCurrentGps} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite}/>
         )}
 
-        {tab==="resumen"&&(
+        {showResumen&&(
           <div>
+            {masBack?<ConductorMasBackBar title={masTitles.resumen} onBack={masBack}/>:null}
             <div style={{background:"#1E293B",display:"flex",borderBottom:"1px solid #334155",position:"sticky",top:108,zIndex:98}}>
               {[
                 {id:"resumen",   label:"Resumen",   icon:"📊"},
@@ -3534,10 +3564,21 @@ function AppInner(){
             {resumenTab==="historial"&&<HistorialView db={db} norma={norma} prof={prof} allSorted={allSorted} dayMap={dayMap} days={days} srch={srch} searchQ={searchQ} setSearchQ={setSearchQ} openEdit={openEdit} deleteEntry={deleteEntry}/>}
           </div>
         )}
-        {tab==="perfil"&&<ProfView prof={prof} authUid={user} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast} onFleetJoinSuccess={()=>{setRolEmpresa("conductor");setTab("servicio");showToast("Equipo activo ✓","#22C55E");}}/>}
-        {tab==="ruta"&&<MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>}
-        {tab==="docs"&&(
+        {showPerfil&&(
+          <>
+            {masBack?<ConductorMasBackBar title={masTitles.perfil} onBack={masBack}/>:null}
+            <ProfView prof={prof} authUid={user} onSave={p=>{setProf(p);showToast("Perfil guardado ✓");}} norma={norma} db={db} showToast={showToast} onFleetJoinSuccess={()=>{setRolEmpresa("conductor");openServicioTab();showToast("Equipo activo ✓","#22C55E");}}/>
+          </>
+        )}
+        {showRuta&&(
+          <>
+            {masBack?<ConductorMasBackBar title={masTitles.ruta} onBack={masBack}/>:null}
+            <MapTab norma={norma} prof={prof} dark={dark} viajeActivo={viajeActivo}/>
+          </>
+        )}
+        {showDocs&&(
           <div>
+            {masBack?<ConductorMasBackBar title={masTitles.docs} onBack={masBack}/>:null}
             {docsTab==="home"&&(
               <div style={{padding:"20px 14px max(80px, calc(72px + env(safe-area-inset-bottom)))",background:docsUi.page,minHeight:"calc(100vh - 120px)"}}>
                 <div style={{fontSize:11,color:docsUi.muted,fontWeight:700,letterSpacing:1.5,marginBottom:20}}>DOCUMENTOS</div>
@@ -17455,10 +17496,12 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       window.dispatchEvent(new Event("cuaderno-recargar-entries"));
     }
   }
-  async function marcarLlegado(stopId,opts={}){
-    const svcMeta=getServicioOperacionMeta(servicio);
-    const geo=resolveEventGeoForPersist(opts.prefetchedGps??null,"entrada_muelle",{
-      servicioInicioGeo:svcMeta?.inicio_servicio_geo,
+  async function marcarLlegadoEn(servicioCtx, stopsCtx, stopId, opts = {}) {
+    const servicio = servicioCtx;
+    const stops = stopsCtx;
+    const svcMeta = getServicioOperacionMeta(servicio);
+    const geo = resolveEventGeoForPersist(opts.prefetchedGps ?? null, "entrada_muelle", {
+      servicioInicioGeo: svcMeta?.inicio_servicio_geo,
     });
     logMuelleGps("payload before save",{
       eventType:"entrada_muelle",
@@ -17511,22 +17554,31 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     await autoTacografoTramoMuelle({ alEntrada: true, stop: stopEntrada });
     if(servicio?.id)await marcarParticipacionActiva(servicio.id,uid).catch(()=>{});
     const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:"entrada_muelle",stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
-    let nextServicio=servicio;
-    if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
-    patchDriverView({stops:updated,servicio:nextServicio});
-    const stopLlegado=updated.find((s)=>s.id===stopId);
+    let nextServicio = servicio;
+    if (op?.referencia) nextServicio = { ...servicio, referencia: op.referencia };
+    const stopLlegado = updated.find((s) => s.id === stopId);
     void onStopEstadoOperativoChange({
-      stop:{...stopLlegado,servicio_id:servicio?.id},
-      allStops:updated,
+      stop: { ...stopLlegado, servicio_id: servicio?.id },
+      allStops: updated,
     });
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+    return { servicio: nextServicio, stops: updated };
   }
-  async function marcarCompletado(stopId,opts={}){
-    const stopForTipo=stops.find((s)=>s.id===stopId);
-    const stopTipo=String(stopForTipo?.tipo||"").toLowerCase();
-    const trackingEventType=
-      stopTipo==="descarga"?"completar_descarga":stopTipo==="carga"?"completar_carga":"salida_muelle";
-    const svcMeta=getServicioOperacionMeta(servicio);
+  async function marcarLlegado(stopId, opts = {}) {
+    const result = await marcarLlegadoEn(servicio, stops, stopId, opts);
+    if (servicio?.id && result?.servicio?.id === servicio.id) {
+      patchDriverView({ stops: result.stops, servicio: result.servicio });
+    }
+    return result;
+  }
+  async function marcarCompletadoEn(servicioCtx, stopsCtx, stopId, opts = {}) {
+    const servicio = servicioCtx;
+    const stops = stopsCtx;
+    const stopForTipo = stops.find((s) => s.id === stopId);
+    const stopTipo = String(stopForTipo?.tipo || "").toLowerCase();
+    const trackingEventType =
+      stopTipo === "descarga" ? "completar_descarga" : stopTipo === "carga" ? "completar_carga" : "salida_muelle";
+    const svcMeta = getServicioOperacionMeta(servicio);
     const geoSalida=resolveEventGeoForPersist(opts.prefetchedGps??null,trackingEventType,{
       servicioInicioGeo:svcMeta?.inicio_servicio_geo,
     });
@@ -17604,64 +17656,107 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     if(updated.filter(s=>s.estado==="pendiente").length===0){
       const doneRes=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({estado:"completado"})});
       if(!doneRes.ok)throw new Error("No se pudo completar el servicio");
-      nextServicio={...nextServicio,estado:"completado"};
+      nextServicio = { ...nextServicio, estado: "completado" };
     }
-    patchDriverView({stops:updated,servicio:nextServicio});
-    const stopCompletado=updated.find((s)=>s.id===stopId);
+    const stopCompletado = updated.find((s) => s.id === stopId);
     void onStopEstadoOperativoChange({
-      stop:{...stopCompletado,servicio_id:servicio?.id},
-      allStops:updated,
+      stop: { ...stopCompletado, servicio_id: servicio?.id },
+      allStops: updated,
     });
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+    return { servicio: nextServicio, stops: updated };
   }
-  async function iniciarServicio(servicioId,opts={}){
-    if(servicio?.id&&servicioId!==servicio.id){
-      devWarn("[OP1] iniciarServicio id mismatch",{uiId:servicio.id,requestedId:servicioId});
+  async function marcarCompletado(stopId, opts = {}) {
+    const result = await marcarCompletadoEn(servicio, stops, stopId, opts);
+    if (servicio?.id && result?.servicio?.id === servicio.id) {
+      patchDriverView({ stops: result.stops, servicio: result.servicio });
+    }
+    return result;
+  }
+  async function iniciarServicioEn(servicioId, opts = {}) {
+    const fecha_inicio = new Date().toISOString();
+    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ estado: "en_curso", fecha_inicio }),
+    });
+    if (uid) await marcarParticipacionActiva(servicioId, uid).catch(() => {});
+    const started = { id: servicioId, estado: "en_curso", fecha_inicio };
+    let nextServicio = { ...started };
+    const inicioGeo = resolveEventGeoForPersist(opts.prefetchedGps ?? null, "inicio_servicio");
+    seedLocationCacheFromGeo(inicioGeo);
+    const op = await registerDriverOperationalPoint({
+      uid,
+      servicio: started,
+      stops: [],
+      norma,
+      eventType: "inicio_servicio",
+      showToast,
+      prefetchedGps: opts.prefetchedGps ?? null,
+    });
+    const referenciaInicio = mergeReferenciaOperacional(op?.referencia || null, {
+      inicio_servicio_geo: inicioGeo,
+    });
+    if (referenciaInicio) {
+      await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ referencia: referenciaInicio }),
+      });
+      nextServicio = { ...nextServicio, referencia: referenciaInicio };
+    } else if (op?.referencia) {
+      nextServicio = { ...nextServicio, referencia: op.referencia };
+    }
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+    return nextServicio;
+  }
+  async function iniciarServicio(servicioId, opts = {}) {
+    if (servicio?.id && servicioId !== servicio.id) {
+      devWarn("[OP1] iniciarServicio id mismatch", { uiId: servicio.id, requestedId: servicioId });
       throw new Error("El servicio en pantalla no coincide. Espera a cerrar el expediente o recarga.");
     }
-    const fecha_inicio=new Date().toISOString();
-    await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({estado:"en_curso",fecha_inicio})});
-    if(uid)await marcarParticipacionActiva(servicioId,uid).catch(()=>{});
-    const started={...(servicio||{}),id:servicioId,estado:"en_curso",fecha_inicio};
-    let nextServicio={...started};
-    const inicioGeo=resolveEventGeoForPersist(opts.prefetchedGps??null,"inicio_servicio");
-    seedLocationCacheFromGeo(inicioGeo);
-    const op=await registerDriverOperationalPoint({uid,servicio:started,stops,norma,eventType:"inicio_servicio",showToast,prefetchedGps:opts.prefetchedGps??null});
-    const referenciaInicio=mergeReferenciaOperacional(
-      op?.referencia||nextServicio.referencia||null,
-      {inicio_servicio_geo:inicioGeo},
-    );
-    if(referenciaInicio!==nextServicio.referencia){
-      await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia:referenciaInicio})});
-      nextServicio={...nextServicio,referencia:referenciaInicio};
-    }else if(op?.referencia){
-      nextServicio={...nextServicio,referencia:op.referencia};
-    }
-    patchDriverView({servicio:nextServicio});
-    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+    const next = await iniciarServicioEn(servicioId, opts);
+    const merged = { ...(servicio || {}), ...next, id: servicioId };
+    patchDriverView({ servicio: merged });
+    return merged;
   }
-  async function iniciarViajeOperacional(servicioId,opts={}){
-    if(!servicio||servicio.id!==servicioId)return;
-    const rutaGeo=resolveEventGeoForPersist(opts.prefetchedGps??null,"ruta_iniciada");
-    const routeStartedAt=new Date().toISOString();
-    let referencia=mergeReferenciaOperacional(servicio.referencia||null,{
-      operational_route_started_at:routeStartedAt,
-      operational_trip_started_at:getOperationalTripStartedAt(servicio)||routeStartedAt,
-      operational_route_started_geo:rutaGeo,
+  async function iniciarViajeOperacional(servicioId, opts = {}) {
+    if (!servicio || servicio.id !== servicioId) return;
+    const rutaGeo = resolveEventGeoForPersist(opts.prefetchedGps ?? null, "ruta_iniciada");
+    const routeStartedAt = new Date().toISOString();
+    let referencia = mergeReferenciaOperacional(servicio.referencia || null, {
+      operational_route_started_at: routeStartedAt,
+      operational_trip_started_at: getOperationalTripStartedAt(servicio) || routeStartedAt,
+      operational_route_started_geo: rutaGeo,
     });
-    const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia})});
-    if(!res.ok)throw new Error("No se pudo iniciar la ruta");
-    const nextServicio={...servicio,referencia};
-    patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...nextServicio}:prev.servicio}));
+    const res = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ referencia }),
+    });
+    if (!res.ok) throw new Error("No se pudo iniciar la ruta");
+    const nextServicio = { ...servicio, referencia };
+    patchDriverView((prev) => ({ ...prev, servicio: prev.servicio ? { ...nextServicio } : prev.servicio }));
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
-    try{
-      const op=await registerDriverOperationalPoint({uid,servicio:nextServicio,stops,norma,eventType:"ruta_iniciada",showToast,prefetchedGps:opts.prefetchedGps??null});
-      if(op?.referencia&&op.referencia!==referencia){
-        await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{method:"PATCH",body:JSON.stringify({referencia:op.referencia})});
-        patchDriverView((prev)=>({...prev,servicio:prev.servicio?{...prev.servicio,referencia:op.referencia}:prev.servicio}));
+    try {
+      const op = await registerDriverOperationalPoint({
+        uid,
+        servicio: nextServicio,
+        stops,
+        norma,
+        eventType: "ruta_iniciada",
+        showToast,
+        prefetchedGps: opts.prefetchedGps ?? null,
+      });
+      if (op?.referencia && op.referencia !== referencia) {
+        await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ referencia: op.referencia }),
+        });
+        patchDriverView((prev) => ({
+          ...prev,
+          servicio: prev.servicio ? { ...prev.servicio, referencia: op.referencia } : prev.servicio,
+        }));
       }
-    }catch(e){
-      devWarn("[ruta] tracking GPS/ETA opcional falló",e?.message||e);
+    } catch (e) {
+      devWarn("[ruta] tracking GPS/ETA opcional falló", e?.message || e);
     }
   }
   async function marcarInicioOperacionStop(stopId,opts={}){
@@ -17699,18 +17794,22 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     await cargar();
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
-  async function finalizarParticipacion(){
-    if(!servicio?.id||!uid)return;
-    const res=await finalizarParticipacionConductor(servicio.id,uid);
-    if(!res?.ok)throw new Error("No se pudo finalizar tu participación");
-    // Limpiar la vista para que el merge no vuelva a fijar el servicio finalizado.
-    setDriverView(EMPTY_DRIVER_VIEW);
-    driverViewRef.current=EMPTY_DRIVER_VIEW;
-    setParticipacion({total:1,activos:1,miEstado:null});
-    await cargar();
+  async function finalizarParticipacionEn(servicioId) {
+    if (!servicioId || !uid) return;
+    const res = await finalizarParticipacionConductor(servicioId, uid);
+    if (!res?.ok) throw new Error("No se pudo finalizar tu participación");
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+    return res;
   }
-  return{
+  async function finalizarParticipacion() {
+    if (!servicio?.id || !uid) return;
+    await finalizarParticipacionEn(servicio.id);
+    setDriverView(EMPTY_DRIVER_VIEW);
+    driverViewRef.current = EMPTY_DRIVER_VIEW;
+    setParticipacion({ total: 1, activos: 1, miEstado: null });
+    await cargar();
+  }
+  return {
     servicio,
     stops,
     siguienteServicio,
@@ -17720,12 +17819,16 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     participacion,
     marcarLlegado,
     marcarCompletado,
+    marcarLlegadoEn,
+    marcarCompletadoEn,
     iniciarServicio,
+    iniciarServicioEn,
     iniciarViajeOperacional,
     marcarInicioOperacionStop,
     cerrarExpediente,
     finalizarParticipacion,
-    recargar:cargar,
+    finalizarParticipacionEn,
+    recargar: cargar,
   };
 }
 
@@ -18713,7 +18816,7 @@ function EvidenciasStop(props) {
 // ─────────────────────────────────────────────────────────────
 //  TAB SERVICIO
 // ─────────────────────────────────────────────────────────────
-const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,onRecalculateOperationalRoute=null,canCreateServices=false,useOperationalLite=false}){
+const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombre="Conductor",showToast,onOpenViajeModal,onRecalculateOperationalRoute=null,canCreateServices=false,useOperationalLite=false,hideRecorrido=false}){
   const{servicio,stops,siguienteServicio,siguientesStops,completados,loading,participacion,marcarLlegado,marcarCompletado,iniciarServicio,iniciarViajeOperacional,cerrarExpediente,finalizarParticipacion,recargar}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const originServicios=useMemo(()=>[servicio,siguienteServicio].filter(Boolean),[servicio?.id,siguienteServicio?.id]);
   const empresaById=useEmpresaOriginLookup(originServicios);
@@ -18844,6 +18947,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
         activosParticipantes={participacion?.activos||1}
         onFinalizarParticipacion={finalizarParticipacion}
         conductorUid={uid}
+        hideRecorrido={hideRecorrido}
       />
       {creando&&canCreateServices&&<CrearServicioModal uid={uid} conductorNombre={conductorNombre} onClose={()=>setCreando(false)} onDcdtSyncWarning={(msg)=>showToast(msg,"#b45309",6000)} onCreado={()=>{setCreando(false);recargar();showToast("✅ Servicio creado");}}/>}
     </>
@@ -18851,6 +18955,22 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
   }
 
   return null;
+});
+
+const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,norma=null,conductorNombre="Conductor",showToast}){
+  const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn,finalizarParticipacionEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  return(
+    <ConductorSimplifiedParadasTab
+      uid={uid}
+      conductorNombre={conductorNombre}
+      showToast={showToast}
+      marcarLlegadoEn={marcarLlegadoEn}
+      marcarCompletadoEn={marcarCompletadoEn}
+      iniciarServicioEn={iniciarServicioEn}
+      finalizarParticipacionEn={finalizarParticipacionEn}
+      EvidenciasStopComponent={EvidenciasStop}
+    />
+  );
 });
 
 

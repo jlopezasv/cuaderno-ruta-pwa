@@ -1574,6 +1574,7 @@ export function ActiveServicePanel({
   activosParticipantes = 1,
   onFinalizarParticipacion = null,
   conductorUid = null,
+  hideRecorrido = false,
 }) {
   const sig = getCockpitSignals(servicio, stops, evidenciasByStop);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
@@ -1896,6 +1897,7 @@ export function ActiveServicePanel({
             </DriverDemoSection>
           ) : null}
 
+          {!hideRecorrido ? (
           <DriverDemoSection title="Recorrido" style={{ padding: 0 }}>
             <DriverRecorridoStops
               items={timelineItems}
@@ -1930,6 +1932,7 @@ export function ActiveServicePanel({
               </div>
             ) : null}
           </DriverDemoSection>
+          ) : null}
 
           <DriverDemoSection style={{ padding: 0 }}>
             <DriverClienteDocumentosSection
@@ -2433,3 +2436,5 @@ export function ActiveServicePanel({
     </div>
   );
 }
+
+export { OperationalStopCard, buildTimelineItems, DRIVER_UI };
