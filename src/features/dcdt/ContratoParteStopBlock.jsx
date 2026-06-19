@@ -387,6 +387,12 @@ export function ContratoParteStopBlock({
         </div>
       ) : null}
 
+      {parteId && loading && mode !== "create" && mode !== "edit" ? (
+        <div style={{ fontSize: 11, color: theme.su, marginBottom: 8, lineHeight: 1.4 }}>
+          Cargando {blockLabel.toLowerCase()} guardado…
+        </div>
+      ) : null}
+
       {selected && mode !== "select" && mode !== "create" && mode !== "edit" ? (
         <div style={{ border: `1px solid ${theme.border}`, borderRadius: 10, padding: 12, background: theme.card }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: theme.tx, marginBottom: 8 }}>{blockLabel}</div>
@@ -425,7 +431,7 @@ export function ContratoParteStopBlock({
         </div>
       ) : null}
 
-      {(mode === "select" || !parteId) && mode !== "create" && mode !== "edit" ? (
+      {(mode === "select" || !parteId || (parteId && !selected)) && mode !== "create" && mode !== "edit" ? (
         <div style={{ marginTop: 0 }}>
           <>
             <select

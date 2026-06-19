@@ -148,7 +148,8 @@ export function EmpresaEditarServicioModal({
 
   useEffect(() => {
     if (!servicio?.id || !wide) return;
-    const cachedRows = Array.isArray(stopsProp) ? stopsProp.filter(Boolean) : [];
+    let cancelled = false;
+    setStopsLoading(true);
 
     const applyRows = (rows) => {
       if (!Array.isArray(rows) || !rows.length) return false;
@@ -157,14 +158,9 @@ export function EmpresaEditarServicioModal({
       return true;
     };
 
-    if (applyRows(cachedRows)) {
-      setStopsLoading(false);
-      return;
-    }
+    const cachedRows = Array.isArray(stopsProp) ? stopsProp.filter(Boolean) : [];
+    if (cachedRows.length) applyRows(cachedRows);
 
-    if (stopsLoadedRef.current === servicio.id) return;
-    let cancelled = false;
-    setStopsLoading(true);
     (async () => {
       try {
         const res = await sbFetch(
@@ -180,11 +176,12 @@ export function EmpresaEditarServicioModal({
           ]);
         }
       } catch {
-        if (!cancelled) setError("No se pudieron cargar las paradas");
+        if (!cancelled && !cachedRows.length) setError("No se pudieron cargar las paradas");
       } finally {
         if (!cancelled) setStopsLoading(false);
       }
     })();
+
     return () => {
       cancelled = true;
     };

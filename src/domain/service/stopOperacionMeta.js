@@ -6,13 +6,15 @@ const MARK = `\n\n${BARE_MARK}`;
 function findStopMetaMark(notas) {
   if (notas == null || notas === "") return null;
   const s = String(notas);
-  const withDoubleBreak = s.indexOf(MARK);
-  if (withDoubleBreak !== -1) return { index: withDoubleBreak, length: MARK.length };
-  const withSingleBreak = s.indexOf(`\n${BARE_MARK}`);
-  if (withSingleBreak !== -1) return { index: withSingleBreak, length: `\n${BARE_MARK}`.length };
-  const bare = s.indexOf(BARE_MARK);
-  if (bare !== -1) return { index: bare, length: BARE_MARK.length };
-  return null;
+  const candidates = [
+    { index: s.indexOf(MARK), length: MARK.length },
+    { index: s.indexOf(`\r\n\r\n${BARE_MARK}`), length: `\r\n\r\n${BARE_MARK}`.length },
+    { index: s.indexOf(`\n${BARE_MARK}`), length: `\n${BARE_MARK}`.length },
+    { index: s.indexOf(`\r\n${BARE_MARK}`), length: `\r\n${BARE_MARK}`.length },
+    { index: s.indexOf(BARE_MARK), length: BARE_MARK.length },
+  ].filter((c) => c.index !== -1);
+  if (!candidates.length) return null;
+  return candidates.reduce((best, cur) => (cur.index < best.index ? cur : best));
 }
 
 function parseMetaPayload(raw) {
@@ -57,7 +59,7 @@ export function mergeStopOperacionMeta(notas, patch) {
   const prev = getStopOperacionMeta(notas);
   const next = { ...prev, ...patch };
   const payload = MARK + JSON.stringify(next);
-  return base ? `${base}${payload}` : BARE_MARK + JSON.stringify(next);
+  return base ? `${base}${payload}` : payload.trimStart();
 }
 
 export function getInicioOperacionMs(stop) {
