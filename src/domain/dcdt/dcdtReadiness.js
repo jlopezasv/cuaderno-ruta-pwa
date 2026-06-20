@@ -19,6 +19,29 @@ import {
 import { fetchConductorVehiculoForDcdt } from "../empresa/conductorVehiculoEmpresa.js";
 import { isDcdtPdfStale } from "./decaPdfStale.js";
 import { DECA_SHORT_LABEL } from "./decaBranding.js";
+import { isDecaAplicable } from "../service/servicioAlcance.js";
+
+function dcdtNotApplicableReadiness() {
+  return {
+    doc: null,
+    missing: [],
+    datos: null,
+    estado: null,
+    estadoComputed: null,
+    isValidated: false,
+    isComplete: false,
+    canValidate: false,
+    canGeneratePdf: false,
+    canDownloadPdf: false,
+    statusLabel: "No aplica (servicio internacional)",
+    hasPdfStorage: false,
+    warnDecaMissingPdfBeforeStart: false,
+    servicioInicioEfectivoAlcanzado: false,
+    inicioEfectivoAt: null,
+    pdfStale: false,
+    decaAplicable: false,
+  };
+}
 
 /** Contexto unificado para resolver DCDT (empresa y conductor). */
 export async function fetchDcdtResolveContext({
@@ -124,6 +147,10 @@ export function validateDcdtReadiness({
   mercanciaEdit = null,
   flotaEvs = {},
 }) {
+  if (!isDecaAplicable(servicio)) {
+    return dcdtNotApplicableReadiness();
+  }
+
   if (!dcdt) {
     return {
       doc: null,
@@ -142,6 +169,7 @@ export function validateDcdtReadiness({
       servicioInicioEfectivoAlcanzado: false,
       inicioEfectivoAt: null,
       pdfStale: false,
+      decaAplicable: true,
     };
   }
 
@@ -196,6 +224,7 @@ export function validateDcdtReadiness({
     servicioInicioEfectivoAlcanzado,
     inicioEfectivoAt: resolveServicioInicioEfectivoAt(servicio),
     pdfStale: isDcdtPdfStale(dcdt),
+    decaAplicable: true,
   };
 
   if (isDemoApp()) {

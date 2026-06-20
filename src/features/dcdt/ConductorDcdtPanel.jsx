@@ -115,6 +115,7 @@ export function ConductorDcdtPanel({
               servicioId: servicio.id,
               empresaId,
               stops: stopsProp,
+              servicio,
             });
             list = filterDcdtRowsForUiSelector(created ? [created] : []);
           }

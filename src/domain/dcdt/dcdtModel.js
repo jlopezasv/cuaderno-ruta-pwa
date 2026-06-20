@@ -26,6 +26,7 @@ import {
   withPdfStaleFlags,
 } from "./decaPdfStale.js";
 import { mercanciaDatosFromCargaStops } from "./stopMercanciaMeta.js";
+import { isDecaAplicable } from "../service/servicioAlcance.js";
 
 export { buildMercanciaDatosPatch, mercanciaEditFromDatos } from "./mercanciaPatch.js";
 
@@ -770,8 +771,15 @@ export async function patchDcdtFechaInicioEfectivoIfNull(dcdtId, isoTimestamp) {
   return Array.isArray(rows) && rows.length > 0;
 }
 
-export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [] }) {
+export async function ensureDcdtForServicio({ servicioId, empresaId, stops = [], servicio = null }) {
+  const svc =
+    servicio && typeof servicio === "object"
+      ? servicio
+      : { id: servicioId, empresa_id: empresaId };
   const existing = await fetchAllDcdtByServicio(servicioId);
+  if (!isDecaAplicable(svc)) {
+    return existing.length > 0 ? existing[0] : null;
+  }
   if (existing.length > 0) return existing[0];
   const datos = syncParteIdsFromStops(emptyDatos(), stops);
   const r = await dcdtRequest("", {

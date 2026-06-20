@@ -29,6 +29,7 @@ import {
   syncParteIdsFromStops,
 } from "./dcdtModel.js";
 import { mercanciaDatosFromCargaStops } from "./stopMercanciaMeta.js";
+import { isDecaAplicable } from "../service/servicioAlcance.js";
 
 const UNASSIGNED_KEY = "__unassigned__";
 
@@ -177,6 +178,15 @@ export async function syncDcdtServiciosAfterStopsPersisted({
   if (!servicioId || !empresaId) {
     logSyncStep("STEP 1 ABORT missing servicioId or empresaId", { servicioId, empresaId });
     return { synced: 0, dcdtIds: [], ungrouped: 0 };
+  }
+
+  const svc =
+    servicio && typeof servicio === "object"
+      ? servicio
+      : { id: servicioId, empresa_id: empresaId };
+  if (!isDecaAplicable(svc)) {
+    logSyncStep("STEP 1 SKIP servicio internacional (sin DeCA)", { servicioId, empresaId });
+    return { synced: 0, dcdtIds: [], ungrouped: 0, skipped: "internacional" };
   }
 
   const stopRows =

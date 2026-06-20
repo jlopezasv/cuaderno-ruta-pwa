@@ -1,4 +1,5 @@
 import { getOperationalTripStartedAt } from "../service/serviceOperacionMeta.js";
+import { isDecaAplicable } from "../service/servicioAlcance.js";
 
 /**
  * Inicio efectivo del servicio (DeCA — debe existir el PDF antes de este momento).
@@ -71,6 +72,7 @@ export function resolveServicioInicioEfectivoAt(servicio, nowMs = Date.now()) {
 }
 
 export function shouldWarnDecaMissingBeforeStart({ servicio, dcdt, nowMs = Date.now() }) {
+  if (!isDecaAplicable(servicio)) return false;
   if (!servicio?.id || !dcdt) return false;
   if (hasDecaPdfGenerado(dcdt)) return false;
 
