@@ -245,6 +245,7 @@ import {
   formatStopGeoSummary,
   prepareStopsGeoForPersist,
   stopMissingPostalWarning,
+  validateStopsAlmacen,
 } from "./domain/geo/stopGeoModel.js";
 import { OperationalSummaryLite } from "./modules/operational-lite/OperationalSummaryLite.jsx";
 import {
@@ -259,6 +260,7 @@ import {
   sortDriverOperationalCandidates,
 } from "./domain/service/driverServiceQueue.js";
 import { useEmpresaOriginLookup } from "./hooks/useEmpresaOriginLookup.js";
+import { useDraggableModal } from "./hooks/useDraggableModal.js";
 import { ServiceOriginBadge } from "./ui/ServiceOriginBadge.jsx";
 import { OperationalEtaSnapshotBlock } from "./features/services/components/OperationalEtaSnapshotBlock.jsx";
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
@@ -12509,6 +12511,7 @@ function AsignarServicioModal({
   const[error,setError]=useState("");
   const[routeEditorOpen,setRouteEditorOpen]=useState(false);
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
+  const{panelStyle:dragPanelStyle,headerGripStyle,onHeaderPointerDown}=useDraggableModal({disabled:isMobile});
   const card=EMPRESA_UI.surface,bg=EMPRESA_UI.surfaceSoft,tx=EMPRESA_UI.tx,su=EMPRESA_UI.muted;
   const iStyle={width:"100%",background:bg,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box",marginBottom:8};
   const lbl={fontSize:10,color:su,fontWeight:700,marginBottom:2,letterSpacing:.2};
@@ -12530,11 +12533,13 @@ function AsignarServicioModal({
     position:"relative",
     width:SERVICIO_MODAL_SHELL.width,
     maxWidth:SERVICIO_MODAL_SHELL.maxWidth,
+    minHeight:SERVICIO_MODAL_SHELL.minHeight,
     maxHeight:SERVICIO_MODAL_SHELL.maxHeight,
     borderRadius:16,
     display:"flex",
     flexDirection:"column",
     overflow:"hidden",
+    ...dragPanelStyle,
   };
   function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
@@ -12576,6 +12581,8 @@ function AsignarServicioModal({
     const {origen:origenRuta,destino:destinoRuta}=routeTextFromStops(stops);
     if(!origenRuta||!destinoRuta){setError("Indica ciudad y país en las paradas de carga y descarga");return;}
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan ciudad / localidad");return;}
+    const almacenErr=validateStopsAlmacen(stops);
+    if(almacenErr){setError(almacenErr);return;}
     if(sinConductor&&!empresaId){setError("Falta la empresa. Vuelve al panel empresa e inténtalo de nuevo.");return;}
     const authUidModal=getUserId?.()||null;
     const effectiveResponsableId=isDemoApp()
@@ -12767,10 +12774,18 @@ function AsignarServicioModal({
         border:`1px solid ${EMPRESA_UI.border}`,
       }} onClick={e=>e.stopPropagation()}>
 
-        <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card}}>
+        <div
+          style={{padding:"12px 16px 10px",borderBottom:`1px solid ${EMPRESA_UI.border}`,flexShrink:0,background:card,...headerGripStyle}}
+          onPointerDown={onHeaderPointerDown}
+        >
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
-            <button type="button" onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+            <div>
+              <div style={{fontSize:15,fontWeight:650,color:tx}}>Nuevo servicio</div>
+              {!isMobile?(
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:3,fontWeight:500}}>Arrastra la cabecera para mover el modal</div>
+              ):null}
+            </div>
+            <button type="button" data-no-drag onClick={onClose} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,width:28,height:28,color:EMPRESA_UI.subtle,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
           </div>
         </div>
 
@@ -17923,7 +17938,20 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
   const[error,setError]=useState("");
   const[paso,setPaso]=useState(1);
   const{isMobile,overlayStyle,modalStyle}=useModalLayout();
+  const{panelStyle:dragPanelStyle,headerGripStyle,onHeaderPointerDown}=useDraggableModal({disabled:isMobile});
   const card="#FFFFFF",bg="#F8FAFC",tx="#0F172A",su="#64748B";
+  const desktopModalStyle=isMobile?modalStyle:{
+    position:"relative",
+    width:SERVICIO_MODAL_SHELL.width,
+    maxWidth:SERVICIO_MODAL_SHELL.maxWidth,
+    minHeight:SERVICIO_MODAL_SHELL.minHeight,
+    maxHeight:SERVICIO_MODAL_SHELL.maxHeight,
+    borderRadius:16,
+    display:"flex",
+    flexDirection:"column",
+    overflow:"hidden",
+    ...dragPanelStyle,
+  };
   const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
 
   function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
@@ -17951,7 +17979,12 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
   }
   function removeStop(i){setStops(prev=>prev.filter((_,idx)=>idx!==i));}
   function validarPaso1(){if(!origen.trim()){setError("Escribe el origen");return false;}if(!destino.trim()){setError("Escribe el destino");return false;}setError("");return true;}
-  function validarPaso2(){if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return false;}setError("");return true;}
+  function validarPaso2(){
+    if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return false;}
+    const almacenErr=validateStopsAlmacen(stops);
+    if(almacenErr){setError(almacenErr);return false;}
+    setError("");return true;
+  }
   const stopsConGeo=stops.filter(s=>s.lat&&s.lon).length;
 
   async function guardar(){
@@ -18025,13 +18058,21 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
 
   return(
     <div style={overlayStyle} onClick={onClose}>
-      <div style={{...modalStyle,background:card}} onClick={e=>e.stopPropagation()}>
+      <div style={{...(isMobile?modalStyle:desktopModalStyle),background:card}} onClick={e=>e.stopPropagation()}>
 
         {/* HEADER — sticky */}
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid #E2E8F0",flexShrink:0,background:card}}>
+        <div
+          style={{padding:"14px 16px 12px",borderBottom:"1px solid #E2E8F0",flexShrink:0,background:card,...headerGripStyle}}
+          onPointerDown={onHeaderPointerDown}
+        >
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <div style={{fontSize:16,fontWeight:800,color:"#B45309"}}>NUEVO SERVICIO</div>
-            <button onClick={onClose} style={{background:"#F1F5F9",border:"1px solid #CBD5E1",borderRadius:8,width:28,height:28,color:"#475569",cursor:"pointer",fontSize:14}}>✕</button>
+            <div>
+              <div style={{fontSize:16,fontWeight:800,color:"#B45309"}}>NUEVO SERVICIO</div>
+              {!isMobile?(
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:3,fontWeight:500}}>Arrastra la cabecera para mover el modal</div>
+              ):null}
+            </div>
+            <button data-no-drag onClick={onClose} style={{background:"#F1F5F9",border:"1px solid #CBD5E1",borderRadius:8,width:28,height:28,color:"#475569",cursor:"pointer",fontSize:14}}>✕</button>
           </div>
           {/* Indicador pasos */}
           <div style={{display:"flex",gap:6}}>

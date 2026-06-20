@@ -23,7 +23,7 @@ import { insertServicioCambiosRows, fmtAuditVal } from "../../domain/fleet/servi
 import { replaceStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
 import { STOP_TIPOS_FORM } from "../../domain/fleet/stopTypes.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
-import { emptyStopGeoForm, hydrateStopFormsFromRows, prepareStopsGeoForPersist } from "../../domain/geo/stopGeoModel.js";
+import { emptyStopGeoForm, hydrateStopFormsFromRows, prepareStopsGeoForPersist, validateStopsAlmacen } from "../../domain/geo/stopGeoModel.js";
 import { normalizeDescargaCargadorLinks } from "../../domain/dcdt/descargaCargadorLink.js";
 import { StopGeoFieldsForm } from "../services/components/StopGeoFieldsForm.jsx";
 import { canPickOfficeServicioResponsable } from "../../domain/empresa/officeUserFilters.js";
@@ -44,6 +44,7 @@ import {
   secondaryButtonStyle,
   SERVICIO_MODAL_SHELL,
 } from "../services/servicioFormTheme.js";
+import { useDraggableModal } from "../../hooks/useDraggableModal.js";
 import { ServicioStopToolbar } from "../services/components/ServicioStopToolbar.jsx";
 import { MatriculaVehiculoBadge } from "../services/components/MatriculaVehiculoBadge.jsx";
 
@@ -90,6 +91,7 @@ export function EmpresaEditarServicioModal({
       ? officeUser.userId || userId
       : null;
   const wide = mode === "wide";
+  const { panelStyle: dragPanelStyle, headerGripStyle, onHeaderPointerDown } = useDraggableModal();
 
   const [stops, setStops] = useState([
     emptyStopGeoForm({ orden: 1, tipo: "carga" }),
@@ -268,6 +270,11 @@ export function EmpresaEditarServicioModal({
         }
         if (stops.some((s) => !s.nombre.trim())) {
           setError("Todas las paradas necesitan ciudad / localidad");
+          return;
+        }
+        const almacenErr = validateStopsAlmacen(stops);
+        if (almacenErr) {
+          setError(almacenErr);
           return;
         }
 
@@ -537,6 +544,7 @@ export function EmpresaEditarServicioModal({
         style={{
           width: SERVICIO_MODAL_SHELL.width,
           maxWidth: SERVICIO_MODAL_SHELL.maxWidth,
+          minHeight: SERVICIO_MODAL_SHELL.minHeight,
           maxHeight: SERVICIO_MODAL_SHELL.maxHeight,
           overflow: "hidden",
           display: "flex",
@@ -545,15 +553,24 @@ export function EmpresaEditarServicioModal({
           borderRadius: 14,
           border: `1px solid ${EMPRESA_UI.border}`,
           boxShadow: "0 24px 60px rgba(15,23,42,.18)",
+          ...dragPanelStyle,
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${EMPRESA_UI.border}` }}>
+        <div
+          style={{
+            padding: "14px 16px",
+            borderBottom: `1px solid ${EMPRESA_UI.border}`,
+            ...headerGripStyle,
+          }}
+          onPointerDown={onHeaderPointerDown}
+        >
           <div style={{ fontSize: 15, fontWeight: 700, color: EMPRESA_UI.tx }}>Editar servicio</div>
           <div style={{ fontSize: 12, color: EMPRESA_UI.muted, marginTop: 4 }}>
             {getServiceNumber(servicio)} · {wide ? "Edición amplia" : "Edición limitada (en curso)"}
+            <span style={{ marginLeft: 8, fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>· Arrastra para mover</span>
           </div>
         </div>
 

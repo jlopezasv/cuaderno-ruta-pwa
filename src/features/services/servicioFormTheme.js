@@ -1,9 +1,10 @@
 /** Tema visual compartido — formulario servicio / preparación DCDT (demo). */
 
 export const SERVICIO_MODAL_SHELL = {
-  width: "90vw",
-  maxWidth: 1450,
-  maxHeight: "92vh",
+  width: "min(96vw, 1520px)",
+  maxWidth: 1520,
+  minHeight: "min(78vh, 720px)",
+  maxHeight: "94vh",
 };
 
 export const SERVICIO_FORM_TONES = {

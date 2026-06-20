@@ -145,4 +145,15 @@ export function stopMissingPostalWarning(stop) {
   return !String(stop?.codigo_postal || "").trim();
 }
 
+export function stopMissingAlmacen(stop) {
+  return !String(stop?.empresa || "").trim();
+}
+
+/** Mensaje de error si alguna parada no tiene almacén, o null si todo OK. */
+export function validateStopsAlmacen(stops) {
+  const list = Array.isArray(stops) ? stops : [];
+  if (!list.some(stopMissingAlmacen)) return null;
+  return "Todas las paradas necesitan almacén";
+}
+
 export { GEO_META_KEYS };

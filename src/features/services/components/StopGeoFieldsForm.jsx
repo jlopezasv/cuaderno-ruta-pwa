@@ -57,10 +57,18 @@ const GRID_CSS = `
 }
 `;
 
-function fieldLabel(theme, text) {
+const PLACEHOLDER_COLOR = {
+  empresa: "#94a3b8",
+  dark: "#64748b",
+};
+
+const SUGGESTION_COLOR = "#94a3b8";
+
+function fieldLabel(theme, text, { required = false } = {}) {
   return (
     <div style={{ fontSize: 10, color: theme.su, fontWeight: 700, marginBottom: 2, letterSpacing: 0.2 }}>
       {text}
+      {required ? <span style={{ color: "#dc2626", marginLeft: 2 }}>*</span> : null}
     </div>
   );
 }
@@ -122,14 +130,17 @@ export function StopGeoFieldsForm({
 }) {
   const theme = THEMES[themeKey] || THEMES.empresa;
   const isGrid = layout === "servicio-grid" || !compact;
+  const placeholderColor = PLACEHOLDER_COLOR[themeKey] || PLACEHOLDER_COLOR.empresa;
+  const inputClass = `stop-geo-field-input stop-geo-field-input--${themeKey}`;
   const inp = {
     width: "100%",
     background: theme.inputBg,
     border: `1px solid ${theme.border}`,
     borderRadius: isGrid ? 8 : compact ? 6 : 9,
-    padding: isGrid ? "8px 10px" : compact ? "6px 8px" : "9px 10px",
-    fontSize: isGrid ? 13 : compact ? 12 : 13,
+    padding: isGrid ? "10px 12px" : compact ? "8px 10px" : "10px 12px",
+    fontSize: isGrid ? 14 : compact ? 12 : 14,
     color: theme.tx,
+    fontWeight: 500,
     outline: "none",
     boxSizing: "border-box",
     marginBottom: isGrid ? 6 : compact ? 4 : 6,
@@ -200,14 +211,17 @@ export function StopGeoFieldsForm({
 
   const lookupLine =
     lookupStatus === "loading" ? (
-      <div style={{ fontSize: 10, color: theme.su, marginBottom: 4 }}>Buscando localidad…</div>
+      <div style={{ fontSize: 11, color: SUGGESTION_COLOR, marginBottom: 4, fontStyle: "italic" }}>
+        Buscando localidad…
+      </div>
     ) : lookupHint ? (
       <div
         style={{
-          fontSize: 10,
-          color: lookupStatus === "ok" ? theme.ok : theme.warn,
+          fontSize: 11,
+          color: lookupStatus === "miss" ? theme.warn : SUGGESTION_COLOR,
           marginBottom: 4,
-          fontWeight: 600,
+          fontWeight: 500,
+          fontStyle: lookupStatus === "ok" ? "italic" : "normal",
         }}
       >
         {lookupHint}
@@ -227,21 +241,33 @@ export function StopGeoFieldsForm({
       </div>
     ) : null;
 
+  const almacenMissing = !String(stop?.empresa || "").trim();
+
   const ubicacionBlock = (
     <div
       style={{
         background: theme.block,
         border: `1px solid ${theme.border}`,
         borderRadius: 10,
-        padding: isGrid ? "10px 12px" : "8px 10px",
+        padding: isGrid ? "12px 14px" : "8px 10px",
         marginBottom: 8,
       }}
     >
+      <style>{`
+.${inputClass}::placeholder { color: ${placeholderColor}; opacity: 1; font-weight: 400; }
+.${inputClass}:not(:placeholder-shown) { color: ${theme.tx}; font-weight: 600; }
+`}</style>
       {blockTitle(theme, "Bloque A — Ubicación operativa")}
       <div className={isGrid ? "stop-geo-row-3" : undefined} style={!isGrid ? { display: "grid", gridTemplateColumns: compact ? "1fr 1fr" : "1fr 120px", gap: 6 } : undefined}>
         <div>
           {fieldLabel(theme, "Ciudad")}
-          <input value={stop?.nombre || ""} onChange={(e) => handleField("nombre", e.target.value)} placeholder="El Ejido" style={inp} />
+          <input
+            value={stop?.nombre || ""}
+            onChange={(e) => handleField("nombre", e.target.value)}
+            placeholder="El Ejido"
+            className={inputClass}
+            style={inp}
+          />
         </div>
         <div>
           {fieldLabel(theme, "Código postal")}
@@ -249,12 +275,18 @@ export function StopGeoFieldsForm({
             value={stop?.codigo_postal || ""}
             onChange={(e) => handleField("codigo_postal", e.target.value.toUpperCase())}
             placeholder="04700"
+            className={inputClass}
             style={inp}
           />
         </div>
         <div>
           {fieldLabel(theme, "País")}
-          <select value={stop?.pais || defaultStopCountry()} onChange={(e) => handleField("pais", e.target.value)} style={inp}>
+          <select
+            value={stop?.pais || defaultStopCountry()}
+            onChange={(e) => handleField("pais", e.target.value)}
+            className={inputClass}
+            style={inp}
+          >
             {EU_COUNTRY_OPTIONS.map((c) => (
               <option key={c.code} value={c.label}>
                 {c.label}
@@ -272,16 +304,22 @@ export function StopGeoFieldsForm({
             value={stop?.direccion || ""}
             onChange={(e) => handleField("direccion", e.target.value)}
             placeholder="Calle, polígono, nave…"
+            className={inputClass}
             style={inp}
           />
         </div>
         <div>
-          {fieldLabel(theme, "Muelle / operador")}
+          {fieldLabel(theme, "Almacén", { required: true })}
           <input
             value={stop?.empresa || ""}
             onChange={(e) => handleField("empresa", e.target.value)}
-            placeholder="Polígono sector 20 — solo informativo"
-            style={{ ...inp, color: theme.su }}
+            placeholder="Nombre del almacén o centro logístico"
+            className={inputClass}
+            style={{
+              ...inp,
+              borderColor: almacenMissing ? "#fca5a5" : theme.border,
+            }}
+            aria-required="true"
           />
         </div>
       </div>
@@ -290,7 +328,8 @@ export function StopGeoFieldsForm({
         <input
           value={stop?.detalles ?? stop?.notas ?? ""}
           onChange={(e) => handleField("detalles", e.target.value)}
-          placeholder="Puerta, horario, referencia muelle…"
+          placeholder="Puerta, horario, referencia de muelle…"
+          className={inputClass}
           style={{ ...inp, marginBottom: showGeoStatus ? 4 : 0 }}
         />
       </div>
