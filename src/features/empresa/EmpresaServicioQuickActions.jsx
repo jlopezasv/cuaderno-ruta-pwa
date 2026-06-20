@@ -6,6 +6,7 @@ import { ServiceQuickActionsBar } from "../services/components/ServiceQuickActio
 import { ServiceMessagesModal } from "../services/components/ServiceMessagesModal.jsx";
 import { useServiceDcdtQuickStatus } from "../services/hooks/useConductorDcdtQuickStatus.js";
 import { useServiceMessagesUnread } from "../services/hooks/useServiceMessagesUnread.js";
+import { isDecaAplicable } from "../../domain/service/servicioAlcance.js";
 
 /**
  * DCDT + CHAT compactos en tarjeta empresa (modal al pulsar; sin alargar tarjeta).
@@ -21,7 +22,7 @@ export function EmpresaServicioQuickActions({
 }) {
   const [chatOpen, setChatOpen] = useState(false);
   const showChat = isServiceMessagesEnabled(servicio) && !!servicio?.id;
-  const showDcdtBtn = showDcdt && !!servicio?.empresa_id;
+  const showDcdtBtn = showDcdt && !!servicio?.empresa_id && isDecaAplicable(servicio);
   const authUserId = empresaUserId || getAuthUid?.() || null;
 
   const dcdtQuick = useServiceDcdtQuickStatus({

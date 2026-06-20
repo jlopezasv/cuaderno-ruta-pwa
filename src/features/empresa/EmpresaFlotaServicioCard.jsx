@@ -17,6 +17,7 @@ import { flotaEvsSigForStops, stopsOperativaSig } from "./empresaFlotaRefresh.js
 import { servicioSinConductorOperacional } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
+import { getServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
 import { EmpresaServicioQuickActions } from "./EmpresaServicioQuickActions.jsx";
@@ -1092,6 +1093,7 @@ function propsEqual(prev, next) {
   ) {
     return false;
   }
+  if (getServicioAlcance(prev.servicio) !== getServicioAlcance(next.servicio)) return false;
   if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
   if (prev.asignadosCount !== next.asignadosCount) return false;
   if (prev.asignadosNombresStr !== next.asignadosNombresStr) return false;

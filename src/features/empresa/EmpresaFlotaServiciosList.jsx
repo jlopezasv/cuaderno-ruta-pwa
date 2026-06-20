@@ -10,6 +10,7 @@ import { getAttentionReason, needsAttention } from "../../domain/service/service
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
 import { conductorUidOperativoServicio } from "../../domain/fleet/operationalPlaceholderConductor.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
+import { getServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { officeResponsableServicioLine } from "../../domain/empresa/empresaOfficeUsers.js";
 
 function evidenciasForServicioStops(servicioId, flotaStops, flotaEvs) {
@@ -120,6 +121,7 @@ function rowPropsEqual(prev, next) {
   ) {
     return false;
   }
+  if (getServicioAlcance(prev.servicio) !== getServicioAlcance(next.servicio)) return false;
   if (prev.servicio?.conductor_id !== next.servicio?.conductor_id) return false;
   if (prev.servicio?.responsable_user_id !== next.servicio?.responsable_user_id) return false;
   if (prev.responsableLine !== next.responsableLine) return false;

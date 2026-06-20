@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAllDcdtByServicio, fetchDcdtByServicio } from "../../../domain/dcdt/dcdtModel.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../../domain/dcdt/dcdtReadiness.js";
+import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
 
 /** @typedef {"validated"|"incomplete"|"none"} DcdtQuickVisual */
 
@@ -27,7 +28,7 @@ export function useConductorDcdtQuickStatus({
   });
 
   const load = useCallback(async () => {
-    if (!servicio?.id || !empresaId) {
+    if (!servicio?.id || !empresaId || !isDecaAplicable(servicio)) {
       setDcdt(null);
       setLoading(false);
       return;
@@ -78,12 +79,12 @@ export function useConductorDcdtQuickStatus({
   }, [pollWhileIncomplete, servicio?.id, readiness.isValidated, load]);
 
   const visual = useMemo(() => {
-    if (!empresaId) return "none";
+    if (!empresaId || !isDecaAplicable(servicio)) return "none";
     if (loading && !dcdt) return "none";
     if (!dcdt) return "none";
     if (readiness.isValidated) return "validated";
     return "incomplete";
-  }, [empresaId, loading, dcdt, readiness.isValidated]);
+  }, [empresaId, servicio, loading, dcdt, readiness.isValidated]);
 
   return { visual, loading, hasDcdt: !!dcdt, readiness, reload: load };
 }

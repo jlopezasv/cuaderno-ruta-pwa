@@ -1,5 +1,6 @@
 import { servicioPendienteAsignacion } from "../../domain/fleet/servicioAssignment.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
+import { getServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { ETA_UI_VISUAL_TICK_MS } from "../../domain/service/operationalEtaPresentation.js";
 
 const EMPRESA_VISTA_ESTADOS_COMPLETADOS = Object.freeze(["completado", "cerrado"]);
@@ -102,7 +103,7 @@ export function formatFlotaManualRefreshLabel(ts) {
 
 function servicioSyncKey(s) {
   if (!s?.id) return "";
-  return `${s.id}|${s.estado}|${s.referencia}|${s.conductor_id}|${s.updated_at || ""}|${s.fecha_inicio || ""}`;
+  return `${s.id}|${s.estado}|${s.referencia}|${getServicioAlcance(s)}|${s.conductor_id}|${s.updated_at || ""}|${s.fecha_inicio || ""}`;
 }
 
 function parseServicioUpdatedAtMs(servicio) {

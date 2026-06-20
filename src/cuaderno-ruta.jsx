@@ -12541,6 +12541,13 @@ function AsignarServicioModal({
   const sinConductor=!conductorSelId;
   const conductorVehiculo=resolveConductorVehiculo(conductoresFlota, conductorSelId);
   const mercanciaPreview=useMemo(()=>mercanciaPreviewFromStops(stops),[stops]);
+  const servicioDcdtPreview=useMemo(
+    ()=>({
+      empresa_id:empresaId||null,
+      referencia:mergeReferenciaOperacional("",servicioAlcanceMetaPatch(alcanceServicio)),
+    }),
+    [empresaId,alcanceServicio],
+  );
   const desktopModalStyle=isMobile?modalStyle:{
     position:"relative",
     width:SERVICIO_MODAL_SHELL.width,
@@ -12867,6 +12874,7 @@ function AsignarServicioModal({
           </div>
 
           <DcdtReadinessPanel
+            servicio={servicioDcdtPreview}
             stops={stops}
             mercancia={mercanciaPreview}
             partesCatalog={partesCatalog}

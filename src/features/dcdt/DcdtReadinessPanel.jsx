@@ -5,6 +5,7 @@ import {
   dcdtStatusIcon,
   dcdtStatusLabel,
 } from "../../domain/dcdt/dcdtFormReadiness.js";
+import { isDecaAplicable } from "../../domain/service/servicioAlcance.js";
 import { SERVICIO_FORM_TONES } from "../services/servicioFormTheme.js";
 import { MatriculaVehiculoBadge } from "../services/components/MatriculaVehiculoBadge.jsx";
 
@@ -44,6 +45,7 @@ function checklistRow(item) {
 }
 
 export function DcdtReadinessPanel({
+  servicio = null,
   stops = [],
   mercancia = {},
   partesCatalog = [],
@@ -52,6 +54,8 @@ export function DcdtReadinessPanel({
   remolque = null,
   tipoVehiculo = "articulado",
 }) {
+  const decaAplicable = servicio ? isDecaAplicable(servicio) : true;
+
   const partesById = useMemo(() => {
     const map = {};
     for (const p of partesCatalog || []) {
@@ -73,6 +77,28 @@ export function DcdtReadinessPanel({
       }),
     [stops, mercancia, partesById, fechaInicio, matricula, remolque, tipoVehiculo],
   );
+
+  if (!decaAplicable) {
+    return (
+      <div
+        style={{
+          border: `1px solid ${tone.border}`,
+          borderRadius: 14,
+          padding: "14px 16px",
+          background: tone.bg,
+          marginTop: 8,
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 800, color: tone.header, marginBottom: 6 }}>
+          {DECA_SHORT_LABEL} — no aplica
+        </div>
+        <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+          Servicio internacional: la documentación contractual es CMR, no DeCA nacional.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

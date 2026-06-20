@@ -120,6 +120,16 @@ export function EmpresaEditarServicioModal({
 
   const rutaDesdeParadas = useMemo(() => routeTextFromStops(stops), [stops]);
   const mercanciaPreview = useMemo(() => mercanciaPreviewFromStops(stops), [stops]);
+  const servicioDcdtPreview = useMemo(
+    () => ({
+      ...servicio,
+      referencia: mergeReferenciaOperacional(
+        servicio?.referencia || "",
+        servicioAlcanceMetaPatch(alcanceServicio),
+      ),
+    }),
+    [servicio, alcanceServicio],
+  );
 
   useEffect(() => {
     if (!servicio?.id) return;
@@ -351,11 +361,27 @@ export function EmpresaEditarServicioModal({
           });
         }
         if (!stopsResult.ok) throw new Error(stopsResult.error || "No se pudieron guardar las paradas");
+
+        const referenciaBeforeSync = patch.referencia ?? servicio.referencia ?? "";
+        const alcanceAl0 = getServicioAlcance(servicio);
+        const alcanceAl1 = alcanceServicio;
+        const referenciaForSync =
+          alcanceAl1 !== alcanceAl0
+            ? mergeReferenciaOperacional(referenciaBeforeSync, servicioAlcanceMetaPatch(alcanceAl1))
+            : referenciaBeforeSync;
+        const servicioForSync = {
+          ...servicio,
+          referencia: referenciaForSync,
+          ...(patch.origen != null ? { origen: patch.origen } : {}),
+          ...(patch.destino != null ? { destino: patch.destino } : {}),
+          ...(patch.fecha_inicio !== undefined ? { fecha_inicio: patch.fecha_inicio } : {}),
+        };
+
         try {
           await syncDcdtServiciosAfterStopsPersisted({
             servicioId: servicio.id,
             empresaId: servicio.empresa_id,
-            servicio,
+            servicio: servicioForSync,
             stops: stopsResult.rows?.length ? stopsResult.rows : stopsPayload,
           });
         } catch (syncErr) {
@@ -658,6 +684,7 @@ export function EmpresaEditarServicioModal({
                 PARADAS · {stops.length}
               </div>
               <DcdtReadinessPanel
+                servicio={servicioDcdtPreview}
                 stops={stops}
                 mercancia={mercanciaPreview}
                 partesCatalog={partesCatalog}

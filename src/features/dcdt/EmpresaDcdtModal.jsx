@@ -39,6 +39,7 @@ import {
 } from "../../domain/dcdt/decaRouteModification.js";
 import { formatDcdtDisplayValue, formatDcdtDisplayValueOrDash } from "../../domain/dcdt/dcdtDisplayText.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { isDecaAplicable } from "../../domain/service/servicioAlcance.js";
 import { fetchConductorVehiculoForDcdt } from "../../domain/empresa/conductorVehiculoEmpresa.js";
 import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
@@ -161,6 +162,7 @@ export function EmpresaDcdtModal({
   showToastRef.current = showToast;
 
   const empresaId = servicio?.empresa_id || empresa?.id;
+  const decaAplicable = isDecaAplicable(servicio);
 
   function setMercanciaField(field, value) {
     mercanciaDirtyRef.current = true;
@@ -272,7 +274,10 @@ export function EmpresaDcdtModal({
   }
 
   useEffect(() => {
-    if (!servicio?.id || !empresaId) return;
+    if (!servicio?.id || !empresaId || !decaAplicable) {
+      if (!decaAplicable) setLoading(false);
+      return;
+    }
     let cancelled = false;
     mercanciaDirtyRef.current = false;
     syncedPartesRef.current = false;
@@ -339,7 +344,7 @@ export function EmpresaDcdtModal({
     return () => {
       cancelled = true;
     };
-  }, [servicio?.id, empresaId]);
+  }, [servicio?.id, empresaId, decaAplicable]);
 
   useEffect(() => {
     if (!selectedDcdtId || !servicio?.id) return;
@@ -768,6 +773,54 @@ export function EmpresaDcdtModal({
     } finally {
       setBusy("");
     }
+  }
+
+  if (!decaAplicable) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: UI.overlay,
+          zIndex: 500,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+        }}
+        onClick={onClose}
+      >
+        <div
+          role="dialog"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: UI.surface,
+            borderRadius: 16,
+            width: "min(98vw, 520px)",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            border: `1px solid ${UI.border}`,
+          }}
+        >
+          <div style={{ padding: "16px 18px", borderBottom: `1px solid ${UI.border}` }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>{DECA_SHORT_LABEL} — no aplica</div>
+            <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
+              Servicio internacional · {getServiceNumberForDisplay(servicio) || "—"}
+            </div>
+          </div>
+          <div style={{ padding: "20px 18px" }}>
+            <div style={{ fontSize: 14, color: UI.tx, lineHeight: 1.5, marginBottom: 16 }}>
+              Este servicio está marcado como <strong>internacional</strong>. La documentación contractual es CMR, no
+              DeCA nacional.
+            </div>
+            <button type="button" onClick={onClose} style={btn(UI.soft, UI.tx)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
