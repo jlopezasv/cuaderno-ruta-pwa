@@ -12137,11 +12137,11 @@ async function patchServicioIdentidadOpcional(servicioId,{serviceNumber,cliente,
   if(!servicioId)return;
   const referenciaBase=serviceNumber?.trim()||null;
   const patch={
-    service_number:referenciaBase,
     cliente:cliente?.trim()||null,
     referencia_cliente:referenciaCliente?.trim()||null,
     referencia,
   };
+  if(referenciaBase)patch.service_number=referenciaBase;
   const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`,{
     method:"PATCH",
     headers:{"Prefer":"return=representation"},
@@ -12356,7 +12356,7 @@ async function crearServicioConIdentidad({
       row = Array.isArray(data) ? data[0] : data;
     } else {
       const getRes = await sbFetch(
-        `/rest/v1/servicios?id=eq.${postBody.id}&select=id,empresa_id,conductor_id,estado,origen,destino,referencia,fecha_inicio,created_at`,
+        `/rest/v1/servicios?id=eq.${postBody.id}&select=id,empresa_id,conductor_id,estado,origen,destino,referencia,fecha_inicio,created_at,service_number`,
       );
       if (getRes.ok) {
         const rows = await getRes.json().catch(() => []);
@@ -12620,7 +12620,7 @@ function AsignarServicioModal({
         estado:SERVICIO_ESTADO_PENDIENTE_ASIGNACION,
         origen:origenRuta,
         destino:destinoRuta,
-        serviceNumber:ref.trim(),
+        serviceNumber:isDemoApp()?"":ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
         operationalPlaces,
@@ -12798,13 +12798,22 @@ function AsignarServicioModal({
             </div>
             <OfficeResponsableServicioField {...responsableFieldProps}/>
             <div>
-              <div style={lbl}>Ref. servicio</div>
-              <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441" style={inp}/>
-            </div>
-            <div>
               <div style={lbl}>Ref. cliente</div>
               <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821" style={inp}/>
             </div>
+            {isDemoApp()?(
+              <div style={{gridColumn:isMobile?"1":"1 / -1"}}>
+                <div style={lbl}>Código de viaje</div>
+                <div style={{...inp,background:EMPRESA_UI.surfaceSoft,color:su,cursor:"default",marginBottom:0}}>
+                  Se asignará automáticamente al guardar (ej. TRA-VIAJE26-0001)
+                </div>
+              </div>
+            ):(
+              <div>
+                <div style={lbl}>Ref. servicio</div>
+                <input value={ref} onChange={e=>setRef(e.target.value)} placeholder="SRV-0441" style={inp}/>
+              </div>
+            )}
             <div>
               <div style={lbl}>Fecha salida</div>
               <input type="datetime-local" value={fechaInicio} onChange={e=>setFechaInicio(e.target.value)}

@@ -1,3 +1,4 @@
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { getOperationalPlanSnapshot, getServicioOperacionMeta, stripServicioOperacionDisplay } from "./serviceOperacionMeta.js";
 import {
   formatOperationalRouteLine,
@@ -9,6 +10,18 @@ import {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const AUTO_REF_PREFIX = "SERV";
+
+/** Formato canónico demo: TRA-VIAJE26-0001 */
+export const VIAJE_CODIGO_RE = /^[A-Z]{3}-VIAJE\d{2}-\d{4}$/;
+
+/** DEMO flota: código asignado por trigger en BD (solo servicios con empresa_id). */
+export function isViajeCodigoDemoFleet(servicio) {
+  return isDemoApp() && !!servicio?.empresa_id;
+}
+
+function isLegacyServHashReference(value) {
+  return /^SERV-\d{3}$/i.test(String(value || "").trim());
+}
 
 function isUuidLike(value) {
   return typeof value === "string" && UUID_RE.test(value.trim());
@@ -36,10 +49,14 @@ export function buildAutoServiceReference(servicio, prefix = AUTO_REF_PREFIX) {
 }
 
 function manualServiceReference(servicio) {
-  const fromRef = stripServicioOperacionDisplay(servicio?.referencia);
   const sn = servicio?.service_number;
   if (sn != null && String(sn).trim() && !isUuidLike(String(sn))) return String(sn).trim();
-  if (fromRef != null && String(fromRef).trim() && !isUuidLike(String(fromRef))) return String(fromRef).trim();
+  const fromRef = stripServicioOperacionDisplay(servicio?.referencia);
+  if (fromRef != null && String(fromRef).trim() && !isUuidLike(String(fromRef))) {
+    const ref = String(fromRef).trim();
+    if (isViajeCodigoDemoFleet(servicio) && !sn && isLegacyServHashReference(ref)) return null;
+    return ref;
+  }
   return null;
 }
 
@@ -47,12 +64,19 @@ function manualServiceReference(servicio) {
 export function getServiceNumberForDisplay(servicio) {
   const manual = manualServiceReference(servicio);
   if (manual) return manual;
+  if (isViajeCodigoDemoFleet(servicio)) {
+    if (servicio?.id) return buildAutoServiceReference(servicio);
+    return null;
+  }
   if (servicio?.id) return buildAutoServiceReference(servicio);
   return null;
 }
 
 export function getServiceNumber(servicio) {
-  return getServiceNumberForDisplay(servicio) || (servicio?.id ? buildAutoServiceReference(servicio) : "SERV-000");
+  const display = getServiceNumberForDisplay(servicio);
+  if (display) return display;
+  if (isViajeCodigoDemoFleet(servicio)) return null;
+  return servicio?.id ? buildAutoServiceReference(servicio) : "SERV-000";
 }
 
 export function getServiceClient(servicio) {
