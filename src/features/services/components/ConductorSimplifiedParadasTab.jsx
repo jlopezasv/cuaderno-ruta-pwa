@@ -28,6 +28,9 @@ import {
 } from "../../../domain/service/operationalEtaAutoRefresh.js";
 import { resolveEtaVisual } from "../../../domain/service/operationalEtaPresentation.js";
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
+import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
+import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
+import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 
 const PAGE = "#F8FAFC";
 /** Referencias estables — evitar bucle infinito en hooks (useEmpresaOriginLookup / useConductorDcdtQuickStatus). */
@@ -107,6 +110,8 @@ export function ConductorSimplifiedParadasTab({
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
   const [chatModalOpen, setChatModalOpen] = useState(false);
   const [detailReadOnly, setDetailReadOnly] = useState(false);
+  const [descargaFirma, setDescargaFirma] = useState(null);
+  const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
   const muelleGpsRef = useRef(null);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -226,6 +231,17 @@ export function ConductorSimplifiedParadasTab({
     const prefetchedGps = await acquireLocation(eventType, actionLabel);
     if (prefetchedGps === null) return;
     muelleGpsRef.current = prefetchedGps;
+
+    if (kind !== "entrada" && isDescargaStopTipo(stop?.tipo)) {
+      setConfirmMuelle(null);
+      setDescargaFirma({
+        stopId,
+        prefetchedGps,
+        stopLabel: active?.lugarDisplay || active?.lugar || stop?.nombre || "Descarga",
+      });
+      return;
+    }
+
     setConfirmMuelleSaving(true);
     try {
       const result =
@@ -240,6 +256,43 @@ export function ConductorSimplifiedParadasTab({
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
+    }
+  };
+
+  const handleConfirmDescargaFirma = async (firmaCanvas) => {
+    if (!descargaFirma || descargaFirmaSaving || !localServicio) return;
+    const stop = localStops.find((s) => s.id === descargaFirma.stopId);
+    if (!stop) {
+      showToast?.("Parada no encontrada");
+      setDescargaFirma(null);
+      return;
+    }
+    setDescargaFirmaSaving(true);
+    try {
+      const firmaRes = await persistDescargaEntregaFirma({
+        stop,
+        servicioId: localServicio.id,
+        firmaCanvas,
+        conductorId: uid,
+        conductorNombre,
+        prefetchedGps: descargaFirma.prefetchedGps,
+      });
+      const stopsWithFirma = localStops.map((s) =>
+        s.id === stop.id ? { ...s, notas: firmaRes.notas } : s,
+      );
+      setLocalStops(stopsWithFirma);
+      const result = await marcarCompletadoEn(localServicio, stopsWithFirma, descargaFirma.stopId, {
+        prefetchedGps: descargaFirma.prefetchedGps,
+      });
+      if (result?.servicio) setLocalServicio(result.servicio);
+      if (result?.stops) setLocalStops(result.stops);
+      setDescargaFirma(null);
+      muelleGpsRef.current = null;
+      showToast?.("Descarga completada con firma registrada", "#166534", 3200);
+    } catch (error) {
+      showToast?.(error?.message || "No se pudo guardar la firma de entrega");
+    } finally {
+      setDescargaFirmaSaving(false);
     }
   };
 
@@ -510,6 +563,17 @@ export function ConductorSimplifiedParadasTab({
           onRetry={retry}
           onContinue={continueWithout}
           onCancel={cancelGate}
+        />
+        <DescargaEntregaFirmaModal
+          open={!!descargaFirma}
+          stopLabel={descargaFirma?.stopLabel || "Descarga"}
+          saving={descargaFirmaSaving}
+          onCancel={() => {
+            if (descargaFirmaSaving) return;
+            setDescargaFirma(null);
+            muelleGpsRef.current = null;
+          }}
+          onConfirm={handleConfirmDescargaFirma}
         />
         <DriverDcdtActionModal
           open={dcdtModalOpen}

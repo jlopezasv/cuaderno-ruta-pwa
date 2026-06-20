@@ -1,3 +1,4 @@
+import { isDescargaStopTipo } from "../fleet/stopTypes.js";
 import { geocodeQueryFromPlace } from "./serviceOperationalPlaces.js";
 import {
   getOperationalEtaSnapshot,
@@ -6,17 +7,10 @@ import {
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 import { isStopOperationallyComplete } from "./serviceStops.js";
 
-/** Paradas con tipo descarga (incl. carga_descarga). */
-export function isDescargaStopTipo(tipo) {
-  const t = String(tipo || "").toLowerCase();
-  return /\bdescarga\b/.test(t) || /solo_descarga/.test(t);
-}
-
 export function getFirstPendingDescargaStop(stops) {
   const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   return sorted.find((s) => isDescargaStopTipo(s.tipo) && !isStopOperationallyComplete(s)) || null;
 }
-
 export function hasCompletedDescargaStop(stops) {
   return (stops || []).some((s) => isDescargaStopTipo(s.tipo) && isStopOperationallyComplete(s));
 }

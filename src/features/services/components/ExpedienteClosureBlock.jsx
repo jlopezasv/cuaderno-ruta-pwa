@@ -16,7 +16,7 @@ function canvasHasInk(ctx, w, h) {
   return false;
 }
 
-function SignaturePad({ canvasRef, onInkChange }) {
+export function SignaturePad({ canvasRef, onInkChange }) {
   const localRef = useRef(null);
   const setRef = (el) => {
     localRef.current = el;

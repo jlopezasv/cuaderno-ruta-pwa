@@ -58,6 +58,12 @@ export const STOP_TIPOS_FORM = Object.freeze([
   { id: "pernocta", label: "Pernocta", icon: "🛏" },
 ]);
 
+/** Paradas con tipo descarga (incl. carga_descarga). */
+export function isDescargaStopTipo(tipo) {
+  const t = String(tipo || "").toLowerCase();
+  return /\bdescarga\b/.test(t) || /solo_descarga/.test(t);
+}
+
 /** Al completar stop, auto-registro tacógrafo (useServicioActivo → marcarCompletado). */
 export const STOP_TIPOS_CON_AUTOTACO = Object.freeze(["carga", "descarga", "parada_tecnica"]);
 

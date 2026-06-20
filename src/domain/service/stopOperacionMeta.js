@@ -69,6 +69,20 @@ export function getInicioOperacionMs(stop) {
   return Number.isFinite(t) ? t : null;
 }
 
+/** Firma de entrega en parada de descarga (`stops.notas` operativos). */
+export function getStopEntregaFirmaMeta(stop) {
+  const m = getStopOperacionMeta(stop?.notas);
+  if (!m?.entrega_firma_url) return null;
+  return {
+    stop_id: stop?.id ?? null,
+    firma_url: m.entrega_firma_url,
+    signed_at: m.entrega_firma_at || null,
+    conductor_id: m.entrega_conductor_id || null,
+    conductor_nombre: m.entrega_conductor_nombre || null,
+    geo: m.entrega_firma_geo || null,
+  };
+}
+
 const META_SKIP_KEYS = new Set([
   "inicio_operacion_at",
   "entrada_geo",
@@ -85,6 +99,11 @@ const META_SKIP_KEYS = new Set([
   "cargador_parte_id",
   "dcdt_servicio_id",
   "mercancia",
+  "entrega_firma_url",
+  "entrega_firma_at",
+  "entrega_conductor_id",
+  "entrega_conductor_nombre",
+  "entrega_firma_geo",
 ]);
 
 const META_LABELS = {
