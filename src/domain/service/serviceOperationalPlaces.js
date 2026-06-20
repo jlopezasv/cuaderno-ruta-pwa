@@ -170,6 +170,24 @@ export function formatStopLugarDisplay(stop, servicio = null, allStops = null) {
   return ciudad || empresa || "—";
 }
 
+/** Línea compacta de tarjeta conductor: «Calle X · Localidad». */
+export function formatStopCardAddressLine(stop) {
+  const localidad = String(stop?.nombre || "").trim();
+  const direccion = String(stop?.direccion || "").trim();
+  if (direccion && localidad) {
+    if (direccion.toLowerCase().includes(localidad.toLowerCase())) return direccion;
+    return `${direccion} · ${localidad}`;
+  }
+  return direccion || localidad || "—";
+}
+
+/** Línea 1 de tarjeta: «Carga 1 · REF-123» (referencia opcional). */
+export function formatStopCardTitleLine(tipoOrdenLabel, referencia = "") {
+  const tipo = String(tipoOrdenLabel || "").trim() || "Parada";
+  const ref = String(referencia || "").trim();
+  return ref ? `${tipo} · ${ref}` : tipo;
+}
+
 function placeFromLegacyColumn(value) {
   const t = String(value || "").trim();
   if (!t) return { nombre: "", direccion: "" };

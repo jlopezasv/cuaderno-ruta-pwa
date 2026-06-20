@@ -11,8 +11,12 @@ import {
   driverQueueAssignmentTimeMs,
   sortDriverOperationalCandidates,
 } from "./driverServiceQueue.js";
-import { getServiceNumberForDisplay } from "./serviceIdentity.js";
-import { formatStopLugarDisplay } from "./serviceOperationalPlaces.js";
+import { getServiceClientReference, getServiceNumberForDisplay } from "./serviceIdentity.js";
+import {
+  formatStopCardAddressLine,
+  formatStopCardTitleLine,
+  formatStopLugarDisplay,
+} from "./serviceOperationalPlaces.js";
 
 const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR = "en_curso,asignado,completado,pendiente_asignacion";
 
@@ -149,6 +153,27 @@ function labelForStopType(stop) {
   return "Parada";
 }
 
+function tipoOrdenLabelForStop(stop, counters) {
+  const g = stopOperationalGroup(stop?.tipo);
+  if (g === "carga") return `Carga ${counters.carga}`;
+  if (g === "descarga") return `Descarga ${counters.descarga}`;
+  if (g === "carga_descarga") return `Carga/descarga ${counters.carga_descarga}`;
+  return `Parada ${counters.otra || stop?.orden || ""}`.trim();
+}
+
+/** Mapa stop.id → etiqueta ordinal por tipo (Carga 1, Descarga 2…) en orden de ruta. */
+export function buildStopTipoOrdinalMap(sortedStops) {
+  const counters = { carga: 0, descarga: 0, carga_descarga: 0, otra: 0 };
+  const map = new Map();
+  for (const stop of sortedStops || []) {
+    if (!stop?.id) continue;
+    const g = stopOperationalGroup(stop?.tipo);
+    counters[g] = (counters[g] || 0) + 1;
+    map.set(stop.id, tipoOrdenLabelForStop(stop, counters));
+  }
+  return map;
+}
+
 /** Etiqueta de viaje para desambiguar paradas mezcladas. */
 export function tripLabelForServicio(servicio, conductorNameById = {}) {
   const ref = getServiceNumberForDisplay(servicio) || "Servicio";
@@ -189,10 +214,15 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
     const cid = sv?.conductor_id || null;
     const conductorNombre = cid ? conductorNameById[cid] || null : null;
     const tripVisual = tripVisualForConductor(cid, conductorNombre);
+    const tipoOrdinalByStopId = buildStopTipoOrdinalMap(sortedStops);
+    const referenciaCliente = getServiceClientReference(sv);
     for (const stop of sortedStops) {
       if (isStopOperationallyComplete(stop)) continue;
       if (filterByParticipacionTipo && !stopMatchesParticipacionTipo(stop, participacionTipo)) continue;
       const lugarDisplay = formatStopLugarDisplay(stop, sv, sortedStops);
+      const tipoOrdenLabel = tipoOrdinalByStopId.get(stop.id) || labelForStopType(stop);
+      const cardLine1 = formatStopCardTitleLine(tipoOrdenLabel, referenciaCliente);
+      const cardLine2 = formatStopCardAddressLine(stop);
       items.push({
         servicio: sv,
         stop,
@@ -201,6 +231,10 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
         cardLabel: buildFlatStopCardLabel(stop, sv, conductorNameById),
         tripLabel: tripLabelForServicio(sv, conductorNameById),
         tipoLabel: labelForStopType(stop),
+        tipoOrdenLabel,
+        referenciaCliente: referenciaCliente || null,
+        cardLine1,
+        cardLine2,
         lugar: lugarDisplay,
         lugarDisplay,
         conductorId: cid,

@@ -20,7 +20,6 @@ import { stopsOperativaSig } from "../../../features/empresa/empresaFlotaRefresh
 import { isStopOperationallyComplete } from "../../../domain/service/serviceStops.js";
 import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { sbFetch } from "../../../data/supabaseClient.js";
-import { tripLabelForServicio } from "../../../domain/service/driverFlatStopList.js";
 import { useAutoOperationalEtaToFirstDescarga } from "../hooks/useAutoOperationalEtaToFirstDescarga.js";
 import {
   getFirstPendingDescargaStop,
@@ -57,6 +56,47 @@ function stopGroupIcon(tipoLabel) {
   if (tipoLabel === "Carga") return "📦";
   if (tipoLabel === "Descarga") return "📤";
   return "📍";
+}
+
+function DriverStopTripContext({ item, servicio }) {
+  if (!item) return null;
+  const ref = getServiceNumberForDisplay(servicio || item.servicio);
+  const empresaLine = item.lugarDisplay || item.lugar;
+  const parts = [empresaLine, ref, item.conductorNombre].filter(Boolean);
+  if (!parts.length) return null;
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: "10px 12px",
+        background: DRIVER_UI.surfaceHi,
+        border: `1px solid ${DRIVER_UI.line}`,
+        borderRadius: 10,
+        fontSize: 12,
+        color: DRIVER_UI.su,
+        lineHeight: 1.45,
+      }}
+    >
+      {empresaLine ? (
+        <div>
+          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Almacén / empresa: </span>
+          {empresaLine}
+        </div>
+      ) : null}
+      {ref ? (
+        <div style={{ marginTop: empresaLine ? 6 : 0 }}>
+          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Servicio: </span>
+          {ref}
+        </div>
+      ) : null}
+      {item.conductorNombre ? (
+        <div style={{ marginTop: 6 }}>
+          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Conductor principal: </span>
+          {item.conductorNombre}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** Estado visible en la lista plana (pendiente vs en muelle). */
@@ -342,7 +382,6 @@ export function ConductorSimplifiedParadasTab({
 
   if (active && timelineItem) {
     const servicioNoIniciado = localServicio?.estado === "asignado" || !localServicio?.fecha_inicio;
-    const lugarTitulo = active.lugarDisplay || active.lugar || timelineItem.label || "Parada";
     const tripVis = active.tripVisual;
     return (
       <div style={{ padding: "0 0 88px", background: PAGE, minHeight: "70vh" }}>
@@ -376,21 +415,13 @@ export function ConductorSimplifiedParadasTab({
           ) : null}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "#b45309", letterSpacing: 0.5, marginBottom: 6 }}>
-                {active.tipoLabel} · {tripLabelForServicio(localServicio)}
+              <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
+                {active.cardLine1 || active.tipoOrdenLabel || active.tipoLabel}
               </div>
-              <h1
-                style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  color: DRIVER_UI.tx,
-                  lineHeight: 1.2,
-                  margin: 0,
-                  wordBreak: "break-word",
-                }}
-              >
-                {lugarTitulo}
-              </h1>
+              <div style={{ fontSize: 14, color: DRIVER_UI.su, marginTop: 5, lineHeight: 1.35, fontWeight: 600 }}>
+                {active.cardLine2 || active.lugarDisplay || active.lugar || "—"}
+              </div>
+              <DriverStopTripContext item={active} servicio={localServicio} />
             </div>
             <button
               type="button"
@@ -634,7 +665,6 @@ export function ConductorSimplifiedParadasTab({
             const status = flatStopListStatus(item.stop);
             const enMuelle = status.phase === "en_muelle";
             const vis = item.tripVisual;
-            const ref = getServiceNumberForDisplay(item.servicio);
             const showEtaToFirstDescarga =
               firstDescargaStopIdByServicio.get(item.servicio?.id) === item.stop?.id;
             const etaVisual = showEtaToFirstDescarga
@@ -677,16 +707,24 @@ export function ConductorSimplifiedParadasTab({
                   {stopGroupIcon(item.tipoLabel)}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, color: "#b45309", letterSpacing: 0.4 }}>{item.tipoLabel}</div>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
+                        {item.cardLine1 || item.tipoOrdenLabel || item.tipoLabel}
+                      </div>
+                      <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 4, lineHeight: 1.35, fontWeight: 600 }}>
+                        {item.cardLine2 || item.lugarDisplay || item.lugar || "—"}
+                      </div>
+                    </div>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 12,
                         fontWeight: 800,
-                        padding: "3px 8px",
+                        padding: "5px 10px",
                         borderRadius: 999,
                         whiteSpace: "nowrap",
                         flexShrink: 0,
+                        lineHeight: 1.2,
                         color: enMuelle ? "#b45309" : DRIVER_UI.su,
                         background: enMuelle ? "#fef3c7" : DRIVER_UI.surfaceHi,
                         border: `1px solid ${enMuelle ? "#fcd34d" : DRIVER_UI.line}`,
@@ -695,52 +733,11 @@ export function ConductorSimplifiedParadasTab({
                       {status.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, marginTop: 5, lineHeight: 1.25 }}>
-                    {item.lugarDisplay || item.lugar}
-                  </div>
                   {showEtaToFirstDescarga && etaLabel ? (
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
                       ETA primera descarga: {etaLabel}
                     </div>
                   ) : null}
-                  {vis ? (
-                    <div
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        marginTop: 8,
-                        background: vis.chipBg,
-                        border: `1px solid ${vis.stripe}33`,
-                        borderRadius: 999,
-                        padding: "4px 10px 4px 4px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: "50%",
-                          background: vis.stripe,
-                          color: "#fff",
-                          fontSize: 11,
-                          fontWeight: 900,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          flexShrink: 0,
-                        }}
-                      >
-                        {vis.initial}
-                      </span>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: vis.chipFg, lineHeight: 1.2 }}>
-                        {ref}
-                        {item.conductorNombre ? ` · ${item.conductorNombre}` : ""}
-                      </span>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: DRIVER_UI.su, marginTop: 6, fontWeight: 600 }}>{item.tripLabel}</div>
-                  )}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
