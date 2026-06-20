@@ -232,10 +232,18 @@ export function ContratoParteStopBlock({
       parte_transporte_id: parte.id,
       parte_transporte_tipo: parte.tipo,
     };
-    const isCarga = String(stop?.tipo || "").toLowerCase() === "carga";
-    const isCargador = String(parte?.tipo || "").toLowerCase() === PARTE_TIPO.CARGADOR;
-    if (isCarga && isCargador && String(parte?.nombre || "").trim()) {
-      patch.empresa = String(parte.nombre).trim();
+    const stopTipo = String(stop?.tipo || "").toLowerCase();
+    const parteTipoNorm = String(parte?.tipo || "").toLowerCase();
+    const parteNombre = String(parte?.nombre || "").trim();
+    if (parteNombre) {
+      const isCargaCargador =
+        stopTipo === "carga" &&
+        (parteTipoNorm === PARTE_TIPO.CARGADOR || parteTipoNorm === "expedidor");
+      const isDescargaDestinatario =
+        stopTipo === "descarga" && parteTipoNorm === PARTE_TIPO.DESTINATARIO;
+      if (isCargaCargador || isDescargaDestinatario) {
+        patch.empresa = parteNombre;
+      }
     }
     applyStopPartePatch(patch);
     setMode("idle");
