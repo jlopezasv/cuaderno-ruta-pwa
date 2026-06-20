@@ -21,6 +21,13 @@ import { isStopOperationallyComplete } from "../../../domain/service/serviceStop
 import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { sbFetch } from "../../../data/supabaseClient.js";
 import { tripLabelForServicio } from "../../../domain/service/driverFlatStopList.js";
+import { useAutoOperationalEtaToFirstDescarga } from "../hooks/useAutoOperationalEtaToFirstDescarga.js";
+import {
+  getFirstPendingDescargaStop,
+  hasCompletedDescargaStop,
+} from "../../../domain/service/operationalEtaAutoRefresh.js";
+import { resolveEtaVisual } from "../../../domain/service/operationalEtaPresentation.js";
+import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 
 const PAGE = "#F8FAFC";
 /** Referencias estables — evitar bucle infinito en hooks (useEmpresaOriginLookup / useConductorDcdtQuickStatus). */
@@ -70,15 +77,25 @@ function flatStopListStatus(stop) {
 
 export function ConductorSimplifiedParadasTab({
   uid,
+  norma = null,
   conductorNombre = "Conductor",
   showToast,
   marcarLlegadoEn,
   marcarCompletadoEn,
   iniciarServicioEn,
   finalizarParticipacionEn,
+  recalculateOperationalRoute,
   EvidenciasStopComponent,
 }) {
   const { loading, items, finalizarServicios, reload } = useDriverFlatPendingStops(uid);
+  const etaClockMs = useEtaVisualClockMs();
+  useAutoOperationalEtaToFirstDescarga({
+    uid,
+    norma,
+    items,
+    recalculateRoute: recalculateOperationalRoute,
+    enabled: !loading && !!uid && typeof recalculateOperationalRoute === "function",
+  });
   const [active, setActive] = useState(null);
   const [localServicio, setLocalServicio] = useState(null);
   const [localStops, setLocalStops] = useState([]);
@@ -115,6 +132,18 @@ export function ConductorSimplifiedParadasTab({
     userId: uid,
     enabled: !!active && showChatQuick && !!detailServicio?.id,
   });
+
+  const firstDescargaStopIdByServicio = useMemo(() => {
+    const map = new Map();
+    for (const item of items) {
+      const sid = item.servicio?.id;
+      if (!sid || map.has(sid)) continue;
+      if (hasCompletedDescargaStop(item.stops)) continue;
+      const first = getFirstPendingDescargaStop(item.stops);
+      if (first?.id) map.set(sid, first.id);
+    }
+    return map;
+  }, [items]);
 
   const openItem = useCallback((item, { readOnly = false } = {}) => {
     setActive(item);
@@ -537,6 +566,17 @@ export function ConductorSimplifiedParadasTab({
             const enMuelle = status.phase === "en_muelle";
             const vis = item.tripVisual;
             const ref = getServiceNumberForDisplay(item.servicio);
+            const showEtaToFirstDescarga =
+              firstDescargaStopIdByServicio.get(item.servicio?.id) === item.stop?.id;
+            const etaVisual = showEtaToFirstDescarga
+              ? resolveEtaVisual(item.servicio, new Date(etaClockMs))
+              : null;
+            const etaLabel =
+              etaVisual?.tier === "operational"
+                ? etaVisual.operational?.eta_label || etaVisual.operational?.label
+                : etaVisual?.tier === "plan"
+                  ? etaVisual.etaLabel
+                  : null;
             return (
             <article
               key={`${item.servicio?.id}-${item.stop?.id}`}
@@ -589,6 +629,11 @@ export function ConductorSimplifiedParadasTab({
                   <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, marginTop: 5, lineHeight: 1.25 }}>
                     {item.lugarDisplay || item.lugar}
                   </div>
+                  {showEtaToFirstDescarga && etaLabel ? (
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
+                      ETA primera descarga: {etaLabel}
+                    </div>
+                  ) : null}
                   {vis ? (
                     <div
                       style={{

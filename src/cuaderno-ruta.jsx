@@ -352,6 +352,7 @@ import {
   getOperationalPlanConfirmedAt,
 } from "./domain/service/serviceOperacionMeta.js";
 import { buildEtaPrevistaFromRoutePlan } from "./domain/service/etaPrevista.js";
+import { getBrowserOperationalGps } from "./domain/location/browserOperationalGps.js";
 import {
   buildServiceIdentityMeta,
   getFixedServiceRoute,
@@ -4894,16 +4895,6 @@ function operationalGpsFromPlan(plan){
   return parseOperationalLatLon(plan?.input_origin);
 }
 
-function getBrowserOperationalGps(){
-  if(typeof navigator==="undefined"||!navigator.geolocation)return Promise.resolve(null);
-  return new Promise(resolve=>{
-    navigator.geolocation.getCurrentPosition(
-      pos=>resolve({lat:pos.coords.latitude,lon:pos.coords.longitude}),
-      ()=>resolve(null),
-      {timeout:6000,enableHighAccuracy:false,maximumAge:300000}
-    );
-  });
-}
 
 function gpsActionErrorMessage(error){
   if(!error)return"Ubicación no disponible";
@@ -5671,27 +5662,29 @@ async function retryOperationalPlanBuild({servicio,request,norma,showToast}){
 }
 
 /** Recalcula ruta desde GPS actual del conductor hasta el destino operativo del servicio. */
-async function recalculateOperationalRouteFromCurrentGps({servicio,norma,showToast}){
-  if(!servicio?.id)return;
+async function recalculateOperationalRouteFromCurrentGps({servicio,norma,showToast,destino:destinoOverride=null,silent=false}){
+  if(!servicio?.id)return silent?{skipped:true,reason:"no_servicio"}:undefined;
   const plan=getOperationalPlanSnapshot(servicio);
   const liveGps=await getBrowserOperationalGps();
   if(!liveGps){
+    if(silent)return{skipped:true,reason:"gps"};
     showToast?.("No se pudo obtener tu ubicación. Activa el GPS e inténtalo de nuevo.");
     throw new Error("GPS no disponible");
   }
   const destino=String(
-    servicio.destino||plan?.input_destination||plan?.planned_destination||"",
+    destinoOverride||servicio.destino||plan?.input_destination||plan?.planned_destination||"",
   ).trim();
   if(!destino){
+    if(silent)return{skipped:true,reason:"sin_destino"};
     showToast?.("Falta destino operativo para recalcular");
     throw new Error("Sin destino");
   }
   const origen=`${liveGps.lat.toFixed(5)},${liveGps.lon.toFixed(5)}`;
-  showToast?.("Calculando ruta desde tu ubicación…");
+  if(!silent)showToast?.("Calculando ruta desde tu ubicación…");
   const operationalPlan=await buildOperationalPlanSnapshot({
     origen,
     destino,
-    waypoint:plan?.input_waypoint||plan?.planned_waypoint||"",
+    waypoint:destinoOverride?null:(plan?.input_waypoint||plan?.planned_waypoint||""),
     velocidad:plan?.velocidad||80,
     norma,
     gpsOrigen:liveGps,
@@ -5706,13 +5699,19 @@ async function recalculateOperationalRouteFromCurrentGps({servicio,norma,showToa
     ...(etaPrevista?{eta_prevista:etaPrevista}:{}),
   });
   const res=await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`,{method:"PATCH",body:JSON.stringify({referencia})});
-  if(!res.ok)throw new Error(`Supabase ${res.status}`);
-  window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
-  if(operationalPlan.status==="ok"){
-    showToast?.(`✅ Ruta recalculada${operationalPlan.planned_eta_label?` · ${operationalPlan.planned_eta_label}`:""}`);
-  }else{
-    showToast?.(`⚠ No se pudo calcular ruta completa${operationalPlan.error?`: ${operationalPlan.error}`:""}`);
+  if(!res.ok){
+    if(silent)return{skipped:true,reason:"persist_failed"};
+    throw new Error(`Supabase ${res.status}`);
   }
+  window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
+  if(!silent){
+    if(operationalPlan.status==="ok"){
+      showToast?.(`✅ Ruta recalculada${operationalPlan.planned_eta_label?` · ${operationalPlan.planned_eta_label}`:""}`);
+    }else{
+      showToast?.(`⚠ No se pudo calcular ruta completa${operationalPlan.error?`: ${operationalPlan.error}`:""}`);
+    }
+  }
+  return{ok:operationalPlan.status==="ok",operationalPlan,referencia};
 }
 
 function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen="",prefillWaypoint="",prefillVelocidad=80,prefillGpsOrigen=null,norma=null}){
@@ -18959,15 +18958,21 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 
 const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,norma=null,conductorNombre="Conductor",showToast}){
   const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn,finalizarParticipacionEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const recalculateOperationalRoute=useCallback(
+    (opts)=>recalculateOperationalRouteFromCurrentGps({...opts,norma,showToast:opts?.silent?undefined:showToast}),
+    [norma,showToast],
+  );
   return(
     <ConductorSimplifiedParadasTab
       uid={uid}
+      norma={norma}
       conductorNombre={conductorNombre}
       showToast={showToast}
       marcarLlegadoEn={marcarLlegadoEn}
       marcarCompletadoEn={marcarCompletadoEn}
       iniciarServicioEn={iniciarServicioEn}
       finalizarParticipacionEn={finalizarParticipacionEn}
+      recalculateOperationalRoute={recalculateOperationalRoute}
       EvidenciasStopComponent={EvidenciasStop}
     />
   );
