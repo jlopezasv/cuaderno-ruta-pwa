@@ -16,7 +16,8 @@ import {
   operationalGroupFromStopTipo,
   sortStopsByOrden,
 } from "../../domain/service/tripOperationalDossier.js";
-import { formatStopNotesForDisplay, getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { formatStopNotesForDisplay, getStopOperacionMeta, getStopEntregaFirmaMeta } from "../../domain/service/stopOperacionMeta.js";
+import { mapStopEntregaFirmaForExpediente } from "../../domain/service/stopEntregaFirma.js";
 import { sanitizeDocumentCommentText } from "../../domain/documents/documentCommentSanitize.js";
 import { SERVICIO_TRAMOS_FUTURE } from "./future/servicioTramos.js";
 import { STOP_ICON } from "./operationalLiteTheme.js";
@@ -196,6 +197,14 @@ export function buildOperationalLiteModel({
 
     const estado = paradaEstado(stop);
     const docCount = evs.length + (incidenciasByStop[stop.id]?.length || 0);
+    const entregaFirmaSignedMs = parseTs(getStopEntregaFirmaMeta(stop)?.signed_at);
+    const entregaFirma = mapStopEntregaFirmaForExpediente(stop, {
+      stopLabel: label,
+      signedAtLabel: entregaFirmaSignedMs != null ? fmtDateTime(entregaFirmaSignedMs) : null,
+    });
+    if (entregaFirma) {
+      entregaFirma.comentario = sanitizeDocumentCommentText(entregaFirma.comentario || "") || null;
+    }
 
     return {
       id: stop.id,
@@ -215,6 +224,7 @@ export function buildOperationalLiteModel({
       llegadaHora: fmtClock(parseTs(stop.hora_llegada_real)),
       salidaHora: fmtClock(parseTs(stop.hora_salida_real)),
       observaciones: formatStopNotesForDisplay(stop.notas) || "",
+      entregaFirma,
       incidencias: incidenciasByStop[stop.id] || [],
       documentos: evs,
     };
@@ -258,8 +268,10 @@ export function buildOperationalLiteModel({
   const totalFotos =
     fotos.length + incidencias.reduce((n, inc) => n + (inc.fotos?.length || 0), 0);
   const cierre = buildCierre(servicio, nombreConductor);
+  const firmasEntregaDescarga = paradas.map((p) => p.entregaFirma).filter(Boolean);
   const operacionCompletada =
     !!cierre ||
+    firmasEntregaDescarga.length > 0 ||
     estadoRaw === SERVICIO_ESTADO_CERRADO ||
     estadoRaw === "completado" ||
     estadoRaw === "cerrado";
@@ -294,6 +306,7 @@ export function buildOperationalLiteModel({
       incidenciasSinStop,
     },
     cierre,
+    firmasEntregaDescarga,
     resumen: {
       cargas,
       descargas,

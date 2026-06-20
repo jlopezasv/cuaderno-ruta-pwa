@@ -4,7 +4,7 @@ import { DRIVER_UI } from "./ActiveServicePanel.jsx";
 
 /**
  * Firma obligatoria al completar una parada de descarga (prueba de entrega).
- * Reutiliza `SignaturePad` del cierre de expediente.
+ * Reutiliza `SignaturePad` del cierre de expediente (incl. observaciones opcionales).
  */
 export function DescargaEntregaFirmaModal({
   open,
@@ -15,9 +15,13 @@ export function DescargaEntregaFirmaModal({
 }) {
   const firmaCanvasRef = useRef(null);
   const [hasFirma, setHasFirma] = useState(false);
+  const [comentario, setComentario] = useState("");
 
   useEffect(() => {
-    if (open) setHasFirma(false);
+    if (open) {
+      setHasFirma(false);
+      setComentario("");
+    }
   }, [open, stopLabel]);
 
   if (!open) return null;
@@ -49,6 +53,8 @@ export function DescargaEntregaFirmaModal({
           width: "100%",
           border: `1px solid ${DRIVER_UI.line}`,
           boxShadow: "0 12px 40px rgba(15,23,42,.18)",
+          maxHeight: "90vh",
+          overflowY: "auto",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -59,6 +65,29 @@ export function DescargaEntregaFirmaModal({
           Confirma la entrega en <strong style={{ color: DRIVER_UI.tx }}>{stopLabel}</strong> con tu firma antes de
           completar esta descarga.
         </div>
+
+        <div style={{ fontSize: 10, fontWeight: 800, color: DRIVER_UI.su, letterSpacing: 0.5, marginBottom: 6 }}>
+          OBSERVACIONES (opcional)
+        </div>
+        <textarea
+          value={comentario}
+          onChange={(e) => setComentario(e.target.value)}
+          placeholder="Incidencias menores, entrega, observaciones de muelle…"
+          rows={3}
+          disabled={saving}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            borderRadius: 12,
+            border: `1px solid ${DRIVER_UI.line}`,
+            padding: "11px 12px",
+            fontSize: 14,
+            color: DRIVER_UI.tx,
+            resize: "vertical",
+            marginBottom: 14,
+            background: "#fff",
+          }}
+        />
 
         <div style={{ fontSize: 10, fontWeight: 800, color: DRIVER_UI.su, letterSpacing: 0.5, marginBottom: 6 }}>
           FIRMA DEL CONDUCTOR
@@ -85,7 +114,7 @@ export function DescargaEntregaFirmaModal({
           <button
             type="button"
             disabled={saving || !hasFirma}
-            onClick={() => onConfirm?.(firmaCanvasRef.current)}
+            onClick={() => onConfirm?.({ firmaCanvas: firmaCanvasRef.current, comentario })}
             style={{
               flex: 1,
               background: hasFirma ? DRIVER_UI.green : "#94a3b8",

@@ -2,6 +2,7 @@ import { sbFetch } from "../../data/supabaseClient.js";
 import { uploadBlobToStorage } from "../../data/uploadUserPhoto.js";
 import { storageUploadUrl } from "../documents/mediaStorageV2.js";
 import { geoPayloadFromLocationResult } from "../../data/driverActionGps.js";
+import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 import { mergeStopOperacionMeta } from "./stopOperacionMeta.js";
 
 function canvasToPngBlob(canvas) {
@@ -28,6 +29,7 @@ export async function persistDescargaEntregaFirma({
   firmaCanvas,
   conductorId = null,
   conductorNombre = null,
+  comentario = "",
   prefetchedGps = null,
 }) {
   if (!stop?.id) throw new Error("Parada no válida");
@@ -60,6 +62,7 @@ export async function persistDescargaEntregaFirma({
     entrega_firma_at: signedAt,
     entrega_conductor_id: conductorId || null,
     entrega_conductor_nombre: conductorNombre || null,
+    entrega_firma_comentario: sanitizeDocumentCommentText(comentario) || null,
     entrega_firma_geo: geo && Number.isFinite(Number(geo.lat)) ? geo : null,
   });
 

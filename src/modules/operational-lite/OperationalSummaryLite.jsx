@@ -249,7 +249,7 @@ export function OperationalSummaryLite({
             <SectionTitle>Evidencias</SectionTitle>
             <LiteEvidenciasGallery doc={doc} onPreview={handlePreview} />
 
-            <LiteCierrePremium cierre={doc.cierre} resumen={doc.resumen} />
+            <LiteCierrePremium cierre={doc.cierre} firmasEntregaDescarga={doc.firmasEntregaDescarga} resumen={doc.resumen} />
           </div>
         </div>
       </div>

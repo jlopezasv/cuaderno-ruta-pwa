@@ -259,8 +259,12 @@ export function ConductorSimplifiedParadasTab({
     }
   };
 
-  const handleConfirmDescargaFirma = async (firmaCanvas) => {
+  const handleConfirmDescargaFirma = async ({ firmaCanvas, comentario = "" } = {}) => {
     if (!descargaFirma || descargaFirmaSaving || !localServicio) return;
+    if (!firmaCanvas) {
+      showToast?.("Añade tu firma antes de completar la descarga");
+      return;
+    }
     const stop = localStops.find((s) => s.id === descargaFirma.stopId);
     if (!stop) {
       showToast?.("Parada no encontrada");
@@ -273,6 +277,7 @@ export function ConductorSimplifiedParadasTab({
         stop,
         servicioId: localServicio.id,
         firmaCanvas,
+        comentario,
         conductorId: uid,
         conductorNombre,
         prefetchedGps: descargaFirma.prefetchedGps,

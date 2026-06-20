@@ -340,8 +340,9 @@ export function LiteResumenEjecutivo({ resumen }) {
   );
 }
 
-export function LiteCierrePremium({ cierre, resumen }) {
-  if (!cierre && !resumen?.operacionCompletada) return null;
+export function LiteCierrePremium({ cierre, firmasEntregaDescarga = [], resumen }) {
+  const firmas = Array.isArray(firmasEntregaDescarga) ? firmasEntregaDescarga : [];
+  if (!cierre && !firmas.length && !resumen?.operacionCompletada) return null;
   return (
     <div
       style={{
@@ -388,6 +389,45 @@ export function LiteCierrePremium({ cierre, resumen }) {
               />
             ) : null}
           </>
+        ) : firmas.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {firmas.map((firma) => (
+              <div
+                key={firma.stop_id || firma.stop_label}
+                style={{
+                  background: "#fff",
+                  border: `1px solid ${LITE_THEME.line}`,
+                  borderRadius: 10,
+                  padding: "12px 12px",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 800, color: LITE_THEME.tx }}>
+                  {firma.stop_label || "Descarga"} · {firma.stop_nombre || "—"}
+                </div>
+                <div style={{ fontSize: 12, color: LITE_THEME.su, marginTop: 4 }}>
+                  {firma.signed_at_label || "—"} · {firma.conductor_nombre || "Conductor"}
+                </div>
+                {firma.comentario ? (
+                  <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5, color: LITE_THEME.tx }}>{firma.comentario}</div>
+                ) : null}
+                {firma.firma_url ? (
+                  <img
+                    src={firma.firma_url}
+                    alt={`Firma ${firma.stop_label || "descarga"}`}
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: 96,
+                      marginTop: 10,
+                      objectFit: "contain",
+                      background: "#fff",
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  />
+                ) : null}
+              </div>
+            ))}
+          </div>
         ) : (
           <div style={{ fontSize: 13, color: LITE_THEME.su }}>Operación completada — pendiente de firma de cierre</div>
         )}

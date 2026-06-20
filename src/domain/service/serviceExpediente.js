@@ -39,7 +39,8 @@ import {
 import { sanitizeDocumentCommentText } from "../documents/documentCommentSanitize.js";
 import { ESTADO_LABEL, SERVICIO_ESTADO_CERRADO } from "../fleet/serviceStatus.js";
 import { getExpedienteCierre } from "./expedienteCierre.js";
-import { getStopOperacionMeta } from "./stopOperacionMeta.js";
+import { getStopOperacionMeta, getStopEntregaFirmaMeta } from "./stopOperacionMeta.js";
+import { mapStopEntregaFirmaForExpediente } from "./stopEntregaFirma.js";
 import { getFleetTenantDisplayFromServicio } from "./fleetTenantDisplay.js";
 import { normalizeServicioEmpresaId } from "./serviceOwnership.js";
 import { DEMO_FLEET_TENANT_LABELS } from "../../config/demoFleetTenantLabels.js";
@@ -436,6 +437,14 @@ export function buildServiceExpediente({
     const llegadaMs = parseTs(stop.hora_llegada_real);
     const salidaMs = parseTs(stop.hora_salida_real);
     const esperaMin = llegadaMs != null && salidaMs != null && salidaMs >= llegadaMs ? Math.round((salidaMs - llegadaMs) / 60000) : null;
+    const entregaFirmaSignedMs = parseTs(getStopEntregaFirmaMeta(stop)?.signed_at);
+    const entregaFirma = mapStopEntregaFirmaForExpediente(stop, {
+      stopLabel: label,
+      signedAtLabel: entregaFirmaSignedMs != null ? fmtDateTime(entregaFirmaSignedMs) : null,
+    });
+    if (entregaFirma) {
+      entregaFirma.comentario = sanitizeDocumentCommentText(entregaFirma.comentario || "") || null;
+    }
     return {
       id: stop.id,
       orden: stop.orden,
@@ -452,6 +461,7 @@ export function buildServiceExpediente({
       salidaHora: fmtClock(salidaMs),
       esperaMin,
       esperaLabel: esperaMin != null ? fmtDur(esperaMin) : "—",
+      entregaFirma,
       evidencias: evs.map((ev) => {
         const enriched = enrichEvidenciaDisplay(ev, {
           stop,
@@ -481,6 +491,8 @@ export function buildServiceExpediente({
       }),
     };
   });
+
+  const firmasEntregaDescarga = stopRows.map((st) => st.entregaFirma).filter(Boolean);
 
   const timeline = [];
   const conductorAssignedAt = serviceMeta?.conductor_assigned_at || null;
@@ -809,6 +821,7 @@ export function buildServiceExpediente({
       totalLabel: expedienteSizeLabel(rawEvidenciasFlat),
     },
     cierreDocumental: buildCierreDocumentalForExpediente(servicio, nombreConductor),
+    firmasEntregaDescarga,
     header: {
       referencia: ref,
       empresa: demoEmpresaHdr?.nombre || resolveExpedienteEmpresaNombre(servicio),
@@ -1137,15 +1150,18 @@ function evidenceUrlForPdfEmbed(ev) {
   return resolveEvidenciaPdfEmbedUrl(ev) || ev?.url || null;
 }
 
-async function fetchCierreFirmaForPdf(cierreDocumental) {
-  const url = cierreDocumental?.firmaUrl;
-  if (!url) return { error: "Sin firma registrada" };
+async function fetchFirmaUrlForPdf(firmaUrl) {
+  if (!firmaUrl) return { error: "Sin firma registrada" };
   try {
-    const blob = await loadRemoteImageBlob(url);
+    const blob = await loadRemoteImageBlob(firmaUrl);
     return await blobToJpeg(blob, { maxSide: 480, quality: 0.86 });
   } catch (error) {
     return { error: error?.message || "Firma no disponible" };
   }
+}
+
+async function fetchCierreFirmaForPdf(cierreDocumental) {
+  return fetchFirmaUrlForPdf(cierreDocumental?.firmaUrl);
 }
 
 async function fetchEvidenceImages(expediente) {
@@ -1210,6 +1226,11 @@ export async function makeServiceExpedientePdfBlob(expediente, options = {}) {
   const cierreFirmaMap = expediente.cierreDocumental
     ? await fetchCierreFirmaForPdf(expediente.cierreDocumental)
     : { error: "Sin cierre documental" };
+  const entregaFirmaImageMap = new Map();
+  for (const firma of expediente.firmasEntregaDescarga || []) {
+    if (!firma?.stop_id || !firma?.firma_url) continue;
+    entregaFirmaImageMap.set(firma.stop_id, await fetchFirmaUrlForPdf(firma.firma_url));
+  }
   const objects = [];
   const add = (data) => {
     objects.push(bytes(data));
@@ -1239,6 +1260,13 @@ export async function makeServiceExpedientePdfBlob(expediente, options = {}) {
     const objectId = addRaw(imageObject(cierreFirmaMap.bytes, cierreFirmaMap.width, cierreFirmaMap.height));
     cierreFirmaRef = { ...cierreFirmaMap, name, objectId };
   }
+  const entregaFirmaImageRefs = new Map();
+  for (const [stopId, img] of entregaFirmaImageMap.entries()) {
+    if (!img?.bytes) continue;
+    const name = `Im${imageIndex++}`;
+    const objectId = addRaw(imageObject(img.bytes, img.width, img.height));
+    entregaFirmaImageRefs.set(stopId, { ...img, name, objectId });
+  }
 
   const pageRefs = [];
   let commands = [];
@@ -1248,7 +1276,7 @@ export async function makeServiceExpedientePdfBlob(expediente, options = {}) {
   const pageHeight = 842;
   const contentWidth = pageWidth - margin * 2;
   const evById = new Map(expediente.evidencias.map((ev) => [ev.id, ev]));
-  const pdfXObjectImages = [...imageRefs.values()];
+  const pdfXObjectImages = [...imageRefs.values(), ...entregaFirmaImageRefs.values()];
   if (cierreFirmaRef) pdfXObjectImages.push(cierreFirmaRef);
   const xObjects = pdfXObjectImages.map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
 
@@ -1451,6 +1479,33 @@ export async function makeServiceExpedientePdfBlob(expediente, options = {}) {
     expediente.integrity?.timestampsVerified ? "Timestamps verificados" : "Timestamps incompletos",
     expediente.integrity?.geoAvailable ? "Geolocalizacion operacional disponible" : "Geolocalizacion operacional no disponible",
   ].forEach((row) => lines(`OK ${row}`, margin, 10, "#166534", 95, 14));
+
+  if (expediente.firmasEntregaDescarga?.length) {
+    section("Firmas de entrega por descarga");
+    for (const firma of expediente.firmasEntregaDescarga) {
+      lines(`${firma.stop_label || "Descarga"} · ${firma.stop_nombre || "—"}`, margin, 10, "#0f766e", 90, 14);
+      lines(`Conductor: ${firma.conductor_nombre || "—"}`, margin, 10, "#334155", 90, 14);
+      lines(`Fecha firma: ${firma.signed_at_label || "—"}`, margin, 10, "#334155", 90, 14);
+      if (firma.comentario) {
+        lines("Observaciones:", margin, 9, "#64748b", 90, 12);
+        lines(firma.comentario, margin, 10, "#334155", 88, 13);
+      }
+      y -= 2;
+      lines("Firma:", margin, 9, "#64748b", 90, 12);
+      y -= 2;
+      const firmaImg = entregaFirmaImageRefs.get(firma.stop_id);
+      const firmaFetch = entregaFirmaImageMap.get(firma.stop_id);
+      if (firmaImg) {
+        drawImage(firmaImg, margin, 220, 64);
+      } else {
+        const fallback =
+          firmaFetch?.error ||
+          (firma.hasFirma ? "Firma no disponible (URL caducada o sin acceso)" : "Sin firma registrada");
+        lines(fallback, margin, 9.5, "#b45309", 88, 13);
+      }
+      y -= 8;
+    }
+  }
 
   if (expediente.cierreDocumental) {
     const cd = expediente.cierreDocumental;
@@ -1781,6 +1836,7 @@ export function downloadServiceArchiveMetadata(expediente) {
     generatedAt: expediente.generatedAt,
     header: expediente.header,
     cierreDocumental: expediente.cierreDocumental || null,
+    firmasEntregaDescarga: expediente.firmasEntregaDescarga || [],
     metrics: expediente.metrics,
     integrity: {
       status: expediente.integrity?.status,

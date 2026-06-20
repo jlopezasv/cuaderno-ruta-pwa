@@ -15311,6 +15311,27 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                       ))}
                     </div>
                   </div>
+                  {(expedientePreview.firmasEntregaDescarga?.length > 0) && (
+                    <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px",marginBottom:14}}>
+                      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:10}}>
+                        Firmas de entrega ({expedientePreview.firmasEntregaDescarga.length})
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                        {expedientePreview.firmasEntregaDescarga.map((firma)=>(
+                          <div key={firma.stop_id} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"10px 12px"}}>
+                            <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{firma.stop_label} · {firma.stop_nombre}</div>
+                            <div style={{fontSize:12,color:"#64748b",marginTop:4}}>{firma.signed_at_label} · {firma.conductor_nombre}</div>
+                            {firma.comentario?(
+                              <div style={{fontSize:12,color:"#334155",marginTop:8,lineHeight:1.45}}>{firma.comentario}</div>
+                            ):null}
+                            {firma.firma_url?(
+                              <img src={firma.firma_url} alt="Firma entrega" style={{maxWidth:"100%",maxHeight:88,marginTop:10,objectFit:"contain",background:"#fff",borderRadius:8,padding:6}}/>
+                            ):null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={{background:"white",border:"1px solid #dbe2ea",borderRadius:12,padding:"13px 14px",marginBottom:14}}>
                     <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8}}>Integridad operacional</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:7}}>

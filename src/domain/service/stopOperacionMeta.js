@@ -79,6 +79,7 @@ export function getStopEntregaFirmaMeta(stop) {
     signed_at: m.entrega_firma_at || null,
     conductor_id: m.entrega_conductor_id || null,
     conductor_nombre: m.entrega_conductor_nombre || null,
+    comentario: m.entrega_firma_comentario || null,
     geo: m.entrega_firma_geo || null,
   };
 }
@@ -104,6 +105,7 @@ const META_SKIP_KEYS = new Set([
   "entrega_conductor_id",
   "entrega_conductor_nombre",
   "entrega_firma_geo",
+  "entrega_firma_comentario",
 ]);
 
 const META_LABELS = {

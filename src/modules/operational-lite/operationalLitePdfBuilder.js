@@ -97,7 +97,7 @@ function imageObject(bytesData, width, height) {
   ]);
 }
 
-async function fetchImageMap(annexItems, cierre) {
+async function fetchImageMap(annexItems, cierre, firmasEntregaDescarga = []) {
   const map = new Map();
   const many = annexItems.length > 12;
   const tasks = annexItems.map(async (item) => {
@@ -123,7 +123,18 @@ async function fetchImageMap(annexItems, cierre) {
       firma = null;
     }
   }
-  return { map, firma };
+
+  const firmasEntrega = new Map();
+  for (const f of firmasEntregaDescarga) {
+    if (!f?.stop_id || !f?.firma_url) continue;
+    try {
+      const blob = await loadRemoteImageBlob(f.firma_url);
+      firmasEntrega.set(f.stop_id, await blobToJpeg(blob, { maxSide: 480, quality: 0.9 }));
+    } catch {
+      firmasEntrega.set(f.stop_id, null);
+    }
+  }
+  return { map, firma, firmasEntrega };
 }
 
 const CAT_LABEL = {
@@ -137,7 +148,11 @@ const CAT_LABEL = {
 export async function buildOperationalLitePdfBlob(doc) {
   const annexItems = doc.evidenciasAnnexo || [];
   const annexGroups = groupAnnexByParada(annexItems);
-  const { map: imageMap, firma: firmaImg } = await fetchImageMap(annexItems, doc.cierre);
+  const { map: imageMap, firma: firmaImg, firmasEntrega: firmasEntregaImg } = await fetchImageMap(
+    annexItems,
+    doc.cierre,
+    doc.firmasEntregaDescarga,
+  );
 
   const objects = [];
   const add = (data) => {
@@ -167,8 +182,15 @@ export async function buildOperationalLitePdfBlob(doc) {
     const objectId = addRaw(imageObject(firmaImg.bytes, firmaImg.width, firmaImg.height));
     firmaRef = { ...firmaImg, name, objectId };
   }
+  const entregaFirmaRefs = new Map();
+  for (const [stopId, img] of firmasEntregaImg.entries()) {
+    if (!img?.bytes) continue;
+    const name = `Im${imageIndex++}`;
+    const objectId = addRaw(imageObject(img.bytes, img.width, img.height));
+    entregaFirmaRefs.set(stopId, { ...img, name, objectId });
+  }
 
-  const allXObjects = [...imageRefs.values(), ...(firmaRef ? [firmaRef] : [])];
+  const allXObjects = [...imageRefs.values(), ...entregaFirmaRefs.values(), ...(firmaRef ? [firmaRef] : [])];
   const xObjectsStr = allXObjects.map((img) => `/${img.name} ${img.objectId} 0 R`).join(" ");
 
   const pageWidth = 595;
@@ -396,6 +418,35 @@ export async function buildOperationalLitePdfBlob(doc) {
     text("COMPLETADO", margin + 14, y - 18, 14, "#15803d");
     text("Operacion documentada y cerrada", margin + 132, y - 18, 10, "#166534");
     y -= 40;
+  }
+
+  if (doc.firmasEntregaDescarga?.length) {
+    section("Firmas de entrega por descarga");
+    for (const firma of doc.firmasEntregaDescarga) {
+      kv("Parada", `${firma.stop_label || "Descarga"} · ${firma.stop_nombre || "—"}`);
+      kv("Conductor", firma.conductor_nombre || "—");
+      kv("Fecha firma", firma.signed_at_label || "—");
+      if (firma.comentario) {
+        lines("Observaciones:", margin, 9, "#64748b", 90, 12);
+        lines(firma.comentario, margin, 10, "#334155", 88, 14);
+      }
+      const ref = entregaFirmaRefs.get(firma.stop_id);
+      if (ref) {
+        ensure(100);
+        text("Firma del conductor", margin, y, 10, "#64748b");
+        y -= 14;
+        const drawW = 200;
+        let drawH = drawW * (ref.height / ref.width);
+        if (drawH > 80) drawH = 80;
+        commands.push(
+          `q ${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${margin} ${(y - drawH).toFixed(2)} cm /${ref.name} Do Q`,
+        );
+        y -= drawH + 16;
+      } else if (firma.firma_url) {
+        lines("Firma no disponible (URL caducada o sin acceso)", margin, 10, "#b45309", 88, 14);
+      }
+      y -= 6;
+    }
   }
 
   if (doc.cierre) {
