@@ -17,7 +17,8 @@ import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
 import { fetchEvidenciasGroupedByStop } from "../../../domain/service/serviceDocuments.js";
 import { mergeEvidenciaIntoByStop } from "../../../domain/documents/operationalEvidenciaSync.js";
 import { stopsOperativaSig } from "../../../features/empresa/empresaFlotaRefresh.js";
-import { isStopOperationallyComplete } from "../../../domain/service/serviceStops.js";
+import { isStopOperationallyComplete, findEarlierPendingStopInRoute } from "../../../domain/service/serviceStops.js";
+import { pendingStopDisplayLabel } from "../../../domain/service/driverFlatStopList.js";
 import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { sbFetch } from "../../../data/supabaseClient.js";
 import { useAutoOperationalEtaToFirstDescarga } from "../hooks/useAutoOperationalEtaToFirstDescarga.js";
@@ -61,8 +62,8 @@ function stopGroupIcon(tipoLabel) {
 function DriverStopTripContext({ item, servicio }) {
   if (!item) return null;
   const ref = getServiceNumberForDisplay(servicio || item.servicio);
-  const empresaLine = item.lugarDisplay || item.lugar;
-  const parts = [empresaLine, ref, item.conductorNombre].filter(Boolean);
+  const almacen = String(item.stop?.empresa || "").trim();
+  const parts = [almacen, ref, item.conductorNombre].filter(Boolean);
   if (!parts.length) return null;
   return (
     <div
@@ -77,14 +78,14 @@ function DriverStopTripContext({ item, servicio }) {
         lineHeight: 1.45,
       }}
     >
-      {empresaLine ? (
+      {almacen ? (
         <div>
-          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Almacén / empresa: </span>
-          {empresaLine}
+          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Almacén: </span>
+          {almacen}
         </div>
       ) : null}
       {ref ? (
-        <div style={{ marginTop: empresaLine ? 6 : 0 }}>
+        <div style={{ marginTop: almacen ? 6 : 0 }}>
           <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Servicio: </span>
           {ref}
         </div>
@@ -96,6 +97,30 @@ function DriverStopTripContext({ item, servicio }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function TripServiceRefPill({ tripServiceRef, tripVisual }) {
+  if (!tripServiceRef) return null;
+  const vis = tripVisual;
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 800,
+        padding: "4px 9px",
+        borderRadius: 999,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        lineHeight: 1.2,
+        color: vis?.chipFg || "#1e40af",
+        background: vis?.chipBg || "#dbeafe",
+        border: `1px solid ${vis?.stripe || "#2563eb"}55`,
+        letterSpacing: 0.2,
+      }}
+    >
+      {tripServiceRef}
+    </span>
   );
 }
 
@@ -152,6 +177,7 @@ export function ConductorSimplifiedParadasTab({
   const [detailReadOnly, setDetailReadOnly] = useState(false);
   const [descargaFirma, setDescargaFirma] = useState(null);
   const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
+  const [orderSkipConfirm, setOrderSkipConfirm] = useState(null);
   const muelleGpsRef = useRef(null);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -197,11 +223,32 @@ export function ConductorSimplifiedParadasTab({
     setDetailReadOnly(!!readOnly);
   }, []);
 
+  const handleOpenItem = useCallback(
+    (item, { readOnly = false } = {}) => {
+      if (!readOnly) {
+        const status = flatStopListStatus(item.stop);
+        if (status.actionLabel === "EMPEZAR") {
+          const earlier = findEarlierPendingStopInRoute(item.stops, item.stop);
+          if (earlier) {
+            setOrderSkipConfirm({
+              item,
+              earlierLabel: pendingStopDisplayLabel(earlier, item.stops),
+            });
+            return;
+          }
+        }
+      }
+      openItem(item, { readOnly });
+    },
+    [openItem],
+  );
+
   const closeDetail = useCallback(() => {
     setActive(null);
     setLocalServicio(null);
     setLocalStops([]);
     setConfirmMuelle(null);
+    setOrderSkipConfirm(null);
     setDcdtModalOpen(false);
     setChatModalOpen(false);
     setDetailReadOnly(false);
@@ -415,8 +462,11 @@ export function ConductorSimplifiedParadasTab({
           ) : null}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                {active.cardLine1 || active.tipoOrdenLabel || active.tipoLabel}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
+                  {active.cardLine1 || active.tipoOrdenLabel || active.tipoLabel}
+                </div>
+                <TripServiceRefPill tripServiceRef={active.tripServiceRef} tripVisual={tripVis} />
               </div>
               <div style={{ fontSize: 14, color: DRIVER_UI.su, marginTop: 5, lineHeight: 1.35, fontWeight: 600 }}>
                 {active.cardLine2 || active.lugarDisplay || active.lugar || "—"}
@@ -716,22 +766,26 @@ export function ConductorSimplifiedParadasTab({
                         {item.cardLine2 || item.lugarDisplay || item.lugar || "—"}
                       </div>
                     </div>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 800,
-                        padding: "5px 10px",
-                        borderRadius: 999,
-                        whiteSpace: "nowrap",
-                        flexShrink: 0,
-                        lineHeight: 1.2,
-                        color: enMuelle ? "#b45309" : DRIVER_UI.su,
-                        background: enMuelle ? "#fef3c7" : DRIVER_UI.surfaceHi,
-                        border: `1px solid ${enMuelle ? "#fcd34d" : DRIVER_UI.line}`,
-                      }}
-                    >
-                      {status.label}
-                    </span>
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 6, flexShrink: 0 }}>
+                      <TripServiceRefPill tripServiceRef={item.tripServiceRef} tripVisual={vis} />
+                      {status.label ? (
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            padding: "5px 10px",
+                            borderRadius: 999,
+                            whiteSpace: "nowrap",
+                            lineHeight: 1.2,
+                            color: enMuelle ? "#b45309" : DRIVER_UI.su,
+                            background: enMuelle ? "#fef3c7" : DRIVER_UI.surfaceHi,
+                            border: `1px solid ${enMuelle ? "#fcd34d" : DRIVER_UI.line}`,
+                          }}
+                        >
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   {showEtaToFirstDescarga && etaLabel ? (
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
@@ -743,7 +797,7 @@ export function ConductorSimplifiedParadasTab({
               <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                 <button
                   type="button"
-                  onClick={() => openItem(item, { readOnly: false })}
+                  onClick={() => handleOpenItem(item, { readOnly: false })}
                   style={{
                     flex: 2,
                     background: enMuelle ? DRIVER_UI.amber : DRIVER_UI.green,
@@ -761,7 +815,7 @@ export function ConductorSimplifiedParadasTab({
                 </button>
                 <button
                   type="button"
-                  onClick={() => openItem(item, { readOnly: true })}
+                  onClick={() => handleOpenItem(item, { readOnly: true })}
                   style={{
                     flex: 1,
                     background: "#fff",
@@ -812,6 +866,83 @@ export function ConductorSimplifiedParadasTab({
                 : `HE TERMINADO MI PARTE · ${getServiceNumberForDisplay(sv)}`}
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {orderSkipConfirm ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,.4)",
+            zIndex: 420,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => setOrderSkipConfirm(null)}
+        >
+          <div
+            role="dialog"
+            aria-labelledby="order-skip-title"
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: "20px 18px",
+              maxWidth: 400,
+              width: "100%",
+              border: `1px solid ${DRIVER_UI.line}`,
+              boxShadow: "0 12px 40px rgba(15,23,42,.18)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div id="order-skip-title" style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 10 }}>
+              Orden de paradas
+            </div>
+            <p style={{ fontSize: 14, color: DRIVER_UI.su, lineHeight: 1.5, margin: "0 0 16px" }}>
+              Vas a atender esta parada antes que{" "}
+              <strong style={{ color: DRIVER_UI.tx }}>{orderSkipConfirm.earlierLabel}</strong>. ¿Continuar?
+            </p>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setOrderSkipConfirm(null)}
+                style={{
+                  flex: 1,
+                  background: DRIVER_UI.surfaceHi,
+                  color: DRIVER_UI.su,
+                  border: `1px solid ${DRIVER_UI.line}`,
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = orderSkipConfirm.item;
+                  setOrderSkipConfirm(null);
+                  openItem(pending, { readOnly: false });
+                }}
+                style={{
+                  flex: 1,
+                  background: DRIVER_UI.amber,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 12,
+                  padding: "12px",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Continuar
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

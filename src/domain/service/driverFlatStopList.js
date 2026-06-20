@@ -13,7 +13,7 @@ import {
 } from "./driverServiceQueue.js";
 import { getServiceClientReference, getServiceNumberForDisplay } from "./serviceIdentity.js";
 import {
-  formatStopCardAddressLine,
+  formatStopCardLocationLine,
   formatStopCardTitleLine,
   formatStopLugarDisplay,
 } from "./serviceOperationalPlaces.js";
@@ -174,6 +174,13 @@ export function buildStopTipoOrdinalMap(sortedStops) {
   return map;
 }
 
+/** Etiqueta legible de una parada pendiente (tipo ordinal + lugar). */
+export function pendingStopDisplayLabel(stop, sortedStops) {
+  const tipoOrdenLabel = buildStopTipoOrdinalMap(sortedStops).get(stop?.id) || labelForStopType(stop);
+  const place = String(stop?.nombre || stop?.direccion || "").trim();
+  return place ? `${tipoOrdenLabel} · ${place}` : tipoOrdenLabel;
+}
+
 /** Etiqueta de viaje para desambiguar paradas mezcladas. */
 export function tripLabelForServicio(servicio, conductorNameById = {}) {
   const ref = getServiceNumberForDisplay(servicio) || "Servicio";
@@ -222,7 +229,8 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
       const lugarDisplay = formatStopLugarDisplay(stop, sv, sortedStops);
       const tipoOrdenLabel = tipoOrdinalByStopId.get(stop.id) || labelForStopType(stop);
       const cardLine1 = formatStopCardTitleLine(tipoOrdenLabel, referenciaCliente);
-      const cardLine2 = formatStopCardAddressLine(stop);
+      const cardLine2 = formatStopCardLocationLine(stop);
+      const tripServiceRef = getServiceNumberForDisplay(sv) || null;
       items.push({
         servicio: sv,
         stop,
@@ -235,6 +243,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
         referenciaCliente: referenciaCliente || null,
         cardLine1,
         cardLine2,
+        tripServiceRef,
         lugar: lugarDisplay,
         lugarDisplay,
         conductorId: cid,

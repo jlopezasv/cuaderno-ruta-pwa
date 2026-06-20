@@ -228,10 +228,16 @@ export function ContratoParteStopBlock({
   }
 
   function linkParte(parte) {
-    applyStopPartePatch({
+    const patch = {
       parte_transporte_id: parte.id,
       parte_transporte_tipo: parte.tipo,
-    });
+    };
+    const isCarga = String(stop?.tipo || "").toLowerCase() === "carga";
+    const isCargador = String(parte?.tipo || "").toLowerCase() === PARTE_TIPO.CARGADOR;
+    if (isCarga && isCargador && String(parte?.nombre || "").trim()) {
+      patch.empresa = String(parte.nombre).trim();
+    }
+    applyStopPartePatch(patch);
     setMode("idle");
     setPendingParteId("");
     setErr("");

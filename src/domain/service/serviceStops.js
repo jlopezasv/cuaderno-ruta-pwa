@@ -22,6 +22,18 @@ export function getCurrentStop(stops) {
   return incomplete[0] || null;
 }
 
+/** Parada anterior en `orden` que sigue pendiente (para aviso no bloqueante al saltar orden). */
+export function findEarlierPendingStopInRoute(stops, targetStop) {
+  if (!targetStop?.id) return null;
+  const targetOrden = Number(targetStop.orden) || 0;
+  const sorted = [...(stops || [])].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
+  for (const stop of sorted) {
+    if ((Number(stop.orden) || 0) >= targetOrden) break;
+    if (!isStopOperationallyComplete(stop)) return stop;
+  }
+  return null;
+}
+
 /** Solo la parada operativa actual debe quedar expandida; null = todas plegadas. */
 export function resolveExpandedStopId(stops, servicio) {
   const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));

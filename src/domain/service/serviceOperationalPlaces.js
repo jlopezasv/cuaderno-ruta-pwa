@@ -170,15 +170,43 @@ export function formatStopLugarDisplay(stop, servicio = null, allStops = null) {
   return ciudad || empresa || "—";
 }
 
-/** Línea compacta de tarjeta conductor: «Calle X · Localidad». */
-export function formatStopCardAddressLine(stop) {
+/** Línea compacta de tarjeta conductor: «Dirección · Almacén · Localidad». */
+export function formatStopCardLocationLine(stop) {
+  const meta = getStopOperacionMeta(stop?.notas);
   const localidad = String(stop?.nombre || "").trim();
   const direccion = String(stop?.direccion || "").trim();
-  if (direccion && localidad) {
-    if (direccion.toLowerCase().includes(localidad.toLowerCase())) return direccion;
-    return `${direccion} · ${localidad}`;
+  const almacen = String(stop?.empresa || meta.empresa_logistica || meta.empresa || "").trim();
+
+  const parts = [];
+  const pushUnique = (text) => {
+    const t = String(text || "").trim();
+    if (!t) return;
+    const key = t.toLowerCase();
+    if (parts.some((p) => p.toLowerCase() === key || p.toLowerCase().includes(key))) return;
+    parts.push(t);
+  };
+
+  if (direccion) pushUnique(direccion);
+  if (almacen) {
+    const dirLower = direccion.toLowerCase();
+    const almLower = almacen.toLowerCase();
+    if (!dirLower || (!dirLower.includes(almLower) && almLower !== dirLower)) {
+      pushUnique(almacen);
+    }
   }
-  return direccion || localidad || "—";
+  if (localidad) {
+    const locLower = localidad.toLowerCase();
+    if (!parts.some((p) => p.toLowerCase().includes(locLower))) {
+      pushUnique(localidad);
+    }
+  }
+
+  return parts.join(" · ") || "—";
+}
+
+/** @deprecated Usar {@link formatStopCardLocationLine}. */
+export function formatStopCardAddressLine(stop) {
+  return formatStopCardLocationLine(stop);
 }
 
 /** Línea 1 de tarjeta: «Carga 1 · REF-123» (referencia opcional). */
