@@ -12,6 +12,12 @@ import {
   stripServicioOperacionDisplay,
 } from "../../domain/service/serviceOperacionMeta.js";
 import {
+  SERVICIO_ALCANCE,
+  SERVICIO_ALCANCE_LABELS,
+  getServicioAlcance,
+  servicioAlcanceMetaPatch,
+} from "../../domain/service/servicioAlcance.js";
+import {
   buildOperationalPlacesMetaPatch,
   operationalPlacesFromStops,
   routeTextFromStops,
@@ -102,6 +108,7 @@ export function EmpresaEditarServicioModal({
   const [serviceNumber, setServiceNumber] = useState("");
   const [cliente, setCliente] = useState("");
   const [refCliente, setRefCliente] = useState("");
+  const [alcanceServicio, setAlcanceServicio] = useState(SERVICIO_ALCANCE.NACIONAL);
   const [adminNotas, setAdminNotas] = useState("");
   const [conductorSel, setConductorSel] = useState("");
   const [responsableSel, setResponsableSel] = useState("");
@@ -126,6 +133,7 @@ export function EmpresaEditarServicioModal({
     );
     setCliente(String(getServiceClient(servicio) || "").trim());
     setRefCliente(String(getServiceClientReference(servicio) || "").trim());
+    setAlcanceServicio(getServicioAlcance(servicio));
     setAdminNotas(String(getServicioOperacionMeta(servicio).admin_notas ?? "").trim());
     setConductorSel(servicio.conductor_id ? servicio.conductor_id : "");
     const resp = servicio.responsable_user_id ? servicio.responsable_user_id : "";
@@ -399,6 +407,16 @@ export function EmpresaEditarServicioModal({
         if (rc1 !== rc0) pushAudit("referencia_cliente", rc0, rc1);
       }
 
+      const al0 = getServicioAlcance(servicio);
+      const al1 = alcanceServicio;
+      if (al1 !== al0) {
+        referenciaAfterIdentity = mergeReferenciaOperacional(
+          referenciaAfterIdentity,
+          servicioAlcanceMetaPatch(al1),
+        );
+        pushAudit("alcance_servicio", al0, al1);
+      }
+
       if (referenciaAfterIdentity !== referenciaBeforeIdentity) {
         patch.referencia = referenciaAfterIdentity;
       }
@@ -498,6 +516,7 @@ export function EmpresaEditarServicioModal({
     serviceNumber,
     cliente,
     refCliente,
+    alcanceServicio,
     adminNotas,
     conductorSel,
     responsableSel,
@@ -606,6 +625,21 @@ export function EmpresaEditarServicioModal({
               surfaceSoft={EMPRESA_UI.surfaceSoft}
               border={EMPRESA_UI.border}
             />
+            <label style={{ ...labelStyle, marginBottom: 0 }}>
+              Alcance del servicio
+              <select
+                value={alcanceServicio}
+                onChange={(e) => setAlcanceServicio(e.target.value)}
+                style={inputStyle}
+              >
+                <option value={SERVICIO_ALCANCE.NACIONAL}>
+                  {SERVICIO_ALCANCE_LABELS[SERVICIO_ALCANCE.NACIONAL]}
+                </option>
+                <option value={SERVICIO_ALCANCE.INTERNACIONAL}>
+                  {SERVICIO_ALCANCE_LABELS[SERVICIO_ALCANCE.INTERNACIONAL]}
+                </option>
+              </select>
+            </label>
           </div>
 
           {wide ? (

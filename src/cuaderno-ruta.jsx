@@ -364,6 +364,11 @@ import {
   resolveServiceRouteEndpoints,
 } from "./domain/service/serviceIdentity.js";
 import {
+  SERVICIO_ALCANCE,
+  SERVICIO_ALCANCE_LABELS,
+  servicioAlcanceMetaPatch,
+} from "./domain/service/servicioAlcance.js";
+import {
   buildOperationalPlacesMetaPatch,
   geocodeQueryFromPlace,
   operationalPlacesFromStops,
@@ -12192,6 +12197,7 @@ async function crearServicioConIdentidad({
   referenciaCliente,
   operationalPlaces = null,
   servicioMetaExtras = null,
+  alcanceServicio = SERVICIO_ALCANCE.NACIONAL,
   ownershipMode = SERVICIO_OWNERSHIP.FLEET_EMPRESA,
   uid: uidProp = null,
   _debugSource,
@@ -12217,9 +12223,14 @@ async function crearServicioConIdentidad({
     lugaresOperativos: placesPatch.lugares_operativos,
   });
   const extraMeta = servicioMetaExtras && typeof servicioMetaExtras === "object" ? servicioMetaExtras : {};
+  const isFleetInsert =
+    ownershipMode === SERVICIO_OWNERSHIP.FLEET_EMPRESA ||
+    normalizeServicioEmpresaId(basePayload.empresa_id) != null;
+  const alcanceMeta = isFleetInsert ? servicioAlcanceMetaPatch(alcanceServicio) : {};
+  const referenciaMeta = { ...identityMeta, ...placesPatch, ...extraMeta, ...alcanceMeta };
   const referencia =
-    Object.keys(identityMeta).length || Object.keys(placesPatch).length || Object.keys(extraMeta).length
-      ? mergeReferenciaOperacional(referenciaBase, { ...identityMeta, ...placesPatch, ...extraMeta })
+    Object.keys(referenciaMeta).length
+      ? mergeReferenciaOperacional(referenciaBase, referenciaMeta)
       : referenciaBase;
   const officeUserForInsert = getOfficeUserFromSession(authUid);
   const insertCtx = await resolveServicioInsertContext({
@@ -12500,6 +12511,7 @@ function AsignarServicioModal({
   const[ref,setRef]=useState("");
   const[cliente,setCliente]=useState("");
   const[refCliente,setRefCliente]=useState("");
+  const[alcanceServicio,setAlcanceServicio]=useState(SERVICIO_ALCANCE.NACIONAL);
   const[fechaInicio,setFechaInicio]=useState(()=>toDTL(new Date()));
   const[stops,setStops]=useState([
     emptyStopGeoForm({orden:1,tipo:"carga"}),
@@ -12623,6 +12635,7 @@ function AsignarServicioModal({
         serviceNumber:isDemoApp()?"":ref.trim(),
         cliente:cliente.trim(),
         referenciaCliente:refCliente.trim(),
+        alcanceServicio,
         operationalPlaces,
         fecha_inicio:new Date(fechaInicio).toISOString(),
         ...responsablePayload,
@@ -12797,6 +12810,17 @@ function AsignarServicioModal({
               <input value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Mercadona" style={inp}/>
             </div>
             <OfficeResponsableServicioField {...responsableFieldProps}/>
+            <div>
+              <div style={lbl}>Alcance</div>
+              <select
+                value={alcanceServicio}
+                onChange={(e)=>setAlcanceServicio(e.target.value)}
+                style={{...inp,cursor:"pointer"}}
+              >
+                <option value={SERVICIO_ALCANCE.NACIONAL}>{SERVICIO_ALCANCE_LABELS[SERVICIO_ALCANCE.NACIONAL]}</option>
+                <option value={SERVICIO_ALCANCE.INTERNACIONAL}>{SERVICIO_ALCANCE_LABELS[SERVICIO_ALCANCE.INTERNACIONAL]}</option>
+              </select>
+            </div>
             <div>
               <div style={lbl}>Ref. cliente</div>
               <input value={refCliente} onChange={e=>setRefCliente(e.target.value)} placeholder="PED-8821" style={inp}/>
