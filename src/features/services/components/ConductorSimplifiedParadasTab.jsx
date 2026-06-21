@@ -3,11 +3,15 @@ import {
   OperationalStopCard,
   buildTimelineItems,
   DRIVER_UI,
+  DRIVER_BACK_BUTTON_STYLE,
+  DRIVER_STATUS_BADGE_FONT_SIZE,
 } from "./ActiveServicePanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
 import { DriverQuickActionsBar } from "./ServiceQuickActionsBar.jsx";
 import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
 import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
+import { ConductorFinalizarParticipacionAction } from "./ConductorFinalizarParticipacionAction.jsx";
+import { ConductorDropStopAction } from "./ConductorDropStopAction.jsx";
 import { useDriverFlatPendingStops } from "../hooks/useDriverFlatPendingStops.js";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
@@ -33,7 +37,6 @@ import { persistDescargaEntregaFirma } from "../../../domain/service/persistDesc
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
 import { withOperationTimeout } from "../../../domain/service/operationTimeout.js";
-import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 
 const PAGE = "#F8FAFC";
 /** Referencias estables — evitar bucle infinito en hooks (useEmpresaOriginLookup / useConductorDcdtQuickStatus). */
@@ -137,9 +140,9 @@ function DriverStopCardHeader({
           {statusLabel ? (
             <span
               style={{
-                fontSize: 12,
+                fontSize: DRIVER_STATUS_BADGE_FONT_SIZE,
                 fontWeight: 800,
-                padding: "5px 10px",
+                padding: "6px 12px",
                 borderRadius: 999,
                 whiteSpace: "nowrap",
                 lineHeight: 1.2,
@@ -188,8 +191,10 @@ export function ConductorSimplifiedParadasTab({
   recalculateOperationalRoute,
   EvidenciasStopComponent,
   onOpenMasServicio,
+  soltarParadaEn,
+  finalizarParticipacionEn,
 }) {
-  const { loading, items, serviciosAccionEnMas } = useDriverFlatPendingStops(uid);
+  const { loading, items, serviciosAccionEnMas, finalizarServicios } = useDriverFlatPendingStops(uid);
   const etaClockMs = useEtaVisualClockMs();
   useAutoOperationalEtaToFirstDescarga({
     uid,
@@ -215,17 +220,18 @@ export function ConductorSimplifiedParadasTab({
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
   const detailServicio = active ? localServicio : null;
+  const detailServicioForAlcance = active?.servicio ?? detailServicio;
   const detailStops = active ? localStops : NO_STOPS;
   const serviciosForEmpresaLookup = useMemo(
-    () => (detailServicio ? [detailServicio] : NO_SERVICIOS),
-    [detailServicio],
+    () => (detailServicioForAlcance ? [detailServicioForAlcance] : NO_SERVICIOS),
+    [detailServicioForAlcance],
   );
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
-  const empresaServicio = detailServicio?.empresa_id ? empresaById[detailServicio.empresa_id] : null;
-  const showDcdtQuick = !!detailServicio?.empresa_id && isDecaAplicable(detailServicio);
+  const empresaServicio = detailServicioForAlcance?.empresa_id ? empresaById[detailServicioForAlcance.empresa_id] : null;
+  const showDcdtQuick = !!detailServicioForAlcance?.empresa_id && isDecaAplicable(detailServicioForAlcance);
   const showChatQuick = isServiceMessagesEnabled(detailServicio);
   const dcdtQuick = useConductorDcdtQuickStatus({
-    servicio: detailServicio,
+    servicio: detailServicioForAlcance,
     empresa: empresaServicio,
     conductorUid: uid,
     stops: detailStops,
@@ -328,11 +334,10 @@ export function ConductorSimplifiedParadasTab({
 
   const operatingBusy = confirmMuelleSaving || descargaFirmaSaving || iniciarSaving;
 
-  const showIrAServicioEnDetalle = useMemo(() => {
-    if (!detailReadOnly || !localServicio?.id) return false;
-    if (serviciosAccionEnMas.some((sv) => sv.id === localServicio.id)) return true;
-    return needsExpedienteClosure(localServicio, localStops);
-  }, [detailReadOnly, localServicio, localStops, serviciosAccionEnMas]);
+  const canFinalizarParticipacion = useMemo(() => {
+    if (!localServicio?.id) return false;
+    return finalizarServicios.some((sv) => sv.id === localServicio.id);
+  }, [localServicio?.id, finalizarServicios]);
 
   const canOperate =
     !detailReadOnly &&
@@ -456,7 +461,10 @@ export function ConductorSimplifiedParadasTab({
     try {
       const prefetchedGps = await acquireLocation("inicio_servicio", "iniciar servicio");
       if (prefetchedGps === null) return;
-      const next = await iniciarServicioEn(localServicio.id, { prefetchedGps });
+      const next = await iniciarServicioEn(localServicio.id, {
+        prefetchedGps,
+        referenciaBase: localServicio.referencia ?? active?.servicio?.referencia ?? null,
+      });
       setLocalServicio((prev) => ({ ...(prev || {}), ...next, id: localServicio.id }));
     } catch (error) {
       showToast?.(error?.message || "No se pudo iniciar el servicio");
@@ -522,18 +530,7 @@ export function ConductorSimplifiedParadasTab({
             <button
               type="button"
               onClick={closeDetail}
-              style={{
-                flexShrink: 0,
-                background: DRIVER_UI.surfaceHi,
-                color: DRIVER_UI.su,
-                border: `1px solid ${DRIVER_UI.line}`,
-                borderRadius: 10,
-                padding: "9px 12px",
-                fontSize: 13,
-                fontWeight: 800,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
+              style={DRIVER_BACK_BUTTON_STYLE}
             >
               ← Volver
             </button>
@@ -613,29 +610,27 @@ export function ConductorSimplifiedParadasTab({
             operatingBusy={operatingBusy}
           />
 
-          {showIrAServicioEnDetalle && typeof onOpenMasServicio === "function" ? (
-            <button
-              type="button"
-              onClick={() => {
-                closeDetail();
-                onOpenMasServicio();
-              }}
-              style={{
-                width: "100%",
-                marginTop: 12,
-                padding: "13px 14px",
-                borderRadius: 12,
-                border: `1px solid ${DRIVER_UI.line}`,
-                background: "#fff",
-                color: "#b45309",
-                fontSize: 14,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              Ir a Servicio →
-            </button>
-          ) : null}
+          <ConductorDropStopAction
+            visible={!!active?.stop?.id && !!localServicio?.id && typeof soltarParadaEn === "function"}
+            stopLabel={active?.tipoOrdenLabel || active?.tipoLabel || "esta parada"}
+            disabled={operatingBusy}
+            showToast={showToast}
+            onConfirm={async () => {
+              await soltarParadaEn(localServicio.id, active.stop.id);
+              closeDetail();
+            }}
+          />
+
+          <ConductorFinalizarParticipacionAction
+            visible={canFinalizarParticipacion && typeof finalizarParticipacionEn === "function"}
+            variant="inline"
+            onConfirm={async () => {
+              await finalizarParticipacionEn(localServicio.id);
+              closeDetail();
+            }}
+            showToast={showToast}
+            successMessage="Has terminado tu parte en este viaje"
+          />
         </div>
 
         {confirmMuelle ? (
@@ -890,7 +885,7 @@ export function ConductorSimplifiedParadasTab({
         </div>
       )}
 
-      {serviciosAccionEnMas.length > 0 && typeof onOpenMasServicio === "function" ? (
+      {serviciosAccionEnMas.length > 0 ? (
         <div
           style={{
             marginTop: 20,
@@ -900,29 +895,20 @@ export function ConductorSimplifiedParadasTab({
             padding: "14px 16px",
           }}
         >
-          <div style={{ fontSize: 12, fontWeight: 800, color: DRIVER_UI.su, marginBottom: 6 }}>PENDIENTE EN SERVICIO</div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: DRIVER_UI.su, marginBottom: 6 }}>PARTICIPACIÓN PENDIENTE</div>
           <div style={{ fontSize: 13, color: "#92400e", lineHeight: 1.45, marginBottom: 12 }}>
             {serviciosAccionEnMas.length === 1
-              ? `El viaje ${getServiceNumberForDisplay(serviciosAccionEnMas[0])} requiere cierre o finalización en Más → Servicio.`
-              : `${serviciosAccionEnMas.length} viajes requieren cierre o finalización en Más → Servicio.`}
+              ? `Has terminado tus paradas en ${getServiceNumberForDisplay(serviciosAccionEnMas[0])}. Puedes finalizar tu participación desde el detalle del viaje.`
+              : `${serviciosAccionEnMas.length} viajes listos para finalizar tu participación. Ábrelos desde «Ver detalles».`}
           </div>
-          <button
-            type="button"
-            onClick={onOpenMasServicio}
-            style={{
-              width: "100%",
-              background: "#fff",
-              color: "#b45309",
-              border: "1px solid #fcd34d",
-              borderRadius: 12,
-              padding: "13px 14px",
-              fontSize: 14,
-              fontWeight: 800,
-              cursor: "pointer",
-            }}
-          >
-            Ir a Más → Servicio
-          </button>
+          <ConductorFinalizarParticipacionAction
+            visible={serviciosAccionEnMas.length === 1 && typeof finalizarParticipacionEn === "function"}
+            variant="list"
+            listButtonLabel="Finalizar mi participación"
+            onConfirm={() => finalizarParticipacionEn(serviciosAccionEnMas[0].id)}
+            showToast={showToast}
+            successMessage="Has terminado tu parte en este viaje"
+          />
         </div>
       ) : null}
 

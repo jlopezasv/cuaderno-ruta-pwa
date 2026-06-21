@@ -63,6 +63,24 @@ const DRIVER_UI = {
   blueSoft: "#eff6ff",
 };
 
+/** Botón «← Volver» visible en detalle conductor. */
+const DRIVER_BACK_BUTTON_STYLE = {
+  flexShrink: 0,
+  background: "#2563eb",
+  color: "#ffffff",
+  border: "none",
+  borderRadius: 10,
+  padding: "9px 14px",
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  boxShadow: "0 2px 6px rgba(37,99,235,.25)",
+};
+
+/** Tamaño de badge de estado en tarjetas conductor (×2 respecto al anterior). */
+const DRIVER_STATUS_BADGE_FONT_SIZE = 20;
+
 /** Ancho máximo del panel tab Servicio (conductor). */
 const DRIVER_PANEL_MAX_WIDTH = 720;
 
@@ -1360,8 +1378,8 @@ function OperationalStopCard({
         background: stateTone.bg,
         color: stateTone.fg,
         borderRadius: 999,
-        padding: "4px 9px",
-        fontSize: 10,
+        padding: "6px 12px",
+        fontSize: DRIVER_STATUS_BADGE_FONT_SIZE,
         fontWeight: 800,
         whiteSpace: "nowrap",
         flexShrink: 0,
@@ -2314,4 +2332,4 @@ export function ActiveServicePanel({
   );
 }
 
-export { OperationalStopCard, buildTimelineItems, DRIVER_UI };
+export { OperationalStopCard, buildTimelineItems, DRIVER_UI, DRIVER_BACK_BUTTON_STYLE, DRIVER_STATUS_BADGE_FONT_SIZE };

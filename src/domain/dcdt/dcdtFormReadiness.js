@@ -232,6 +232,8 @@ export function filterPartesForStop(partes, stop) {
 
 export function applyParteUbicacionToStop(parte, onChange, index) {
   if (!parte || !onChange) return;
+  const parteNombre = String(parte.nombre || "").trim();
+  if (parteNombre) onChange(index, "empresa", parteNombre);
   if (hasText(parte.direccionOperativa)) onChange(index, "direccion", parte.direccionOperativa.trim());
   if (hasText(parte.ciudad)) onChange(index, "nombre", parte.ciudad.trim());
   if (hasText(parte.codigoPostal)) onChange(index, "codigo_postal", parte.codigoPostal.trim());

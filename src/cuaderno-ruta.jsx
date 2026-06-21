@@ -328,6 +328,7 @@ import {
   fetchParticipacionServicio,
   finalizarParticipacionConductor,
   marcarParticipacionActiva,
+  soltarParadaConductor,
 } from "./domain/fleet/servicioAssignment.js";
 import {
   asignarConductorEnServicioCreado,
@@ -17765,12 +17766,20 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function iniciarServicioEn(servicioId, opts = {}) {
     const fecha_inicio = new Date().toISOString();
+    let referenciaBase = opts.referenciaBase ?? null;
+    if (!referenciaBase && servicioId) {
+      const refRes = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}&select=referencia`).catch(() => null);
+      if (refRes?.ok) {
+        const refRows = await refRes.json().catch(() => []);
+        referenciaBase = Array.isArray(refRows) ? refRows[0]?.referencia ?? null : null;
+      }
+    }
     await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
       method: "PATCH",
       body: JSON.stringify({ estado: "en_curso", fecha_inicio }),
     });
     if (uid) await marcarParticipacionActiva(servicioId, uid).catch(() => {});
-    const started = { id: servicioId, estado: "en_curso", fecha_inicio };
+    const started = { id: servicioId, estado: "en_curso", fecha_inicio, referencia: referenciaBase };
     let nextServicio = { ...started };
     const inicioGeo = resolveEventGeoForPersist(opts.prefetchedGps ?? null, "inicio_servicio");
     seedLocationCacheFromGeo(inicioGeo);
@@ -17783,7 +17792,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       showToast,
       prefetchedGps: opts.prefetchedGps ?? null,
     });
-    const referenciaInicio = mergeReferenciaOperacional(op?.referencia || null, {
+    const referenciaInicio = mergeReferenciaOperacional(referenciaBase || op?.referencia || null, {
       inicio_servicio_geo: inicioGeo,
     });
     if (referenciaInicio) {
@@ -17903,6 +17912,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
     return res;
   }
+  async function soltarParadaEn(servicioId, stopId) {
+    if (!servicioId || !stopId || !uid) return;
+    const res = await soltarParadaConductor(servicioId, uid, stopId);
+    if (!res?.ok) throw new Error("No se pudo quitar la parada de tu lista");
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+    return res;
+  }
   async function finalizarParticipacion() {
     if (!servicio?.id || !uid) return;
     await finalizarParticipacionEn(servicio.id);
@@ -17931,6 +17947,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     cerrarExpedienteEn,
     finalizarParticipacion,
     finalizarParticipacionEn,
+    soltarParadaEn,
     recargar: cargar,
   };
 }
@@ -19010,8 +19027,7 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 });
 
 const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductorNombre="Conductor"}){
-  const{candidates,loading:flatLoading,finalizarServicios,stopsByServicioId}=useDriverFlatPendingStops(uid);
-  const{finalizarParticipacionEn,cerrarExpedienteEn}=useServicioActivo(uid,null,showToast,conductorNombre);
+  const{candidates,loading:flatLoading}=useDriverFlatPendingStops(uid);
   const[selectedServicioId,setSelectedServicioId]=useState(null);
 
   const activeTrips=useMemo(()=>(candidates||[]).filter((sv)=>{
@@ -19021,20 +19037,7 @@ const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductor
 
   const effectiveServicioId=selectedServicioId??(activeTrips.length===1?activeTrips[0]?.id:null);
   const selectedServicio=activeTrips.find((s)=>s.id===effectiveServicioId)||null;
-  const selectedStops=selectedServicio?.id?(stopsByServicioId[selectedServicio.id]||[]):[];
   const showTripPicker=activeTrips.length>1&&!effectiveServicioId;
-  const needsCierre=!!selectedServicio&&needsExpedienteClosure(selectedServicio,selectedStops);
-  const canFinalizar=!!selectedServicio&&!needsCierre&&finalizarServicios.some((s)=>s.id===selectedServicio.id);
-
-  const handleFinalizar=useCallback(async()=>{
-    if(!selectedServicio?.id)return;
-    await finalizarParticipacionEn(selectedServicio.id);
-  },[selectedServicio?.id,finalizarParticipacionEn]);
-
-  const handleCerrarExpediente=useCallback(async(opts)=>{
-    if(!selectedServicio?.id)return;
-    await cerrarExpedienteEn(selectedServicio,opts);
-  },[selectedServicio,cerrarExpedienteEn]);
 
   if(flatLoading){
     return(
@@ -19049,13 +19052,9 @@ const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductor
   return(
     <ConductorMasServicioTab
       servicio={selectedServicio}
-      stops={selectedStops}
       loading={false}
       showToast={showToast}
       conductorNombre={conductorNombre}
-      canFinalizarParticipacion={canFinalizar}
-      onFinalizarParticipacion={handleFinalizar}
-      onCerrarExpediente={handleCerrarExpediente}
       onBackToTripPicker={()=>setSelectedServicioId(null)}
       showTripBack={activeTrips.length>1}
     />
@@ -19063,7 +19062,7 @@ const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductor
 });
 
 const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,norma=null,conductorNombre="Conductor",showToast,onOpenMasServicio}){
-  const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
+  const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn,finalizarParticipacionEn,soltarParadaEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const recalculateOperationalRoute=useCallback(
     (opts)=>recalculateOperationalRouteFromCurrentGps({...opts,norma,showToast:opts?.silent?undefined:showToast}),
     [norma,showToast],
@@ -19080,6 +19079,8 @@ const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,nor
       recalculateOperationalRoute={recalculateOperationalRoute}
       EvidenciasStopComponent={EvidenciasStop}
       onOpenMasServicio={onOpenMasServicio}
+      soltarParadaEn={soltarParadaEn}
+      finalizarParticipacionEn={finalizarParticipacionEn}
     />
   );
 });

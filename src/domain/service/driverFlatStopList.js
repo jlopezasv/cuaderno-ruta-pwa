@@ -1,11 +1,12 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
+import { fetchAllConductorDroppedStopIds } from "../fleet/servicioAssignment.js";
 import {
   normalizeParticipacionTipo,
   PARTICIPACION_TIPO,
   stopMatchesParticipacionTipo,
 } from "../fleet/participacionTipo.js";
-import { isConductorServicioOperativoActivo, needsExpedienteClosure, isServicioExpedienteCerrado } from "./expedienteCierre.js";
+import { isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./expedienteCierre.js";
 import { isStopOperationallyComplete } from "./serviceStops.js";
 import {
   driverQueueAssignmentTimeMs,
@@ -206,12 +207,14 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
 
   const { candidates, assignedAtById, participacionBySvId, participacionTipoBySvId } =
     await fetchDriverOperationalCandidates(uid);
+  const droppedStopsByServicioId = await fetchAllConductorDroppedStopIds(uid);
   const sorted = sortDriverOperationalCandidates(candidates, assignedAtById);
   const items = [];
   const stopsByServicioId = {};
   const filterByParticipacionTipo = isDemoApp();
 
   for (const sv of sorted) {
+    const droppedStopIds = droppedStopsByServicioId.get(sv.id) || new Set();
     const participacionTipo =
       participacionTipoBySvId[sv.id] ||
       (sv.conductor_id === uid ? PARTICIPACION_TIPO.TODO : PARTICIPACION_TIPO.TODO);
@@ -226,6 +229,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
     const referenciaCliente = getServiceClientReference(sv);
     for (const stop of sortedStops) {
       if (isStopOperationallyComplete(stop)) continue;
+      if (droppedStopIds.has(stop.id)) continue;
       if (filterByParticipacionTipo && !stopMatchesParticipacionTipo(stop, participacionTipo)) continue;
       const lugarDisplay = formatStopLugarDisplay(stop, sv, sortedStops);
       const tipoOrdenLabel = tipoOrdinalByStopId.get(stop.id) || labelForStopType(stop);
@@ -276,22 +280,7 @@ export function serviciosPendientesFinalizarParticipacion(candidates, participac
   });
 }
 
-/** Viajes con cierre de expediente o finalización pendiente (destino Más → Servicio). */
-export function serviciosConAccionPendienteEnMas(candidates, finalizarServicios, stopsByServicioId = {}) {
-  const seen = new Set();
-  const out = [];
-  for (const sv of finalizarServicios || []) {
-    if (!sv?.id || seen.has(sv.id)) continue;
-    seen.add(sv.id);
-    out.push(sv);
-  }
-  for (const sv of candidates || []) {
-    if (!sv?.id || seen.has(sv.id)) continue;
-    const stops = stopsByServicioId[sv.id] || [];
-    if (needsExpedienteClosure(sv, stops)) {
-      seen.add(sv.id);
-      out.push(sv);
-    }
-  }
-  return out;
+/** Viajes con finalización de participación pendiente (aviso en tab Paradas). */
+export function serviciosConAccionPendienteEnMas(_candidates, finalizarServicios) {
+  return (finalizarServicios || []).filter((sv) => !!sv?.id);
 }

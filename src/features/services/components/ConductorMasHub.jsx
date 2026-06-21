@@ -11,7 +11,7 @@ const UI = {
 };
 
 const HUB_ITEMS = [
-  { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos · finalizar participación" },
+  { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos del viaje" },
   { id: "hoy", icon: "◷", label: "Hoy", hint: "Jornada y tacógrafo" },
   { id: "resumen", icon: "▤", label: "Resumen", hint: "Actividad · IA · Historial" },
   { id: "ruta", icon: "◎", label: "Ruta", hint: "Mapa y navegación" },
@@ -111,13 +111,15 @@ export function ConductorMasBackBar({ title, onBack }) {
         type="button"
         onClick={onBack}
         style={{
-          background: "transparent",
+          background: "#2563eb",
+          color: "#ffffff",
           border: "none",
-          color: UI.accent,
-          fontSize: 15,
+          borderRadius: 10,
+          padding: "8px 12px",
+          fontSize: 14,
           fontWeight: 800,
           cursor: "pointer",
-          padding: "6px 4px",
+          boxShadow: "0 2px 6px rgba(37,99,235,.25)",
         }}
       >
         ← Más

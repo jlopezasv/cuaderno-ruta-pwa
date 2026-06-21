@@ -420,8 +420,125 @@ export async function marcarParticipacionActiva(servicioId, conductorId) {
   return { ok: true };
 }
 
+export const SOLE_ACTIVE_CONDUCTOR_ERROR =
+  "No puedes hacer esto: eres el único conductor asignado a este servicio";
+
+/** Conductores con participación activa en el servicio (no finalizada a nivel viaje). */
+export async function fetchActiveConductorIdsForServicio(servicioId) {
+  if (!servicioId) return new Set();
+  const active = new Set();
+  const wholeFinalized = new Set();
+
+  const sr = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}&select=conductor_id`).catch(() => null);
+  if (sr?.ok) {
+    const rows = await sr.json().catch(() => []);
+    const principalId = Array.isArray(rows) ? rows[0]?.conductor_id : null;
+    if (principalId) active.add(principalId);
+  }
+
+  const ar = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,estado_participacion,stop_id`,
+  ).catch(() => null);
+  if (ar?.ok) {
+    const rows = await ar.json().catch(() => []);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const cid = row?.conductor_id;
+      if (!cid) continue;
+      active.add(cid);
+      const est = String(row.estado_participacion || "").toLowerCase();
+      if (est === "finalizado" && !row.stop_id) wholeFinalized.add(cid);
+    }
+  }
+
+  for (const cid of wholeFinalized) active.delete(cid);
+  return active;
+}
+
+export async function assertNotSoleActiveConductor(servicioId, conductorId) {
+  if (!servicioId || !conductorId) return;
+  const active = await fetchActiveConductorIdsForServicio(servicioId);
+  if (active.size <= 1 && active.has(conductorId)) {
+    throw new Error(SOLE_ACTIVE_CONDUCTOR_ERROR);
+  }
+}
+
+/** Paradas que el conductor ha soltado (stop_id con participación finalizada). */
+export async function fetchConductorDroppedStopIds(servicioId, conductorId) {
+  if (!servicioId || !conductorId) return new Set();
+  const ar = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}&stop_id=not.is.null&estado_participacion=eq.finalizado&select=stop_id`,
+  ).catch(() => null);
+  if (!ar?.ok) return new Set();
+  const rows = await ar.json().catch(() => []);
+  const out = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row?.stop_id) out.add(row.stop_id);
+  }
+  return out;
+}
+
+export async function fetchAllConductorDroppedStopIds(conductorId) {
+  if (!conductorId) return new Map();
+  const ar = await sbFetch(
+    `/rest/v1/servicio_asignaciones?conductor_id=eq.${conductorId}&stop_id=not.is.null&estado_participacion=eq.finalizado&select=servicio_id,stop_id`,
+  ).catch(() => null);
+  if (!ar?.ok) return new Map();
+  const rows = await ar.json().catch(() => []);
+  const byServicio = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const sid = row?.servicio_id;
+    const stopId = row?.stop_id;
+    if (!sid || !stopId) continue;
+    if (!byServicio.has(sid)) byServicio.set(sid, new Set());
+    byServicio.get(sid).add(stopId);
+  }
+  return byServicio;
+}
+
+/** Quita una parada concreta de la lista del conductor (trazabilidad en servicio_asignaciones). */
+export async function soltarParadaConductor(servicioId, conductorId, stopId) {
+  if (!servicioId || !conductorId || !stopId) return { ok: false };
+  await assertNotSoleActiveConductor(servicioId, conductorId);
+  const now = new Date().toISOString();
+  const patch = {
+    estado_participacion: "finalizado",
+    fecha_fin_participacion: now,
+    tipo_asignacion: "parada_renunciada",
+  };
+  const pr = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}&stop_id=eq.${stopId}`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(patch),
+    },
+  ).catch(() => null);
+  if (pr?.ok) {
+    const rows = await pr.json().catch(() => []);
+    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
+  }
+  const ins = await sbFetch("/rest/v1/servicio_asignaciones", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      servicio_id: servicioId,
+      conductor_id: conductorId,
+      stop_id: stopId,
+      tipo_asignacion: "parada_renunciada",
+      estado_participacion: "finalizado",
+      fecha_fin_participacion: now,
+    }),
+  }).catch(() => null);
+  if (ins?.ok) {
+    const rows = await ins.json().catch(() => []);
+    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
+  }
+  return { ok: false };
+}
+
 export async function finalizarParticipacionConductor(servicioId, conductorId) {
   if (!servicioId || !conductorId) return { ok: false };
+  await assertNotSoleActiveConductor(servicioId, conductorId);
   const now = new Date().toISOString();
   const patch = { estado_participacion: "finalizado", fecha_fin_participacion: now };
   const r = await sbFetch(

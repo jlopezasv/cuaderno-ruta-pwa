@@ -43,7 +43,7 @@ export function useDriverFlatPendingStops(uid) {
       setStopsByServicioId(data.stopsByServicioId || {});
       setFinalizarServicios(pendientesFinalizar);
       setServiciosAccionEnMas(
-        serviciosConAccionPendienteEnMas(data.candidates, pendientesFinalizar, data.stopsByServicioId || {}),
+        serviciosConAccionPendienteEnMas(data.candidates, pendientesFinalizar),
       );
     } catch {
       setItems([]);
