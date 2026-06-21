@@ -21,6 +21,7 @@ import { getServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
 import { EmpresaServicioQuickActions } from "./EmpresaServicioQuickActions.jsx";
+import { EmpresaServicioAdminActions } from "./EmpresaServicioAdminActions.jsx";
 
 const UI = Object.freeze({
   surface: "#ffffff",
@@ -493,28 +494,13 @@ function EmpresaFlotaServicioCardImpl({
             showDcdt={!!onDcdt}
           />
 
-          {onAsignarConductor && !expanded && !servicio.conductor_id ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAsignarConductor();
-              }}
-              style={{
-                marginTop: 10,
-                background: UI.accentSoft,
-                color: UI.accent,
-                border: "1px solid #bfdbfe",
-                borderRadius: 8,
-                padding: "7px 10px",
-                fontSize: 12,
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              Asignar conductor
-            </button>
-          ) : null}
+          <EmpresaServicioAdminActions
+            servicio={servicio}
+            puedeEditarAdmin={puedeEditarAdmin}
+            onEditarServicio={onEditarServicio}
+            onAsignarConductor={onAsignarConductor}
+            onAnular={onAnular}
+          />
         </div>
 
         <div
@@ -1003,79 +989,7 @@ function EmpresaFlotaServicioCardImpl({
               </div>
             ) : null}
 
-            {puedeEditarAdmin && onEditarServicio ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEditarServicio();
-                }}
-                style={{
-                  width: "100%",
-                  marginTop: 12,
-                  background: UI.surface,
-                  color: UI.accent,
-                  border: `1px solid ${UI.border}`,
-                  borderRadius: 9,
-                  padding: "10px 10px",
-                  fontSize: 12.5,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                Editar servicio
-              </button>
-            ) : null}
-
           </div>
-
-            {onAsignarConductor ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAsignarConductor();
-                }}
-                style={{
-                  width: "100%",
-                  marginTop: 12,
-                  background: UI.accentSoft,
-                  color: UI.accent,
-                  border: "1px solid #bfdbfe",
-                  borderRadius: 9,
-                  padding: "10px 10px",
-                  fontSize: 12.5,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                {servicio.conductor_id ? "Gestionar conductores" : "Asignar conductor"}
-              </button>
-            ) : null}
-
-            {servicio.estado !== "anulado" ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAnular?.();
-                }}
-                style={{
-                  width: "100%",
-                  marginTop: 12,
-                  background: "#f1f5f9",
-                  color: "#475569",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 9,
-                  padding: "10px 10px",
-                  fontSize: 12.5,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                Anular servicio
-              </button>
-            ) : null}
         </div>
       ) : null}
     </div>

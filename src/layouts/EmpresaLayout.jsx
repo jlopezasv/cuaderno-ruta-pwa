@@ -255,16 +255,16 @@ export default function EmpresaLayout({
   const tabBtnStyle = (active) => ({
     background: active ? "rgba(245,158,11,.18)" : "transparent",
     border: "none",
-    borderBottom: `3px solid ${active ? accent : "transparent"}`,
-    borderRadius: active ? "8px 8px 0 0" : 0,
-    padding: "11px 14px 9px",
-    fontSize: 13,
+    borderBottom: `2px solid ${active ? accent : "transparent"}`,
+    borderRadius: active ? "6px 6px 0 0" : 0,
+    padding: "7px 11px 5px",
+    fontSize: 12,
     fontWeight: active ? 800 : 600,
     color: active ? tabActive : tabIdle,
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
     transition: "background .15s ease, color .15s ease, border-color .15s ease",
     whiteSpace: "nowrap",
     boxShadow: active ? "inset 0 -1px 0 rgba(245,158,11,.25)" : "none",
@@ -291,7 +291,7 @@ export default function EmpresaLayout({
             overflow: "visible",
           }}
         >
-          <div style={{ padding: "10px 0", marginRight: 12, flexShrink: 0 }}>
+          <div style={{ padding: "6px 0", marginRight: 10, flexShrink: 0 }}>
             <BrandHeader panelLabel="Panel Empresa" nameLabel={prof.nombre || "Empresa"} titleColor={tx} subColor={su} />
           </div>
           <div
@@ -318,7 +318,7 @@ export default function EmpresaLayout({
                   if (tab !== t.id) e.currentTarget.style.background = "transparent";
                 }}
               >
-                <span style={{ fontSize: 14, color: tab === t.id ? accent : "#64748b" }}>{t.icon}</span>
+                <span style={{ fontSize: 13, color: tab === t.id ? accent : "#64748b" }}>{t.icon}</span>
                 {t.label}
               </button>
             ))}
@@ -364,7 +364,7 @@ export default function EmpresaLayout({
       {/* ── MOBILE HEADER + PESTAÑAS (visibles bajo la cabecera) ── */}
       {isMobile && (
         <>
-          <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
+          <div style={{ background: card, borderBottom: `1px solid ${border}`, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
             <BrandHeader panelLabel="Panel Empresa" compact titleColor={tx} subColor={su} />
             <div style={{ display: "flex", gap: 8 }}>
               {showModeSwitch && (
@@ -390,7 +390,7 @@ export default function EmpresaLayout({
               overflowX: "auto",
               WebkitOverflowScrolling: "touch",
               position: "sticky",
-              top: 52,
+              top: 46,
               zIndex: 99,
               boxShadow: "0 1px 2px rgba(15,23,42,.04)",
             }}
@@ -406,20 +406,20 @@ export default function EmpresaLayout({
                     flexShrink: 0,
                     background: active ? "rgba(245,158,11,.18)" : "transparent",
                     border: "none",
-                    borderBottom: `3px solid ${active ? accent : "transparent"}`,
-                    padding: "10px 14px 7px",
-                    fontSize: 12,
+                    borderBottom: `2px solid ${active ? accent : "transparent"}`,
+                    padding: "6px 10px 4px",
+                    fontSize: 11,
                     fontWeight: active ? 800 : 600,
                     color: active ? tabActive : tabIdle,
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
-                    gap: 5,
+                    gap: 4,
                     whiteSpace: "nowrap",
                     boxShadow: active ? "inset 0 -1px 0 rgba(245,158,11,.25)" : "none",
                   }}
                 >
-                  <span style={{ fontSize: 14, color: active ? accent : "#64748b" }}>{t.icon}</span>
+                  <span style={{ fontSize: 13, color: active ? accent : "#64748b" }}>{t.icon}</span>
                   {t.label}
                 </button>
               );
@@ -493,19 +493,19 @@ export default function EmpresaLayout({
                   background: active ? accentHover : "transparent",
                   border: "none",
                   borderTop: `2px solid ${active ? accent : "transparent"}`,
-                  padding: "8px 4px 6px",
-                  fontSize: 10,
+                  padding: "5px 2px 4px",
+                  fontSize: 9,
                   fontWeight: active ? 700 : 550,
                   color: active ? tabActive : tabIdle,
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  gap: 2,
+                  gap: 1,
                   transition: "background .15s ease, color .15s ease",
                 }}
               >
-                <span style={{ fontSize: 17, color: active ? accent : "#94a3b8" }}>{t.icon}</span>
+                <span style={{ fontSize: 15, color: active ? accent : "#94a3b8" }}>{t.icon}</span>
                 {t.label}
               </button>
             );
