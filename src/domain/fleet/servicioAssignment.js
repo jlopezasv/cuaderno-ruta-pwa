@@ -365,7 +365,7 @@ export async function syncServicioColaboradores(
 export async function fetchParticipacionServicio(servicioId) {
   if (!servicioId) return [];
   const r = await sbFetch(
-    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,tipo_asignacion,estado_participacion`,
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,tipo_asignacion,estado_participacion,stop_id`,
   );
   if (r.ok) {
     const rows = await r.json().catch(() => []);
@@ -454,6 +454,38 @@ export async function fetchActiveConductorIdsForServicio(servicioId) {
   return active;
 }
 
+/** Resumen de participación para UI (Tab Servicio / anti-huérfano). */
+export async function fetchParticipacionResumenServicio(servicioId) {
+  const activeIds = await fetchActiveConductorIdsForServicio(servicioId);
+  const ar = await sbFetch(
+    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&select=conductor_id,stop_id`,
+  ).catch(() => null);
+  const allIds = new Set(activeIds);
+  if (ar?.ok) {
+    const rows = await ar.json().catch(() => []);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row?.conductor_id) allIds.add(row.conductor_id);
+    }
+  }
+  const sr = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}&select=conductor_id`).catch(() => null);
+  if (sr?.ok) {
+    const rows = await sr.json().catch(() => []);
+    const principalId = Array.isArray(rows) ? rows[0]?.conductor_id : null;
+    if (principalId) allIds.add(principalId);
+  }
+  return {
+    total: allIds.size || 1,
+    activos: activeIds.size || (allIds.size ? 1 : 0),
+    activeIds,
+  };
+}
+
+export function isConductorUltimoActivoEnServicio(activeIds, conductorId) {
+  if (!conductorId) return false;
+  const set = activeIds instanceof Set ? activeIds : new Set(activeIds || []);
+  return set.size <= 1 && set.has(conductorId);
+}
+
 export async function assertNotSoleActiveConductor(servicioId, conductorId) {
   if (!servicioId || !conductorId) return;
   const active = await fetchActiveConductorIdsForServicio(servicioId);
@@ -498,7 +530,6 @@ export async function fetchAllConductorDroppedStopIds(conductorId) {
 /** Quita una parada concreta de la lista del conductor (trazabilidad en servicio_asignaciones). */
 export async function soltarParadaConductor(servicioId, conductorId, stopId) {
   if (!servicioId || !conductorId || !stopId) return { ok: false };
-  await assertNotSoleActiveConductor(servicioId, conductorId);
   const now = new Date().toISOString();
   const patch = {
     estado_participacion: "finalizado",

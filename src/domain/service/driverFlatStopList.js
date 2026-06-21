@@ -72,15 +72,15 @@ export async function fetchDriverOperationalCandidates(uid) {
   }
 
   async function fetchAssignedAtBySvId() {
-    const selectCols = isDemoApp()
-      ? "servicio_id,created_at,estado_participacion,participacion_tipo"
-      : "servicio_id,created_at,estado_participacion";
+    const selectWithStop = isDemoApp()
+      ? "servicio_id,created_at,estado_participacion,participacion_tipo,stop_id"
+      : "servicio_id,created_at,estado_participacion,stop_id";
     let ar = await sbFetch(
-      `/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=${selectCols}`,
+      `/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=${selectWithStop}`,
     );
     if (!ar.ok && isDemoApp()) {
       ar = await sbFetch(
-        `/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at,estado_participacion`,
+        `/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at,estado_participacion,stop_id`,
       );
     }
     if (!ar.ok) return { assignedAtById: {}, participacionBySvId: {}, participacionTipoBySvId: {} };
@@ -94,9 +94,14 @@ export async function fetchDriverOperationalCandidates(uid) {
       if (!sid) return;
       if (ts && (map[sid] === undefined || new Date(ts) < new Date(map[sid]))) map[sid] = ts;
       const est = String(r?.estado_participacion || "").toLowerCase();
-      if (est === "finalizado") part[sid] = "finalizado";
-      else if (part[sid] === undefined) part[sid] = est || "pendiente";
-      if (isDemoApp() && r?.participacion_tipo != null) {
+      const isStopLevel = !!r?.stop_id;
+      // Solo finalización a nivel viaje (stop_id null) retira el servicio entero del conductor.
+      if (est === "finalizado" && !isStopLevel) {
+        part[sid] = "finalizado";
+      } else if (part[sid] !== "finalizado" && part[sid] === undefined) {
+        part[sid] = est || "pendiente";
+      }
+      if (isDemoApp() && !isStopLevel && r?.participacion_tipo != null) {
         tipoBySv[sid] = normalizeParticipacionTipo(r.participacion_tipo);
       }
     });

@@ -326,6 +326,7 @@ import {
   fetchServicioConductorIds,
   syncServicioColaboradores,
   fetchParticipacionServicio,
+  fetchParticipacionResumenServicio,
   finalizarParticipacionConductor,
   marcarParticipacionActiva,
   soltarParadaConductor,
@@ -5355,7 +5356,7 @@ async function fetchDriverOperationalCandidates(uid){
   }
   /** Momento de asignación al conductor (FIFO) + estado de participación (FASE 2A). */
   async function fetchAssignedAtBySvId(){
-    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at,estado_participacion`);
+    const ar=await sbFetch(`/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.asc&limit=200&select=servicio_id,created_at,estado_participacion,stop_id`);
     if(!ar.ok)return{assignedAtById:{},participacionBySvId:{}};
     const rows=await ar.json().catch(()=>[]);
     const map={};const part={};
@@ -5364,9 +5365,9 @@ async function fetchDriverOperationalCandidates(uid){
       if(!sid)return;
       if(ts&&(map[sid]===undefined||new Date(ts)<new Date(map[sid])))map[sid]=ts;
       const est=String(r?.estado_participacion||"").toLowerCase();
-      // Si cualquier fila del conductor para el servicio está finalizada, prevalece "finalizado".
-      if(est==="finalizado")part[sid]="finalizado";
-      else if(part[sid]===undefined)part[sid]=est||"pendiente";
+      const isStopLevel=!!r?.stop_id;
+      if(est==="finalizado"&&!isStopLevel)part[sid]="finalizado";
+      else if(part[sid]!=="finalizado"&&part[sid]===undefined)part[sid]=est||"pendiente";
     });
     return{assignedAtById:map,participacionBySvId:part};
   }
@@ -17476,18 +17477,14 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
         setDriverView(merged);
         // FASE 2A: participación del conductor en el servicio activo (total + mi estado).
         try{
+          const resumen=await fetchParticipacionResumenServicio(merged.servicio.id);
           const partRows=await fetchParticipacionServicio(merged.servicio.id);
           if(gen===loadGenRef.current){
             const rows=Array.isArray(partRows)?partRows:[];
-            const total=new Set(rows.map(r=>r?.conductor_id).filter(Boolean)).size;
-            const activos=new Set(
-              rows
-                .filter(r=>String(r?.estado_participacion||"pendiente").toLowerCase()!=="finalizado")
-                .map(r=>r?.conductor_id).filter(Boolean)
-            ).size;
-            const miFila=rows.find(r=>r?.conductor_id===uid);
-            const miEstado=miFila?String(miFila.estado_participacion||"pendiente").toLowerCase():null;
-            setParticipacion({total:total||1,activos:activos||total||1,miEstado});
+            const miWhole=rows.find((r)=>r?.conductor_id===uid&&!r?.stop_id);
+            let miEstado=miWhole?String(miWhole.estado_participacion||"pendiente").toLowerCase():null;
+            if(!miEstado&&resumen.activeIds.has(uid))miEstado="activo";
+            setParticipacion({total:resumen.total||1,activos:resumen.activos||1,miEstado});
           }
         }catch(_){ if(gen===loadGenRef.current)setParticipacion({total:1,activos:1,miEstado:null}); }
         const stopsRows=Array.isArray(merged.stops)?merged.stops:[];

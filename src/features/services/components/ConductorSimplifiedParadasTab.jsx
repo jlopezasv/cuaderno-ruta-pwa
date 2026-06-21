@@ -23,7 +23,6 @@ import { mergeEvidenciaIntoByStop } from "../../../domain/documents/operationalE
 import { stopsOperativaSig } from "../../../features/empresa/empresaFlotaRefresh.js";
 import { isStopOperationallyComplete, findEarlierPendingStopInRoute } from "../../../domain/service/serviceStops.js";
 import { pendingStopDisplayLabel } from "../../../domain/service/driverFlatStopList.js";
-import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { sbFetch } from "../../../data/supabaseClient.js";
 import { useAutoOperationalEtaToFirstDescarga } from "../hooks/useAutoOperationalEtaToFirstDescarga.js";
 import {
@@ -36,6 +35,10 @@ import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
+import {
+  fetchParticipacionResumenServicio,
+  isConductorUltimoActivoEnServicio,
+} from "../../../domain/fleet/servicioAssignment.js";
 import { withOperationTimeout } from "../../../domain/service/operationTimeout.js";
 
 const PAGE = "#F8FAFC";
@@ -194,7 +197,7 @@ export function ConductorSimplifiedParadasTab({
   soltarParadaEn,
   finalizarParticipacionEn,
 }) {
-  const { loading, items, serviciosAccionEnMas, finalizarServicios } = useDriverFlatPendingStops(uid);
+  const { loading, items, finalizarServicios } = useDriverFlatPendingStops(uid);
   const etaClockMs = useEtaVisualClockMs();
   useAutoOperationalEtaToFirstDescarga({
     uid,
@@ -216,6 +219,7 @@ export function ConductorSimplifiedParadasTab({
   const [descargaFirma, setDescargaFirma] = useState(null);
   const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
   const [orderSkipConfirm, setOrderSkipConfirm] = useState(null);
+  const [participacionResumen, setParticipacionResumen] = useState(null);
   const muelleGpsRef = useRef(null);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -319,6 +323,24 @@ export function ConductorSimplifiedParadasTab({
     };
   }, [active, localServicio?.id, stopsSig, localStops]);
 
+  useEffect(() => {
+    if (!localServicio?.id) {
+      setParticipacionResumen(null);
+      return;
+    }
+    let cancelled = false;
+    fetchParticipacionResumenServicio(localServicio.id)
+      .then((res) => {
+        if (!cancelled) setParticipacionResumen(res);
+      })
+      .catch(() => {
+        if (!cancelled) setParticipacionResumen(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [localServicio?.id, items.length]);
+
   const timelineItems = useMemo(() => buildTimelineItems(localStops), [localStops]);
   const activeStopId = active?.stop?.id;
   const timelineItem = useMemo(
@@ -334,10 +356,21 @@ export function ConductorSimplifiedParadasTab({
 
   const operatingBusy = confirmMuelleSaving || descargaFirmaSaving || iniciarSaving;
 
-  const canFinalizarParticipacion = useMemo(() => {
+  const elegibleFinalizarPorParadas = useMemo(() => {
     if (!localServicio?.id) return false;
     return finalizarServicios.some((sv) => sv.id === localServicio.id);
   }, [localServicio?.id, finalizarServicios]);
+
+  const esUltimoActivoEnViaje = useMemo(() => {
+    if (!participacionResumen || !uid) return false;
+    return isConductorUltimoActivoEnServicio(participacionResumen.activeIds, uid);
+  }, [participacionResumen, uid]);
+
+  const puedeFinalizarParticipacion =
+    elegibleFinalizarPorParadas &&
+    !!participacionResumen &&
+    participacionResumen.total > 1 &&
+    !esUltimoActivoEnViaje;
 
   const canOperate =
     !detailReadOnly &&
@@ -622,7 +655,7 @@ export function ConductorSimplifiedParadasTab({
           />
 
           <ConductorFinalizarParticipacionAction
-            visible={canFinalizarParticipacion && typeof finalizarParticipacionEn === "function"}
+            visible={puedeFinalizarParticipacion && typeof finalizarParticipacionEn === "function"}
             variant="inline"
             onConfirm={async () => {
               await finalizarParticipacionEn(localServicio.id);
@@ -631,6 +664,24 @@ export function ConductorSimplifiedParadasTab({
             showToast={showToast}
             successMessage="Has terminado tu parte en este viaje"
           />
+
+          {elegibleFinalizarPorParadas && esUltimoActivoEnViaje ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: "11px 14px",
+                borderRadius: 12,
+                border: `1px solid ${DRIVER_UI.line}`,
+                background: DRIVER_UI.surfaceHi,
+                color: DRIVER_UI.su,
+                fontSize: 12.5,
+                fontWeight: 600,
+                lineHeight: 1.45,
+              }}
+            >
+              Eres el último conductor activo de este servicio. No puedes finalizar tu participación hasta que haya otro conductor asignado.
+            </div>
+          ) : null}
         </div>
 
         {confirmMuelle ? (
@@ -884,33 +935,6 @@ export function ConductorSimplifiedParadasTab({
           })}
         </div>
       )}
-
-      {serviciosAccionEnMas.length > 0 ? (
-        <div
-          style={{
-            marginTop: 20,
-            background: "#fffbeb",
-            border: "1px solid #fcd34d",
-            borderRadius: 14,
-            padding: "14px 16px",
-          }}
-        >
-          <div style={{ fontSize: 12, fontWeight: 800, color: DRIVER_UI.su, marginBottom: 6 }}>PARTICIPACIÓN PENDIENTE</div>
-          <div style={{ fontSize: 13, color: "#92400e", lineHeight: 1.45, marginBottom: 12 }}>
-            {serviciosAccionEnMas.length === 1
-              ? `Has terminado tus paradas en ${getServiceNumberForDisplay(serviciosAccionEnMas[0])}. Puedes finalizar tu participación desde el detalle del viaje.`
-              : `${serviciosAccionEnMas.length} viajes listos para finalizar tu participación. Ábrelos desde «Ver detalles».`}
-          </div>
-          <ConductorFinalizarParticipacionAction
-            visible={serviciosAccionEnMas.length === 1 && typeof finalizarParticipacionEn === "function"}
-            variant="list"
-            listButtonLabel="Finalizar mi participación"
-            onConfirm={() => finalizarParticipacionEn(serviciosAccionEnMas[0].id)}
-            showToast={showToast}
-            successMessage="Has terminado tu parte en este viaje"
-          />
-        </div>
-      ) : null}
 
       {orderSkipConfirm ? (
         <div
