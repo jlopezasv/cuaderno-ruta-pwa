@@ -15,15 +15,22 @@ export async function fetchConductorVehiculoForDcdt(userId, empresaId = null) {
   if (!userId) return null;
 
   let ce = null;
-  const ceBase = empresaId
-    ? `user_id=eq.${userId}&empresa_id=eq.${empresaId}`
-    : `user_id=eq.${userId}`;
+  const ceParts = ["activo=eq.true"];
+  if (empresaId) {
+    ceParts.unshift(`empresa_id=eq.${empresaId}`);
+    ceParts.unshift(`user_id=eq.${userId}`);
+  } else {
+    ceParts.unshift(`user_id=eq.${userId}`);
+  }
+  const ceBase = ceParts.join("&");
 
   for (const select of [
     "id,user_id,nombre,matricula,remolque",
     "id,user_id,nombre,matricula",
   ]) {
-    const cr = await sbFetch(`/rest/v1/conductor_empresa?${ceBase}&select=${select}&limit=1`);
+    const cr = await sbFetch(
+      `/rest/v1/conductor_empresa?${ceBase}&select=${select}&order=created_at.desc&limit=1`,
+    );
     if (!cr.ok) continue;
     const rows = await cr.json().catch(() => []);
     ce = Array.isArray(rows) ? rows[0] : null;

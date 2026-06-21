@@ -76,6 +76,11 @@ function vehiculoEditFromDatos(vehiculo) {
   };
 }
 
+function conductorVehiculoTieneDatos(row) {
+  if (!row) return false;
+  return Boolean(String(row.matricula ?? "").trim() || String(row.remolque ?? "").trim());
+}
+
 function hydrateMercanciaEdit(dcdtMercancia, servicio, stops, dcdt, multiDeca) {
   const fromDcdt = mercanciaEditFromDatos(dcdtMercancia);
   const hasDcdt =
@@ -200,7 +205,12 @@ export function EmpresaDcdtModal({
     (async () => {
       try {
         const row = await fetchConductorVehiculoForDcdt(uid, empresaId);
-        if (!cancelled && row) setConductorEmpresa(row);
+        if (!cancelled && row) {
+          const prev = conductorRef.current;
+          if (conductorVehiculoTieneDatos(row) || !conductorVehiculoTieneDatos(prev)) {
+            setConductorEmpresa(row);
+          }
+        }
       } catch {
         /* perfil opcional */
       }
