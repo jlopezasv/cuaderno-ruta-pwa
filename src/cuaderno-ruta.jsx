@@ -154,6 +154,7 @@ import { isPlatformAdminUid } from "./config/adminUsers.js";
 import PropietarioLayout from "./layouts/PropietarioLayout.jsx";
 import { ModeSwitchButton } from "./ui/ModeSwitchButton.jsx";
 import { EmpresaPendingScreen } from "./ui/EmpresaPendingScreen.jsx";
+import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
 import { getPushClientContext, initFcmPush, logPushInitResult } from "./data/fcmPush";
 import { pushDebugInfo, pushDebugWarn } from "./lib/pushDebugLog.js";
 import {
