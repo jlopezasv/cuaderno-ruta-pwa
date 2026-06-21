@@ -104,8 +104,8 @@ export async function fetchDcdtResolveContext({
   };
 }
 
-/** Mercancía efectiva: DCDT guardado + meta servicio (misma lógica que modal empresa). */
-export function mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit = null) {
+/** Mercancía y vehículo efectivos: DCDT guardado + edición en formulario (modal empresa). */
+export function mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit = null, vehiculoEdit = null) {
   const base = dcdt?.datos || {};
   const fromDcdt = mercanciaEditFromDatos(base.mercancia);
   const fromSvc = getServicioMercanciaFromMeta(servicio);
@@ -120,6 +120,23 @@ export function mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit = null)
   const bultosRaw = edit.bultos !== undefined && edit.bultos !== "" ? edit.bultos : fromDcdt.bultos || fromSvc.bultos;
   const paletsRaw = edit.palets !== undefined && edit.palets !== "" ? edit.palets : fromDcdt.palets || fromSvc.palets;
 
+  const vehiculoBase = base.vehiculo || {};
+  const vehiculo =
+    vehiculoEdit != null
+      ? {
+          ...vehiculoBase,
+          use_conductor_matricula: vehiculoBase.use_conductor_matricula !== false,
+          matricula_override:
+            vehiculoEdit.matricula !== undefined
+              ? String(vehiculoEdit.matricula ?? "").trim() || null
+              : vehiculoBase.matricula_override ?? null,
+          remolque_override:
+            vehiculoEdit.remolque !== undefined
+              ? String(vehiculoEdit.remolque ?? "").trim() || null
+              : vehiculoBase.remolque_override ?? null,
+        }
+      : vehiculoBase;
+
   return {
     ...base,
     mercancia: buildMercanciaDatosPatch({
@@ -128,6 +145,7 @@ export function mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit = null)
       bultos: bultosRaw,
       palets: paletsRaw,
     }),
+    vehiculo,
   };
 }
 
@@ -145,6 +163,7 @@ export function validateDcdtReadiness({
   empresaOwnerProfile = null,
   conductor = null,
   mercanciaEdit = null,
+  vehiculoEdit = null,
   flotaEvs = {},
 }) {
   if (!isDecaAplicable(servicio)) {
@@ -173,7 +192,7 @@ export function validateDcdtReadiness({
     };
   }
 
-  const datos = mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit);
+  const datos = mergeDcdtDatosForReadiness(dcdt, servicio, mercanciaEdit, vehiculoEdit);
   const { doc, missing } = resolveDcdtDocument({
     servicio,
     stops,

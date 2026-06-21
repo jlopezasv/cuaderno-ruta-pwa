@@ -69,6 +69,13 @@ function FieldRow({ label, value, missing }) {
   );
 }
 
+function vehiculoEditFromDatos(vehiculo) {
+  return {
+    matricula: String(vehiculo?.matricula_override ?? "").trim(),
+    remolque: String(vehiculo?.remolque_override ?? "").trim(),
+  };
+}
+
 function hydrateMercanciaEdit(dcdtMercancia, servicio, stops, dcdt, multiDeca) {
   const fromDcdt = mercanciaEditFromDatos(dcdtMercancia);
   const hasDcdt =
@@ -126,6 +133,7 @@ export function EmpresaDcdtModal({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [mercanciaEdit, setMercanciaEdit] = useState({ descripcion: "", peso_kg: "", bultos: "", palets: "" });
+  const [vehiculoEdit, setVehiculoEdit] = useState({ matricula: "", remolque: "" });
   const [pickingRole, setPickingRole] = useState(null);
   const [confirmRole, setConfirmRole] = useState(null);
   const [empresaOwnerProfile, setEmpresaOwnerProfile] = useState(null);
@@ -143,6 +151,7 @@ export function EmpresaDcdtModal({
   const [rutaModMotivo, setRutaModMotivo] = useState("");
   const [actionFeedback, setActionFeedback] = useState(null);
   const mercanciaDirtyRef = useRef(false);
+  const vehiculoDirtyRef = useRef(false);
   const syncedPartesRef = useRef(false);
   const allDcdtsRef = useRef([]);
   allDcdtsRef.current = allDcdts;
@@ -167,6 +176,11 @@ export function EmpresaDcdtModal({
   function setMercanciaField(field, value) {
     mercanciaDirtyRef.current = true;
     setMercanciaEdit((p) => ({ ...p, [field]: value }));
+  }
+
+  function setVehiculoField(field, value) {
+    vehiculoDirtyRef.current = true;
+    setVehiculoEdit((p) => ({ ...p, [field]: value }));
   }
 
   useEffect(() => {
@@ -280,6 +294,7 @@ export function EmpresaDcdtModal({
     }
     let cancelled = false;
     mercanciaDirtyRef.current = false;
+    vehiculoDirtyRef.current = false;
     syncedPartesRef.current = false;
     setLoading(true);
     setSelectedDcdtId(null);
@@ -391,6 +406,7 @@ export function EmpresaDcdtModal({
           empresaOwnerProfile,
           conductor: conductorRef.current,
           mercanciaEdit: mercanciaForReadiness,
+          vehiculoEdit: vehiculoEditFromDatos(persisted?.datos?.vehiculo),
           flotaEvs: flotaEvsRef.current,
         });
         persisted = await refreshValidacionSnapshotIfStale({
@@ -411,6 +427,9 @@ export function EmpresaDcdtModal({
         setAllDcdts((prev) => prev.map((r) => (r.id === persisted.id ? persisted : r)));
         if (!mercanciaDirtyRef.current) {
           setMercanciaEdit(mercanciaForReadiness);
+        }
+        if (!vehiculoDirtyRef.current) {
+          setVehiculoEdit(vehiculoEditFromDatos(persisted?.datos?.vehiculo));
         }
       } catch (e) {
         if (!cancelled) showToastRef.current?.(e?.message || `No se pudo cargar ${DECA_SHORT_LABEL}`);
@@ -455,9 +474,10 @@ export function EmpresaDcdtModal({
       empresaOwnerProfile,
       conductor: conductorEmpresa || conductor,
       mercanciaEdit,
+      vehiculoEdit,
       flotaEvs,
     });
-  }, [dcdt, servicio, scopeStops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit, flotaEvs]);
+  }, [dcdt, servicio, scopeStops, masterById, empresa, empresaOwnerProfile, conductorEmpresa, conductor, mercanciaEdit, vehiculoEdit, flotaEvs]);
 
   const { doc, missing, datos } = readiness;
   const missingKeys = useMemo(() => new Set(missing.map((f) => f.key)), [missing]);
@@ -482,6 +502,8 @@ export function EmpresaDcdtModal({
   const puedeModificarEnRuta = demoRutaSurface && canModificarDecaEnRuta({ servicio, dcdt });
   const puedeEditarMercanciaSimple =
     !readiness.hasPdfStorage && !isDcdtEstadoValidated(dcdt?.estado);
+  const puedeEditarVehiculoDeCA = puedeEditarMercanciaSimple;
+  const necesitaVehiculoManual = missingKeys.has("vehiculo.matricula");
   const rutaModBlockedReason =
     !puedeModificarEnRuta && dcdt?.id
       ? getModificarEnRutaBlockedReason({ servicio, dcdt, demoSurface: demoRutaSurface })
@@ -574,6 +596,7 @@ export function EmpresaDcdtModal({
           empresaOwnerProfile,
           conductor: conductorEmpresa || conductor,
           mercanciaEdit,
+          vehiculoEdit,
           flotaEvs,
         }).missing,
         evidenciasByStop: flotaEvs,
@@ -605,6 +628,49 @@ export function EmpresaDcdtModal({
     }
   }
 
+  async function guardarVehiculoDeCA() {
+    if (!dcdt) return;
+    setBusy("save-vehiculo");
+    try {
+      const nextDatos = {
+        ...dcdt.datos,
+        vehiculo: {
+          ...(dcdt.datos?.vehiculo || {}),
+          use_conductor_matricula: true,
+          matricula_override: String(vehiculoEdit.matricula ?? "").trim() || null,
+          remolque_override: String(vehiculoEdit.remolque ?? "").trim() || null,
+        },
+      };
+      const estado = computeDcdtEstado({
+        missing: validateDcdtReadiness({
+          servicio,
+          dcdt: { ...dcdt, datos: nextDatos },
+          stops: scopeStops,
+          masterById,
+          empresa,
+          empresaOwnerProfile,
+          conductor: conductorEmpresa || conductor,
+          mercanciaEdit,
+          vehiculoEdit,
+          flotaEvs,
+        }).missing,
+        evidenciasByStop: flotaEvs,
+        datos: nextDatos,
+        currentEstado: dcdt.estado,
+      });
+      const next = await saveDcdtDatos(dcdt.id, nextDatos, estado);
+      setDcdt(next);
+      setAllDcdts((prev) => prev.map((r) => (r.id === next.id ? next : r)));
+      setVehiculoEdit(vehiculoEditFromDatos(next?.datos?.vehiculo));
+      vehiculoDirtyRef.current = false;
+      showToast?.("Matrícula guardada en DeCA");
+    } catch (e) {
+      showToast?.(e?.message || "Error al guardar");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function completarDesdeOcr() {
     if (!dcdt) return;
     const ocr = extractLatestOcrFromEvidencias(flotaEvs);
@@ -623,6 +689,8 @@ export function EmpresaDcdtModal({
         empresa,
         empresaOwnerProfile,
         conductor: conductorEmpresa || conductor,
+        mercanciaEdit,
+        vehiculoEdit,
         flotaEvs,
       });
       const estado = computeDcdtEstado({
@@ -759,6 +827,8 @@ export function EmpresaDcdtModal({
       setRutaModMotivo("");
       setMercanciaEdit(mercanciaEditFromDatos(next?.datos?.mercancia));
       mercanciaDirtyRef.current = false;
+      vehiculoDirtyRef.current = false;
+      setVehiculoEdit(vehiculoEditFromDatos(next?.datos?.vehiculo));
       notifyAction(
         `Modificación en ruta registrada (${entries.length} cambio${entries.length > 1 ? "s" : ""}) — PDF DeCA actualizado`,
         "ok",
@@ -858,6 +928,7 @@ export function EmpresaDcdtModal({
                           disabled={!!busy}
                           onClick={() => {
                             mercanciaDirtyRef.current = false;
+                            vehiculoDirtyRef.current = false;
                             setSelectedDcdtId(row.id);
                           }}
                           style={{
@@ -1000,8 +1071,46 @@ export function EmpresaDcdtModal({
               <FieldRow label="Origen" value={doc?.origen} missing={missingKeys.has("origen")} />
               <FieldRow label="Destino" value={doc?.destino} missing={missingKeys.has("destino")} />
               <FieldRow label="Matrícula" value={doc?.vehiculo?.matricula} missing={missingKeys.has("vehiculo.matricula")} />
-              {doc?.vehiculo?.remolque ? (
+              {doc?.vehiculo?.remolque && !necesitaVehiculoManual ? (
                 <FieldRow label="Remolque" value={doc?.vehiculo?.remolque} missing={false} />
+              ) : null}
+              {puedeEditarVehiculoDeCA && necesitaVehiculoManual ? (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, margin: "10px 0 6px" }}>
+                    VEHÍCULO (matrícula manual)
+                  </div>
+                  <div style={{ fontSize: 11, color: UI.su, marginBottom: 8, lineHeight: 1.45 }}>
+                    Si no llega desde el conductor principal, rellena la matrícula del vehículo cargado en este viaje.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={MERC_LBL}>Matrícula tractora *</div>
+                      <input
+                        value={vehiculoEdit.matricula}
+                        onChange={(e) => setVehiculoField("matricula", e.target.value)}
+                        placeholder="Ej. 1234 ABC"
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <div style={MERC_LBL}>Matrícula remolque</div>
+                      <input
+                        value={vehiculoEdit.remolque}
+                        onChange={(e) => setVehiculoField("remolque", e.target.value)}
+                        placeholder="Ej. R-5678 DEF"
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy === "save-vehiculo" || !String(vehiculoEdit.matricula || "").trim()}
+                    onClick={guardarVehiculoDeCA}
+                    style={{ fontSize: 11, fontWeight: 700, marginBottom: 12, cursor: "pointer" }}
+                  >
+                    {busy === "save-vehiculo" ? "Guardando…" : "Guardar matrícula"}
+                  </button>
+                </>
               ) : null}
               <FieldRow label="Fecha" value={doc?.fecha_transporte ? new Date(doc.fecha_transporte).toLocaleDateString("es-ES") : ""} missing={missingKeys.has("fecha_transporte")} />
 

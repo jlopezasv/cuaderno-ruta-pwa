@@ -55,7 +55,7 @@ import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
 import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
 import { ConductorVehiculoEmpresaFields } from "./features/empresa/ConductorVehiculoEmpresaFields.jsx";
-import { guardarConductorVehiculoEmpresa } from "./domain/empresa/conductorVehiculoEmpresa.js";
+import { guardarConductorVehiculoEmpresa, syncConductorVehiculoProfileToEmpresaFlota } from "./domain/empresa/conductorVehiculoEmpresa.js";
 import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
@@ -2434,6 +2434,10 @@ function AppInner(){
     const uid=getUserId();
     if(uid){
       sbUpsert("profiles",[{id:uid,nombre:prof.nombre||null,dni:prof.dni||null,empresa:prof.empresa||null,matricula:prof.matricula||null,remolque:prof.remolque||null,tipo_vehiculo:prof.tipoVehiculo||"articulado",licencia:prof.licencia||null,pais_base:prof.paisBase||"ES",tipo_servicio:prof.tipoServicio||"nacional",lang:prof.lang||"es",cif:prof.cif||null,direccion:prof.direccion||null,telefono:prof.telefono||null,email_empresa:prof.emailEmpresa||null,cp:prof.cp||null,ciudad:prof.ciudad||null,updated_at:new Date().toISOString()}]).catch(()=>{});
+      void syncConductorVehiculoProfileToEmpresaFlota(uid,{
+        matricula:prof.matricula||"",
+        remolque:prof.tipoVehiculo==="rigido"?"":(prof.remolque||""),
+      }).catch(()=>{});
     }
   },[prof,loaded]);
 

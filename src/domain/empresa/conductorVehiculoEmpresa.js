@@ -65,3 +65,37 @@ export async function guardarConductorVehiculoEmpresa(conductorEmpresaId, { matr
   const rows = text ? JSON.parse(text) : [];
   return Array.isArray(rows) ? rows[0] : rows;
 }
+
+/**
+ * Sincroniza matrícula/remolque del perfil del conductor hacia conductor_empresa
+ * (oficina lee flota sin acceso a profiles).
+ */
+export async function syncConductorVehiculoProfileToEmpresaFlota(userId, { matricula, remolque }) {
+  if (!userId) return { updated: 0 };
+
+  const r = await sbFetch(
+    `/rest/v1/conductor_empresa?user_id=eq.${userId}&activo=eq.true&select=id`,
+  );
+  if (!r.ok) return { updated: 0 };
+
+  const rows = await r.json().catch(() => []);
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return { updated: 0 };
+
+  const payload = {
+    matricula: String(matricula ?? "").trim() || null,
+    remolque: String(remolque ?? "").trim() || null,
+  };
+
+  let updated = 0;
+  for (const row of list) {
+    if (!row?.id) continue;
+    try {
+      await guardarConductorVehiculoEmpresa(row.id, payload);
+      updated += 1;
+    } catch {
+      /* fila ajena o RLS — continuar con el resto */
+    }
+  }
+  return { updated };
+}
