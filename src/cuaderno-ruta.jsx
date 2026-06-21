@@ -2888,68 +2888,6 @@ function AppInner(){
     }
   }
 
-  // Alertas de voz — se disparan una vez por sesión
-  const voiceAlerted=useRef({m20:false,m45jornada:false,superado:false});
-  useEffect(()=>{
-    if(!norma.isDriving)return;
-    function speak(txt){
-      if(!window.speechSynthesis)return;
-      window.speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance(txt);
-      u.lang="es-ES";u.rate=0.88;u.pitch=1.15;
-      // Seleccionar voz femenina en español
-      const voices=window.speechSynthesis.getVoices();
-      const femVoice=voices.find(v=>v.lang.startsWith("es")&&/female|mujer|mónica|monica|lucia|lucía|paula|elena|google esp/i.test(v.name))
-        ||voices.find(v=>v.lang.startsWith("es")&&v.name.includes("Google"))
-        ||voices.find(v=>v.lang.startsWith("es"));
-      if(femVoice)u.voice=femVoice;
-      window.speechSynthesis.speak(u);
-    }
-    // Las voces pueden no estar cargadas aún — cargarlas
-    if(window.speechSynthesis&&window.speechSynthesis.getVoices().length===0){
-      window.speechSynthesis.addEventListener("voiceschanged",()=>{},{ once:true });
-    }
-    // 20 min antes de pausa obligatoria
-    if(norma.rCont<=20&&norma.rCont>15&&!voiceAlerted.current.m20){
-      voiceAlerted.current.m20=true;
-      speak(`Atención. Te quedan ${Math.round(norma.rCont)} minutos de conducción continua. Si no paras te pueden multar.`);
-    }
-    if(norma.rCont>20)voiceAlerted.current.m20=false;
-    // Límite superado
-    if(norma.rCont<=0&&!voiceAlerted.current.superado){
-      voiceAlerted.current.superado=true;
-      speakNatural("Límite de conducción continua superado. Para el vehículo ahora mismo. Riesgo de multa grave.");
-    }
-    if(norma.rCont>0)voiceAlerted.current.superado=false;
-    // 45 min antes de fin de jornada diaria
-    if(norma.rDay<=45&&norma.rDay>40&&!voiceAlerted.current.m45jornada){
-      voiceAlerted.current.m45jornada=true;
-      speak(`Atención. Te quedan ${Math.round(norma.rDay)} minutos de jornada diaria. Superar el límite puede suponer una multa.`);
-    }
-    if(norma.rDay>45)voiceAlerted.current.m45jornada=false;
-    // Pausa completada — ya puedes conducir
-    const isPausing=norma.crType==="inicio_pausa"||norma.crType==="inicio_descanso_frac";
-    const crDur=norma.crDur||0;
-    if(isPausing&&crDur>=45&&!voiceAlerted.current.pausaOk){
-      voiceAlerted.current.pausaOk=true;
-      speakNatural("Pausa completada. Ya puedes continuar conduciendo.");
-    }
-    if(!isPausing)voiceAlerted.current.pausaOk=false;
-    // Descanso diario completado
-    const isResting=norma.crType==="inicio_descanso"||norma.crType==="inicio_descanso_semanal_r";
-    if(isResting&&crDur>=540&&!voiceAlerted.current.descansoOk){
-      voiceAlerted.current.descansoOk=true;
-      speakNatural("Descanso completado. Ya tienes la jornada disponible para conducir.");
-    }
-    if(!isResting)voiceAlerted.current.descansoOk=false;
-    // 5 minutos para que termine la pausa
-    if(isPausing&&crDur>=40&&crDur<42&&!voiceAlerted.current.pausaCasi){
-      voiceAlerted.current.pausaCasi=true;
-      speakNatural("Faltan cinco minutos para completar la pausa obligatoria.");
-    }
-    if(!isPausing||crDur<40)voiceAlerted.current.pausaCasi=false;
-  },[norma.isDriving,norma.rCont,norma.rDay]);
-
   function openEdit(e){setEditId(e.id);setEvType(e.type);setEvNote(e.note||"");setEvLoc(e.location||"");setEvPhoto(e.photo||null);setTMode("exact");setTExact(toDTL(e.ts));setTOff(0);setModal("event");}
   function interpretarDescanso(tipo, entries){
     // Buscar el inicio correspondiente
@@ -3406,9 +3344,9 @@ function AppInner(){
         {showHoy&&(
           <div className="pw">
             {masBack?<ConductorMasBackBar title={masTitles.hoy} onBack={masBack}/>:null}
-            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={openServicioTab}/><Alerts alerts={norma.alerts}/></div>}
+            {isWide&&<div className="sb"><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></div>}
             <div className="mc">
-              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries} onOpenServicio={openServicioTab}/><Alerts alerts={norma.alerts}/></>}
+              {!isWide&&<><LiveCard active={active} actMins={actMins} norma={norma} jState={jState} onAct={openAdd} matricula={prof.matricula} equipoActivo={equipoActivo} equipoConductor={equipoConductor} clock={clock} lang={prof.lang||"es"} showToast={showToast} activeEntries={activeEntries}/><Alerts alerts={norma.alerts}/></>}
               <div style={{ padding: "0 14px 14px" }}>
                 {todayEnts.length > 0 ? (
                   <div
@@ -4432,7 +4370,6 @@ function AppInner(){
         setViajeActivo(v);
         localStorage.setItem("viaje_activo",JSON.stringify(v));
         showToast(sid?"✅ Ruta guardada · planificación operacional lista":"✅ Destino guardado");
-        setTimeout(()=>speakNatural("Ruta guardada. Planificación operacional lista."),500);
       }}/>}
 
       {/* ════ MODAL DATOS ACTUALES ════ */}
@@ -5920,56 +5857,8 @@ function ModalDestino({onClose,onSave,showToast,prefillDestino="",prefillOrigen=
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-//  VOZ NATURAL — selecciona la mejor voz española disponible
-// ─────────────────────────────────────────────────────────────
-let _bestVoice=null;
-function getBestVoice(){
-  if(_bestVoice)return _bestVoice;
-  const voices=window.speechSynthesis?.getVoices()||[];
-  // Prioridad: voces premium/neural > Google > cualquier español
-  const priority=[
-    v=>v.lang.startsWith("es")&&/premium|enhanced|neural|natural/i.test(v.name),
-    v=>v.lang.startsWith("es")&&/google/i.test(v.name),
-    v=>v.lang.startsWith("es")&&/lucia|lucía|mónica|monica|paula|elena|jorge|carlos/i.test(v.name),
-    v=>v.lang==="es-ES",
-    v=>v.lang.startsWith("es"),
-  ];
-  for(const fn of priority){const v=voices.find(fn);if(v){_bestVoice=v;return v;}}
-  return null;
-}
-
-function speakNatural(txt){
-  if(!window.speechSynthesis)return;
-  window.speechSynthesis.cancel();
-  // Limpiar emojis y símbolos especiales antes de hablar
-  const clean=txt.replace(/[\u{1F000}-\u{1FFFF}]/gu,"")
-    .replace(/[\u{2600}-\u{27BF}]/gu,"")
-    .replace(/[⚠️🔴🟠🟡🟢✅❌⛔👁🎙📍🗺]/g,"")
-    .replace(/\s+/g," ").trim();
-  const u=new SpeechSynthesisUtterance(clean);
-  u.lang="es-ES";
-  u.rate=0.9;
-  u.pitch=1.05;
-  u.volume=1;
-  const v=getBestVoice();
-  if(v)u.voice=v;
-  // Retry si las voces no están cargadas aún
-  if(!v&&window.speechSynthesis.getVoices().length===0){
-    window.speechSynthesis.onvoiceschanged=()=>{
-      _bestVoice=null;
-      const v2=getBestVoice();
-      if(v2)u.voice=v2;
-      window.speechSynthesis.speak(u);
-    };
-    return;
-  }
-  window.speechSynthesis.speak(u);
-}
 function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
   const[open,setOpen]=useState(false);
-
-  const prevEstado=useRef(null);
 
   // Calcular con velocidad de camión real (80 km/h)
   const plan=useMemo(()=>{
@@ -5987,22 +5876,6 @@ function ViajeBar({viaje,norma,onCancel,onChangeDestino}){
       });
     }catch{return null;}
   },[viaje,norma.cont,norma.todayDrive,norma.weekDrive]);
-
-  // Alertas de voz cuando cambia el estado del viaje
-  useEffect(()=>{
-    if(!plan)return;
-    const descansos=plan.segs.filter(s=>["rest","rest_r","wrest"].includes(s.type));
-    const nuevoEstado=descansos.length;
-    if(prevEstado.current===null){prevEstado.current=nuevoEstado;return;}
-    if(nuevoEstado!==prevEstado.current){
-      prevEstado.current=nuevoEstado;
-      if(nuevoEstado===0){
-        speakNatural(`Buenas noticias. Con este ritmo llegas a ${viaje.destino} el ${formatOperationalEtaLabel(plan.arrival)||"horario previsto"} sin necesidad de descanso en ruta.`);
-      } else if(nuevoEstado>prevEstado.current){
-        speakNatural(`Atención. El retraso acumulado hace que necesites ${nuevoEstado===1?"un descanso adicional en ruta":nuevoEstado+" descansos en ruta"} para llegar a ${viaje.destino}.`);
-      }
-    }
-  },[plan]);
 
   if(!plan)return null;
 
@@ -6421,64 +6294,12 @@ function ResumenDetalleTiemposTecnico({ norma }) {
   );
 }
 
-/** Resumen servicio activo para copiloto en pestaña HOY (misma fuente que TabServicio). */
-function useCopilotServicio(uid){
-  const[servicio,setServicio]=useState(null);
-  const[stops,setStops]=useState([]);
-  const[evidenciasByStop,setEvidenciasByStop]=useState({});
-  const cargar=useCallback(async()=>{
-    if(!uid){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
-    try{
-      const resolved=await resolveDriverActiveServiceAndStops(uid);
-      const sv=resolved?.servicio||null;
-      const list=Array.isArray(resolved?.stops)?resolved.stops:[];
-      if(!sv?.id){setServicio(null);setStops([]);setEvidenciasByStop({});return;}
-      setServicio(sv);
-      setStops(list);
-      const ids=list.map(s=>s.id).filter(Boolean).join(",");
-      if(!ids){setEvidenciasByStop({});return;}
-      const evr=await sbFetch(`/rest/v1/evidencias?stop_id=in.(${ids})&order=created_at.desc`);
-      const evs=await evr.json();
-      setEvidenciasByStop(groupDocumentsByStop(Array.isArray(evs)?evs:[]));
-    }catch(_){
-      setServicio(null);setStops([]);setEvidenciasByStop({});
-    }
-  },[uid]);
-  useEffect(()=>{void cargar();},[cargar]);
-  useEffect(()=>{
-    function onRecarga(){void cargar();}
-    window.addEventListener("cuaderno-recargar-servicio",onRecarga);
-    return()=>window.removeEventListener("cuaderno-recargar-servicio",onRecarga);
-  },[cargar]);
-  return{servicio,stops,evidenciasByStop,recargar:cargar};
+function fmtClockWithSeconds(d) {
+  const dt = d instanceof Date ? d : new Date(d);
+  return `${p2(dt.getHours())}:${p2(dt.getMinutes())}:${p2(dt.getSeconds())}`;
 }
 
-function copilotStopGroup(tipo){
-  const t=String(tipo||"").toLowerCase();
-  if(t==="carga")return"carga";
-  if(t==="descarga")return"descarga";
-  if(t.includes("carga")&&t.includes("descarga"))return"carga_descarga";
-  return"otra";
-}
-function copilotStopLabel(tipo){
-  const g=copilotStopGroup(tipo);
-  if(g==="carga")return"Carga";
-  if(g==="descarga")return"Descarga";
-  if(g==="carga_descarga")return"Carga/descarga";
-  return"Parada";
-}
-function copilotPlaceName(stop){
-  const n=String(stop?.nombre||"").trim();
-  const d=String(stop?.direccion||"").trim();
-  if(n)return n;
-  if(d)return d;
-  return`Parada ${stop?.orden??""}`.trim();
-}
-function copilotStopDone(stop){
-  return!!stop?.hora_salida_real||stop?.estado==="completado";
-}
-
-function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equipoConductor,clock,lang="es",showToast,activeEntries=[],onOpenServicio}){
+function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equipoConductor,clock,lang="es",showToast,activeEntries=[]}){
   const TE=active?EV[active.type]:null;
   const isDriving=active?.type==="inicio_conduccion";
   const isPausing=active&&["inicio_pausa","inicio_descanso","inicio_descanso_frac","inicio_descanso_semanal","inicio_descanso_semanal_r"].includes(active.type);
@@ -6494,17 +6315,6 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
   const ventanaMax=norma.dispInfo?.ventanaMax??norma.ventanaDisp?.ventanaMax??(15*60);
   const ventana=norma.dispInfo?.dispRemain??norma.ventanaDisp?.restante??ventanaMax;
   const ventanaCol=ventana<=60?"#EF4444":ventana<=120?"#F97316":"#22C55E";
-
-  const uidCop = getUserId();
-  const { servicio: cpSv, stops: cpStops, evidenciasByStop: cpEvs } = useCopilotServicio(uidCop);
-  const sortedCp = [...(cpStops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
-  const cpCurrent = sortedCp.length ? getCurrentStop(sortedCp) : null;
-  const cpPlan = cpSv ? getOperationalPlanSnapshot(cpSv) : null;
-  const cpEta = cpSv ? formatOperationalEtaSnapshotLine(cpSv, new Date()) : null;
-  const cpKm = Number.isFinite(Number(cpPlan?.planned_km)) ? Math.round(Number(cpPlan.planned_km)) : null;
-  const evsCur = cpCurrent?.id ? cpEvs?.[cpCurrent.id] : null;
-  const cmrN = Array.isArray(evsCur) ? evsCur.filter((e) => e?.tipo === "cmr").length : 0;
-  const incN = Array.isArray(evsCur) ? evsCur.filter((e) => e?.tipo === "incidencia").length : 0;
 
   const estadoHumano =
     jState === "none"
@@ -6526,38 +6336,6 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
     normPill = { icon: "⚠", text: `Descanso en ${fmtDur(rCont)}`, bg: "#ffedd5", fg: "#c2410c", br: "#fed7aa" };
   else if (jState === "open" && norma.canDrive > 0 && norma.canDrive <= 60 && !isPausing)
     normPill = { icon: "⚠", text: `Para en ${fmtDur(norma.canDrive)}`, bg: "#ffedd5", fg: "#c2410c", br: "#fed7aa" };
-
-  let svcHead = "Sin servicio activo";
-  let svcSub = "Aquí verás la siguiente parada y documentos pendientes.";
-  let svcCta = "Ir al servicio";
-  if (cpSv) {
-    const ruta = getFixedServiceRoute(cpSv);
-    if (cpSv.estado === "asignado") {
-      svcHead = "Servicio asignado";
-      svcSub = ruta || "Pendiente de iniciar";
-      svcCta = "Iniciar servicio";
-    } else if (!getOperationalPlanConfirmedAt(cpSv)) {
-      svcHead = "Confirma ruta y destino";
-      svcSub = ruta || "Servicio en curso";
-      svcCta = "Añadir destino";
-    } else if (cpCurrent && !cpCurrent.hora_llegada_real) {
-      svcHead = `Próxima parada · ${copilotStopLabel(cpCurrent.tipo)}`;
-      svcSub = copilotPlaceName(cpCurrent);
-      svcCta = "Confirmar llegada";
-    } else if (cpCurrent && !copilotStopDone(cpCurrent)) {
-      svcHead = `En operación · ${copilotStopLabel(cpCurrent.tipo)}`;
-      svcSub = copilotPlaceName(cpCurrent);
-      svcCta = cmrN ? "Subir o revisar CMR" : "Finalizar operación";
-    } else {
-      svcHead = "Servicio en curso";
-      svcSub = ruta || "Sigue el plan en Servicio";
-      svcCta = "Ver servicio";
-    }
-  }
-
-  const openSvc = () => {
-    if (typeof onOpenServicio === "function") onOpenServicio();
-  };
 
   let pauseProg = null;
   if (jState === "closed") {
@@ -6623,7 +6401,7 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
             <div style={{ fontSize: 28, fontWeight: 800, color: C.tx, fontVariantNumeric: "tabular-nums", letterSpacing: -0.5 }}>
-              {fmtT(clock)}
+              {fmtClockWithSeconds(clock)}
             </div>
             <div style={{ fontSize: 12, color: C.su, marginTop: 4, fontWeight: 600 }}>{estadoHumano}</div>
             {matricula ? (
@@ -6923,62 +6701,6 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
               {isDriving ? "Parar conducción" : `Fin de ${TE?.label || "actividad"}`}
             </button>
           )}
-        </div>
-
-        {/* Contexto operativo — después de las acciones, tono secundario */}
-        <div
-          style={{
-            background: C.soft,
-            borderRadius: 14,
-            padding: "12px 14px",
-            border: `1px solid ${C.line}`,
-          }}
-        >
-          <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", letterSpacing: 1, marginBottom: 6 }}>CONTEXTO OPERATIVO</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: C.tx, lineHeight: 1.28 }}>{svcHead}</div>
-          <div style={{ fontSize: 13, color: C.su, marginTop: 5, fontWeight: 600, lineHeight: 1.4 }}>{svcSub}</div>
-          {cpEta || cpKm != null ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 14px", marginTop: 8, fontSize: 12, color: C.tx, fontWeight: 700 }}>
-              {cpEta ? (
-                <span>
-                  ⏱ ETA <span style={{ fontVariantNumeric: "tabular-nums" }}>{cpEta}</span>
-                </span>
-              ) : null}
-              {cpKm != null ? (
-                <span>
-                  🚛 {cpKm} km
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {(cmrN === 0 && cpCurrent && cpCurrent.hora_llegada_real && !copilotStopDone(cpCurrent)) || incN > 0 ? (
-            <div style={{ fontSize: 11, color: incN > 0 ? "#c2410c" : C.su, marginTop: 8, fontWeight: 650 }}>
-              {incN > 0 ? `⚠ ${incN} incidencia(s)` : "📦 Documento pendiente: CMR"}
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              playClick();
-              openSvc();
-            }}
-            style={{
-              marginTop: 10,
-              minHeight: 44,
-              maxWidth: "100%",
-              padding: "9px 14px",
-              background: "transparent",
-              color: C.su,
-              border: `1px solid ${C.line}`,
-              borderRadius: 10,
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-              alignSelf: "flex-start",
-            }}
-          >
-            {svcCta} →
-          </button>
         </div>
 
         {jState === "open" && (
@@ -10240,7 +9962,7 @@ function useNora({norma,viajeActivo,active}){
     if(has(t,"pierdo tiempo","estoy perdiendo tiempo","voy mal de tiempo"))return getTimeLossAnalysis;
     return null;
   }
-  function responder(texto){setEstado("respondiendo");setLastText(texto);speakNatural(texto);setTimeout(()=>setEstado("escuchando"),3500);}
+  function responder(texto){setEstado("respondiendo");setLastText(texto);setTimeout(()=>setEstado("escuchando"),3500);}
   function procesarTexto(txt){
     const norm=n(txt);
     // Detectar palabra clave "nora" o "ora"
@@ -10403,8 +10125,6 @@ function NoraModal({norma,viajeActivo,onClose}){
       const resp=responder(txt);
       setLastA(resp);
       setFase("speaking");
-      speakNatural(resp);
-      // Volver a idle tras la respuesta
       const duracion=Math.max(3000,resp.length*60);
       setTimeout(()=>setFase("idle"),duracion);
     };
@@ -10424,7 +10144,6 @@ function NoraModal({norma,viajeActivo,onClose}){
   function parar(){
     clearTimeout(timeoutRef.current);
     if(recRef.current)try{recRef.current.abort();}catch(_){}
-    window.speechSynthesis?.cancel();
     setFase("idle");
   }
 
