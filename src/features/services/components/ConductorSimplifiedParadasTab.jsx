@@ -31,6 +31,9 @@ import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.j
 import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
+import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
+import { withOperationTimeout } from "../../../domain/service/operationTimeout.js";
+import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 
 const PAGE = "#F8FAFC";
 /** Referencias estables — evitar bucle infinito en hooks (useEmpresaOriginLookup / useConductorDcdtQuickStatus). */
@@ -59,68 +62,99 @@ function stopGroupIcon(tipoLabel) {
   return "📍";
 }
 
-function DriverStopTripContext({ item, servicio }) {
-  if (!item) return null;
-  const ref = getServiceNumberForDisplay(servicio || item.servicio);
-  const almacen = String(item.stop?.empresa || "").trim();
-  const parts = [almacen, ref, item.conductorNombre].filter(Boolean);
-  if (!parts.length) return null;
-  return (
-    <div
-      style={{
-        marginTop: 10,
-        padding: "10px 12px",
-        background: DRIVER_UI.surfaceHi,
-        border: `1px solid ${DRIVER_UI.line}`,
-        borderRadius: 10,
-        fontSize: 12,
-        color: DRIVER_UI.su,
-        lineHeight: 1.45,
-      }}
-    >
-      {almacen ? (
-        <div>
-          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Almacén: </span>
-          {almacen}
-        </div>
-      ) : null}
-      {ref ? (
-        <div style={{ marginTop: almacen ? 6 : 0 }}>
-          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Servicio: </span>
-          {ref}
-        </div>
-      ) : null}
-      {item.conductorNombre ? (
-        <div style={{ marginTop: 6 }}>
-          <span style={{ fontWeight: 800, color: DRIVER_UI.tx }}>Conductor principal: </span>
-          {item.conductorNombre}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function TripServiceRefPill({ tripServiceRef, tripVisual }) {
   if (!tripServiceRef) return null;
   const vis = tripVisual;
   return (
     <span
       style={{
-        fontSize: 11,
+        display: "inline-block",
+        maxWidth: "100%",
+        fontSize: 10,
         fontWeight: 800,
-        padding: "4px 9px",
+        padding: "3px 8px",
         borderRadius: 999,
         whiteSpace: "nowrap",
-        flexShrink: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        verticalAlign: "middle",
         lineHeight: 1.2,
         color: vis?.chipFg || "#1e40af",
         background: vis?.chipBg || "#dbeafe",
         border: `1px solid ${vis?.stripe || "#2563eb"}55`,
-        letterSpacing: 0.2,
+        letterSpacing: 0.15,
       }}
+      title={tripServiceRef}
     >
       {tripServiceRef}
     </span>
+  );
+}
+
+const DRIVER_STOP_LOCATION_STYLE = {
+  fontSize: 13,
+  color: DRIVER_UI.su,
+  lineHeight: 1.45,
+  fontWeight: 600,
+  wordBreak: "normal",
+  overflowWrap: "break-word",
+  whiteSpace: "normal",
+};
+
+/** Cabecera de tarjeta: título en una línea; pastilla viaje debajo (no compite por ancho). */
+function DriverStopCardHeader({
+  title,
+  subtitle,
+  referenciaCliente = null,
+  tripServiceRef,
+  tripVisual,
+  statusLabel = null,
+  statusEnMuelle = false,
+  titleSize = 16,
+  showSubtitle = true,
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, width: "100%" }}>
+      <div
+        style={{
+          fontSize: titleSize,
+          fontWeight: 800,
+          color: DRIVER_UI.tx,
+          lineHeight: 1.25,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {title}
+      </div>
+      {referenciaCliente ? (
+        <div style={{ fontSize: 12, color: DRIVER_UI.muted, fontWeight: 600, lineHeight: 1.3 }}>
+          Ref. {referenciaCliente}
+        </div>
+      ) : null}
+      {tripServiceRef || statusLabel ? (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, maxWidth: "100%" }}>
+          <TripServiceRefPill tripServiceRef={tripServiceRef} tripVisual={tripVisual} />
+          {statusLabel ? (
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 800,
+                padding: "5px 10px",
+                borderRadius: 999,
+                whiteSpace: "nowrap",
+                lineHeight: 1.2,
+                color: statusEnMuelle ? "#b45309" : DRIVER_UI.su,
+                background: statusEnMuelle ? "#fef3c7" : DRIVER_UI.surfaceHi,
+                border: `1px solid ${statusEnMuelle ? "#fcd34d" : DRIVER_UI.line}`,
+              }}
+            >
+              {statusLabel}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {showSubtitle && subtitle ? <div style={DRIVER_STOP_LOCATION_STYLE}>{subtitle}</div> : null}
+    </div>
   );
 }
 
@@ -151,11 +185,11 @@ export function ConductorSimplifiedParadasTab({
   marcarLlegadoEn,
   marcarCompletadoEn,
   iniciarServicioEn,
-  finalizarParticipacionEn,
   recalculateOperationalRoute,
   EvidenciasStopComponent,
+  onOpenMasServicio,
 }) {
-  const { loading, items, finalizarServicios, reload } = useDriverFlatPendingStops(uid);
+  const { loading, items, serviciosAccionEnMas } = useDriverFlatPendingStops(uid);
   const etaClockMs = useEtaVisualClockMs();
   useAutoOperationalEtaToFirstDescarga({
     uid,
@@ -171,7 +205,6 @@ export function ConductorSimplifiedParadasTab({
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [iniciarSaving, setIniciarSaving] = useState(false);
-  const [finalizarSavingId, setFinalizarSavingId] = useState(null);
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
   const [chatModalOpen, setChatModalOpen] = useState(false);
   const [detailReadOnly, setDetailReadOnly] = useState(false);
@@ -189,7 +222,7 @@ export function ConductorSimplifiedParadasTab({
   );
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicio?.empresa_id ? empresaById[detailServicio.empresa_id] : null;
-  const showDcdtQuick = !!detailServicio?.empresa_id;
+  const showDcdtQuick = !!detailServicio?.empresa_id && isDecaAplicable(detailServicio);
   const showChatQuick = isServiceMessagesEnabled(detailServicio);
   const dcdtQuick = useConductorDcdtQuickStatus({
     servicio: detailServicio,
@@ -248,12 +281,12 @@ export function ConductorSimplifiedParadasTab({
     setLocalServicio(null);
     setLocalStops([]);
     setConfirmMuelle(null);
+    setConfirmMuelleSaving(false);
     setOrderSkipConfirm(null);
     setDcdtModalOpen(false);
     setChatModalOpen(false);
     setDetailReadOnly(false);
-    void reload();
-  }, [reload]);
+  }, []);
 
   const stopsSig = useMemo(() => stopsOperativaSig(localStops), [localStops]);
 
@@ -293,10 +326,19 @@ export function ConductorSimplifiedParadasTab({
     return null;
   }, [timelineItems]);
 
+  const operatingBusy = confirmMuelleSaving || descargaFirmaSaving || iniciarSaving;
+
+  const showIrAServicioEnDetalle = useMemo(() => {
+    if (!detailReadOnly || !localServicio?.id) return false;
+    if (serviciosAccionEnMas.some((sv) => sv.id === localServicio.id)) return true;
+    return needsExpedienteClosure(localServicio, localStops);
+  }, [detailReadOnly, localServicio, localStops, serviciosAccionEnMas]);
+
   const canOperate =
     !detailReadOnly &&
     localServicio?.estado === "en_curso" &&
-    !isStopOperationallyComplete(active?.stop);
+    !isStopOperationallyComplete(active?.stop) &&
+    !operatingBusy;
 
   const handleEvidenciaSaved = useCallback((ev) => {
     const stopId = ev?.stop_id;
@@ -305,7 +347,7 @@ export function ConductorSimplifiedParadasTab({
   }, []);
 
   const handleMuelleRequest = ({ kind, stopId }) => {
-    if (confirmMuelleSaving) return;
+    if (confirmMuelleSaving || operatingBusy) return;
     muelleGpsRef.current = null;
     setConfirmMuelle({ kind, stopId });
   };
@@ -315,12 +357,24 @@ export function ConductorSimplifiedParadasTab({
     const { kind, stopId } = confirmMuelle;
     const stop = localStops.find((s) => s.id === stopId);
     const { eventType, actionLabel } = muelleActionMeta(kind, stop);
-    const prefetchedGps = await acquireLocation(eventType, actionLabel);
-    if (prefetchedGps === null) return;
+    setConfirmMuelleSaving(true);
+    let prefetchedGps;
+    try {
+      prefetchedGps = await acquireLocation(eventType, actionLabel);
+    } catch (error) {
+      showToast?.(error?.message || "No se pudo obtener la ubicación");
+      setConfirmMuelleSaving(false);
+      return;
+    }
+    if (prefetchedGps === null) {
+      setConfirmMuelleSaving(false);
+      return;
+    }
     muelleGpsRef.current = prefetchedGps;
 
     if (kind !== "entrada" && isDescargaStopTipo(stop?.tipo)) {
       setConfirmMuelle(null);
+      setConfirmMuelleSaving(false);
       setDescargaFirma({
         stopId,
         prefetchedGps,
@@ -329,12 +383,16 @@ export function ConductorSimplifiedParadasTab({
       return;
     }
 
-    setConfirmMuelleSaving(true);
     try {
-      const result =
+      const run =
         kind === "entrada"
-          ? await marcarLlegadoEn(localServicio, localStops, stopId, { prefetchedGps })
-          : await marcarCompletadoEn(localServicio, localStops, stopId, { prefetchedGps });
+          ? () => marcarLlegadoEn(localServicio, localStops, stopId, { prefetchedGps })
+          : () => marcarCompletadoEn(localServicio, localStops, stopId, { prefetchedGps });
+      const result = await withOperationTimeout(
+        run(),
+        45000,
+        "La operación tardó demasiado. Comprueba tu conexión e inténtalo de nuevo.",
+      );
       if (result?.servicio) setLocalServicio(result.servicio);
       if (result?.stops) setLocalStops(result.stops);
       setConfirmMuelle(null);
@@ -373,9 +431,13 @@ export function ConductorSimplifiedParadasTab({
         s.id === stop.id ? { ...s, notas: firmaRes.notas } : s,
       );
       setLocalStops(stopsWithFirma);
-      const result = await marcarCompletadoEn(localServicio, stopsWithFirma, descargaFirma.stopId, {
-        prefetchedGps: descargaFirma.prefetchedGps,
-      });
+      const result = await withOperationTimeout(
+        marcarCompletadoEn(localServicio, stopsWithFirma, descargaFirma.stopId, {
+          prefetchedGps: descargaFirma.prefetchedGps,
+        }),
+        45000,
+        "La operación tardó demasiado. Comprueba tu conexión e inténtalo de nuevo.",
+      );
       if (result?.servicio) setLocalServicio(result.servicio);
       if (result?.stops) setLocalStops(result.stops);
       setDescargaFirma(null);
@@ -400,20 +462,6 @@ export function ConductorSimplifiedParadasTab({
       showToast?.(error?.message || "No se pudo iniciar el servicio");
     } finally {
       setIniciarSaving(false);
-    }
-  };
-
-  const handleFinalizarParticipacion = async (servicioId) => {
-    if (!servicioId || finalizarSavingId) return;
-    setFinalizarSavingId(servicioId);
-    try {
-      await finalizarParticipacionEn(servicioId);
-      showToast?.("Has terminado tu parte en este viaje");
-      void reload();
-    } catch (error) {
-      showToast?.(error?.message || "No se pudo finalizar tu participación");
-    } finally {
-      setFinalizarSavingId(null);
     }
   };
 
@@ -462,16 +510,14 @@ export function ConductorSimplifiedParadasTab({
           ) : null}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 17, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                  {active.cardLine1 || active.tipoOrdenLabel || active.tipoLabel}
-                </div>
-                <TripServiceRefPill tripServiceRef={active.tripServiceRef} tripVisual={tripVis} />
-              </div>
-              <div style={{ fontSize: 14, color: DRIVER_UI.su, marginTop: 5, lineHeight: 1.35, fontWeight: 600 }}>
-                {active.cardLine2 || active.lugarDisplay || active.lugar || "—"}
-              </div>
-              <DriverStopTripContext item={active} servicio={localServicio} />
+              <DriverStopCardHeader
+                title={active.tipoOrdenLabel || active.tipoLabel || active.cardLine1 || "Parada"}
+                referenciaCliente={active.referenciaCliente}
+                tripServiceRef={active.tripServiceRef}
+                tripVisual={tripVis}
+                titleSize={17}
+                showSubtitle={false}
+              />
             </div>
             <button
               type="button"
@@ -563,7 +609,33 @@ export function ConductorSimplifiedParadasTab({
             conductorNombre={conductorNombre}
             onEvidenciaSaved={handleEvidenciaSaved}
             acquireActionLocation={acquireLocation}
+            driverDetailLayout
+            operatingBusy={operatingBusy}
           />
+
+          {showIrAServicioEnDetalle && typeof onOpenMasServicio === "function" ? (
+            <button
+              type="button"
+              onClick={() => {
+                closeDetail();
+                onOpenMasServicio();
+              }}
+              style={{
+                width: "100%",
+                marginTop: 12,
+                padding: "13px 14px",
+                borderRadius: 12,
+                border: `1px solid ${DRIVER_UI.line}`,
+                background: "#fff",
+                color: "#b45309",
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Ir a Servicio →
+            </button>
+          ) : null}
         </div>
 
         {confirmMuelle ? (
@@ -661,6 +733,7 @@ export function ConductorSimplifiedParadasTab({
           }}
           onConfirm={handleConfirmDescargaFirma}
         />
+
         <DriverDcdtActionModal
           open={dcdtModalOpen}
           onClose={() => {
@@ -757,36 +830,15 @@ export function ConductorSimplifiedParadasTab({
                   {stopGroupIcon(item.tipoLabel)}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>
-                        {item.cardLine1 || item.tipoOrdenLabel || item.tipoLabel}
-                      </div>
-                      <div style={{ fontSize: 13, color: DRIVER_UI.su, marginTop: 4, lineHeight: 1.35, fontWeight: 600 }}>
-                        {item.cardLine2 || item.lugarDisplay || item.lugar || "—"}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 6, flexShrink: 0 }}>
-                      <TripServiceRefPill tripServiceRef={item.tripServiceRef} tripVisual={vis} />
-                      {status.label ? (
-                        <span
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 800,
-                            padding: "5px 10px",
-                            borderRadius: 999,
-                            whiteSpace: "nowrap",
-                            lineHeight: 1.2,
-                            color: enMuelle ? "#b45309" : DRIVER_UI.su,
-                            background: enMuelle ? "#fef3c7" : DRIVER_UI.surfaceHi,
-                            border: `1px solid ${enMuelle ? "#fcd34d" : DRIVER_UI.line}`,
-                          }}
-                        >
-                          {status.label}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
+                  <DriverStopCardHeader
+                    title={item.tipoOrdenLabel || item.tipoLabel || item.cardLine1 || "Parada"}
+                    subtitle={item.cardLine2 || item.lugarDisplay || item.lugar || "—"}
+                    referenciaCliente={item.referenciaCliente}
+                    tripServiceRef={item.tripServiceRef}
+                    tripVisual={vis}
+                    statusLabel={status.label}
+                    statusEnMuelle={enMuelle}
+                  />
                   {showEtaToFirstDescarga && etaLabel ? (
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
                       ETA primera descarga: {etaLabel}
@@ -838,34 +890,39 @@ export function ConductorSimplifiedParadasTab({
         </div>
       )}
 
-      {finalizarServicios.length > 0 ? (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: DRIVER_UI.su, marginBottom: 10 }}>PARTICIPACIÓN</div>
-          {finalizarServicios.map((sv) => (
-            <button
-              key={sv.id}
-              type="button"
-              disabled={finalizarSavingId === sv.id}
-              onClick={() => handleFinalizarParticipacion(sv.id)}
-              style={{
-                width: "100%",
-                marginBottom: 8,
-                background: "#fef2f2",
-                color: "#b91c1c",
-                border: "1px solid rgba(185,28,28,.25)",
-                borderRadius: 12,
-                padding: "14px",
-                fontSize: 14,
-                fontWeight: 800,
-                cursor: finalizarSavingId === sv.id ? "default" : "pointer",
-                opacity: finalizarSavingId === sv.id ? 0.7 : 1,
-              }}
-            >
-              {finalizarSavingId === sv.id
-                ? "Finalizando..."
-                : `HE TERMINADO MI PARTE · ${getServiceNumberForDisplay(sv)}`}
-            </button>
-          ))}
+      {serviciosAccionEnMas.length > 0 && typeof onOpenMasServicio === "function" ? (
+        <div
+          style={{
+            marginTop: 20,
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: 14,
+            padding: "14px 16px",
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 800, color: DRIVER_UI.su, marginBottom: 6 }}>PENDIENTE EN SERVICIO</div>
+          <div style={{ fontSize: 13, color: "#92400e", lineHeight: 1.45, marginBottom: 12 }}>
+            {serviciosAccionEnMas.length === 1
+              ? `El viaje ${getServiceNumberForDisplay(serviciosAccionEnMas[0])} requiere cierre o finalización en Más → Servicio.`
+              : `${serviciosAccionEnMas.length} viajes requieren cierre o finalización en Más → Servicio.`}
+          </div>
+          <button
+            type="button"
+            onClick={onOpenMasServicio}
+            style={{
+              width: "100%",
+              background: "#fff",
+              color: "#b45309",
+              border: "1px solid #fcd34d",
+              borderRadius: 12,
+              padding: "13px 14px",
+              fontSize: 14,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            Ir a Más → Servicio
+          </button>
         </div>
       ) : null}
 

@@ -194,9 +194,6 @@ import {
   runRetentionSweep,
   syncArchivedServicesFromList,
   markServiceArchived,
-  getConductorStorageStats,
-  purgeAllConductorLocalMediaCaches,
-  formatStorageMb,
   touchServiceDocumentAccess,
 } from "./data/conductorLocalMediaRetention";
 import { getOperationalStatus, OPERATIONAL_STATUS_META } from "./domain/service/serviceOperationalStatus";
@@ -232,6 +229,7 @@ import { MatriculaVehiculoBadge } from "./features/services/components/Matricula
 import { EmpresaDcdtModal } from "./features/dcdt/EmpresaDcdtModal.jsx";
 import { mercanciaPreviewFromStops } from "./domain/dcdt/stopMercanciaMeta.js";
 import { syncDcdtServiciosAfterStopsPersisted, onStopEstadoOperativoChange } from "./domain/dcdt/dcdtServicioSync.js";
+import { withOperationTimeout } from "./domain/service/operationTimeout.js";
 import { normalizeDescargaCargadorLinks } from "./domain/dcdt/descargaCargadorLink.js";
 import { stopContractualTitle } from "./domain/dcdt/dcdtFormReadiness.js";
 import { fetchPartesTransporte } from "./domain/dcdt/partesTransporteModel.js";
@@ -253,7 +251,7 @@ import {
   canShowOperationalSummaryLiteInDocs,
 } from "./modules/operational-lite/operationalLiteVisibility.js";
 import { cerrarExpedienteServicio } from "./domain/service/cerrarExpedienteServicio.js";
-import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado } from "./domain/service/expedienteCierre.js";
+import { getExpedienteCierre, isConductorServicioOperativoActivo, isServicioExpedienteCerrado, needsExpedienteClosure } from "./domain/service/expedienteCierre.js";
 import {
   mergeDriverActiveViewFromResolution,
   pickNextAssignedService,
@@ -380,7 +378,9 @@ import EmpresaLayout from "./layouts/EmpresaLayout";
 import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoInvitacionModal.jsx";
 import { getConductorTabs } from "./navigation/conductorTabs";
 import { ConductorSimplifiedParadasTab } from "./features/services/components/ConductorSimplifiedParadasTab.jsx";
-import { ConductorMasHub, ConductorMasBackBar } from "./features/services/components/ConductorMasHub.jsx";
+import { ConductorMasHub, ConductorMasBackBar, ConductorMasTripPicker } from "./features/services/components/ConductorMasHub.jsx";
+import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
+import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
 import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
 import {
@@ -3291,6 +3291,7 @@ function AppInner(){
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
     !authSession?.capabilities?.empresa;
+  const openMasServicio=useCallback(()=>{setTab("mas");setMasSub("servicio");},[]);
   const openServicioTab=()=>setTab(conductorSimplified?"paradas":"servicio");
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
@@ -3388,7 +3389,7 @@ function AppInner(){
 
       <main style={s.main}>
         {conductorSimplified&&tab==="paradas"&&(
-          <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast}/>
+          <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
         {showMasHub&&<ConductorMasHub onSelect={setMasSub}/>}
@@ -3396,7 +3397,7 @@ function AppInner(){
         {showMasServicio&&(
           <>
             <ConductorMasBackBar title={masTitles.servicio} onBack={masBack}/>
-            <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} onRecalculateOperationalRoute={recalculateOperationalRouteFromCurrentGps} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite} hideRecorrido/>
+            <TabMasServicio uid={getUserId()} showToast={showToast} conductorNombre={prof.nombre?.trim()||"Conductor"}/>
           </>
         )}
 
@@ -7969,7 +7970,6 @@ function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
       </div>}
 
       {/* NOTIFICACIONES */}
-      <ConductorAlmacenamientoCard showToast={showToast} />
       <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>
         <div style={{fontSize:11,fontWeight:800,color:"#64748B",letterSpacing:1.5,marginBottom:10}}>🔔 NOTIFICACIONES</div>
         {typeof Notification!=="undefined"?(
@@ -17671,7 +17671,11 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     const now=new Date().toISOString();
     const stopSalidaRow=stops.find(s=>s.id===stopId);
     const notasSalida=mergeStopOperacionMeta(stopSalidaRow?.notas,{salida_geo:geoSalida});
-    const res=await sbFetch(`/rest/v1/stops?id=eq.${stopId}`,{method:"PATCH",body:JSON.stringify({estado:"completado",hora_salida_real:now,notas:notasSalida})});
+    const res = await withOperationTimeout(
+      sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "PATCH", body: JSON.stringify({ estado: "completado", hora_salida_real: now, notas: notasSalida }) }),
+      25000,
+      "No se pudo contactar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
+    );
     logMuelleGps("supabase update result",{
       eventType:trackingEventType,
       stopId,
@@ -17725,7 +17729,17 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       }
     }
 
-    const op=await registerDriverOperationalPoint({uid,servicio,stops:updated,norma,eventType:trackingEventType,stopId,showToast,prefetchedGps:opts.prefetchedGps??null});
+    let op = null;
+    try {
+      op = await withOperationTimeout(
+        registerDriverOperationalPoint({ uid, servicio, stops: updated, norma, eventType: trackingEventType, stopId, showToast, prefetchedGps: opts.prefetchedGps ?? null }),
+        30000,
+        "Registro operativo agotó el tiempo",
+      );
+    } catch (e) {
+      devWarn("[OP3] register timeout/fail after completar", e?.message || e);
+      showToast?.("Parada completada. Algunos datos operativos no se sincronizaron.", "#F97316", 4200);
+    }
     let nextServicio=servicio;
     if(op?.referencia)nextServicio={...servicio,referencia:op.referencia};
 
@@ -17870,6 +17884,18 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     await cargar();
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
   }
+  async function cerrarExpedienteEn(servicioRow, { comentario, firmaCanvas, prefetchedGps = null } = {}) {
+    if (!servicioRow?.id) throw new Error("Sin servicio");
+    await cerrarExpedienteServicio({
+      servicio: servicioRow,
+      comentario,
+      firmaCanvas,
+      conductorId: uid,
+      conductorNombre: conductorNombre || null,
+      prefetchedGps,
+    });
+    window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
+  }
   async function finalizarParticipacionEn(servicioId) {
     if (!servicioId || !uid) return;
     const res = await finalizarParticipacionConductor(servicioId, uid);
@@ -17902,6 +17928,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     iniciarViajeOperacional,
     marcarInicioOperacionStop,
     cerrarExpediente,
+    cerrarExpedienteEn,
     finalizarParticipacion,
     finalizarParticipacionEn,
     recargar: cargar,
@@ -18292,83 +18319,6 @@ function DriverCachedMediaImg({ servicioId, evidenciaId, src, alt, style }) {
     );
   }
   return <img src={display.url} alt={alt || ""} style={style} />;
-}
-
-function ConductorAlmacenamientoCard({ showToast }) {
-  const [stats, setStats] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const refresh = () => {
-    void getConductorStorageStats()
-      .then(setStats)
-      .catch(() => setStats({ idbBytes: 0, cachedFiles: 0, retentionServices: 0 }));
-  };
-  useEffect(() => {
-    refresh();
-  }, []);
-  const mb = stats ? formatStorageMb(stats.idbBytes) : "—";
-  return (
-    <div style={{ background: "white", borderRadius: 14, padding: 16, boxShadow: "0 2px 6px rgba(0,0,0,.05)", marginBottom: 12 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#64748B", letterSpacing: 1.5, marginBottom: 10 }}>ALMACENAMIENTO</div>
-      <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.5, marginBottom: 8 }}>
-        <div>
-          <strong>{mb} MB</strong> · caché documental en este dispositivo
-        </div>
-        <div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>
-          Archivos en caché: <strong>{stats?.cachedFiles ?? "—"}</strong>
-          {stats?.retentionServices != null ? (
-            <span>
-              {" "}
-              · Servicios en retención local: {stats.retentionServices}
-            </span>
-          ) : null}
-        </div>
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          color: "#64748B",
-          lineHeight: 1.45,
-          marginBottom: 12,
-          background: "#F8FAFC",
-          borderRadius: 10,
-          padding: "10px 12px",
-          border: "1px solid #E2E8F0",
-        }}
-      >
-        Los documentos siguen disponibles para la empresa y podrán descargarse de nuevo cuando los necesites. Esto solo borra copias locales en el móvil o tablet.
-      </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await purgeAllConductorLocalMediaCaches();
-            showToast?.("Espacio liberado en el dispositivo · los documentos siguen en empresa");
-            refresh();
-          } catch {
-            showToast?.("No se pudo completar la limpieza");
-          } finally {
-            setBusy(false);
-          }
-        }}
-        style={{
-          width: "100%",
-          background: "#0EA5E9",
-          color: "white",
-          border: "none",
-          borderRadius: 11,
-          padding: "13px",
-          fontSize: 14,
-          fontWeight: 800,
-          cursor: busy ? "wait" : "pointer",
-          opacity: busy ? 0.7 : 1,
-        }}
-      >
-        {busy ? "Liberando…" : "Liberar espacio"}
-      </button>
-    </div>
-  );
 }
 
 function bucketServiceDocDate(sv, refDate) {
@@ -19059,8 +19009,61 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
   return null;
 });
 
-const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,norma=null,conductorNombre="Conductor",showToast}){
-  const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn,finalizarParticipacionEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
+const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductorNombre="Conductor"}){
+  const{candidates,loading:flatLoading,finalizarServicios,stopsByServicioId}=useDriverFlatPendingStops(uid);
+  const{finalizarParticipacionEn,cerrarExpedienteEn}=useServicioActivo(uid,null,showToast,conductorNombre);
+  const[selectedServicioId,setSelectedServicioId]=useState(null);
+
+  const activeTrips=useMemo(()=>(candidates||[]).filter((sv)=>{
+    const st=String(sv.estado||"").toLowerCase();
+    return st==="en_curso"||st==="asignado"||st==="completado";
+  }),[candidates]);
+
+  const effectiveServicioId=selectedServicioId??(activeTrips.length===1?activeTrips[0]?.id:null);
+  const selectedServicio=activeTrips.find((s)=>s.id===effectiveServicioId)||null;
+  const selectedStops=selectedServicio?.id?(stopsByServicioId[selectedServicio.id]||[]):[];
+  const showTripPicker=activeTrips.length>1&&!effectiveServicioId;
+  const needsCierre=!!selectedServicio&&needsExpedienteClosure(selectedServicio,selectedStops);
+  const canFinalizar=!!selectedServicio&&!needsCierre&&finalizarServicios.some((s)=>s.id===selectedServicio.id);
+
+  const handleFinalizar=useCallback(async()=>{
+    if(!selectedServicio?.id)return;
+    await finalizarParticipacionEn(selectedServicio.id);
+  },[selectedServicio?.id,finalizarParticipacionEn]);
+
+  const handleCerrarExpediente=useCallback(async(opts)=>{
+    if(!selectedServicio?.id)return;
+    await cerrarExpedienteEn(selectedServicio,opts);
+  },[selectedServicio,cerrarExpedienteEn]);
+
+  if(flatLoading){
+    return(
+      <div style={{padding:40,textAlign:"center",color:"#64748B",fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando…</div>
+    );
+  }
+
+  if(showTripPicker){
+    return <ConductorMasTripPicker trips={activeTrips} onSelect={setSelectedServicioId}/>;
+  }
+
+  return(
+    <ConductorMasServicioTab
+      servicio={selectedServicio}
+      stops={selectedStops}
+      loading={false}
+      showToast={showToast}
+      conductorNombre={conductorNombre}
+      canFinalizarParticipacion={canFinalizar}
+      onFinalizarParticipacion={handleFinalizar}
+      onCerrarExpediente={handleCerrarExpediente}
+      onBackToTripPicker={()=>setSelectedServicioId(null)}
+      showTripBack={activeTrips.length>1}
+    />
+  );
+});
+
+const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,norma=null,conductorNombre="Conductor",showToast,onOpenMasServicio}){
+  const{marcarLlegadoEn,marcarCompletadoEn,iniciarServicioEn}=useServicioActivo(uid,norma,showToast,conductorNombre);
   const recalculateOperationalRoute=useCallback(
     (opts)=>recalculateOperationalRouteFromCurrentGps({...opts,norma,showToast:opts?.silent?undefined:showToast}),
     [norma,showToast],
@@ -19074,9 +19077,9 @@ const TabParadasSimplificado=React.memo(function TabParadasSimplificado({uid,nor
       marcarLlegadoEn={marcarLlegadoEn}
       marcarCompletadoEn={marcarCompletadoEn}
       iniciarServicioEn={iniciarServicioEn}
-      finalizarParticipacionEn={finalizarParticipacionEn}
       recalculateOperationalRoute={recalculateOperationalRoute}
       EvidenciasStopComponent={EvidenciasStop}
+      onOpenMasServicio={onOpenMasServicio}
     />
   );
 });

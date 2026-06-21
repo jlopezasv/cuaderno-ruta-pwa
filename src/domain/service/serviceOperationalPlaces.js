@@ -170,7 +170,7 @@ export function formatStopLugarDisplay(stop, servicio = null, allStops = null) {
   return ciudad || empresa || "—";
 }
 
-/** Línea compacta de tarjeta conductor: «Dirección · Almacén · Localidad». */
+/** Línea completa de dirección (detalle): «Dirección · Almacén · Localidad · CP…». */
 export function formatStopCardLocationLine(stop) {
   const meta = getStopOperacionMeta(stop?.notas);
   const localidad = String(stop?.nombre || "").trim();

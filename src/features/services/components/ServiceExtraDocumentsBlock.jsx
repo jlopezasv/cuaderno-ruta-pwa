@@ -30,6 +30,7 @@ export function ServiceExtraDocumentsBlock({
   tone = "light",
   compact = false,
   openAddRequestVersion = 0,
+  hideInlineAdd = false,
 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -213,23 +214,25 @@ export function ServiceExtraDocumentsBlock({
             <div style={{ fontSize: 11, color: shell.sub, marginTop: 3, lineHeight: 1.35 }}>No ligados a una parada concreta</div>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => setModal(true)}
-          style={{
-            flexShrink: 0,
-            background: shell.btnBg,
-            color: "white",
-            border: "none",
-            borderRadius: 10,
-            padding: compact ? "7px 10px" : "8px 11px",
-            fontSize: 11,
-            fontWeight: 800,
-            cursor: "pointer",
-          }}
-        >
-          + Anadir
-        </button>
+        {hideInlineAdd ? null : (
+          <button
+            type="button"
+            onClick={() => setModal(true)}
+            style={{
+              flexShrink: 0,
+              background: shell.btnBg,
+              color: "white",
+              border: "none",
+              borderRadius: 10,
+              padding: compact ? "7px 10px" : "8px 11px",
+              fontSize: 11,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            + Anadir
+          </button>
+        )}
       </div>
       {lastError ? (
         <div style={{ fontSize: 11, color: "#b91c1c", marginBottom: 8, lineHeight: 1.35 }}>{lastError}</div>

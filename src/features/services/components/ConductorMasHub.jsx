@@ -1,4 +1,5 @@
 import React from "react";
+import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 
 const UI = {
   page: "#F8FAFC",
@@ -10,13 +11,49 @@ const UI = {
 };
 
 const HUB_ITEMS = [
-  { id: "servicio", icon: "🚛", label: "Servicio", hint: "DeCA · Chat · Cliente · documentos" },
+  { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos · finalizar participación" },
   { id: "hoy", icon: "◷", label: "Hoy", hint: "Jornada y tacógrafo" },
   { id: "resumen", icon: "▤", label: "Resumen", hint: "Actividad · IA · Historial" },
   { id: "ruta", icon: "◎", label: "Ruta", hint: "Mapa y navegación" },
   { id: "docs", icon: "▥", label: "Documentos", hint: "Expedientes · gastos · km" },
   { id: "perfil", icon: "◉", label: "Perfil", hint: "Datos y equipo" },
 ];
+
+export function ConductorMasTripPicker({ trips, onSelect }) {
+  return (
+    <div style={{ padding: "14px 14px 88px", background: UI.page, minHeight: "60vh" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.2, marginBottom: 12 }}>
+        ELIGE UN VIAJE
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {(trips || []).map((sv) => {
+          const ref = getServiceNumberForDisplay(sv) || "Viaje";
+          const estado = String(sv.estado || "").replace(/_/g, " ");
+          return (
+            <button
+              key={sv.id}
+              type="button"
+              onClick={() => onSelect?.(sv.id)}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                background: UI.card,
+                border: `1px solid ${UI.line}`,
+                borderRadius: 14,
+                padding: "14px 16px",
+                cursor: "pointer",
+                boxShadow: "0 2px 8px rgba(15,23,42,.04)",
+              }}
+            >
+              <div style={{ fontSize: 15, fontWeight: 800, color: UI.tx }}>{ref}</div>
+              <div style={{ fontSize: 12, color: UI.su, marginTop: 4, textTransform: "capitalize" }}>{estado}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function ConductorMasHub({ onSelect }) {
   return (

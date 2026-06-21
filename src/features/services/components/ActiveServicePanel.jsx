@@ -27,6 +27,7 @@ import {
 } from "../../../domain/service/stopOperacionMeta.js";
 import { needsExpedienteClosure } from "../../../domain/service/expedienteCierre.js";
 import { ExpedienteClosureBlock } from "./ExpedienteClosureBlock.jsx";
+import { ConductorFinalizarParticipacionAction } from "./ConductorFinalizarParticipacionAction.jsx";
 import { SiguienteServicioAccordion, SiguienteServicioEmpty } from "./SiguienteServicioAccordion.jsx";
 import { ServiceOriginBadge } from "../../../ui/ServiceOriginBadge.jsx";
 import { EnRutaHastaProximaEntrada } from "./EnRutaHastaProximaEntrada.jsx";
@@ -42,6 +43,7 @@ import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
 import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
 import { useServiceMessagesUnread } from "../hooks/useServiceMessagesUnread.js";
+import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
 
 /** Claro, operativo — sin estética oscura “gaming” */
 const DRIVER_UI = {
@@ -230,16 +232,40 @@ function StopRecorridoInfoLines({ stop, tone = "legacy" }) {
             marginTop: 2,
             lineHeight: 1.35,
             fontWeight: isDemo ? 600 : 700,
+            wordBreak: "normal",
+            overflowWrap: "break-word",
           }}
         >
           {empresa}
         </div>
       ) : null}
       {lugar ? (
-        <div style={{ fontSize: isDemo ? 14 : 13, color: midColor, marginTop: 2, lineHeight: 1.35 }}>{lugar}</div>
+        <div
+          style={{
+            fontSize: isDemo ? 14 : 13,
+            color: midColor,
+            marginTop: 2,
+            lineHeight: 1.35,
+            wordBreak: "normal",
+            overflowWrap: "break-word",
+          }}
+        >
+          {lugar}
+        </div>
       ) : null}
       {direccion ? (
-        <div style={{ fontSize: isDemo ? 13 : 12, color: mutedColor, marginTop: 2, lineHeight: 1.3 }}>{direccion}</div>
+        <div
+          style={{
+            fontSize: isDemo ? 13 : 12,
+            color: mutedColor,
+            marginTop: 2,
+            lineHeight: 1.3,
+            wordBreak: "normal",
+            overflowWrap: "break-word",
+          }}
+        >
+          {direccion}
+        </div>
       ) : null}
       {detalles ? (
         <div
@@ -1309,6 +1335,8 @@ function OperationalStopCard({
   conductorNombre,
   onEvidenciaSaved,
   acquireActionLocation,
+  driverDetailLayout = false,
+  operatingBusy = false,
 }) {
   const { stop, label, group } = item;
   const entrada = !!stop.hora_llegada_real;
@@ -1325,6 +1353,103 @@ function OperationalStopCard({
   const Ev = EvidenciasStopComponent;
   const icon = stopTimelineIcon(group);
   const stopId = stop?.id;
+
+  const stateBadge = (
+    <span
+      style={{
+        background: stateTone.bg,
+        color: stateTone.fg,
+        borderRadius: 999,
+        padding: "4px 9px",
+        fontSize: 10,
+        fontWeight: 800,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      {stateText}
+    </span>
+  );
+
+  const entradaAction = !entrada ? (
+    <div style={{ marginTop: driverDetailLayout ? 8 : 12 }}>
+      {canOperate && !operatingBusy ? (
+        <button
+          type="button"
+          onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })}
+          style={muellePrimaryBtnStyle("green")}
+        >
+          {primaryMuelleActionLabel(stop, "entrada")}
+        </button>
+      ) : operatingBusy ? (
+        <div
+          style={{
+            ...muellePrimaryBtnStyle("green"),
+            opacity: 0.65,
+            cursor: "wait",
+            textAlign: "center",
+          }}
+        >
+          Guardando…
+        </div>
+      ) : (
+        <div
+          style={{
+            background: DRIVER_UI.surfaceHi,
+            borderRadius: 11,
+            padding: "10px 11px",
+            color: DRIVER_UI.su,
+            fontSize: 12,
+            fontWeight: 650,
+            border: `1px solid ${DRIVER_UI.line}`,
+          }}
+        >
+          Pendiente de turno operacional
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  const inOperationBlock = inOperation ? (
+    <div style={{ marginTop: driverDetailLayout ? 8 : 12 }}>
+      {Ev ? (
+        <Ev
+          key={stop.id}
+          stopId={stop.id}
+          servicioId={servicioId}
+          servicio={servicio}
+          stop={stop}
+          conductorName={conductorNombre}
+          conductorId={servicio?.conductor_id}
+          showToast={showToast}
+          onEvidenciaSaved={onEvidenciaSaved}
+          acquireActionLocation={acquireActionLocation}
+        />
+      ) : null}
+      <button
+        type="button"
+        onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
+        disabled={!canOperate || operatingBusy}
+        style={{
+          ...muellePrimaryBtnStyle("amber"),
+          marginTop: 12,
+          opacity: canOperate && !operatingBusy ? 1 : 0.55,
+          cursor: canOperate && !operatingBusy ? "pointer" : operatingBusy ? "wait" : "default",
+        }}
+      >
+        {operatingBusy ? "Guardando…" : finishActionLabelForStop(stop)}
+      </button>
+    </div>
+  ) : null;
+
+  const locationDetails = (
+    <>
+      <StopRecorridoInfoLines stop={stop} tone="legacy" />
+      {(entrada || salida || (isFirstCarga && servicio?.fecha_inicio)) && (
+        <StopTimesBlock stop={stop} isFirstCarga={isFirstCarga} servicio={servicio} />
+      )}
+    </>
+  );
 
   return (
     <article
@@ -1370,93 +1495,32 @@ function OperationalStopCard({
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>{label}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {!driverDetailLayout ? (
+                <div style={{ fontSize: 15, fontWeight: 800, color: DRIVER_UI.tx, lineHeight: 1.25 }}>{label}</div>
+              ) : null}
               {salida ? (
                 <div style={{ fontSize: 12, color: DRIVER_UI.green, marginTop: 3, fontWeight: 800, lineHeight: 1.3 }}>
                   ✓ {operationName} completada · {stopTime(stop.hora_salida_real)}
                 </div>
               ) : null}
-              <StopRecorridoInfoLines stop={stop} tone="legacy" />
-              {(entrada || salida || (isFirstCarga && servicio?.fecha_inicio)) && (
-                <StopTimesBlock stop={stop} isFirstCarga={isFirstCarga} servicio={servicio} />
-              )}
+              {!driverDetailLayout ? locationDetails : null}
             </div>
-            <span
-              style={{
-                background: stateTone.bg,
-                color: stateTone.fg,
-                borderRadius: 999,
-                padding: "4px 9px",
-                fontSize: 10,
-                fontWeight: 800,
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-              }}
-            >
-              {stateText}
-            </span>
+            {stateBadge}
           </div>
 
-          {!entrada ? (
-            <div style={{ marginTop: 12 }}>
-              {canOperate ? (
-                <button
-                  type="button"
-                  onClick={() => onConfirmMuelle?.({ kind: "entrada", stopId: stop.id })}
-                  style={muellePrimaryBtnStyle("green")}
-                >
-                  {primaryMuelleActionLabel(stop, "entrada")}
-                </button>
-              ) : (
-                <div
-                  style={{
-                    background: DRIVER_UI.surfaceHi,
-                    borderRadius: 11,
-                    padding: "10px 11px",
-                    color: DRIVER_UI.su,
-                    fontSize: 12,
-                    fontWeight: 650,
-                    border: `1px solid ${DRIVER_UI.line}`,
-                  }}
-                >
-                  Pendiente de turno operacional
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {inOperation ? (
-            <div style={{ marginTop: 12 }}>
-              {Ev ? (
-                <Ev
-                  key={stop.id}
-                  stopId={stop.id}
-                  servicioId={servicioId}
-                  servicio={servicio}
-                  stop={stop}
-                  conductorName={conductorNombre}
-                  conductorId={servicio?.conductor_id}
-                  showToast={showToast}
-                  onEvidenciaSaved={onEvidenciaSaved}
-                  acquireActionLocation={acquireActionLocation}
-                />
-              ) : null}
-              <button
-                type="button"
-                onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
-                disabled={!canOperate}
-                style={{
-                  ...muellePrimaryBtnStyle("amber"),
-                  marginTop: 12,
-                  opacity: canOperate ? 1 : 0.55,
-                  cursor: canOperate ? "pointer" : "default",
-                }}
-              >
-                {finishActionLabelForStop(stop)}
-              </button>
-            </div>
-          ) : null}
+          {driverDetailLayout ? (
+            <>
+              {entradaAction}
+              {inOperationBlock}
+              <div style={{ marginTop: 10 }}>{locationDetails}</div>
+            </>
+          ) : (
+            <>
+              {entradaAction}
+              {inOperationBlock}
+            </>
+          )}
 
           {salida && docs.total > 0 ? (
             <div style={{ color: docs.incidencias ? DRIVER_UI.amber : DRIVER_UI.su, fontSize: 12, fontWeight: 700, marginTop: 10 }}>
@@ -1582,8 +1646,6 @@ export function ActiveServicePanel({
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [cierreSaving, setCierreSaving] = useState(false);
-  const [confirmFinalizar, setConfirmFinalizar] = useState(false);
-  const [finalizarSaving, setFinalizarSaving] = useState(false);
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
   const [chatModalOpen, setChatModalOpen] = useState(false);
   const showCierreDocumental = useMemo(
@@ -1594,7 +1656,7 @@ export function ActiveServicePanel({
   const sortedStops = useMemo(() => timelineItems.map((item) => item.stop), [timelineItems]);
   const empresaServicio = empresaById[servicio?.empresa_id] || null;
   const showChatQuick = isServiceMessagesEnabled(servicio);
-  const showDcdtQuick = !!servicio?.empresa_id;
+  const showDcdtQuick = !!servicio?.empresa_id && isDecaAplicable(servicio);
   const dcdtQuick = useConductorDcdtQuickStatus({
     servicio,
     empresa: empresaServicio,
@@ -1698,20 +1760,6 @@ export function ActiveServicePanel({
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
-    }
-  };
-
-  const handleConfirmFinalizarParticipacion = async () => {
-    if (!onFinalizarParticipacion || finalizarSaving) return;
-    setFinalizarSaving(true);
-    try {
-      await onFinalizarParticipacion();
-      showToast?.("Has finalizado tu participación en este servicio");
-      setConfirmFinalizar(false);
-    } catch (error) {
-      showToast?.(error?.message || "No se pudo finalizar tu participación");
-    } finally {
-      setFinalizarSaving(false);
     }
   };
 
@@ -1990,23 +2038,13 @@ export function ActiveServicePanel({
 
           {puedeFinalizarParticipacion ? (
             <DriverDemoSection style={{ padding: "12px 16px" }}>
-              <button
-                type="button"
-                onClick={() => setConfirmFinalizar(true)}
-                style={{
-                  width: "100%",
-                  padding: "13px 14px",
-                  borderRadius: 8,
-                  border: "0.5px solid rgba(185,28,28,.35)",
-                  background: "#fef2f2",
-                  color: "#b91c1c",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
-              >
-                Finalizar mi participación
-              </button>
+              <ConductorFinalizarParticipacionAction
+                visible
+                variant="demo"
+                onConfirm={onFinalizarParticipacion}
+                showToast={showToast}
+                dialogHint="El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio."
+              />
             </DriverDemoSection>
           ) : esMultiConductor &&
             esUltimoActivo &&
@@ -2076,80 +2114,6 @@ export function ActiveServicePanel({
           senderName={conductorNombre}
           showToast={showToast}
         />
-        {confirmFinalizar ? (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(15,23,42,.4)",
-              zIndex: 400,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 16,
-            }}
-            onClick={() => !finalizarSaving && setConfirmFinalizar(false)}
-          >
-            <div
-              role="dialog"
-              style={{
-                background: "#ffffff",
-                borderRadius: 18,
-                padding: "20px 18px",
-                maxWidth: 400,
-                width: "100%",
-                border: `1px solid ${DRIVER_UI.line}`,
-                boxShadow: "0 20px 50px rgba(15,23,42,.12)",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
-                Finalizar mi participación
-              </div>
-              <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
-                El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio.
-              </div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button
-                  type="button"
-                  disabled={finalizarSaving}
-                  onClick={() => setConfirmFinalizar(false)}
-                  style={{
-                    flex: 1,
-                    background: DRIVER_UI.surfaceHi,
-                    color: DRIVER_UI.su,
-                    border: `1px solid ${DRIVER_UI.line}`,
-                    borderRadius: 12,
-                    padding: "12px",
-                    fontWeight: 700,
-                    cursor: finalizarSaving ? "default" : "pointer",
-                    opacity: finalizarSaving ? 0.65 : 1,
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  disabled={finalizarSaving}
-                  onClick={handleConfirmFinalizarParticipacion}
-                  style={{
-                    flex: 1,
-                    background: "#dc2626",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 12,
-                    padding: "12px",
-                    fontWeight: 800,
-                    cursor: finalizarSaving ? "default" : "pointer",
-                    opacity: finalizarSaving ? 0.75 : 1,
-                  }}
-                >
-                  {finalizarSaving ? "Finalizando..." : "Finalizar"}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
     );
   }
@@ -2252,25 +2216,12 @@ export function ActiveServicePanel({
         </div>
 
         {puedeFinalizarParticipacion ? (
-          <button
-            type="button"
-            onClick={() => setConfirmFinalizar(true)}
-            style={{
-              marginTop: 14,
-              width: "100%",
-              minHeight: 46,
-              padding: "11px 14px",
-              borderRadius: 12,
-              border: "1px solid #fca5a5",
-              background: "#fef2f2",
-              color: "#b91c1c",
-              fontSize: 13,
-              fontWeight: 800,
-              cursor: "pointer",
-            }}
-          >
-            Finalizar mi participación
-          </button>
+          <ConductorFinalizarParticipacionAction
+            visible
+            onConfirm={onFinalizarParticipacion}
+            showToast={showToast}
+            dialogHint="El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio."
+          />
         ) : esMultiConductor &&
           esUltimoActivo &&
           servicio?.estado === "en_curso" &&
@@ -2359,80 +2310,6 @@ export function ActiveServicePanel({
       )}
       {confirmMuelleDialog}
       {locationGateModal}
-      {confirmFinalizar ? (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,.4)",
-            zIndex: 400,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-          onClick={() => !finalizarSaving && setConfirmFinalizar(false)}
-        >
-          <div
-            role="dialog"
-            style={{
-              background: "#ffffff",
-              borderRadius: 18,
-              padding: "20px 18px",
-              maxWidth: 400,
-              width: "100%",
-              border: `1px solid ${DRIVER_UI.line}`,
-              boxShadow: "0 20px 50px rgba(15,23,42,.12)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontSize: 16, fontWeight: 800, color: DRIVER_UI.tx, marginBottom: 8 }}>
-              Finalizar mi participación
-            </div>
-            <div style={{ fontSize: 13, color: DRIVER_UI.su, lineHeight: 1.45, marginBottom: 18 }}>
-              El servicio seguirá abierto para el resto de conductores. Tú quedarás libre para avanzar a otros servicios. Esta acción no cierra el servicio.
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                type="button"
-                disabled={finalizarSaving}
-                onClick={() => setConfirmFinalizar(false)}
-                style={{
-                  flex: 1,
-                  background: DRIVER_UI.surfaceHi,
-                  color: DRIVER_UI.su,
-                  border: `1px solid ${DRIVER_UI.line}`,
-                  borderRadius: 12,
-                  padding: "12px",
-                  fontWeight: 700,
-                  cursor: finalizarSaving ? "default" : "pointer",
-                  opacity: finalizarSaving ? 0.65 : 1,
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={finalizarSaving}
-                onClick={handleConfirmFinalizarParticipacion}
-                style={{
-                  flex: 1,
-                  background: "#dc2626",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 12,
-                  padding: "12px",
-                  fontWeight: 800,
-                  cursor: finalizarSaving ? "default" : "pointer",
-                  opacity: finalizarSaving ? 0.75 : 1,
-                }}
-              >
-                {finalizarSaving ? "Finalizando..." : "Finalizar"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

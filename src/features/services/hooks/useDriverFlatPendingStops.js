@@ -3,6 +3,7 @@ import {
   fetchConductorNameMapForServicios,
   fetchDriverOperationalCandidates,
   resolveDriverFlatPendingStops,
+  serviciosConAccionPendienteEnMas,
   serviciosPendientesFinalizarParticipacion,
 } from "../../../domain/service/driverFlatStopList.js";
 
@@ -12,6 +13,8 @@ export function useDriverFlatPendingStops(uid) {
   const [candidates, setCandidates] = useState([]);
   const [participacionBySvId, setParticipacionBySvId] = useState({});
   const [finalizarServicios, setFinalizarServicios] = useState([]);
+  const [stopsByServicioId, setStopsByServicioId] = useState({});
+  const [serviciosAccionEnMas, setServiciosAccionEnMas] = useState([]);
 
   const reload = useCallback(async () => {
     if (!uid) {
@@ -19,6 +22,8 @@ export function useDriverFlatPendingStops(uid) {
       setCandidates([]);
       setParticipacionBySvId({});
       setFinalizarServicios([]);
+      setStopsByServicioId({});
+      setServiciosAccionEnMas([]);
       setLoading(false);
       return;
     }
@@ -27,17 +32,26 @@ export function useDriverFlatPendingStops(uid) {
       const { candidates: cands } = await fetchDriverOperationalCandidates(uid);
       const conductorNameById = await fetchConductorNameMapForServicios(cands);
       const data = await resolveDriverFlatPendingStops(uid, { conductorNameById });
+      const pendientesFinalizar = serviciosPendientesFinalizarParticipacion(
+        data.candidates,
+        data.participacionBySvId,
+        data.items,
+      );
       setItems(data.items);
       setCandidates(data.candidates);
       setParticipacionBySvId(data.participacionBySvId);
-      setFinalizarServicios(
-        serviciosPendientesFinalizarParticipacion(data.candidates, data.participacionBySvId, data.items),
+      setStopsByServicioId(data.stopsByServicioId || {});
+      setFinalizarServicios(pendientesFinalizar);
+      setServiciosAccionEnMas(
+        serviciosConAccionPendienteEnMas(data.candidates, pendientesFinalizar, data.stopsByServicioId || {}),
       );
     } catch {
       setItems([]);
       setCandidates([]);
       setParticipacionBySvId({});
       setFinalizarServicios([]);
+      setStopsByServicioId({});
+      setServiciosAccionEnMas([]);
     } finally {
       setLoading(false);
     }
@@ -53,5 +67,5 @@ export function useDriverFlatPendingStops(uid) {
     return () => window.removeEventListener("cuaderno-recargar-servicio", onReload);
   }, [reload]);
 
-  return { loading, items, candidates, participacionBySvId, finalizarServicios, reload };
+  return { loading, items, candidates, participacionBySvId, finalizarServicios, stopsByServicioId, serviciosAccionEnMas, reload };
 }

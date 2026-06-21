@@ -5,7 +5,7 @@ import {
   PARTICIPACION_TIPO,
   stopMatchesParticipacionTipo,
 } from "../fleet/participacionTipo.js";
-import { isConductorServicioOperativoActivo } from "./expedienteCierre.js";
+import { isConductorServicioOperativoActivo, needsExpedienteClosure, isServicioExpedienteCerrado } from "./expedienteCierre.js";
 import { isStopOperationallyComplete } from "./serviceStops.js";
 import {
   driverQueueAssignmentTimeMs,
@@ -13,9 +13,8 @@ import {
 } from "./driverServiceQueue.js";
 import { getServiceClientReference, getServiceNumberForDisplay } from "./serviceIdentity.js";
 import {
-  formatStopCardLocationLine,
-  formatStopCardTitleLine,
   formatStopLugarDisplay,
+  formatStopCardTitleLine,
 } from "./serviceOperationalPlaces.js";
 
 const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR = "en_curso,asignado,completado,pendiente_asignacion";
@@ -202,13 +201,14 @@ export function buildFlatStopCardLabel(stop, servicio, conductorNameById = {}) {
  * @returns {Promise<{ items: object[], participacionBySvId: Record<string,string>, candidates: object[] }>}
  */
 export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {} } = {}) {
-  const empty = { items: [], participacionBySvId: {}, candidates: [] };
+  const empty = { items: [], participacionBySvId: {}, candidates: [], stopsByServicioId: {} };
   if (!uid) return empty;
 
   const { candidates, assignedAtById, participacionBySvId, participacionTipoBySvId } =
     await fetchDriverOperationalCandidates(uid);
   const sorted = sortDriverOperationalCandidates(candidates, assignedAtById);
   const items = [];
+  const stopsByServicioId = {};
   const filterByParticipacionTipo = isDemoApp();
 
   for (const sv of sorted) {
@@ -217,6 +217,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
       (sv.conductor_id === uid ? PARTICIPACION_TIPO.TODO : PARTICIPACION_TIPO.TODO);
     const stops = await fetchStopsForServicioId(sv.id);
     const sortedStops = [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
+    if (sv?.id) stopsByServicioId[sv.id] = sortedStops;
     const assignmentMs = driverQueueAssignmentTimeMs(sv, assignedAtById);
     const cid = sv?.conductor_id || null;
     const conductorNombre = cid ? conductorNameById[cid] || null : null;
@@ -229,7 +230,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
       const lugarDisplay = formatStopLugarDisplay(stop, sv, sortedStops);
       const tipoOrdenLabel = tipoOrdinalByStopId.get(stop.id) || labelForStopType(stop);
       const cardLine1 = formatStopCardTitleLine(tipoOrdenLabel, referenciaCliente);
-      const cardLine2 = formatStopCardLocationLine(stop);
+      const cardLine2 = lugarDisplay;
       const tripServiceRef = getServiceNumberForDisplay(sv) || null;
       items.push({
         servicio: sv,
@@ -258,7 +259,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
     return (Number(a.stop.orden) || 0) - (Number(b.stop.orden) || 0);
   });
 
-  return { items, participacionBySvId, candidates };
+  return { items, participacionBySvId, candidates, stopsByServicioId };
 }
 
 /** Servicios donde el conductor puede pulsar «He terminado mi parte». */
@@ -269,7 +270,28 @@ export function serviciosPendientesFinalizarParticipacion(candidates, participac
     if (pendingBySv.has(sv.id)) return false;
     const part = participacionBySvId[sv.id];
     if (part === "finalizado") return false;
+    if (isServicioExpedienteCerrado(sv)) return false;
     const st = String(sv.estado || "").toLowerCase();
-    return st === "en_curso" || st === "asignado";
+    return st === "en_curso" || st === "asignado" || st === "completado";
   });
+}
+
+/** Viajes con cierre de expediente o finalización pendiente (destino Más → Servicio). */
+export function serviciosConAccionPendienteEnMas(candidates, finalizarServicios, stopsByServicioId = {}) {
+  const seen = new Set();
+  const out = [];
+  for (const sv of finalizarServicios || []) {
+    if (!sv?.id || seen.has(sv.id)) continue;
+    seen.add(sv.id);
+    out.push(sv);
+  }
+  for (const sv of candidates || []) {
+    if (!sv?.id || seen.has(sv.id)) continue;
+    const stops = stopsByServicioId[sv.id] || [];
+    if (needsExpedienteClosure(sv, stops)) {
+      seen.add(sv.id);
+      out.push(sv);
+    }
+  }
+  return out;
 }
