@@ -66,6 +66,51 @@ function nextPendingStop(stops) {
     .find((s) => s.estado === "pendiente") || null;
 }
 
+function metricCellStyle() {
+  return {
+    minWidth: 0,
+    lineHeight: 1.25,
+  };
+}
+
+function metricLabelStyle() {
+  return {
+    fontSize: 10,
+    fontWeight: 700,
+    color: UI.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+    marginBottom: 2,
+  };
+}
+
+function metricValueStyle({ large = false, color = UI.tx } = {}) {
+  return {
+    fontSize: large ? 15 : 13,
+    fontWeight: large ? 800 : 700,
+    color,
+    fontVariantNumeric: "tabular-nums",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+}
+
+function estadoBadgeStyle(stateColor) {
+  return {
+    background: `${stateColor}18`,
+    color: stateColor,
+    border: `1px solid ${stateColor}33`,
+    borderRadius: 999,
+    padding: "2px 8px",
+    fontWeight: 700,
+    fontSize: 11,
+    lineHeight: 1.25,
+    whiteSpace: "nowrap",
+    flexShrink: 0,
+  };
+}
+
 function EmpresaFlotaServicioCardImpl({
   servicio,
   stops,
@@ -224,6 +269,49 @@ function EmpresaFlotaServicioCardImpl({
 
   const toggle = () => onToggleExpand();
 
+  const conductoresMetric =
+    asignadosCount > 1
+      ? { label: "Conductores", value: String(asignadosCount) }
+      : conductorLine
+        ? {
+            label: "Conductor",
+            value: sinOp ? "Sin asignar" : conductorLine.replace(/^Conductor ·\s*/, ""),
+          }
+        : null;
+
+  const paradasMetric = summary.progressLine
+    ? {
+        label: "Paradas",
+        value: summary.progressLine.replace(/^Paradas ·\s*/, ""),
+      }
+    : progressLabel !== "0/0"
+      ? { label: "Paradas", value: progressLabel }
+      : null;
+
+  const etaMetric = summary.arrivalLabel
+    ? {
+        label: summary.etaCaption || "ETA",
+        value: summary.arrivalLabel,
+        large: true,
+        calculating: summary.calculating,
+      }
+    : null;
+
+  const metricCells = [conductoresMetric, paradasMetric, etaMetric].filter(Boolean);
+
+  const secondaryParts = [
+    asignadosCount > 1 && asignadosNombresStr ? asignadosNombresStr : null,
+    responsableLine,
+    summary.contextLine,
+  ].filter(Boolean);
+
+  const inlineOpsParts = [
+    summary.deviation?.text
+      ? { text: summary.deviation.text, color: (DEV_TONES[summary.deviation.tone] || DEV_TONES.warn).fg }
+      : null,
+    summary.remainingLine ? { text: summary.remainingLine, color: UI.subtle } : null,
+  ].filter(Boolean);
+
   return (
     <div
       style={{
@@ -255,8 +343,8 @@ function EmpresaFlotaServicioCardImpl({
           }
         }}
         style={{
-          padding: "16px 12px 14px",
-          minHeight: 56,
+          padding: "12px 12px 10px",
+          minHeight: 48,
           cursor: "pointer",
           display: "flex",
           gap: 10,
@@ -266,19 +354,59 @@ function EmpresaFlotaServicioCardImpl({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          {summary.clienteLine ? (
+          {(summary.clienteLine || summary.estadoServicio || incBadgeLabel) ? (
             <div
               style={{
-                fontSize: 14,
-                fontWeight: 750,
-                color: tx,
-                lineHeight: 1.25,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                minWidth: 0,
               }}
             >
-              {summary.clienteLine}
+              {summary.clienteLine ? (
+                <div
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 750,
+                    color: tx,
+                    lineHeight: 1.25,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                    flex: 1,
+                  }}
+                >
+                  {summary.clienteLine}
+                </div>
+              ) : (
+                <div style={{ flex: 1, minWidth: 0 }} />
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                {summary.estadoServicio ? (
+                  <span style={estadoBadgeStyle(stateColor)}>{summary.estadoServicio}</span>
+                ) : null}
+                {incBadgeLabel ? (
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      fontSize: 11,
+                      fontWeight: 750,
+                      color: UI.amber,
+                      background: UI.amberSoft,
+                      border: "1px solid #fcd34d",
+                      borderRadius: 999,
+                      padding: "2px 8px",
+                      lineHeight: 1.25,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {incBadgeLabel}
+                  </span>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -287,7 +415,7 @@ function EmpresaFlotaServicioCardImpl({
               fontSize: summary.clienteLine ? 13 : 15,
               fontWeight: summary.clienteLine ? 700 : 800,
               color: summary.clienteLine ? UI.subtle : tx,
-              marginTop: summary.clienteLine ? 4 : 0,
+              marginTop: summary.clienteLine ? 3 : 0,
               lineHeight: 1.3,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -297,183 +425,74 @@ function EmpresaFlotaServicioCardImpl({
             {summary.routeLabel}
           </div>
 
-          {incBadgeLabel ? (
+          {metricCells.length ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))",
+                gap: "4px 14px",
+                marginTop: 8,
+              }}
+            >
+              {metricCells.map((cell) => (
+                <div key={cell.label} style={metricCellStyle()}>
+                  <div style={metricLabelStyle()}>{cell.label}</div>
+                  <div
+                    style={metricValueStyle({
+                      large: cell.large,
+                      color: cell.calculating ? UI.muted : UI.tx,
+                    })}
+                  >
+                    {cell.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {secondaryParts.length ? (
             <div
               style={{
                 marginTop: 6,
-                display: "inline-flex",
-                alignItems: "center",
-                fontSize: 12,
-                fontWeight: 750,
-                color: UI.amber,
-                background: UI.amberSoft,
-                border: "1px solid #fcd34d",
-                borderRadius: 999,
-                padding: "3px 9px",
-                lineHeight: 1.25,
-              }}
-            >
-              {incBadgeLabel}
-            </div>
-          ) : null}
-
-          {asignadosCount > 1 ? (
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: UI.subtle,
-                marginTop: 4,
-                lineHeight: 1.3,
-              }}
-            >
-              Conductores asignados: {asignadosCount}
-              <div style={{ fontSize: 12, color: UI.muted, fontWeight: 500, marginTop: 2 }}>
-                {asignadosNombresStr}
-              </div>
-            </div>
-          ) : conductorLine ? (
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: UI.subtle,
-                marginTop: 4,
-                lineHeight: 1.3,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {conductorLine}
-            </div>
-          ) : null}
-
-          {responsableLine ? (
-            <div
-              style={{
                 fontSize: 12,
                 fontWeight: 600,
                 color: UI.muted,
-                marginTop: conductorLine || asignadosCount > 1 ? 3 : 4,
-                lineHeight: 1.3,
+                lineHeight: 1.35,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
               }}
             >
-              {responsableLine}
+              {secondaryParts.join(" · ")}
             </div>
           ) : null}
 
-          {(summary.estadoServicio || summary.progressLine) ? (
+          {inlineOpsParts.length ? (
             <div
               style={{
+                marginTop: 5,
                 display: "flex",
                 flexWrap: "wrap",
-                alignItems: "center",
-                gap: "6px 10px",
-                marginTop: 8,
+                gap: "2px 10px",
                 fontSize: 12,
-                color: UI.muted,
+                fontWeight: 650,
+                lineHeight: 1.35,
               }}
             >
-              {summary.estadoServicio ? (
-                <span
-                  style={{
-                    background: `${stateColor}18`,
-                    color: stateColor,
-                    border: `1px solid ${stateColor}33`,
-                    borderRadius: 999,
-                    padding: "2px 8px",
-                    fontWeight: 700,
-                    fontSize: 11,
-                  }}
-                >
-                  {summary.estadoServicio}
+              {inlineOpsParts.map((part, i) => (
+                <span key={i} style={{ color: part.color, fontVariantNumeric: "tabular-nums" }}>
+                  {part.text}
                 </span>
-              ) : null}
-              {summary.progressLine ? (
-                <span style={{ fontWeight: 600, color: UI.subtle }}>{summary.progressLine}</span>
-              ) : null}
-            </div>
-          ) : null}
-
-          {summary.contextLine ? (
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 750,
-                color: tx,
-                marginTop: 10,
-                lineHeight: 1.35,
-              }}
-            >
-              {summary.contextLine}
-            </div>
-          ) : null}
-
-          {summary.arrivalLabel ? (
-            <div style={{ marginTop: 12 }}>
-              <div
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: UI.muted,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.35,
-                }}
-              >
-                {summary.etaCaption || "ETA inicial"}
-              </div>
-              <div
-                style={{
-                  fontSize: 18,
-                  fontWeight: 800,
-                  color: tx,
-                  marginTop: 3,
-                  lineHeight: 1.2,
-                  fontVariantNumeric: "tabular-nums",
-                }}
-              >
-                {summary.arrivalLabel}
-              </div>
-            </div>
-          ) : null}
-
-          {summary.deviation ? (
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 13,
-                fontWeight: 750,
-                color: (DEV_TONES[summary.deviation.tone] || DEV_TONES.warn).fg,
-                lineHeight: 1.35,
-              }}
-            >
-              {summary.deviation.text}
-            </div>
-          ) : null}
-
-          {summary.remainingLine ? (
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 12.5,
-                fontWeight: 600,
-                color: UI.subtle,
-                lineHeight: 1.35,
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {summary.remainingLine}
+              ))}
             </div>
           ) : null}
 
           {attention && !expanded ? (
             <div
               style={{
-                marginTop: 8,
+                marginTop: 6,
                 fontSize: 11,
                 fontWeight: 700,
                 color: UI.amber,
@@ -508,23 +527,24 @@ function EmpresaFlotaServicioCardImpl({
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            justifyContent: "center",
+            justifyContent: "flex-start",
             flexShrink: 0,
-            minWidth: 48,
+            minWidth: 40,
+            paddingTop: 2,
           }}
         >
           <div
             aria-hidden
             style={{
-              width: 48,
-              height: 48,
-              borderRadius: 12,
+              width: 40,
+              height: 40,
+              borderRadius: 10,
               border: `1px solid ${UI.border}`,
               background: UI.surfaceSoft,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 22,
+              fontSize: 20,
               fontWeight: 700,
               color: UI.muted,
               lineHeight: 1,
