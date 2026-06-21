@@ -17904,17 +17904,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
   }
   async function finalizarParticipacionEn(servicioId) {
     if (!servicioId || !uid) return;
-    const res = await finalizarParticipacionConductor(servicioId, uid);
-    if (!res?.ok) throw new Error("No se pudo finalizar tu participación");
+    await finalizarParticipacionConductor(servicioId, uid);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
-    return res;
   }
   async function soltarParadaEn(servicioId, stopId) {
     if (!servicioId || !stopId || !uid) return;
-    const res = await soltarParadaConductor(servicioId, uid, stopId);
-    if (!res?.ok) throw new Error("No se pudo quitar la parada de tu lista");
+    await soltarParadaConductor(servicioId, uid, stopId);
     window.dispatchEvent(new Event("cuaderno-recargar-servicio"));
-    return res;
   }
   async function finalizarParticipacion() {
     if (!servicio?.id || !uid) return;

@@ -1,4 +1,5 @@
 import { sbFetch } from "../../data/supabaseClient.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { bootstrapOperationalFlowOnConductorAssign } from "./servicioOperationalBootstrap.js";
 import { insertStopsForServicio } from "./servicioStopsInsert.js";
 import { normalizeParticipacionTipo, PARTICIPACION_TIPO } from "./participacionTipo.js";
@@ -423,6 +424,35 @@ export async function marcarParticipacionActiva(servicioId, conductorId) {
 export const SOLE_ACTIVE_CONDUCTOR_ERROR =
   "No puedes hacer esto: eres el único conductor asignado a este servicio";
 
+export const STOP_DROP_ORPHAN_ERROR =
+  "No puedes soltar esta parada: nadie más quedaría asignado a ella. Pide a tráfico que asigne otro conductor primero, o complétala tú mismo.";
+
+async function parseSupabaseErrorResponse(response) {
+  const body = await response.text().catch(() => "");
+  if (!body) return "Error desconocido";
+  try {
+    const parsed = JSON.parse(body);
+    const msg = parsed?.message || parsed?.error || parsed?.details;
+    if (typeof msg === "string" && msg.trim()) return msg.trim();
+  } catch {
+    /* body no JSON */
+  }
+  return body.trim() || "Error desconocido";
+}
+
+async function callGuardedParticipacionRpc(rpcName, payload) {
+  const r = await sbFetch(`/rest/v1/rpc/${rpcName}`, {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+  if (!r) throw new Error("Sin conexión");
+  if (!r.ok) {
+    throw new Error(await parseSupabaseErrorResponse(r));
+  }
+  return { ok: true };
+}
+
 /** Conductores con participación activa en el servicio (no finalizada a nivel viaje). */
 export async function fetchActiveConductorIdsForServicio(servicioId) {
   if (!servicioId) return new Set();
@@ -527,74 +557,23 @@ export async function fetchAllConductorDroppedStopIds(conductorId) {
   return byServicio;
 }
 
-/** Quita una parada concreta de la lista del conductor (trazabilidad en servicio_asignaciones). */
+/** Quita una parada concreta de la lista del conductor (RPC atómica con anti-huérfana). */
 export async function soltarParadaConductor(servicioId, conductorId, stopId) {
-  if (!servicioId || !conductorId || !stopId) return { ok: false };
-  const now = new Date().toISOString();
-  const patch = {
-    estado_participacion: "finalizado",
-    fecha_fin_participacion: now,
-    tipo_asignacion: "parada_renunciada",
-  };
-  const pr = await sbFetch(
-    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}&stop_id=eq.${stopId}`,
-    {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(patch),
-    },
-  ).catch(() => null);
-  if (pr?.ok) {
-    const rows = await pr.json().catch(() => []);
-    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
-  }
-  const ins = await sbFetch("/rest/v1/servicio_asignaciones", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      servicio_id: servicioId,
-      conductor_id: conductorId,
-      stop_id: stopId,
-      tipo_asignacion: "parada_renunciada",
-      estado_participacion: "finalizado",
-      fecha_fin_participacion: now,
-    }),
-  }).catch(() => null);
-  if (ins?.ok) {
-    const rows = await ins.json().catch(() => []);
-    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
-  }
-  return { ok: false };
+  if (!servicioId || !conductorId || !stopId) throw new Error("Datos incompletos");
+  return callGuardedParticipacionRpc("soltar_parada_conductor_guarded", {
+    p_servicio_id: servicioId,
+    p_conductor_id: conductorId,
+    p_stop_id: stopId,
+    p_apply_participacion_tipo_filter: isDemoApp(),
+  });
 }
 
+/** Finaliza participación del conductor (RPC atómica; valida cada parada pendiente visible). */
 export async function finalizarParticipacionConductor(servicioId, conductorId) {
-  if (!servicioId || !conductorId) return { ok: false };
-  await assertNotSoleActiveConductor(servicioId, conductorId);
-  const now = new Date().toISOString();
-  const patch = { estado_participacion: "finalizado", fecha_fin_participacion: now };
-  const r = await sbFetch(
-    `/rest/v1/servicio_asignaciones?servicio_id=eq.${servicioId}&conductor_id=eq.${conductorId}`,
-    {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(patch),
-    },
-  ).catch(() => null);
-  if (r && r.ok) {
-    const rows = await r.json().catch(() => []);
-    if (Array.isArray(rows) && rows.length > 0) return { ok: true };
-  }
-  // Servicio legacy sin fila para este conductor: crear una ya finalizada.
-  const ins = await sbFetch("/rest/v1/servicio_asignaciones", {
-    method: "POST",
-    body: JSON.stringify({
-      servicio_id: servicioId,
-      conductor_id: conductorId,
-      stop_id: null,
-      tipo_asignacion: "colaborador",
-      estado_participacion: "finalizado",
-      fecha_fin_participacion: now,
-    }),
-  }).catch(() => null);
-  return { ok: !!(ins && ins.ok) };
+  if (!servicioId || !conductorId) throw new Error("Datos incompletos");
+  return callGuardedParticipacionRpc("finalizar_participacion_conductor_guarded", {
+    p_servicio_id: servicioId,
+    p_conductor_id: conductorId,
+    p_apply_participacion_tipo_filter: isDemoApp(),
+  });
 }
