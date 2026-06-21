@@ -383,7 +383,7 @@ import { ConductorSimplifiedParadasTab } from "./features/services/components/Co
 import { ConductorMasHub, ConductorMasBackBar, ConductorMasTripPicker } from "./features/services/components/ConductorMasHub.jsx";
 import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
 import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
-import { BrandHeader, BrandMark } from "./ui/BrandHeader.jsx";
+import { fetchServiciosForMasTripPicker } from "./domain/service/driverFlatStopList.js";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
 import {
   LIM,
@@ -393,6 +393,7 @@ import {
   buildPlan,
   fmtT,
   fmtDur,
+  fmtDurLive,
   TRUCK_KMH,
   haverDist,
   p2,
@@ -1018,7 +1019,7 @@ const fmtFull=d=>`${fmtD(d)} · ${fmtT(d)}`;
 const toDate=d=>d instanceof Date?d:new Date(d);
 const sameDay=(a,b)=>new Date(a).toDateString()===new Date(b).toDateString();
 const dayKey=d=>new Date(d).toISOString().slice(0,10);
-const diffMin=(a,b)=>Math.max(0,Math.round((toDate(b)-toDate(a))/60000));
+const diffMin=(a,b)=>Math.max(0,(+toDate(b)-+toDate(a))/60000);
 const fmtLive=m=>{const h=Math.floor(m/60),r=m%60;return`${p2(h)}:${p2(r)}`;};
 const toDTL=d=>{const D=new Date(d);return`${D.getFullYear()}-${p2(D.getMonth()+1)}-${p2(D.getDate())}T${p2(D.getHours())}:${p2(D.getMinutes())}`;};
 function getMon(d){const d2=new Date(d);d2.setHours(0,0,0,0);const day=d2.getDay()||7;d2.setDate(d2.getDate()-(day-1));return d2;}
@@ -2436,10 +2437,6 @@ function AppInner(){
   },[prof,loaded]);
 
   const today=new Date();
-  // Reloj a resolución de minuto: evita recalcular la norma (coste ~O(n²) sobre TODO el
-  // historial) en cada tick de 1s, que saturaba el hilo principal y congelaba la UI con
-  // conductores de alto volumen de registros. La norma se muestra en minutos.
-  const minuteClock=useMemo(()=>{const d=new Date(clock);d.setSeconds(0,0);return +d;},[clock]);
   const allSorted=useMemo(()=>[...db.entries].sort((a,b)=>+toDate(a.ts)-+toDate(b.ts)),[db.entries]);
   const activeEntries=useMemo(()=>allSorted.filter(e=>!e.deleted&&!e.corrected_by),[allSorted]);
   const todayEnts=allSorted.filter(e=>sameDay(e.ts,today));
@@ -2451,9 +2448,10 @@ function AppInner(){
     try{const v=localStorage.getItem("manual_offset");return v?JSON.parse(v):null;}catch{return null;}
   });
 
+  // Norma con resolución de segundos (clock ya tira cada 1s) para contadores en vivo en Hoy.
   const normaRaw=useMemo(
-    ()=>calcNorma(activeEntries,new Date(minuteClock),prof.abroadNow||false),
-    [activeEntries,minuteClock,prof.abroadNow]
+    ()=>calcNorma(activeEntries,clock,prof.abroadNow||false),
+    [activeEntries,clock,prof.abroadNow]
   );
   // Aplicar offset manual si existe y es del mismo día
   const norma=useMemo(()=>{
@@ -6294,11 +6292,6 @@ function ResumenDetalleTiemposTecnico({ norma }) {
   );
 }
 
-function fmtClockWithSeconds(d) {
-  const dt = d instanceof Date ? d : new Date(d);
-  return `${p2(dt.getHours())}:${p2(dt.getMinutes())}:${p2(dt.getSeconds())}`;
-}
-
 function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equipoConductor,clock,lang="es",showToast,activeEntries=[]}){
   const TE=active?EV[active.type]:null;
   const isDriving=active?.type==="inicio_conduccion";
@@ -6337,6 +6330,23 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
   else if (jState === "open" && norma.canDrive > 0 && norma.canDrive <= 60 && !isPausing)
     normPill = { icon: "⚠", text: `Para en ${fmtDur(norma.canDrive)}`, bg: "#ffedd5", fg: "#c2410c", br: "#fed7aa" };
 
+  const rRest=norma.rRest??0;
+  const crDurLive=norma.crDur??0;
+  const metricHeroStyle={
+    fontSize:34,
+    fontWeight:900,
+    fontVariantNumeric:"tabular-nums",
+    letterSpacing:-0.5,
+    lineHeight:1.05,
+  };
+  const metricSubStyle={
+    fontSize:24,
+    fontWeight:800,
+    fontVariantNumeric:"tabular-nums",
+    marginTop:4,
+    letterSpacing:-0.3,
+  };
+
   let pauseProg = null;
   if (jState === "closed") {
     const lastClose = activeEntries.slice().reverse().find((e) => e.type === "fin_jornada");
@@ -6367,15 +6377,42 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
   if (jState === "open") {
     if (isPausing) {
       proxPausaEtiqueta = norma.crType === "inicio_descanso" ? "Descanso en curso" : "Pausa en curso";
-      proxPausaTexto = `Llevas ${fmtDur(norma.crDur || 0)}`;
+      proxPausaTexto = fmtDurLive(crDurLive);
     } else if (isDriving) {
       proxPausaEtiqueta = "Tiempo hasta pausa";
-      proxPausaTexto = rCont <= 0 ? "Conviene parar ya" : fmtDur(rCont);
+      proxPausaTexto = rCont <= 0 ? "Conviene parar ya" : fmtDurLive(rCont);
     } else {
       proxPausaEtiqueta = "Próxima pausa";
       proxPausaTexto =
-        norma.canDrive > 0 ? `Al conducir, hasta ${fmtDur(norma.canDrive)}` : "Antes de seguir, pausa o descanso";
+        norma.canDrive > 0 ? fmtDurLive(norma.canDrive) : "Antes de seguir, pausa o descanso";
     }
+  }
+
+  let heroLabel = null;
+  let heroValue = null;
+  let heroColor = contC;
+  if (jState === "open") {
+    if (isPausing) {
+      heroLabel = norma.crType === "inicio_descanso" ? "Descanso en curso" : "Pausa en curso";
+      heroValue = fmtDurLive(crDurLive);
+      heroColor = "#6366f1";
+      if (rRest > 0) {
+        heroLabel = norma.crType === "inicio_descanso" ? "Descanso restante" : "Pausa restante";
+        heroValue = fmtDurLive(rRest);
+      }
+    } else if (isDriving) {
+      heroLabel = "Conducción restante";
+      heroValue = rCont <= 0 ? "0:00" : fmtDurLive(rCont);
+      heroColor = contC;
+    } else {
+      heroLabel = "Conducción disponible";
+      heroValue = norma.canDrive > 0 ? fmtDurLive(norma.canDrive) : "0:00";
+      heroColor = norma.canDrive <= 60 ? "#EF4444" : "#22C55E";
+    }
+  } else if (jState === "closed" && pauseProg) {
+    heroLabel = "Descanso entre jornadas";
+    heroValue = fmtDurLive(pauseProg.minHecho);
+    heroColor = pauseProg.ok ? "#22c55e" : "#818cf8";
   }
 
   return (
@@ -6400,8 +6437,8 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: C.tx, fontVariantNumeric: "tabular-nums", letterSpacing: -0.5 }}>
-              {fmtClockWithSeconds(clock)}
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#94a3b8", fontVariantNumeric: "tabular-nums" }}>
+              {fmtT(clock)}
             </div>
             <div style={{ fontSize: 12, color: C.su, marginTop: 4, fontWeight: 600 }}>{estadoHumano}</div>
             {matricula ? (
@@ -6428,7 +6465,7 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
             </div>
             {jState === "open" ? (
               <div style={{ fontSize: 11, color: C.su, marginTop: 8, fontWeight: 600 }}>
-                Ventana · <span style={{ color: ventanaCol, fontWeight: 800 }}>{fmtDur(ventana)}</span> / {fmtDur(ventanaMax)}
+                Ventana · <span style={{ color: ventanaCol, fontWeight: 800 }}>{fmtDurLive(ventana)}</span> / {fmtDur(ventanaMax)}
               </div>
             ) : null}
           </div>
@@ -6498,6 +6535,23 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
           </div>
         )}
 
+        {heroLabel && heroValue ? (
+          <div
+            style={{
+              background: C.card,
+              borderRadius: 18,
+              padding: "18px 16px 16px",
+              border: `1px solid ${C.line}`,
+              boxShadow: "0 8px 28px rgba(15,23,42,.08)",
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 800, color: C.su, letterSpacing: 0.8, marginBottom: 8 }}>
+              {heroLabel.toUpperCase()}
+            </div>
+            <div style={{ ...metricHeroStyle, color: heroColor }}>{heroValue}</div>
+          </div>
+        ) : null}
+
         {/* Tiempo disponible — prioridad alta */}
         <div
           style={{
@@ -6513,19 +6567,19 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Jornada disponible</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: dayC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(rDay)}</div>
+                <div style={{ ...metricSubStyle, color: dayC }}>{fmtDurLive(rDay)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Conducción restante</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: contC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(rCont)}</div>
+                <div style={{ ...metricSubStyle, color: contC }}>{fmtDurLive(rCont)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>Jornada hoy</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: dayC, fontVariantNumeric: "tabular-nums", marginTop: 4, letterSpacing: -0.3 }}>{fmtDur(norma.todayDrive || 0)}</div>
+                <div style={{ ...metricSubStyle, color: dayC }}>{fmtDurLive(norma.todayDrive || 0)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 12, color: C.su, fontWeight: 650 }}>{proxPausaEtiqueta}</div>
-                <div style={{ fontSize: 15, fontWeight: 750, color: C.tx, marginTop: 4, lineHeight: 1.35 }}>{proxPausaTexto}</div>
+                <div style={{ ...metricSubStyle, color: C.tx, lineHeight: 1.35 }}>{proxPausaTexto}</div>
               </div>
             </div>
           ) : jState === "closed" && pauseProg ? (
@@ -6534,8 +6588,8 @@ function LiveCard({active,actMins,norma,jState,onAct,matricula,equipoActivo,equi
               <div style={{ height: 8, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
                 <div style={{ width: `${pauseProg.pct}%`, height: "100%", background: pauseProg.ok ? "#22c55e" : "#818cf8", borderRadius: 99, transition: "width .4s" }} />
               </div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.tx, marginTop: 10 }}>
-                {pauseProg.ok ? "✓ Mínimo cumplido" : `${fmtDur(pauseProg.minHecho)} de ${fmtDur(pauseProg.minNecesario)}`}
+              <div style={{ ...metricSubStyle, color: C.tx, marginTop: 10 }}>
+                {pauseProg.ok ? "✓ Mínimo cumplido" : `${fmtDurLive(pauseProg.minHecho)} de ${fmtDur(pauseProg.minNecesario)}`}
               </div>
             </div>
           ) : (
@@ -18739,19 +18793,37 @@ const TabServicio=React.memo(function TabServicio({uid,norma=null,conductorNombr
 });
 
 const TabMasServicio=React.memo(function TabMasServicio({uid,showToast,conductorNombre="Conductor"}){
-  const{candidates,loading:flatLoading}=useDriverFlatPendingStops(uid);
+  const[masTrips,setMasTrips]=useState([]);
+  const[masTripsLoading,setMasTripsLoading]=useState(true);
   const[selectedServicioId,setSelectedServicioId]=useState(null);
 
-  const activeTrips=useMemo(()=>(candidates||[]).filter((sv)=>{
-    const st=String(sv.estado||"").toLowerCase();
-    return st==="en_curso"||st==="asignado"||st==="completado";
-  }),[candidates]);
+  const cargarMasTrips=useCallback(async()=>{
+    if(!uid){setMasTrips([]);setMasTripsLoading(false);return;}
+    setMasTripsLoading(true);
+    try{
+      const rows=await fetchServiciosForMasTripPicker(uid);
+      setMasTrips(Array.isArray(rows)?rows:[]);
+    }catch{
+      setMasTrips([]);
+    }finally{
+      setMasTripsLoading(false);
+    }
+  },[uid]);
+
+  useEffect(()=>{void cargarMasTrips();},[cargarMasTrips]);
+  useEffect(()=>{
+    const onReload=()=>void cargarMasTrips();
+    window.addEventListener("cuaderno-recargar-servicio",onReload);
+    return()=>window.removeEventListener("cuaderno-recargar-servicio",onReload);
+  },[cargarMasTrips]);
+
+  const activeTrips=masTrips;
 
   const effectiveServicioId=selectedServicioId??(activeTrips.length===1?activeTrips[0]?.id:null);
   const selectedServicio=activeTrips.find((s)=>s.id===effectiveServicioId)||null;
   const showTripPicker=activeTrips.length>1&&!effectiveServicioId;
 
-  if(flatLoading){
+  if(masTripsLoading){
     return(
       <div style={{padding:40,textAlign:"center",color:"#64748B",fontSize:13,background:"#F8FAFC",minHeight:"60vh"}}>Cargando…</div>
     );

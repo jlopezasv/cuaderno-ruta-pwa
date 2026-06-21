@@ -12,13 +12,125 @@ import {
   driverQueueAssignmentTimeMs,
   sortDriverOperationalCandidates,
 } from "./driverServiceQueue.js";
-import { getServiceClientReference, getServiceNumberForDisplay } from "./serviceIdentity.js";
+import { getServiceClientReference, getServiceNumberForDisplay, getFixedServiceRoute } from "./serviceIdentity.js";
 import {
   formatStopLugarDisplay,
   formatStopCardTitleLine,
 } from "./serviceOperationalPlaces.js";
 
 const ESTADOS_SERVICIO_ACTIVO_CONDUCTOR = "en_curso,asignado,completado,pendiente_asignacion";
+
+/** Viajes activos sin límite + últimos N completados para Más → Servicio. */
+export const MAS_TRIP_PICKER_MAX_RECENT_COMPLETED = 10;
+const MAS_TRIP_ESTADOS_ACTIVOS = "en_curso,asignado,pendiente_asignacion";
+const MAS_TRIP_FETCH_LIMIT_ACTIVOS = 200;
+
+export function isServicioMasTripActivo(servicio) {
+  const st = String(servicio?.estado || "").toLowerCase();
+  return st === "en_curso" || st === "asignado" || st === "pendiente_asignacion";
+}
+
+export function isServicioMasTripCompletado(servicio) {
+  return String(servicio?.estado || "").toLowerCase() === "completado";
+}
+
+function servicioMasTripSortMs(servicio) {
+  const raw = servicio?.updated_at || servicio?.created_at;
+  const t = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(t) ? t : 0;
+}
+
+async function fetchServiciosMasByConductorAndEstados(uid, estadosIn, { limit, order = "created_at.desc" } = {}) {
+  if (!uid || !estadosIn) return [];
+  let q = `/rest/v1/servicios?conductor_id=eq.${uid}&estado=in.(${estadosIn})&order=${order}`;
+  if (limit != null) q += `&limit=${limit}`;
+  const r = await sbFetch(q);
+  if (!r.ok) return [];
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function fetchServiciosMasByAsignaciones(uid, estadosIn, { limit, order = "created_at.desc" } = {}) {
+  if (!uid || !estadosIn) return [];
+  const ar = await sbFetch(
+    `/rest/v1/servicio_asignaciones?conductor_id=eq.${uid}&order=created_at.desc&limit=200&select=servicio_id`,
+  );
+  if (!ar.ok) return [];
+  const arows = await ar.json().catch(() => []);
+  const ids = [...new Set((Array.isArray(arows) ? arows : []).map((row) => row?.servicio_id).filter(Boolean))];
+  if (!ids.length) return [];
+  let q = `/rest/v1/servicios?id=in.(${ids.join(",")})&estado=in.(${estadosIn})&order=${order}`;
+  if (limit != null) q += `&limit=${limit}`;
+  const sr = await sbFetch(q);
+  if (!sr.ok) return [];
+  const srows = await sr.json().catch(() => []);
+  return Array.isArray(srows) ? srows : [];
+}
+
+/**
+ * Lista acotada para Más → Servicio: todos los activos + últimos completados recientes.
+ * @returns {Promise<object[]>}
+ */
+export async function fetchServiciosForMasTripPicker(uid) {
+  if (!uid) return [];
+
+  const [activosPrincipal, activosColab, recientesCompletadosPrincipal, recientesCompletadosColab] =
+    await Promise.all([
+      fetchServiciosMasByConductorAndEstados(uid, MAS_TRIP_ESTADOS_ACTIVOS, {
+        limit: MAS_TRIP_FETCH_LIMIT_ACTIVOS,
+        order: "created_at.desc",
+      }),
+      fetchServiciosMasByAsignaciones(uid, MAS_TRIP_ESTADOS_ACTIVOS, {
+        limit: MAS_TRIP_FETCH_LIMIT_ACTIVOS,
+        order: "created_at.desc",
+      }),
+      fetchServiciosMasByConductorAndEstados(uid, "completado", {
+        limit: MAS_TRIP_PICKER_MAX_RECENT_COMPLETED,
+        order: "updated_at.desc",
+      }),
+      fetchServiciosMasByAsignaciones(uid, "completado", {
+        limit: MAS_TRIP_PICKER_MAX_RECENT_COMPLETED,
+        order: "updated_at.desc",
+      }),
+    ]);
+
+  const byId = new Map();
+  for (const sv of [
+    ...activosPrincipal,
+    ...activosColab,
+    ...recientesCompletadosPrincipal,
+    ...recientesCompletadosColab,
+  ]) {
+    if (sv?.id) byId.set(sv.id, sv);
+  }
+
+  const activos = [...byId.values()].filter(isServicioMasTripActivo);
+  const completados = [...byId.values()]
+    .filter(isServicioMasTripCompletado)
+    .sort((a, b) => servicioMasTripSortMs(b) - servicioMasTripSortMs(a))
+    .slice(0, MAS_TRIP_PICKER_MAX_RECENT_COMPLETED);
+
+  const merged = new Map();
+  for (const sv of activos) if (sv?.id) merged.set(sv.id, sv);
+  for (const sv of completados) if (sv?.id) merged.set(sv.id, sv);
+
+  return [...merged.values()].sort((a, b) => {
+    const aAct = isServicioMasTripActivo(a);
+    const bAct = isServicioMasTripActivo(b);
+    if (aAct !== bAct) return aAct ? -1 : 1;
+    return servicioMasTripSortMs(b) - servicioMasTripSortMs(a);
+  });
+}
+
+/** Etiqueta legible de ruta + cliente para tarjetas de viaje en Más. */
+export function masTripPickerCardLines(servicio) {
+  const route = getFixedServiceRoute(servicio);
+  const cliente = getServiceClientReference(servicio);
+  const codigo = getServiceNumberForDisplay(servicio) || "Viaje";
+  const routeLine = route || null;
+  const clienteLine = cliente ? String(cliente).trim() : null;
+  return { codigo, routeLine, clienteLine };
+}
 
 /** Paleta estable por conductor_id (mismo conductor = mismo color en toda la sesión). */
 const TRIP_VISUAL_PALETTE = [

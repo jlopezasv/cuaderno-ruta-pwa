@@ -1,5 +1,5 @@
 import React from "react";
-import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
+import { masTripPickerCardLines } from "../../../domain/service/driverFlatStopList.js";
 
 const UI = {
   page: "#F8FAFC",
@@ -27,7 +27,7 @@ export function ConductorMasTripPicker({ trips, onSelect }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {(trips || []).map((sv) => {
-          const ref = getServiceNumberForDisplay(sv) || "Viaje";
+          const { codigo, routeLine, clienteLine } = masTripPickerCardLines(sv);
           const estado = String(sv.estado || "").replace(/_/g, " ");
           return (
             <button
@@ -45,7 +45,19 @@ export function ConductorMasTripPicker({ trips, onSelect }) {
                 boxShadow: "0 2px 8px rgba(15,23,42,.04)",
               }}
             >
-              <div style={{ fontSize: 15, fontWeight: 800, color: UI.tx }}>{ref}</div>
+              {routeLine ? (
+                <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx, lineHeight: 1.35 }}>{routeLine}</div>
+              ) : null}
+              {clienteLine ? (
+                <div style={{ fontSize: 13, fontWeight: 650, color: UI.tx, marginTop: routeLine ? 4 : 0 }}>{clienteLine}</div>
+              ) : null}
+              {!routeLine && !clienteLine ? (
+                <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx }}>{codigo}</div>
+              ) : (
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginTop: 6, fontFamily: "monospace" }}>
+                  {codigo}
+                </div>
+              )}
               <div style={{ fontSize: 12, color: UI.su, marginTop: 4, textTransform: "capitalize" }}>{estado}</div>
             </button>
           );

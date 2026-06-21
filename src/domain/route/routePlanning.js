@@ -350,8 +350,18 @@ export const fmtT = (d) => `${p2(d.getHours())}:${p2(d.getMinutes())}`;
 export const fmtDur = (m) => {
   if (!m || m < 1) return "0m";
   const h = Math.floor(m / 60),
-    r = m % 60;
+    r = Math.round(m % 60);
   return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`;
+};
+
+/** Minutos (puede ser fraccional) → H:MM:SS o M:SS para contadores en vivo del tacógrafo. */
+export const fmtDurLive = (m) => {
+  const totalSec = Math.max(0, Math.floor((Number(m) || 0) * 60 + 1e-6));
+  const h = Math.floor(totalSec / 3600);
+  const min = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${p2(min)}:${p2(s)}`;
+  return `${min}:${p2(s)}`;
 };
 
 export function buildPlan(driveMins, norma, cfg = {}) {
