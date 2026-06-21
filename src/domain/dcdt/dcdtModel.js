@@ -943,6 +943,7 @@ export async function validarDcdtTrafico(id, userId, { doc, servicio, conductor,
       ...(current?.datos?.vehiculo || {}),
       use_conductor_matricula: true,
       matricula_override: doc?.vehiculo?.matricula || current?.datos?.vehiculo?.matricula_override || null,
+      remolque_override: doc?.vehiculo?.remolque || current?.datos?.vehiculo?.remolque_override || null,
     },
   };
   const r = await dcdtRequest(`?id=eq.${id}`, {

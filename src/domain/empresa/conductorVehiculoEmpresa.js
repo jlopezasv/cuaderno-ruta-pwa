@@ -24,17 +24,22 @@ export async function fetchConductorVehiculoForDcdt(userId, empresaId = null) {
   }
   const ceBase = ceParts.join("&");
 
-  for (const select of [
-    "id,user_id,nombre,matricula,remolque",
-    "id,user_id,nombre,matricula",
-  ]) {
-    const cr = await sbFetch(
-      `/rest/v1/conductor_empresa?${ceBase}&select=${select}&order=created_at.desc&limit=1`,
-    );
-    if (!cr.ok) continue;
-    const rows = await cr.json().catch(() => []);
+  const primarySelect = "id,user_id,nombre,matricula,remolque";
+  const primaryCr = await sbFetch(
+    `/rest/v1/conductor_empresa?${ceBase}&select=${primarySelect}&order=created_at.desc&limit=1`,
+  );
+  if (primaryCr.ok) {
+    const rows = await primaryCr.json().catch(() => []);
     ce = Array.isArray(rows) ? rows[0] : null;
-    if (ce) break;
+  } else {
+    // Legacy: entornos sin columna remolque (no demo/prod actuales).
+    const fallbackCr = await sbFetch(
+      `/rest/v1/conductor_empresa?${ceBase}&select=id,user_id,nombre,matricula&order=created_at.desc&limit=1`,
+    );
+    if (fallbackCr.ok) {
+      const rows = await fallbackCr.json().catch(() => []);
+      ce = Array.isArray(rows) ? rows[0] : null;
+    }
   }
 
   let profile = null;

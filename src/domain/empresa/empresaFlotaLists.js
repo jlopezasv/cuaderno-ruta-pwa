@@ -16,7 +16,7 @@ export async function fetchEmpresaConductoresLite(empresaId) {
   const filter = [
     `empresa_id=eq.${empresaId}`,
     "activo=eq.true",
-    "select=id,user_id,nombre,matricula,telefono_movil,activo,empresa_id",
+    "select=id,user_id,nombre,matricula,remolque,telefono_movil,activo,empresa_id",
     "order=nombre.asc",
   ].join("&");
 
@@ -58,18 +58,30 @@ export async function fetchEmpresaConductoresLite(empresaId) {
         const pr = await sbFetch(
           `/rest/v1/profiles?id=eq.${r.user_id}&select=nombre,matricula,remolque,tipo_vehiculo,is_archived`,
         );
-        if (!pr.ok) return { ...r, nombre: r.nombre || "Conductor", matricula: r.matricula || "" };
+        if (!pr.ok) {
+          return {
+            ...r,
+            nombre: r.nombre || "Conductor",
+            matricula: r.matricula || "",
+            remolque: r.remolque || "",
+          };
+        }
         const profile = (await pr.json().catch(() => []))[0];
         if (profile?.is_archived) return null;
         return {
           ...r,
           nombre: profile?.nombre || r.nombre || "Conductor",
           matricula: profile?.matricula || r.matricula || "",
-          remolque: profile?.remolque || "",
+          remolque: r.remolque || profile?.remolque || "",
           tipo_vehiculo: profile?.tipo_vehiculo || "articulado",
         };
       } catch (_) {
-        return { ...r, nombre: r.nombre || "Conductor", matricula: r.matricula || "" };
+        return {
+          ...r,
+          nombre: r.nombre || "Conductor",
+          matricula: r.matricula || "",
+          remolque: r.remolque || "",
+        };
       }
     }),
   );

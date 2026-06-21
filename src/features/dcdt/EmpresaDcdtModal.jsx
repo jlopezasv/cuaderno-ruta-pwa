@@ -1081,9 +1081,7 @@ export function EmpresaDcdtModal({
               <FieldRow label="Origen" value={doc?.origen} missing={missingKeys.has("origen")} />
               <FieldRow label="Destino" value={doc?.destino} missing={missingKeys.has("destino")} />
               <FieldRow label="Matrícula" value={doc?.vehiculo?.matricula} missing={missingKeys.has("vehiculo.matricula")} />
-              {doc?.vehiculo?.remolque && !necesitaVehiculoManual ? (
-                <FieldRow label="Remolque" value={doc?.vehiculo?.remolque} missing={false} />
-              ) : null}
+              <FieldRow label="Remolque" value={doc?.vehiculo?.remolque} missing={false} />
               {puedeEditarVehiculoDeCA && necesitaVehiculoManual ? (
                 <>
                   <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, margin: "10px 0 6px" }}>
