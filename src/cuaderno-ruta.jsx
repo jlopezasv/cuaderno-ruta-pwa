@@ -3291,7 +3291,7 @@ function AppInner(){
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
     !authSession?.capabilities?.empresa;
-  const openMasServicio=useCallback(()=>{setTab("mas");setMasSub("servicio");},[]);
+  const openMasServicio=()=>{setTab("mas");setMasSub("servicio");};
   const openServicioTab=()=>setTab(conductorSimplified?"paradas":"servicio");
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
