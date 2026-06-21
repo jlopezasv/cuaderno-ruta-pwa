@@ -8379,15 +8379,14 @@ Responde SIEMPRE en español. Sé directo y práctico. Usa los datos reales del 
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",
+          model:"claude-sonnet-4-6",
           max_tokens:1200,
           system:SYSTEM,
           messages:apiMsgs
         })
       });
-      if(!res.ok)throw new Error(`HTTP ${res.status}`);
       const data=await res.json();
-      if(data.error)throw new Error(data.error.message||"API error");
+      if(!res.ok||data.error)throw new Error(data.error?.message||`HTTP ${res.status}`);
       const reply=data.content?.[0]?.text||"No pude procesar la respuesta.";
       setMsgs(p=>[...p,{role:"assistant",content:reply}]);
     }catch(err){
