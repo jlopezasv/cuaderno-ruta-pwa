@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=375, initial-scale=1" />
+  <title>Preview Hoy + Más viajes — 375px</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 375px; font-family: system-ui, sans-serif; background: #eef2f7; padding-bottom: 24px; }
+    .title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 14px 8px; }
+    .note { font-size: 11px; color: #64748b; padding: 0 14px 10px; line-height: 1.45; }
+    .sticky { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+    .back { background: none; border: none; color: #f59e0b; font-weight: 800; font-size: 15px; }
+    .hoy { background: #f1f5f9; }
+    .header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 14px 16px 12px; display: flex; justify-content: space-between; gap: 12px; }
+    .clock-small { font-size: 14px; font-weight: 700; color: #94a3b8; font-variant-numeric: tabular-nums; }
+    .estado { font-size: 12px; color: #64748b; margin-top: 4px; font-weight: 600; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; border-radius: 999px; padding: 6px 11px; font-size: 12px; font-weight: 700; }
+    .content { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+    .hero { background: #fff; border-radius: 18px; padding: 18px 16px; border: 1px solid #e2e8f0; box-shadow: 0 8px 28px rgba(15,23,42,.08); }
+    .hero-label { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: 0.8px; margin-bottom: 8px; }
+    .hero-value { font-size: 34px; font-weight: 900; color: #22c55e; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+    .card { background: #fff; border-radius: 16px; padding: 16px; border: 1px solid #e2e8f0; }
+    .card-label { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: 0.8px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .metric-label { font-size: 12px; color: #64748b; font-weight: 650; }
+    .metric-live { font-size: 24px; font-weight: 800; color: #22c55e; font-variant-numeric: tabular-nums; margin-top: 4px; }
+    .trip { width: 100%; text-align: left; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; }
+    .trip-route { font-size: 16px; font-weight: 800; color: #0f172a; }
+    .trip-client { font-size: 13px; font-weight: 650; color: #0f172a; margin-top: 4px; }
+    .trip-code { font-size: 11px; font-weight: 700; color: #94a3b8; margin-top: 6px; font-family: monospace; }
+    .trip-estado { font-size: 12px; color: #64748b; margin-top: 4px; text-transform: capitalize; }
+    .limit-note { font-size: 11px; color: #64748b; padding: 0 14px 8px; }
+  </style>
+</head>
+<body>
+  <div class="title">Más → Hoy — tacógrafo en vivo</div>
+  <div class="note">Hora del día pequeña (HH:MM) · contadores grandes con segundos</div>
+
+  <div class="sticky"><button type="button" class="back">← Más</button><strong>Hoy</strong></div>
+
+  <div class="hoy">
+    <div class="header">
+      <div>
+        <div class="clock-small" id="clockDay">11:34</div>
+        <div class="estado">Conduciendo</div>
+      </div>
+      <div style="text-align:right"><span class="pill">✅ Vas bien</span></div>
+    </div>
+    <div class="content">
+      <div class="hero">
+        <div class="hero-label">CONDUCCIÓN RESTANTE</div>
+        <div class="hero-value" id="heroDrive">4:29:47</div>
+      </div>
+      <div class="card">
+        <div class="card-label">TIEMPO DISPONIBLE</div>
+        <div class="grid">
+          <div><div class="metric-label">Jornada disponible</div><div class="metric-live" id="mDay">8:12:05</div></div>
+          <div><div class="metric-label">Conducción restante</div><div class="metric-live" id="mCont">4:29:47</div></div>
+          <div><div class="metric-label">Jornada hoy</div><div class="metric-live" id="mToday">4:28:13</div></div>
+          <div><div class="metric-label">Tiempo hasta pausa</div><div class="metric-live" id="mPause">4:29:47</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="title">Más → Servicio → Elige un viaje</div>
+  <div class="limit-note">Todos los activos + máx. 10 completados recientes</div>
+  <div class="sticky"><button type="button" class="back">← Más</button><strong>Servicio</strong></div>
+  <div style="padding:14px 14px 0">
+    <div style="font-size:11px;font-weight:800;color:#64748b;letter-spacing:1.2px;margin-bottom:12px">ELIGE UN VIAJE</div>
+    <div class="trip">
+      <div class="trip-route">Almería → Badajoz</div>
+      <div class="trip-client">Mercadona Logística</div>
+      <div class="trip-code">XTR-VIAJE26-0012</div>
+      <div class="trip-estado">en curso</div>
+    </div>
+    <div class="trip">
+      <div class="trip-route">Coslada → Valencia</div>
+      <div class="trip-code">XTR-VIAJE26-0006</div>
+      <div class="trip-estado">asignado</div>
+    </div>
+    <div class="trip">
+      <div class="trip-route">Madrid → Lisboa</div>
+      <div class="trip-client">Cliente internacional</div>
+      <div class="trip-code">XTR-VIAJE26-0001</div>
+      <div class="trip-estado">completado</div>
+    </div>
+  </div>
+
+  <script>
+    function pad(n) { return String(n).padStart(2, "0"); }
+    function fmtDay(d) { return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+    function fmtLive(totalSec) {
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+    }
+    let driveSec = 4 * 3600 + 29 * 60 + 47;
+    function tick() {
+      document.getElementById("clockDay").textContent = fmtDay(new Date());
+      driveSec = Math.max(0, driveSec - 1);
+      const live = fmtLive(driveSec);
+      document.getElementById("heroDrive").textContent = live;
+      document.getElementById("mCont").textContent = live;
+      document.getElementById("mPause").textContent = live;
+      document.getElementById("mDay").textContent = fmtLive(driveSec + 4 * 3600 + 42 * 60 + 18);
+      document.getElementById("mToday").textContent = fmtLive(driveSec + 18);
+    }
+    tick();
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>

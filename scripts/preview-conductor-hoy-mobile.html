@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=375, initial-scale=1" />
+  <title>Preview Más → Hoy — 375px</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 375px; font-family: system-ui, sans-serif; background: #eef2f7; padding-bottom: 24px; }
+    .title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 14px 8px; }
+    .note { font-size: 11px; color: #64748b; padding: 0 14px 10px; line-height: 1.45; }
+    .sticky { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+    .back { background: none; border: none; color: #f59e0b; font-weight: 800; font-size: 15px; }
+    .hoy { background: #f1f5f9; min-height: 520px; }
+    .header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 14px 16px 12px; display: flex; justify-content: space-between; gap: 12px; }
+    .clock { font-size: 28px; font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+    .estado { font-size: 12px; color: #64748b; margin-top: 4px; font-weight: 600; }
+    .mat { font-size: 10px; color: #94a3b8; font-family: monospace; margin-top: 4px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; border-radius: 999px; padding: 6px 11px; font-size: 12px; font-weight: 700; }
+    .ventana { font-size: 11px; color: #64748b; margin-top: 8px; font-weight: 600; text-align: right; }
+    .content { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+    .card { background: #fff; border-radius: 16px; padding: 16px; border: 1px solid #e2e8f0; box-shadow: 0 6px 24px rgba(15,23,42,.07); }
+    .card-label { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: 0.8px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .metric-label { font-size: 12px; color: #64748b; font-weight: 650; }
+    .metric-val { font-size: 20px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .green { color: #22c55e; }
+    .actions { display: flex; flex-direction: column; gap: 10px; }
+    .btn-primary { width: 100%; background: #dc2626; color: #fff; border: none; border-radius: 14px; padding: 15px; font-size: 15px; font-weight: 800; }
+    .removed { background: #fef2f2; border: 1px dashed #fca5a5; border-radius: 12px; padding: 12px; font-size: 12px; color: #991b1b; line-height: 1.45; }
+    .removed strong { display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="title">Más → Hoy — 375px (después del cambio)</div>
+  <div class="note">Reloj con segundos en vivo · sin bloque «Contexto operativo» · sin avisos de voz</div>
+
+  <div class="sticky"><button type="button" class="back">← Más</button><strong>Hoy</strong></div>
+
+  <div class="hoy">
+    <div class="header">
+      <div>
+        <div class="clock" id="clock">11:34:27</div>
+        <div class="estado">Conduciendo</div>
+        <div class="mat">1234 ABC</div>
+      </div>
+      <div>
+        <div class="pill"><span>✅</span><span>Vas bien</span></div>
+        <div class="ventana">Ventana · <strong style="color:#22c55e">12h 40m</strong> / 15h</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="card">
+        <div class="card-label">TIEMPO DISPONIBLE</div>
+        <div class="grid">
+          <div><div class="metric-label">Jornada disponible</div><div class="metric-val green">8h 12m</div></div>
+          <div><div class="metric-label">Conducción restante</div><div class="metric-val green">3h 05m</div></div>
+          <div><div class="metric-label">Jornada hoy</div><div class="metric-val green">4h 28m</div></div>
+          <div><div class="metric-label">Tiempo hasta pausa</div><div class="metric-val green">3h 05m</div></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn-primary">Parar conducción</button>
+      </div>
+
+      <div class="removed">
+        <strong>Eliminado: «Contexto operativo»</strong>
+        Ya no aparece «En operación · Descarga», ETA, km, CMR pendiente ni «Finalizar operación». Las paradas se gestionan solo en la pestaña Paradas.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function pad(n) { return String(n).padStart(2, "0"); }
+    function tick() {
+      const d = new Date();
+      document.getElementById("clock").textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+    tick();
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>

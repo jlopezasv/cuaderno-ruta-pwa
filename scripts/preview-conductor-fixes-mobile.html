@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=375, initial-scale=1" />
+  <title>Preview conductor fixes — 375px</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 375px; font-family: system-ui, sans-serif; background: #eef2f7; padding-bottom: 24px; }
+    .title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; padding: 12px 14px 8px; letter-spacing: 0.4px; }
+    .sticky { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; border-left: 4px solid #2563eb; }
+    .page { background: #f8fafc; padding: 14px; min-height: 200px; }
+    .badge { display: inline-block; font-size: 20px; font-weight: 800; padding: 6px 12px; border-radius: 999px; background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+    .badge-muelle { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+    .btn-volver { flex-shrink: 0; background: #2563eb; color: #fff; border: none; border-radius: 10px; padding: 9px 14px; font-size: 14px; font-weight: 800; box-shadow: 0 2px 6px rgba(37,99,235,.25); }
+    .btn-green { width: 100%; background: #15803d; color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 800; margin-bottom: 10px; }
+    .btn-gray { width: 100%; background: #f8fafc; color: #475569; border: 1px solid #cbd5e1; border-radius: 12px; padding: 12px; font-size: 13px; font-weight: 700; margin-top: 12px; }
+    .btn-red { width: 100%; background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 12px; padding: 13px; font-size: 14px; font-weight: 800; margin-top: 8px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+    .card-list { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 14px 14px 16px; margin-bottom: 10px; border-left: 5px solid #2563eb; }
+    .trip-btn { width: 100%; text-align: left; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+    .btn-mas-back { background: #2563eb; color: #fff; border: none; border-radius: 10px; padding: 8px 12px; font-size: 14px; font-weight: 800; box-shadow: 0 2px 6px rgba(37,99,235,.25); }
+    .btn-add { width: 100%; background: #15803d; color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 800; margin-top: 10px; }
+    .doc-block { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; font-size: 13px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="title">Paradas — lista (badges ×2)</div>
+  <div class="page">
+    <div class="card-list">
+      <div style="font-size:16px;font-weight:800;margin-bottom:6px">Descarga 1</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;background:#dbeafe;color:#1e40af">XTR-VIAJE26-0006</span>
+        <span class="badge">Pendiente</span>
+      </div>
+      <div style="font-size:13px;color:#64748b;font-weight:600">La Morena · Madrid</div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn-green" style="flex:2;margin:0">EMPEZAR</button>
+        <button style="flex:1;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 8px;font-size:12px;font-weight:700;color:#64748b">Ver detalles</button>
+      </div>
+    </div>
+    <div class="card-list" style="background:#fffbeb;border-color:#fcd34d">
+      <div style="font-size:16px;font-weight:800;margin-bottom:6px">Carga 1</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;background:#dbeafe;color:#1e40af">XTR-VIAJE26-0001</span>
+        <span class="badge badge-muelle">En muelle</span>
+      </div>
+      <div style="font-size:13px;color:#64748b;font-weight:600">Coslada · Madrid</div>
+    </div>
+  </div>
+
+  <div class="title">Detalle — internacional (sin DeCA tras iniciar)</div>
+  <div class="sticky">
+    <div>
+      <div style="font-size:17px;font-weight:800">Descarga 1</div>
+      <div style="margin-top:6px"><span style="font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;background:#dbeafe;color:#1e40af">XTR-VIAJE26-0006 · Internacional</span></div>
+    </div>
+    <button type="button" class="btn-volver">← Volver</button>
+  </div>
+  <div class="page">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <strong style="font-size:14px">Operación</strong>
+        <span class="badge">Pendiente</span>
+      </div>
+      <button class="btn-green">Entrada a muelle</button>
+    </div>
+    <button type="button" class="btn-gray">No voy a hacer esta parada</button>
+    <p style="font-size:11px;color:#94a3b8;margin-top:8px;text-align:center">Sin botón DeCA — servicio internacional</p>
+  </div>
+
+  <div class="title">Más → Servicio (solo documentos)</div>
+  <div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:10px 12px;display:flex;gap:10px;align-items:center">
+    <button type="button" class="btn-mas-back">← Más</button>
+    <span style="font-size:14px;font-weight:800">Servicio</span>
+  </div>
+  <div class="page">
+    <div class="doc-block">📄 CMR adjunto por empresa · Ver</div>
+    <button type="button" class="btn-add">+ Añadir foto o documento</button>
+    <p style="font-size:11px;color:#94a3b8;margin-top:10px;text-align:center">Sin firma de cierre · sin finalizar participación</p>
+  </div>
+
+  <div class="title">Más → Servicio (varios viajes activos)</div>
+  <div class="page">
+    <div style="font-size:11px;font-weight:800;color:#64748b;margin-bottom:10px">ELIGE UN VIAJE</div>
+    <button type="button" class="trip-btn"><div style="font-weight:800">XTR-VIAJE26-0001</div><div style="font-size:12px;color:#64748b;margin-top:4px">en curso</div></button>
+    <button type="button" class="trip-btn"><div style="font-weight:800">XTR-VIAJE26-0006</div><div style="font-size:12px;color:#64748b;margin-top:4px">internacional · en curso</div></button>
+  </div>
+</body>
+</html>

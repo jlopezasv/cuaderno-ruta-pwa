@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preview — tarjeta servicio empresa (horizontal)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #eef2f7;
+      padding: 24px;
+      color: #0f172a;
+    }
+    h1 { font-size: 18px; margin-bottom: 6px; }
+    .sub { font-size: 13px; color: #64748b; margin-bottom: 24px; max-width: 720px; line-height: 1.5; }
+    .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 1200px; }
+    @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+    .panel-title {
+      font-size: 11px; font-weight: 800; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px;
+    }
+    .card {
+      background: #fff; border: 1px solid #dbe4ee; border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(15,23,42,.07);
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 16px 12px 14px; display: flex; gap: 10px; cursor: default;
+    }
+    .card-head.new { padding: 12px 12px 10px; }
+    .body { flex: 1; min-width: 0; }
+    .chev {
+      width: 48px; height: 48px; border-radius: 12px; border: 1px solid #dbe4ee;
+      background: #f8fafc; display: flex; align-items: center; justify-content: center;
+      color: #64748b; font-size: 22px; flex-shrink: 0;
+    }
+    .chev.new { width: 40px; height: 40; border-radius: 10px; font-size: 20px; margin-top: 2px; }
+    .cliente { font-size: 14px; font-weight: 750; line-height: 1.25; }
+    .route { font-size: 13px; font-weight: 700; color: #475569; margin-top: 4px; line-height: 1.3; }
+    .route.new { margin-top: 3px; }
+    .line { font-size: 13px; font-weight: 600; color: #475569; margin-top: 4px; }
+    .line-sm { font-size: 12px; color: #64748b; margin-top: 3px; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; font-size: 12px; }
+    .badge { background: #dcfce718; color: #15803d; border: 1px solid #15803d33; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 11px; }
+    .ctx { font-size: 13px; font-weight: 750; margin-top: 10px; }
+    .eta-block { margin-top: 12px; }
+    .eta-label { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .35px; }
+    .eta-val { font-size: 18px; font-weight: 800; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .remain { margin-top: 8px; font-size: 12.5px; font-weight: 600; color: #475569; }
+    .actions { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn { border-radius: 8px; padding: 7px 10px; font-size: 12px; font-weight: 700; text-align: center; border: 1px solid #e2e8f0; background: #f8fafc; color: #475569; }
+    .btn-deca { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+    .admin { margin-top: 8px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; }
+    .admin .btn { font-size: 11px; padding: 6px 8px; font-weight: 800; }
+    .admin-primary { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
+
+    /* NEW layout */
+    .row-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+    .badges { display: flex; gap: 6px; flex-shrink: 0; }
+    .metrics {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+      gap: 4px 14px; margin-top: 8px;
+    }
+    .metric-label { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .35px; margin-bottom: 2px; }
+    .metric-val { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .metric-val.lg { font-size: 15px; font-weight: 800; }
+    .secondary { margin-top: 6px; font-size: 12px; font-weight: 600; color: #64748b; line-height: 1.35; }
+    .inline-ops { margin-top: 5px; font-size: 12px; font-weight: 650; color: #475569; }
+  </style>
+</head>
+<body>
+  <h1>Tarjeta servicio empresa — antes vs después</h1>
+  <p class="sub">Ejemplo real: BERLINALE · Almería → Badajoz · 2 conductores · En curso · Descanso reglamentario · ETA Lunes 05:38. Botones DeCA/Chat/Admin sin cambios (abajo).</p>
+
+  <div class="wrap">
+    <div>
+      <div class="panel-title">Antes (apilado vertical)</div>
+      <div class="card">
+        <div class="card-head">
+          <div class="body">
+            <div class="cliente">BERLINALE</div>
+            <div class="route">Almería → Badajoz</div>
+            <div class="line">Conductores asignados: 2</div>
+            <div class="line-sm">João Silva · Miguel Torres</div>
+            <div class="line-sm">Responsable · Ana Ruiz</div>
+            <div class="badge-row">
+              <span class="badge">En curso</span>
+              <span>Paradas · 1/3</span>
+            </div>
+            <div class="ctx">Descanso reglamentario</div>
+            <div class="eta-block">
+              <div class="eta-label">ETA actual</div>
+              <div class="eta-val">Lunes · 05:38</div>
+            </div>
+            <div class="remain">1.183 km · 13h restantes</div>
+            <div class="actions">
+              <div class="btn btn-deca">DeCA · incompleto</div>
+              <div class="btn">💬 CHAT</div>
+            </div>
+            <div class="admin">
+              <div class="btn">Modificar servicio</div>
+              <div class="btn admin-primary">Gestionar conductor</div>
+              <div class="btn">Anular servicio</div>
+            </div>
+          </div>
+          <div class="chev">›</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Después (grid horizontal — implementado)</div>
+      <div class="card">
+        <div class="card-head new">
+          <div class="body">
+            <div class="row-top">
+              <div class="cliente" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">BERLINALE</div>
+              <div class="badges"><span class="badge">En curso</span></div>
+            </div>
+            <div class="route new">Almería → Badajoz</div>
+            <div class="metrics">
+              <div>
+                <div class="metric-label">Conductores</div>
+                <div class="metric-val">2</div>
+              </div>
+              <div>
+                <div class="metric-label">Paradas</div>
+                <div class="metric-val">1/3</div>
+              </div>
+              <div>
+                <div class="metric-label">ETA actual</div>
+                <div class="metric-val lg">Lunes · 05:38</div>
+              </div>
+            </div>
+            <div class="secondary">João Silva · Miguel Torres · Responsable · Ana Ruiz · Descanso reglamentario</div>
+            <div class="inline-ops">1.183 km · 13h restantes</div>
+            <div class="actions">
+              <div class="btn btn-deca">DeCA · incompleto</div>
+              <div class="btn">💬 CHAT</div>
+            </div>
+            <div class="admin">
+              <div class="btn">Modificar servicio</div>
+              <div class="btn admin-primary">Gestionar conductor</div>
+              <div class="btn">Anular servicio</div>
+            </div>
+          </div>
+          <div class="chev new">›</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

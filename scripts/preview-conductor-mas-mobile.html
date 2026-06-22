@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=375, initial-scale=1" />
+  <title>Preview Más conductor — 375px</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 375px; font-family: system-ui, sans-serif; background: #eef2f7; }
+    .screen { margin-bottom: 16px; }
+    .title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 14px 8px; }
+    .sticky { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+    .back { background: none; border: none; color: #f59e0b; font-weight: 800; font-size: 15px; }
+    .page { background: #f8fafc; padding: 14px 14px 24px; min-height: 320px; display: flex; flex-direction: column; gap: 12px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px; }
+    .card-label { font-size: 11px; font-weight: 800; color: #64748b; margin-bottom: 8px; }
+    .doc-row { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 12px; padding: 8px 10px; margin-top: 6px; font-size: 12px; }
+    .doc-name { font-weight: 800; color: #0f172a; }
+    .doc-meta { color: #64748b; margin-top: 4px; font-size: 10px; }
+    .btn-green { width: 100%; background: #15803d; color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 800; }
+    .btn-red { width: 100%; background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 12px; padding: 13px; font-size: 14px; font-weight: 800; margin-top: 4px; }
+    .prof-card { background: #fff; border-radius: 14px; padding: 16px; margin: 0 14px 12px; box-shadow: 0 2px 6px rgba(0,0,0,.05); }
+    .prof-section { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: 1.2px; margin-bottom: 10px; }
+    .input { width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; font-size: 14px; margin-bottom: 12px; }
+    .notif { background: #fff; border-radius: 14px; padding: 16px; margin: 0 14px; box-shadow: 0 2px 6px rgba(0,0,0,.05); }
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <div class="title">Más → Servicio — 375px</div>
+    <div class="sticky"><button type="button" class="back">← Más</button><strong>Servicio</strong></div>
+    <div class="page">
+      <div class="card">
+        <div class="card-label">DOCUMENTOS EMPRESA</div>
+        <div class="doc-row">
+          <div class="doc-name">Documento empresa</div>
+          <div class="doc-meta">CMR_origen.pdf · 5 jun, 09:14 · Empresa</div>
+        </div>
+        <div class="doc-row">
+          <div class="doc-name">Documento empresa</div>
+          <div class="doc-meta">foto_almacen.jpg · 4 jun, 18:02 · Empresa</div>
+        </div>
+      </div>
+      <button type="button" class="btn-green">+ Añadir foto o documento</button>
+      <div class="card">
+        <div class="card-label">ARCHIVOS ADICIONALES</div>
+        <div style="font-size: 12px; color: #64748b;">Ningun archivo</div>
+      </div>
+      <button type="button" class="btn-red">Finalizar mi participación</button>
+    </div>
+  </div>
+
+  <div class="screen">
+    <div class="title">Más → Perfil — 375px (sin Almacenamiento)</div>
+    <div class="sticky"><button type="button" class="back">← Más</button><strong>Perfil</strong></div>
+    <div style="padding: 14px;">
+      <div class="prof-card">
+        <div class="prof-section">DATOS PERSONALES</div>
+        <input class="input" value="José López" readonly />
+        <input class="input" value="1234 ABC" readonly />
+      </div>
+      <div class="notif">
+        <div class="prof-section">🔔 NOTIFICACIONES</div>
+        <div style="font-size: 13px; color: #1e293b; font-weight: 700;">Alertas con pantalla apagada</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Límite conducción, pausa, descanso</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
