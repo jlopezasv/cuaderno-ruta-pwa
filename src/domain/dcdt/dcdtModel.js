@@ -695,6 +695,35 @@ export async function fetchDcdtByServicio(servicioId) {
   return rows[0] ?? null;
 }
 
+/** Persiste matrícula/remolque editados en formulario de servicio hacia todos los DeCA del viaje. */
+export async function persistDcdtVehiculoOverridesForServicio(
+  servicioId,
+  { matricula = null, remolque = null } = {},
+) {
+  if (!servicioId) return { updated: 0 };
+  const mat = String(matricula ?? "").trim();
+  const rem = String(remolque ?? "").trim();
+  if (!mat && !rem) return { updated: 0 };
+
+  const rows = await fetchAllDcdtByServicio(servicioId);
+  let updated = 0;
+  for (const dcdt of rows) {
+    if (!dcdt?.id) continue;
+    const nextDatos = {
+      ...(dcdt.datos || emptyDatos()),
+      vehiculo: {
+        ...(dcdt.datos?.vehiculo || {}),
+        use_conductor_matricula: true,
+        matricula_override: mat || dcdt.datos?.vehiculo?.matricula_override || null,
+        remolque_override: rem || dcdt.datos?.vehiculo?.remolque_override || null,
+      },
+    };
+    await saveDcdtDatos(dcdt.id, nextDatos, dcdt.estado, { skipPdfStale: true });
+    updated += 1;
+  }
+  return { updated };
+}
+
 /** Todas las filas DeCA de un servicio (1:N por cargador en demo). */
 export async function fetchAllDcdtByServicio(servicioId) {
   if (!servicioId) return [];

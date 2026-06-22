@@ -221,12 +221,14 @@ import { DcdtReadinessPanel } from "./features/dcdt/DcdtReadinessPanel.jsx";
 import {
   getStopTone,
   primaryButtonStyle,
-  resolveConductorVehiculo,
   secondaryButtonStyle,
   SERVICIO_MODAL_SHELL,
 } from "./features/services/servicioFormTheme.js";
 import { ServicioStopToolbar } from "./features/services/components/ServicioStopToolbar.jsx";
 import { MatriculaVehiculoBadge } from "./features/services/components/MatriculaVehiculoBadge.jsx";
+import { ServicioVehiculoMatriculaFields } from "./features/services/components/ServicioVehiculoMatriculaFields.jsx";
+import { useServicioVehiculoEdit } from "./features/services/useServicioVehiculoEdit.js";
+import { persistDcdtVehiculoOverridesForServicio } from "./domain/dcdt/dcdtModel.js";
 import { EmpresaDcdtModal } from "./features/dcdt/EmpresaDcdtModal.jsx";
 import { mercanciaPreviewFromStops } from "./domain/dcdt/stopMercanciaMeta.js";
 import { syncDcdtServiciosAfterStopsPersisted, onStopEstadoOperativoChange } from "./domain/dcdt/dcdtServicioSync.js";
@@ -12318,7 +12320,11 @@ function AsignarServicioModal({
     return hit?.nombre||conductorNombre||"Conductor";
   },[conductorSelId,conductoresFlota,conductorNombre]);
   const sinConductor=!conductorSelId;
-  const conductorVehiculo=resolveConductorVehiculo(conductoresFlota, conductorSelId);
+  const { setMatricula, setRemolque, tipoVehiculo, vehiculoPreview } = useServicioVehiculoEdit({
+    conductorId: conductorSelId || null,
+    conductores: conductoresFlota,
+    empresaId,
+  });
   const mercanciaPreview=useMemo(()=>mercanciaPreviewFromStops(stops),[stops]);
   const servicioDcdtPreview=useMemo(
     ()=>({
@@ -12455,6 +12461,10 @@ function AsignarServicioModal({
         servicio:sv,
         logTag:"AsignarServicioModal",
         onWarning:onDcdtSyncWarning,
+      });
+      await persistDcdtVehiculoOverridesForServicio(sv.id, {
+        matricula: vehiculoPreview.matricula,
+        remolque: vehiculoPreview.remolque,
       });
       if(!sinConductor){
         void sendAssignmentPush({conductorId:conductorSelId,origen:origenRuta,destino:destinoRuta,fechaInicio,servicioId:sv.id});
@@ -12648,7 +12658,15 @@ function AsignarServicioModal({
                   No hay conductores activos en la flota. Invítalos desde la pestaña Conductores.
                 </div>
               ):null}
-              <MatriculaVehiculoBadge matricula={conductorVehiculo.matricula} remolque={conductorVehiculo.remolque} tipoVehiculo={conductorVehiculo.tipoVehiculo}/>
+              <ServicioVehiculoMatriculaFields
+                matricula={vehiculoPreview.matricula || ""}
+                remolque={vehiculoPreview.remolque || ""}
+                tipoVehiculo={tipoVehiculo}
+                onMatriculaChange={setMatricula}
+                onRemolqueChange={setRemolque}
+                inputStyle={inp}
+                labelStyle={lbl}
+              />
             </div>
           </div>
 
@@ -12658,9 +12676,9 @@ function AsignarServicioModal({
             mercancia={mercanciaPreview}
             partesCatalog={partesCatalog}
             fechaInicio={fechaInicio}
-            matricula={conductorVehiculo.matricula||null}
-            remolque={conductorVehiculo.remolque||null}
-            tipoVehiculo={conductorVehiculo.tipoVehiculo}
+            matricula={vehiculoPreview.matricula}
+            remolque={vehiculoPreview.remolque}
+            tipoVehiculo={tipoVehiculo}
           />
 
           <div style={{background:bg,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:10,padding:"8px 10px",marginBottom:8}}>
@@ -13342,8 +13360,9 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           const perfil=await sbSelect("profiles",`id=eq.${r.user_id}`);
           if(perfil[0]?.is_archived)return null;
           const nombreReal=perfil[0]?.nombre||r.nombre||"Conductor";
-          const matriculaReal=perfil[0]?.matricula||r.matricula||"";
-          const remolqueReal=perfil[0]?.remolque||r.remolque||"";
+          const pickVeh=((...vals)=>{for(const v of vals){const s=String(v??"").trim();if(s)return s;}return "";});
+          const matriculaReal=pickVeh(r.matricula,perfil[0]?.matricula);
+          const remolqueReal=pickVeh(r.remolque,perfil[0]?.remolque);
           const entries=await sbSelect("entries",`user_id=eq.${r.user_id}&order=ts.asc&limit=2000`);
           const ents=entries.map(e=>({...e,ts:new Date(e.ts)}));
           const normaC=calcNorma(ents,new Date(),false);
@@ -13357,7 +13376,18 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             norma:normaC,
             entries:ents,
           };
-        }catch(_){return{...r,norma:null,entries:[],telefono_movil:r.telefono_movil||"",telefono:""};}
+        }catch(_){
+          const pickVeh=((...vals)=>{for(const v of vals){const s=String(v??"").trim();if(s)return s;}return "";});
+          return{
+            ...r,
+            matricula:pickVeh(r.matricula),
+            remolque:pickVeh(r.remolque),
+            norma:null,
+            entries:[],
+            telefono_movil:r.telefono_movil||"",
+            telefono:"",
+          };
+        }
       }));
       const visible=conds.filter(Boolean);
       diagLogConductoresListResult(empId,{

@@ -42,17 +42,18 @@ import { DcdtReadinessPanel } from "../dcdt/DcdtReadinessPanel.jsx";
 import { mercanciaPreviewFromStops } from "../../domain/dcdt/stopMercanciaMeta.js";
 import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
+import { persistDcdtVehiculoOverridesForServicio } from "../../domain/dcdt/dcdtModel.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 import {
   getStopTone,
   primaryButtonStyle,
-  resolveConductorVehiculo,
   secondaryButtonStyle,
   SERVICIO_MODAL_SHELL,
 } from "../services/servicioFormTheme.js";
 import { useDraggableModal } from "../../hooks/useDraggableModal.js";
 import { ServicioStopToolbar } from "../services/components/ServicioStopToolbar.jsx";
-import { MatriculaVehiculoBadge } from "../services/components/MatriculaVehiculoBadge.jsx";
+import { ServicioVehiculoMatriculaFields } from "../services/components/ServicioVehiculoMatriculaFields.jsx";
+import { useServicioVehiculoEdit } from "../services/useServicioVehiculoEdit.js";
 
 function p2(n) {
   return String(n).padStart(2, "0");
@@ -130,6 +131,11 @@ export function EmpresaEditarServicioModal({
     }),
     [servicio, alcanceServicio],
   );
+  const { setMatricula, setRemolque, tipoVehiculo, vehiculoPreview } = useServicioVehiculoEdit({
+    conductorId: conductorSel || null,
+    conductores,
+    empresaId: servicio?.empresa_id || null,
+  });
 
   useEffect(() => {
     if (!servicio?.id) return;
@@ -384,6 +390,10 @@ export function EmpresaEditarServicioModal({
             servicio: servicioForSync,
             stops: stopsResult.rows?.length ? stopsResult.rows : stopsPayload,
           });
+          await persistDcdtVehiculoOverridesForServicio(servicio.id, {
+            matricula: vehiculoPreview.matricula,
+            remolque: vehiculoPreview.remolque,
+          });
         } catch (syncErr) {
           const message = syncErr?.message || String(syncErr);
           console.error("[DCDT sync] editar-servicio", message);
@@ -552,11 +562,10 @@ export function EmpresaEditarServicioModal({
     onApplied,
     onNotifyAssignment,
     conductores,
+    vehiculoPreview,
   ]);
 
   if (!servicio || !mode) return null;
-
-  const conductorVehiculo = resolveConductorVehiculo(conductores, conductorSel);
 
   const paradaInputStyle = {
     width: "100%",
@@ -689,9 +698,9 @@ export function EmpresaEditarServicioModal({
                 mercancia={mercanciaPreview}
                 partesCatalog={partesCatalog}
                 fechaInicio={fechaInicioLocal}
-                matricula={conductorVehiculo.matricula || null}
-                remolque={conductorVehiculo.remolque || null}
-                tipoVehiculo={conductorVehiculo.tipoVehiculo}
+                matricula={vehiculoPreview.matricula}
+                remolque={vehiculoPreview.remolque}
+                tipoVehiculo={tipoVehiculo}
               />
               {stopsLoading ? (
                 <div style={{ fontSize: 12, color: EMPRESA_UI.muted, marginBottom: 12 }}>Cargando paradas…</div>
@@ -819,10 +828,14 @@ export function EmpresaEditarServicioModal({
                   </option>
                 ))}
               </select>
-              <MatriculaVehiculoBadge
-                matricula={conductorVehiculo.matricula}
-                remolque={conductorVehiculo.remolque}
-                tipoVehiculo={conductorVehiculo.tipoVehiculo}
+              <ServicioVehiculoMatriculaFields
+                matricula={vehiculoPreview.matricula || ""}
+                remolque={vehiculoPreview.remolque || ""}
+                tipoVehiculo={tipoVehiculo}
+                onMatriculaChange={setMatricula}
+                onRemolqueChange={setRemolque}
+                inputStyle={inputStyle}
+                labelStyle={{ fontSize: 11, fontWeight: 650, color: EMPRESA_UI.muted, marginBottom: 6, display: "block" }}
               />
               <div style={{ fontSize: 11, color: EMPRESA_UI.muted, marginTop: 4 }}>
                 Si eliges un conductor, el servicio pasará a «Asignado».

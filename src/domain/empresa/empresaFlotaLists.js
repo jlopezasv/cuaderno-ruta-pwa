@@ -4,6 +4,14 @@ import { extractSupabaseErrorBody, logDemoEquipoJoin } from "./conductorEmpresaJ
 
 const conductoresCache = { empresaId: null, data: null, inflight: null };
 
+function pickStr(...vals) {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
 function logConductoresDemo(phase, payload) {
   if (!isDemoApp()) return;
   console.warn("[DEMO conductores]", phase, payload);
@@ -62,8 +70,8 @@ export async function fetchEmpresaConductoresLite(empresaId) {
           return {
             ...r,
             nombre: r.nombre || "Conductor",
-            matricula: r.matricula || "",
-            remolque: r.remolque || "",
+            matricula: pickStr(r.matricula),
+            remolque: pickStr(r.remolque),
           };
         }
         const profile = (await pr.json().catch(() => []))[0];
@@ -71,16 +79,16 @@ export async function fetchEmpresaConductoresLite(empresaId) {
         return {
           ...r,
           nombre: profile?.nombre || r.nombre || "Conductor",
-          matricula: profile?.matricula || r.matricula || "",
-          remolque: r.remolque || profile?.remolque || "",
+          matricula: pickStr(r.matricula, profile?.matricula),
+          remolque: pickStr(r.remolque, profile?.remolque),
           tipo_vehiculo: profile?.tipo_vehiculo || "articulado",
         };
       } catch (_) {
         return {
           ...r,
           nombre: r.nombre || "Conductor",
-          matricula: r.matricula || "",
-          remolque: r.remolque || "",
+          matricula: pickStr(r.matricula),
+          remolque: pickStr(r.remolque),
         };
       }
     }),
