@@ -1,6 +1,7 @@
 // api/admin.js — Vercel Serverless Function
 // Gestiona emails transaccionales (Brevo) y archivado lógico de perfiles (service_role).
 
+import { randomBytes } from "crypto";
 import { isDemoApp } from "./_lib/appEnvironment.js";
 import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
 
@@ -175,9 +176,16 @@ async function authAdminDeleteUser(userId) {
   return r.ok || r.status === 404;
 }
 
-/** Contraseña temporal usuarios oficina (prod fase inicial + DEMO). */
-const OFFICE_USER_TEMP_PASSWORD = "DemoCuaderno2026!";
-const DEMO_OFFICE_USER_PASSWORD = OFFICE_USER_TEMP_PASSWORD;
+/** Contraseña temporal fija solo en entorno DEMO. */
+const DEMO_OFFICE_USER_PASSWORD = "DemoCuaderno2026!";
+
+function generateSecureTempPassword() {
+  return randomBytes(18).toString("base64url");
+}
+
+function resolveOfficeUserTempPassword() {
+  return isDemoApp() ? DEMO_OFFICE_USER_PASSWORD : generateSecureTempPassword();
+}
 
 function supabaseErrorMessage(detail) {
   if (!detail) return null;
@@ -236,21 +244,22 @@ async function authAdminSetUserPassword(userId, password) {
 }
 
 /** Crea Auth si no existe; si existe, reutiliza uid y fija contraseña temporal. */
-async function resolveOfficeUserAuthAccount({ email, nombre }) {
+async function resolveOfficeUserAuthAccount({ email, nombre, tempPassword }) {
+  const password = tempPassword || resolveOfficeUserTempPassword();
   const existing = await authAdminGetUserByEmail(email);
   if (existing?.id && UUID_RE.test(existing.id)) {
-    await authAdminSetUserPassword(existing.id, OFFICE_USER_TEMP_PASSWORD);
+    await authAdminSetUserPassword(existing.id, password);
     return {
       ok: true,
       userId: existing.id,
       authCreated: false,
-      tempPassword: OFFICE_USER_TEMP_PASSWORD,
+      tempPassword: password,
     };
   }
 
   const created = await authAdminCreateUser({
     email,
-    password: OFFICE_USER_TEMP_PASSWORD,
+    password,
     nombre,
   });
   if (!created.ok) {
@@ -268,7 +277,7 @@ async function resolveOfficeUserAuthAccount({ email, nombre }) {
     ok: true,
     userId: uid,
     authCreated: true,
-    tempPassword: OFFICE_USER_TEMP_PASSWORD,
+    tempPassword: password,
   };
 }
 
@@ -717,18 +726,36 @@ export default async function handler(req, res) {
         code: "ADMIN_MISCONFIGURED",
       });
     }
-    const { caller_uid, empresa_id, nombre, email, rol } = req.body || {};
+
+    const authHeader = req.headers.authorization || req.headers.Authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!token) {
+      return res.status(401).json({
+        ok: false,
+        error: "Falta Authorization: Bearer",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+
+    const authUid = await supabaseAuthUserId(token);
+    if (!authUid) {
+      return res.status(401).json({
+        ok: false,
+        error: "Sesión inválida o expirada",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+
+    const { empresa_id, nombre, email, rol } = req.body || {};
     if (
-      !caller_uid ||
       !empresa_id ||
       !nombre?.trim() ||
       !email?.trim() ||
-      !UUID_RE.test(caller_uid) ||
       !UUID_RE.test(empresa_id)
     ) {
       return res.status(400).json({
         ok: false,
-        error: "caller_uid, empresa_id, nombre y email son obligatorios",
+        error: "empresa_id, nombre y email son obligatorios",
         code: "ADMIN_BAD_REQUEST",
       });
     }
@@ -741,7 +768,7 @@ export default async function handler(req, res) {
         code: "ADMIN_BAD_REQUEST",
       });
     }
-    if (!(await callerCanManageEmpresaUsuarios(caller_uid, empresa_id))) {
+    if (!(await callerCanManageEmpresaUsuarios(authUid, empresa_id))) {
       return res.status(403).json({
         ok: false,
         error: "No autorizado para gestionar usuarios de esta empresa",
@@ -754,11 +781,14 @@ export default async function handler(req, res) {
       rol: normalizedRol,
       empresa_id,
       email: emailNorm,
+      caller_uid: authUid,
     });
 
+    const tempPassword = resolveOfficeUserTempPassword();
     const authResolved = await resolveOfficeUserAuthAccount({
       email: emailNorm,
       nombre: nombreNorm,
+      tempPassword,
     });
     if (!authResolved.ok) {
       const errMsg = authResolved.error || "No se pudo crear el usuario en Auth";
@@ -839,15 +869,23 @@ export default async function handler(req, res) {
       user_id: newUid,
     });
 
-    const tempPassword = authResolved.tempPassword || OFFICE_USER_TEMP_PASSWORD;
-    return res.json({
+    const response = {
       ok: true,
       user_id: newUid,
       email: emailNorm,
-      password: tempPassword,
-      message: `Usuario creado con contraseña temporal: ${tempPassword}`,
       empresa_usuario: row,
-    });
+    };
+
+    if (isDemoApp()) {
+      const demoPassword = authResolved.tempPassword || DEMO_OFFICE_USER_PASSWORD;
+      response.password = demoPassword;
+      response.message = `Usuario creado con contraseña temporal: ${demoPassword}`;
+    } else {
+      response.message =
+        "Usuario de oficina creado. La invitación por email con contraseña temporal está pendiente; el usuario debe usar «Recuperar contraseña» o contactar con el administrador de la plataforma.";
+    }
+
+    return res.json(response);
   }
 
   if (

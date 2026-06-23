@@ -1,4 +1,4 @@
-import { sbFetch } from "../../data/supabaseClient.js";
+import { sbFetch, ensureAuthAccessToken } from "../../data/supabaseClient.js";
 import { DEMO_LOGIN_HINT, isDemoApp } from "../../config/appEnvironment.js";
 
 export const OFFICE_USER_ROLES = Object.freeze(["jefe_flota", "trafico", "administrativo"]);
@@ -419,17 +419,24 @@ export function setEmpresaOfficeUserPuedeVerTodos(id, puedeVerTodos) {
   return patchEmpresaOfficeUser(id, { puede_ver_todos: !!puedeVerTodos });
 }
 
-export async function createEmpresaOfficeUser({ empresaId, nombre, email, rol, callerUid }) {
+export async function createEmpresaOfficeUser({ empresaId, nombre, email, rol }) {
   if (!empresaId || !nombre?.trim() || !email?.trim()) {
     throw new Error("Empresa, nombre y email son obligatorios");
   }
 
+  const token = await ensureAuthAccessToken();
+  if (!token) {
+    throw new Error("Inicia sesión para crear usuarios de oficina");
+  }
+
   const res = await fetch("/api/admin", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify({
       action: "create_office_user",
-      caller_uid: callerUid,
       empresa_id: empresaId,
       nombre: nombre.trim(),
       email: email.trim(),
@@ -438,12 +445,14 @@ export async function createEmpresaOfficeUser({ empresaId, nombre, email, rol, c
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Error al crear usuario (${res.status})`);
-  const password = data.password || data.tempPassword || DEMO_LOGIN_HINT.password;
+  const password = data.password || data.tempPassword || (isDemoApp() ? DEMO_LOGIN_HINT.password : null);
   return {
     ...data,
     password,
     tempPassword: password,
-    message: data.message || `Usuario creado con contraseña temporal: ${password}`,
+    message:
+      data.message ||
+      (password ? `Usuario creado con contraseña temporal: ${password}` : "Usuario de oficina creado"),
   };
 }
 

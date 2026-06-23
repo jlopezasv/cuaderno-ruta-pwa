@@ -521,7 +521,6 @@ export function EmpresaUsuariosOficinaPanel({
         nombre: form.nombre,
         email: form.email,
         rol: form.rol,
-        callerUid: uid,
       });
       invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
       const eu = result.empresa_usuario || {};
@@ -547,7 +546,7 @@ export function EmpresaUsuariosOficinaPanel({
       if (row) {
         setUsers((prev) => mergeOfficeUserLists([row], prev));
       }
-      const passwordUsed = result.password || result.tempPassword || DEMO_LOGIN_HINT.password;
+      const passwordUsed = result.password || result.tempPassword || (isDemoApp() ? DEMO_LOGIN_HINT.password : null);
       setModal(null);
       if (isDemoApp()) {
         setCreatedCredentials({
