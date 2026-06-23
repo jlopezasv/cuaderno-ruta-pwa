@@ -25,7 +25,11 @@ import {
   resetPassword as sbResetPassword,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed } from "./config/appEnvironment.js";
-import { isPlanificadorMapaBetaEnabled } from "./config/productFeatures.js";
+import {
+  isPlanificadorMapaBetaEnabled,
+  isConductorSimplifiedParadasUiEnabled,
+  getConductorDefaultTabId,
+} from "./config/productFeatures.js";
 import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
 import {
   isDocumentosEmpresaDemoUi,
@@ -2173,20 +2177,20 @@ function QrMuelleModal({onClose,showToast,setDb}){
 }
 
 function AppInner(){
-  const conductorSimplified = isDemoApp();
+  const conductorSimplified = isConductorSimplifiedParadasUiEnabled();
   const[db,setDb]=useState({entries:[],docs:[]});
   const[prof,setProf]=useState(PROF0);
   const[loaded,setLoaded]=useState(false);
   const[authChecked,setAuthChecked]=useState(false);
   const[user,setUser]=useState(null);
-  const[tab,setTab]=useState(()=>(isDemoApp()?"paradas":"servicio"));
+  const[tab,setTab]=useState(()=>getConductorDefaultTabId());
   const[masSub,setMasSub]=useState(null);
   const[viajeActivo,setViajeActivo]=useState(()=>{try{const v=localStorage.getItem("viaje_activo");return v?JSON.parse(v):null;}catch{return null;}});
   useEffect(()=>{
     if(!navigator.serviceWorker)return;
     function onSwMessage(e){
       if(e?.data?.type==="OPEN_TAB"&&e?.data?.payload?.tab==="servicio"){
-        setTab(isDemoApp()?"paradas":"servicio");
+        setTab(getConductorDefaultTabId());
       }
     }
     navigator.serviceWorker.addEventListener("message",onSwMessage);
@@ -2218,8 +2222,8 @@ function AppInner(){
     const d=localStorage.getItem("dark");
     const darkPrefSet=localStorage.getItem("dark_pref_set")==="1";
     const activeMode=normalizeActiveMode(getStoredAuthSession(getUserId())?.activeMode);
-    // En DEMO conductor mantenemos claro por defecto salvo preferencia manual explícita.
-    if(isDemoApp()&&activeMode==="conductor"&&!darkPrefSet)return false;
+    // UI conductor simplificada: tema claro por defecto salvo preferencia manual explícita.
+    if(isConductorSimplifiedParadasUiEnabled()&&activeMode==="conductor"&&!darkPrefSet)return false;
     if(d==="1")return true;
     if(d==="0")return false;
     return false;
@@ -3237,7 +3241,7 @@ function AppInner(){
     authSession?.capabilities?.empresaStatus==="pending"&&
     !authSession?.capabilities?.empresa;
   const openMasServicio=()=>{setTab("mas");setMasSub("servicio");};
-  const openServicioTab=()=>setTab(conductorSimplified?"paradas":"servicio");
+  const openServicioTab=()=>setTab(getConductorDefaultTabId());
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
