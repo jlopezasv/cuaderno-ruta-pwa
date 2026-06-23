@@ -32,3 +32,13 @@ export function isClienteMailEnhancedUiEnabled() {
 export function isEmpresaImmediateAccessEnabled() {
   return true;
 }
+
+/** Conductor: pestañas PARADAS + MÁS, lista plana de paradas y detalle operativo. */
+export function isConductorSimplifiedParadasUiEnabled() {
+  return true;
+}
+
+/** Pestaña inicial del shell conductor. */
+export function getConductorDefaultTabId() {
+  return isConductorSimplifiedParadasUiEnabled() ? "paradas" : "servicio";
+}
