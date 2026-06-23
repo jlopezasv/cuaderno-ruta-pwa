@@ -1,7 +1,13 @@
 // api/cmr.js — Escaner CMR con Claude Vision
+import { requireAuthenticatedUser } from "./_lib/cmrAuth.js";
+import { tryConsumeCmrOcrQuota } from "./_lib/cmrOcrUsage.js";
+
+const MAX_IMAGE_B64_CHARS = 2 * 1024 * 1024;
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") {
@@ -12,12 +18,39 @@ export default async function handler(req, res) {
     });
   }
 
+  const auth = await requireAuthenticatedUser(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+      code: auth.code,
+    });
+  }
+
   const { image, mediaType = "image/jpeg" } = req.body || {};
   if (!image) {
     return res.status(400).json({
       ok: false,
       error: "No image provided",
       code: "CMR_BAD_REQUEST",
+    });
+  }
+
+  const b64 = String(image);
+  if (b64.length > MAX_IMAGE_B64_CHARS) {
+    return res.status(413).json({
+      ok: false,
+      error: "Imagen demasiado grande (máx. 2 MB en base64). Sube el CMR como documento sin OCR.",
+      code: "CMR_IMAGE_TOO_LARGE",
+    });
+  }
+
+  const quota = await tryConsumeCmrOcrQuota(auth.uid);
+  if (!quota.ok) {
+    return res.status(quota.status).json({
+      ok: false,
+      error: quota.error,
+      code: quota.code,
     });
   }
 
@@ -46,7 +79,7 @@ export default async function handler(req, res) {
           content: [
             {
               type: "image",
-              source: { type: "base64", media_type: mediaType, data: image },
+              source: { type: "base64", media_type: mediaType, data: b64 },
             },
             {
               type: "text",
@@ -75,7 +108,6 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
 
     const data = await response.json();
     if (!response.ok) {
-      // TEMP diagnóstico OCR — quitar tras UAT (no registrar API key)
       console.error("[cmr] anthropic_error", {
         httpStatus: response.status,
         errorType: data?.error?.type ?? data?.type ?? null,
@@ -91,7 +123,6 @@ Si es una foto de mala calidad o no es un CMR, devuelve {"error": "No se pudo le
         ok: false,
         error: friendly,
         code: "CMR_UPSTREAM",
-        // TEMP diagnóstico — expone tipo/mensaje upstream al cliente para UAT
         debug: {
           anthropicHttpStatus: response.status,
           anthropicErrorType: data?.error?.type ?? data?.type ?? null,

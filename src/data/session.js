@@ -244,6 +244,50 @@ export async function resetPassword(email) {
 
 
 
+/** Verifica contraseña actual y actualiza a la nueva (sesión activa). */
+export async function changePasswordWithVerification({ email, currentPassword, newPassword, accessToken }) {
+  assertAuthTargetSafe("auth:changePassword");
+  const emailNorm = String(email || "").trim().toLowerCase();
+  if (!emailNorm) throw new Error("No se pudo obtener el email de la sesión");
+  if (!currentPassword) throw new Error("Indica la contraseña actual");
+  if (!newPassword || newPassword.length < 6) throw new Error("La nueva contraseña debe tener al menos 6 caracteres");
+
+  const verifyRes = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SB_KEY },
+    body: JSON.stringify({ email: emailNorm, password: currentPassword }),
+  });
+  const verifyData = await verifyRes.json().catch(() => ({}));
+  if (!verifyRes.ok) {
+    throw new Error(authErrorMessage(verifyData, "La contraseña actual no es correcta"));
+  }
+
+  const bearer = accessToken || verifyData.access_token;
+  if (!bearer) throw new Error("Sesión no válida");
+
+  const updateRes = await fetch(`${SB_URL}/auth/v1/user`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SB_KEY,
+      Authorization: `Bearer ${bearer}`,
+    },
+    body: JSON.stringify({ password: newPassword }),
+  });
+  const updateData = await updateRes.json().catch(() => ({}));
+  if (!updateRes.ok) {
+    throw new Error(authErrorMessage(updateData, "No se pudo cambiar la contraseña"));
+  }
+
+  if (verifyData.access_token) {
+    persistSbSession(verifyData);
+  }
+
+  return updateData;
+}
+
+
+
 export async function signOut() {
 
   await sbFetch("/auth/v1/logout", { method: "POST" }).catch(() => {});

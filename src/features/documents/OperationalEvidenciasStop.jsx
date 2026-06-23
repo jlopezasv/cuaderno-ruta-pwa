@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { sbFetch } from "../../data/supabaseClient.js";
+import { sbFetch, ensureAuthAccessToken } from "../../data/supabaseClient.js";
 import { uploadOperationalDocument } from "../../data/uploadOperationalDocument.js";
 import { DOCUMENT_TYPES } from "../../domain/service/serviceDocuments.js";
 import { enrichEvidenciaDisplay, mergeDocMetaIntoDatos } from "../../domain/documents/operationalDocumentRecord.js";
@@ -16,6 +16,8 @@ import { geoPayloadFromLocationResult, tryDriverGeoSnapshot } from "../../data/d
 import { OperationalDocumentRow } from "./OperationalDocumentRow.jsx";
 import { notifyEvidenciaSaved, notifyIncidenciaSaved } from "../../domain/documents/operationalEvidenciaSync.js";
 import { createIncidencia, listIncidenciasByServicio } from "../../domain/incidencias/incidenciasApi.js";
+import { isExpedientePrincipalCmrUiEnabled } from "../../config/productFeatures.js";
+import { markCmrDatosWithOcr, stopHasCmrOcr } from "../../domain/documents/cmrOcrStop.js";
 
 const CMR_FIELDS = [
   { k: "num_cmr", l: "Nº CMR" },
@@ -58,11 +60,13 @@ export function OperationalEvidenciasStop({
   const [incFotos, setIncFotos] = useState([]);
   const [cmrFase, setCmrFase] = useState("scan");
   const [cmrCampos, setCmrCampos] = useState({});
+  const [cmrOcrUsed, setCmrOcrUsed] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewMeta, setPreviewMeta] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const fileRef = useRef(null);
+  const fileSinOcrRef = useRef(null);
   const fotoRef = useRef(null);
   const incFotoRef = useRef(null);
   const previewBlobRef = useRef(null);
@@ -129,6 +133,11 @@ export function OperationalEvidenciasStop({
   }, [evidencias, allowedTipos, stop, conductorName]);
 
   const canTipo = (t) => !allowedTipos || allowedTipos.has(String(t || "").toLowerCase());
+  const cmrOcrPerStopEnabled = isExpedientePrincipalCmrUiEnabled();
+  const paradaYaTieneOcrCmr = useMemo(
+    () => cmrOcrPerStopEnabled && stopHasCmrOcr(evidencias),
+    [cmrOcrPerStopEnabled, evidencias],
+  );
 
   async function captureUploadGeo(eventType, actionLabel) {
     if (typeof acquireActionLocation === "function") {
@@ -283,12 +292,17 @@ export function OperationalEvidenciasStop({
     cmrSourceFileRef.current = null;
   }
 
-  async function escanearCmr(e) {
+  async function escanearCmr(e, { skipOcrConfirm = false } = {}) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (cmrOcrPerStopEnabled && paradaYaTieneOcrCmr && !skipOcrConfirm) {
+      const ok = window.confirm("Esto consumirá un nuevo OCR. ¿Continuar?");
+      if (!ok) return;
+    }
     cmrSourceFileRef.current = file;
     setError("");
+    setCmrOcrUsed(false);
     setCmrFase("procesando");
     try {
       await preparePreview(file);
@@ -304,19 +318,31 @@ export function OperationalEvidenciasStop({
           api: "/api/cmr",
         });
       }
+      const token = await ensureAuthAccessToken();
+      if (!token) {
+        throw new Error("Inicia sesión para usar OCR CMR");
+      }
       const resp = await fetch("/api/cmr", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ image: b64, mediaType: "image/jpeg" }),
       });
       const data = await resp.json();
       if (data.ok && data.campos) {
         setCmrCampos(data.campos);
+        setCmrOcrUsed(true);
         setCmrFase("revisar");
       } else {
         const errMsg = String(data.error || "");
-        if (/x-api-key|api.key|anthropic/i.test(errMsg)) {
+        if (resp.status === 429 || data.code === "CMR_DAILY_LIMIT") {
+          setError("Límite diario de OCR CMR alcanzado. Puedes subir el CMR como documento sin OCR.");
+        } else if (/x-api-key|api.key|anthropic/i.test(errMsg)) {
           setError("OCR no configurado en Demo: falta ANTHROPIC_API_KEY en Vercel (proyecto demo). Puedes guardar el documento sin OCR.");
+        } else if (resp.status === 413 || data.code === "CMR_IMAGE_TOO_LARGE") {
+          setError(errMsg || "Imagen demasiado grande. Puedes guardar el documento sin OCR.");
         } else {
           setError(data.error || "No se pudo leer el documento");
         }
@@ -328,12 +354,30 @@ export function OperationalEvidenciasStop({
     }
   }
 
+  async function subirCmrSinOcr(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    cmrSourceFileRef.current = file;
+    setError("");
+    setCmrOcrUsed(false);
+    setCmrCampos({});
+    setCmrFase("procesando");
+    try {
+      await preparePreview(file);
+      setCmrFase("revisar");
+    } catch (err) {
+      setError("Error: " + (err?.message || err));
+      setCmrFase("scan");
+    }
+  }
+
   async function guardarCmr() {
     setSaving(true);
     setError("");
     try {
       let url = null;
-      let datos = { ...cmrCampos };
+      let datos = markCmrDatosWithOcr({ ...cmrCampos }, { ocrApplied: cmrOcrUsed });
       const sourceFile = cmrSourceFileRef.current;
       if (sourceFile) {
         if (isOperationalDocTraceEnabled()) {
@@ -350,13 +394,14 @@ export function OperationalEvidenciasStop({
           context: { ...uploadContext, eventoOperacional: "CMR escaneado", geo },
         });
         url = up.previewUrl;
-        datos = mergeDocMetaIntoDatos(cmrCampos, up.docMeta);
+        datos = markCmrDatosWithOcr(mergeDocMetaIntoDatos(cmrCampos, up.docMeta), { ocrApplied: cmrOcrUsed });
       }
       await persistEvidencia("cmr", { url, datos });
       setModal(null);
       setNotaFoto("");
       setCmrFase("scan");
       setCmrCampos({});
+      setCmrOcrUsed(false);
       revokePreview();
       showToast?.("Documento guardado");
     } catch (e) {
@@ -495,7 +540,7 @@ export function OperationalEvidenciasStop({
           </button>
         )}
         {canTipo("cmr") && (
-          <button type="button" onClick={() => { setModal("cmr"); setCmrFase("scan"); setError(""); revokePreview(); }} style={gBtn(isDocsShell ? "rgba(56,189,248,.12)" : "#0EA5E920", isDocsShell ? "1px solid rgba(56,189,248,.35)" : "1.5px solid #0EA5E950", isDocsShell ? "10px 4px" : "12px 6px")}>
+          <button type="button" onClick={() => { setModal("cmr"); setCmrFase("scan"); setCmrOcrUsed(false); setError(""); revokePreview(); }} style={gBtn(isDocsShell ? "rgba(56,189,248,.12)" : "#0EA5E920", isDocsShell ? "1px solid rgba(56,189,248,.35)" : "1.5px solid #0EA5E950", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📄</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#7DD3FC" : "#0EA5E9" }}>Documento</span>
           </button>
@@ -524,11 +569,22 @@ export function OperationalEvidenciasStop({
             </div>
             <div style={{ padding: "16px 18px 40px" }}>
               <input ref={fileRef} {...cameraProps} onChange={escanearCmr} style={{ display: "none" }} />
+              <input ref={fileSinOcrRef} {...cameraProps} onChange={subirCmrSinOcr} style={{ display: "none" }} />
+              {cmrOcrPerStopEnabled && paradaYaTieneOcrCmr && (
+                <div style={{ background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 9, padding: "10px 12px", marginBottom: 12, fontSize: 12, color: "#92400E", lineHeight: 1.4 }}>
+                  OCR CMR ya realizado en esta parada. Puedes subir otro documento sin OCR o repetir OCR con confirmación.
+                </div>
+              )}
               {cmrFase === "scan" && (
                 <>
-                  <button type="button" onClick={() => fileRef.current?.click()} style={{ width: "100%", background: "#F59E0B", color: "#0F172A", border: "none", borderRadius: 13, padding: "18px", fontSize: 16, fontWeight: 800, cursor: "pointer", marginBottom: 12 }}>
-                    📷 Capturar CMR
+                  <button type="button" onClick={() => fileRef.current?.click()} style={{ width: "100%", background: "#F59E0B", color: "#0F172A", border: "none", borderRadius: 13, padding: "18px", fontSize: 16, fontWeight: 800, cursor: "pointer", marginBottom: 10 }}>
+                    📷 Capturar CMR {cmrOcrPerStopEnabled ? "(con OCR)" : ""}
                   </button>
+                  {cmrOcrPerStopEnabled && (
+                    <button type="button" onClick={() => fileSinOcrRef.current?.click()} style={{ width: "100%", background: "white", color: "#0F172A", border: "1.5px solid #CBD5E1", borderRadius: 13, padding: "14px", fontSize: 14, fontWeight: 800, cursor: "pointer", marginBottom: 12 }}>
+                      📎 Subir documento sin OCR
+                    </button>
+                  )}
                   {!isMobileCaptureDevice() && (
                     <div style={{ fontSize: 11, color: LIGHT.su, marginBottom: 10 }}>En PC puedes elegir cámara web o imagen guardada.</div>
                   )}

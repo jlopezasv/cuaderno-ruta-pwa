@@ -23,6 +23,7 @@ import {
   signUp as sbSignUp,
   refreshSession as sbRefreshSession,
   resetPassword as sbResetPassword,
+  changePasswordWithVerification as sbChangePasswordWithVerification,
 } from "./data/session";
 import { isDemoApp, isPublicRegistrationAllowed } from "./config/appEnvironment.js";
 import {
@@ -7544,30 +7545,31 @@ function BorrarTodo({db,prof,showToast,embedded=false}){
 
 function CambiarPassword({embedded=false}){
   const[open,setOpen]=useState(false);
+  const[passCurrent,setPassCurrent]=useState("");
   const[pass1,setPass1]=useState("");
   const[pass2,setPass2]=useState("");
   const[loading,setLoading]=useState(false);
   const[msg,setMsg]=useState("");
 
   async function cambiar(){
-    if(!pass1||pass1.length<6){setMsg("❌ Mínimo 6 caracteres");return;}
-    if(pass1!==pass2){setMsg("❌ Las contraseñas no coinciden");return;}
+    if(!passCurrent){setMsg("❌ Indica la contraseña actual");return;}
+    if(!pass1||pass1.length<6){setMsg("❌ La nueva contraseña debe tener al menos 6 caracteres");return;}
+    if(pass1!==pass2){setMsg("❌ Las contraseñas nuevas no coinciden");return;}
+    if(passCurrent===pass1){setMsg("❌ La nueva contraseña debe ser distinta de la actual");return;}
     setLoading(true);setMsg("");
     try{
-      // Actualizar contraseña via Supabase auth
       const session=getSession();
-      guardDemoCannotUseProduction(SB_URL,"auth:change-password");
-      const res=await fetch(`${SB_URL}/auth/v1/user`,{
-        method:"PUT",
-        headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":`Bearer ${session?.access_token}`},
-        body:JSON.stringify({password:pass1})
+      const email=session?.user?.email||session?.user?.user_metadata?.email||"";
+      await sbChangePasswordWithVerification({
+        email,
+        currentPassword: passCurrent,
+        newPassword: pass1,
+        accessToken: session?.access_token,
       });
-      const d=await res.json();
-      if(!res.ok)throw new Error(d.message||d.error_description||"Error");
       setMsg("✅ Contraseña cambiada correctamente");
-      setPass1("");setPass2("");
+      setPassCurrent("");setPass1("");setPass2("");
       setTimeout(()=>{setOpen(false);setMsg("");},2000);
-    }catch(e){setMsg("❌ "+e.message);}
+    }catch(e){setMsg("❌ "+(e?.message||String(e)));}
     setLoading(false);
   }
 
@@ -7582,11 +7584,12 @@ function CambiarPassword({embedded=false}){
       ):(
         <div>
           {!embedded&&<div style={{fontSize:13,fontWeight:700,color:"#0F172A",marginBottom:10}}>🔑 CAMBIAR CONTRASEÑA</div>}
-          <input type="password" value={pass1} onChange={e=>setPass1(e.target.value)} placeholder="Nueva contraseña (mín. 6 caracteres)" style={inS}/>
-          <input type="password" value={pass2} onChange={e=>setPass2(e.target.value)} placeholder="Repite la contraseña" style={inS}/>
+          <input type="password" value={passCurrent} onChange={e=>setPassCurrent(e.target.value)} placeholder="Contraseña actual" style={inS} autoComplete="current-password"/>
+          <input type="password" value={pass1} onChange={e=>setPass1(e.target.value)} placeholder="Nueva contraseña (mín. 6 caracteres)" style={inS} autoComplete="new-password"/>
+          <input type="password" value={pass2} onChange={e=>setPass2(e.target.value)} placeholder="Confirmar nueva contraseña" style={inS} autoComplete="new-password"/>
           {msg&&<div style={{fontSize:13,color:msg.startsWith("✅")?"#166534":"#DC2626",marginBottom:10}}>{msg}</div>}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <button onClick={()=>{setOpen(false);setPass1("");setPass2("");setMsg("");}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:9,padding:"11px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
+            <button onClick={()=>{setOpen(false);setPassCurrent("");setPass1("");setPass2("");setMsg("");}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:9,padding:"11px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
             <button onClick={cambiar} disabled={loading} style={{background:loading?"#94A3B8":"#0F172A",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
               {loading?"⏳ Guardando...":"✓ Cambiar"}
             </button>

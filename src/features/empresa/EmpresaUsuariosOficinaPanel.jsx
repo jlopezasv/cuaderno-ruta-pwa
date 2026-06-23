@@ -225,7 +225,7 @@ function OfficeUserCredentialsModal({ nombre, email, password, onClose, showToas
       .catch(() => showToast?.("No se pudo copiar"));
   }
 
-  const credBlock = `Email: ${email}\nContraseña: ${password}`;
+  const credBlock = `Cuaderno de Ruta — acceso oficina\nEmail: ${email}\nContraseña temporal: ${password}\n\nCámbiala desde Perfil → Seguridad tras el primer acceso.`;
 
   return (
     <div
@@ -257,7 +257,8 @@ function OfficeUserCredentialsModal({ nombre, email, password, onClose, showToas
         </div>
         <div style={{ fontSize: 13, color: CONFIG_UI.muted, marginBottom: 18, lineHeight: 1.5 }}>
           Comparte estas credenciales con <strong style={{ color: CONFIG_UI.tx }}>{nombre}</strong> de forma
-          manual (demo). No se envía email automático.
+          segura. <strong style={{ color: CONFIG_UI.tx }}>Solo se muestran una vez</strong>
+          {isDemoApp() ? " (demo; sin email automático)." : "; el email de invitación aún no está activo."}
         </div>
 
         <div style={{ marginBottom: 12 }}>
@@ -299,16 +300,20 @@ function OfficeUserCredentialsModal({ nombre, email, password, onClose, showToas
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+        <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={() => copyText(credBlock, "Credenciales")}
+            style={{ ...configBtnPrimary(false), width: "100%" }}
+          >
+            {copied === "Credenciales" ? "Credenciales copiadas ✓" : "Copiar credenciales"}
+          </button>
           <button
             type="button"
             onClick={() => copyText(password, "Contraseña")}
             style={configBtnSecondary()}
           >
-            {copied === "Contraseña" ? "Copiada ✓" : "Copiar contraseña"}
-          </button>
-          <button type="button" onClick={() => copyText(credBlock, "Credenciales")} style={configBtnSecondary()}>
-            {copied === "Credenciales" ? "Copiadas ✓" : "Copiar todo"}
+            {copied === "Contraseña" ? "Contraseña copiada ✓" : "Copiar solo contraseña"}
           </button>
         </div>
 
@@ -546,9 +551,9 @@ export function EmpresaUsuariosOficinaPanel({
       if (row) {
         setUsers((prev) => mergeOfficeUserLists([row], prev));
       }
-      const passwordUsed = result.password || result.tempPassword || (isDemoApp() ? DEMO_LOGIN_HINT.password : null);
+      const passwordUsed = result.password || result.tempPassword || null;
       setModal(null);
-      if (isDemoApp()) {
+      if (passwordUsed) {
         setCreatedCredentials({
           nombre: form.nombre.trim(),
           email: form.email.trim(),
@@ -711,7 +716,7 @@ export function EmpresaUsuariosOficinaPanel({
         />
       ) : null}
 
-      {isDemoApp() && createdCredentials ? (
+      {createdCredentials ? (
         <OfficeUserCredentialsModal
           nombre={createdCredentials.nombre}
           email={createdCredentials.email}

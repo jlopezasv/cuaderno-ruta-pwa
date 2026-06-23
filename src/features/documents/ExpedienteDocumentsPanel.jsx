@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { isExpedientePrincipalCmrUiEnabled } from "../../config/productFeatures.js";
+import { ExpedientePrincipalCmrPanel } from "./ExpedientePrincipalCmrPanel.jsx";
 import { OperationalDocumentRow } from "./OperationalDocumentRow.jsx";
 
 const GROUP_ORDER = ["cmr", "fotos", "documentos"];
@@ -12,6 +14,7 @@ const GROUP_LABEL = {
  * Lista expediente agrupada, tamaño total, lazy thumbs.
  */
 export function ExpedienteDocumentsPanel({ expediente, onOpenDocument, tone = "light" }) {
+  const usePrincipalCmr = isExpedientePrincipalCmrUiEnabled();
   const [openGroup, setOpenGroup] = useState(null);
   const panel =
     tone === "dark"
@@ -33,6 +36,16 @@ export function ExpedienteDocumentsPanel({ expediente, onOpenDocument, tone = "l
 
   const totalLabel = expediente?.storage?.totalLabel || "—";
   const count = expediente?.evidencias?.length || 0;
+
+  if (usePrincipalCmr) {
+    return (
+      <ExpedientePrincipalCmrPanel
+        expediente={expediente}
+        onOpenDocument={onOpenDocument}
+        tone={tone}
+      />
+    );
+  }
 
   if (!count) {
     return <div style={{ fontSize: 12, color: panel.su }}>Sin documentos en el expediente.</div>;

@@ -869,21 +869,17 @@ export default async function handler(req, res) {
       user_id: newUid,
     });
 
+    const tempPassword = authResolved.tempPassword;
     const response = {
       ok: true,
       user_id: newUid,
       email: emailNorm,
       empresa_usuario: row,
+      password: tempPassword,
+      message: isDemoApp()
+        ? `Usuario creado con contraseña temporal: ${tempPassword}`
+        : "Usuario creado. Copia y comparte la contraseña temporal con el usuario; solo se muestra una vez.",
     };
-
-    if (isDemoApp()) {
-      const demoPassword = authResolved.tempPassword || DEMO_OFFICE_USER_PASSWORD;
-      response.password = demoPassword;
-      response.message = `Usuario creado con contraseña temporal: ${demoPassword}`;
-    } else {
-      response.message =
-        "Usuario de oficina creado. La invitación por email con contraseña temporal está pendiente; el usuario debe usar «Recuperar contraseña» o contactar con el administrador de la plataforma.";
-    }
 
     return res.json(response);
   }

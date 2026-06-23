@@ -1,5 +1,5 @@
 import { sbFetch, ensureAuthAccessToken } from "../../data/supabaseClient.js";
-import { DEMO_LOGIN_HINT, isDemoApp } from "../../config/appEnvironment.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 
 export const OFFICE_USER_ROLES = Object.freeze(["jefe_flota", "trafico", "administrativo"]);
 
@@ -445,14 +445,12 @@ export async function createEmpresaOfficeUser({ empresaId, nombre, email, rol })
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Error al crear usuario (${res.status})`);
-  const password = data.password || data.tempPassword || (isDemoApp() ? DEMO_LOGIN_HINT.password : null);
+  const password = data.password || data.tempPassword || null;
   return {
     ...data,
     password,
     tempPassword: password,
-    message:
-      data.message ||
-      (password ? `Usuario creado con contraseña temporal: ${password}` : "Usuario de oficina creado"),
+    message: data.message || (password ? "Usuario creado. Guarda la contraseña temporal." : "Usuario de oficina creado"),
   };
 }
 

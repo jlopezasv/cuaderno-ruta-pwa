@@ -1,3 +1,5 @@
+import { isDemoApp } from "./appEnvironment.js";
+
 /**
  * Capacidades de producto (antes acotadas al entorno demo).
  * `isDemoApp()` queda solo para seguridad Supabase, credenciales demo y hints de login.
@@ -41,4 +43,9 @@ export function isConductorSimplifiedParadasUiEnabled() {
 /** Pestaña inicial del shell conductor. */
 export function getConductorDefaultTabId() {
   return isConductorSimplifiedParadasUiEnabled() ? "paradas" : "servicio";
+}
+
+/** Expediente operacional: CMR principal + miniaturas + OCR acotado por parada. */
+export function isExpedientePrincipalCmrUiEnabled() {
+  return isDemoApp();
 }
