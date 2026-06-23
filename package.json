@@ -24,6 +24,7 @@
     "deploy:demo:service-messages": "node scripts/apply-sql-file.mjs supabase/migrations/20260711120000_service_messages_demo.sql",
     "deploy:demo:viaje-codigo": "node scripts/apply-sql-file.mjs supabase/migrations/20260713120000_servicio_viaje_codigo_demo.sql",
     "deploy:prod:admin-agenda": "node scripts/apply-admin-agenda-comercial-prod.mjs",
+    "deploy:prod:chat-read-receipts": "node scripts/apply-prod-chat-read-receipts.mjs",
     "deploy:demo:align-structure": "node scripts/apply-demo-align-structure.mjs",
     "deploy:demo:archivo-limpieza": "node scripts/deploy-demo-archivo-limpieza.mjs",
     "deploy:demo:superadmin-jlopez": "node scripts/apply-demo-superadmin-jlopez.mjs",
