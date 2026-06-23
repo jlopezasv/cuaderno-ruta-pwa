@@ -19,8 +19,14 @@ export function ServiceMessagesModal({
   audience = "conductor",
   canMarkForCustomerReport = false,
   showToast,
+  onMarkRead,
 }) {
   if (!open) return null;
+
+  const handleClose = () => {
+    void onMarkRead?.();
+    onClose?.();
+  };
 
   const modal = (
     <div role="dialog" aria-modal="true" aria-label="Chat del servicio" style={OVERLAY}>
@@ -41,7 +47,7 @@ export function ServiceMessagesModal({
         </div>
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleClose}
           style={{
             background: "#f1f5f9",
             border: "none",
@@ -78,6 +84,7 @@ export function ServiceMessagesModal({
           canMarkForCustomerReport={canMarkForCustomerReport}
           showToast={showToast}
           modalLayout
+          onMarkRead={onMarkRead}
         />
       </div>
     </div>

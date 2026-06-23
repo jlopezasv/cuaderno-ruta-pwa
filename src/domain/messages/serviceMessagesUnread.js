@@ -1,9 +1,10 @@
-/** Estado local de lectura de mensajes (solo UX conductor; no persiste en servidor). */
+/** Cálculo local de no leídos; la fuente de verdad de lectura es Supabase (chat_service_read_receipts). */
 
 function readKey(servicioId, userId) {
   return `cuaderno_svc_msgs_read_${servicioId}_${userId}`;
 }
 
+/** Caché local opcional (respaldo si falla la red al reabrir). */
 export function getServiceMessagesReadAt(servicioId, userId) {
   if (!servicioId || !userId) return null;
   try {
@@ -13,13 +14,18 @@ export function getServiceMessagesReadAt(servicioId, userId) {
   }
 }
 
-export function markServiceMessagesRead(servicioId, userId, atIso = new Date().toISOString()) {
-  if (!servicioId || !userId) return;
+export function cacheServiceMessagesReadAt(servicioId, userId, atIso) {
+  if (!servicioId || !userId || !atIso) return;
   try {
     localStorage.setItem(readKey(servicioId, userId), atIso);
   } catch {
     /* ignore */
   }
+}
+
+/** @deprecated Usar upsertServiceMessageReadReceipt; mantiene caché local. */
+export function markServiceMessagesRead(servicioId, userId, atIso = new Date().toISOString()) {
+  cacheServiceMessagesReadAt(servicioId, userId, atIso);
 }
 
 export function countUnreadServiceMessages(messages, userId, readAtIso = null) {

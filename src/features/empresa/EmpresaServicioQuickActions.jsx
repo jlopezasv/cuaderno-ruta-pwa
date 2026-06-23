@@ -62,7 +62,7 @@ export function EmpresaServicioQuickActions({
           showUnreadHint={messagesUnread.unread > 0}
           onChatClick={() => {
             setChatOpen(true);
-            messagesUnread.markRead();
+            void messagesUnread.markRead();
           }}
         />
         {dcdtQuick.readiness?.warnDecaMissingPdfBeforeStart ? (
@@ -87,7 +87,7 @@ export function EmpresaServicioQuickActions({
         open={chatOpen}
         onClose={() => {
           setChatOpen(false);
-          messagesUnread.markRead();
+          void messagesUnread.markRead();
           void messagesUnread.refresh();
         }}
         servicio={servicio}
@@ -96,6 +96,7 @@ export function EmpresaServicioQuickActions({
         audience="empresa"
         canMarkForCustomerReport
         showToast={showToast}
+        onMarkRead={messagesUnread.markRead}
       />
     </>
   );

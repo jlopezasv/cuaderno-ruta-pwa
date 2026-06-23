@@ -579,7 +579,7 @@ export function ConductorSimplifiedParadasTab({
                 unreadCount={messagesUnread.unread}
                 onChatClick={() => {
                   setChatModalOpen(true);
-                  messagesUnread.markRead();
+                  void messagesUnread.markRead();
                 }}
               />
             </div>
@@ -796,12 +796,13 @@ export function ConductorSimplifiedParadasTab({
           open={chatModalOpen}
           onClose={() => {
             setChatModalOpen(false);
-            messagesUnread.markRead();
+            void messagesUnread.markRead();
             void messagesUnread.refresh();
           }}
           servicio={localServicio}
           senderName={conductorNombre}
           showToast={showToast}
+          onMarkRead={messagesUnread.markRead}
         />
       </div>
     );

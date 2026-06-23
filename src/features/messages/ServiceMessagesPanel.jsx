@@ -27,6 +27,7 @@ export function ServiceMessagesPanel({
   compact = false,
   modalLayout = false,
   onMessagesChange,
+  onMarkRead,
 }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +60,27 @@ export function ServiceMessagesPanel({
     onMessagesChange?.(messages);
   }, [messages, onMessagesChange]);
 
+  const markVisibleAsRead = useCallback(
+    (rows = messages) => {
+      if (!onMarkRead) return;
+      if (!rows.length) {
+        void onMarkRead();
+        return;
+      }
+      const last = rows[rows.length - 1];
+      void onMarkRead({
+        lastReadMessageId: last?.id ?? null,
+        lastReadAt: last?.created_at ?? new Date().toISOString(),
+      });
+    },
+    [messages, onMarkRead],
+  );
+
+  useEffect(() => {
+    if (loading) return;
+    markVisibleAsRead(messages);
+  }, [loading, messages, markVisibleAsRead]);
+
   const handleSend = async () => {
     const text = draft.trim();
     if (!text || sending) return;
@@ -71,7 +93,11 @@ export function ServiceMessagesPanel({
         senderRole,
         includeInCustomerReport: canMarkForCustomerReport && includeInReport,
       });
-      setMessages((prev) => [...prev, saved]);
+      setMessages((prev) => {
+        const next = [...prev, saved];
+        markVisibleAsRead(next);
+        return next;
+      });
       setDraft("");
       setIncludeInReport(false);
       showToast?.("Mensaje enviado", "#166534", 2200);

@@ -1957,7 +1957,7 @@ export function ActiveServicePanel({
                 unreadCount={messagesUnread.unread}
                 onChatClick={() => {
                   setChatModalOpen(true);
-                  messagesUnread.markRead();
+                  void messagesUnread.markRead();
                 }}
               />
             </DriverDemoSection>
@@ -2125,12 +2125,13 @@ export function ActiveServicePanel({
           open={chatModalOpen}
           onClose={() => {
             setChatModalOpen(false);
-            messagesUnread.markRead();
+            void messagesUnread.markRead();
             void messagesUnread.refresh();
           }}
           servicio={servicio}
           senderName={conductorNombre}
           showToast={showToast}
+          onMarkRead={messagesUnread.markRead}
         />
       </div>
     );

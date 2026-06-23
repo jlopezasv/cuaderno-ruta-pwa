@@ -1,4 +1,5 @@
 import { sbFetch, getAuthUid, ensureAuthAccessToken } from "../../data/supabaseClient.js";
+import { upsertServiceMessageReadReceipt } from "./serviceMessagesReadReceipts.js";
 
 function pushDebugWarn(label, payload) {
   if (typeof console !== "undefined") console.warn(`[service-messages] ${label}`, payload);
@@ -69,6 +70,13 @@ export async function createServiceMessage({
     senderUserId,
     senderName: body.sender_name,
     messagePreview: text.slice(0, 120),
+  });
+
+  void upsertServiceMessageReadReceipt({
+    servicioId,
+    userId: senderUserId,
+    lastReadAt: saved.created_at || new Date().toISOString(),
+    lastReadMessageId: saved.id,
   });
 
   return saved;
