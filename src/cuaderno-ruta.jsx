@@ -87,7 +87,8 @@ import {
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { MustChangePasswordGate } from "./features/auth/MustChangePasswordGate.jsx";
 import { ChangePasswordForm } from "./features/auth/ChangePasswordForm.jsx";
-import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
+import { bootstrapErrorMessage, BOOTSTRAP_ERRORS } from "./auth/officeBootstrap.js";
+import { fetchOfficeUserContextRest, fetchOfficeUserLinkRow } from "./domain/empresa/officeUserLinkage.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import {
   invalidateEmpresaRecordCache,
@@ -7854,6 +7855,7 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
   const[tipoCuenta,setTipoCuenta]=useState(tipoCuentaProp);
   const[empresa,setEmpresa]=useState(null);
   const[loading,setLoading]=useState(!tipoCuentaProp);
+  const[officeSatellite,setOfficeSatellite]=useState(false);
   const[creando,setCreando]=useState(false);
   const[nombre,setNombre]=useState("");
   const[cif,setCif]=useState("");
@@ -7874,14 +7876,31 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
       }).catch(()=>setLoading(false));
       return;
     }
-    sbSelect("profiles",`id=eq.${uid}`).then(rows=>{
+    sbSelect("profiles",`id=eq.${uid}`).then(async rows=>{
       const tc=rows[0]?.tipo_cuenta||ACCOUNT_TYPES.CONDUCTOR;
       setTipoCuenta(tc);
       if(tc==="empresa"){
-        sbSelect("empresas",`owner_id=eq.${uid}`).then(emps=>{
-          if(emps.length)setEmpresa(emps[0]);
-          setLoading(false);
-        }).catch(()=>setLoading(false));
+        const emps=await sbSelect("empresas",`owner_id=eq.${uid}`).catch(()=>[]);
+        if(emps.length){
+          setEmpresa(emps[0]);
+          setOfficeSatellite(false);
+        }else{
+          const officeCtx=getStoredAuthSession(uid)?.capabilities?.officeUser;
+          const linkEmpresaId=officeCtx?.empresaId||null;
+          let linkId=linkEmpresaId;
+          if(!linkId){
+            const link=await fetchOfficeUserLinkRow(uid);
+            linkId=link?.empresa_id||null;
+          }
+          if(linkId){
+            setOfficeSatellite(true);
+            const linked=await sbSelect("empresas",`id=eq.${linkId}`).catch(()=>[]);
+            if(linked[0])setEmpresa(linked[0]);
+          }else{
+            setOfficeSatellite(false);
+          }
+        }
+        setLoading(false);
       } else setLoading(false);
     }).catch(()=>{
       setTipoCuenta(ACCOUNT_TYPES.CONDUCTOR);
@@ -8013,6 +8032,10 @@ function EmpresaPerfilBlock({tipoCuentaProp=null}){
               QR invitar
             </button>
           </div>
+        </div>
+      ):officeSatellite&&!empresa?(
+        <div style={{fontSize:14,color:"#57534e",lineHeight:1.55,fontWeight:500}}>
+          {bootstrapErrorMessage(BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN)}
         </div>
       ):(
         <div>
@@ -13336,6 +13359,31 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       }
       const isEmpresaAccount=perfilesSelf[0]?.tipo_cuenta===ACCOUNT_TYPES.EMPRESA;
       if(isEmpresaAccount){
+        const ownerRows=await sbSelect("empresas",`owner_id=eq.${uid}&limit=1`).catch(()=>[]);
+        const isEmpresaOwner=!!ownerRows[0];
+        if(!isEmpresaOwner){
+          let officeResolved=getOfficeUserFromSession(uid);
+          if(!officeResolved?.activo||!officeResolved?.empresaId){
+            officeResolved=await fetchOfficeUserContextRest(uid);
+          }
+          if(officeResolved?.activo&&officeResolved?.empresaId){
+            const empOffice=await resolveCurrentEmpresaRecord(sbSelect,uid,officeResolved);
+            setEmpresa(empOffice||{id:officeResolved.empresaId,nombre:officeResolved.empresaNombre||"Empresa"});
+            setModo("jefe");
+            onRoleChange?.("jefe");
+            const rolOficina=String(officeResolved.rol||"").toLowerCase();
+            if(rolOficina!=="administrativo"){
+              await loadConductores(officeResolved.empresaId);
+            }else{
+              setLoading(false);
+            }
+            return;
+          }
+          const linkRow=await fetchOfficeUserLinkRow(uid);
+          setModo(linkRow&&!linkRow.activo?"office_sin_empresa":"office_link_broken");
+          setLoading(false);
+          return;
+        }
         setModo("crear_empresa");
         setLoading(false);
         return;
@@ -14399,7 +14447,16 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   if(modo==="office_sin_empresa")return(
     <div style={{padding:"40px 20px",textAlign:"center",background:bg,minHeight:"100vh"}}>
       <div style={{fontSize:16,fontWeight:700,color:tx,marginBottom:8}}>Usuario de oficina sin empresa asociada</div>
-      <div style={{fontSize:14,color:su}}>Contacta con el administrador de tu empresa.</div>
+      <div style={{fontSize:14,color:su}}>{bootstrapErrorMessage(BOOTSTRAP_ERRORS.OFFICE_INACTIVE)}</div>
+    </div>
+  );
+
+  if(modo==="office_link_broken")return(
+    <div style={{padding:"40px 20px",textAlign:"center",background:bg,minHeight:"100vh"}}>
+      <div style={{fontSize:16,fontWeight:700,color:tx,marginBottom:8}}>Vinculación de cuenta incompleta</div>
+      <div style={{fontSize:14,color:su,lineHeight:1.5,maxWidth:420,margin:"0 auto"}}>
+        {bootstrapErrorMessage(BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN)}
+      </div>
     </div>
   );
 

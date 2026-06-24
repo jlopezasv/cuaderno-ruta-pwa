@@ -1,21 +1,22 @@
 import { isSuperadminUser } from "../config/superadminUsers.js";
-import { getSession } from "../data/supabaseClient.js";
 import { isDemoApp, isProductionApp } from "../config/appEnvironment.js";
-import { ACCOUNT_TYPES, parseProfileAccount } from "./accountModel.js";
 import { getStoredAuthSession, persistAuthSession } from "../data/authContext.js";
 import { fetchActiveConductorEmpresaRows } from "../domain/empresa/conductorEmpresaLink.js";
-import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
-import { ensureAuthAccessToken } from "../data/supabaseClient.js";
+import { ensureAuthAccessToken, getSession } from "../data/supabaseClient.js";
 import {
+  ACCOUNT_TYPES,
   buildSessionCapabilities,
   deriveFeatureFlags,
   deriveShellCapabilities,
   isHybridCapabilities,
+  parseProfileAccount,
 } from "./accountModel.js";
+import { userIsEmpresaOwner } from "../domain/empresa/officeUserLinkage.js";
 import {
   BOOTSTRAP_ERRORS,
-  fetchOfficeUserContextRpc,
+  fetchOfficeUserContext,
 } from "./officeBootstrap.js";
+import { fetchOfficeUserLinkRow } from "../domain/empresa/officeUserLinkage.js";
 import { profileMustChangePassword } from "../domain/auth/mustChangePassword.js";
 
 export { isHybridCapabilities as isHybridAccount };
@@ -70,7 +71,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
   let officeUser =
     prefetched.officeUser !== undefined ? prefetched.officeUser : null;
   if (prefetched.officeUser === undefined) {
-    officeUser = await fetchOfficeUserContextRpc();
+    officeUser = await fetchOfficeUserContext(uid);
   }
 
   let hasFleetLink = prefetched.hasFleetLink;
@@ -105,6 +106,17 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     bootstrapError = BOOTSTRAP_ERRORS.NO_PROFILE;
   } else if (officeUser && !officeUser.activo) {
     bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
+  } else if (
+    account.accountType === ACCOUNT_TYPES.EMPRESA &&
+    !account.canDrive &&
+  !(await userIsEmpresaOwner(uid, sbSelect))
+  ) {
+    const linkRow = await fetchOfficeUserLinkRow(uid).catch(() => null);
+    if (!linkRow) {
+      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
+    } else if (!officeUser?.activo) {
+      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
+    }
   }
 
   const admin = isSuperadminUser(uid, getSession()?.user?.email);
@@ -159,7 +171,7 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
   const profiles = await sbSelect("profiles", `id=eq.${uid}`).catch(() => []);
   const profile = profiles[0] || null;
 
-  const officeUser = await fetchOfficeUserContextRpc();
+  const officeUser = await fetchOfficeUserContext(uid);
 
   let hasFleetLink;
   const account = parseProfileAccount(profile);

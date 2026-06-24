@@ -466,6 +466,47 @@ export function canManageEmpresaOfficeUsers(capabilities) {
   );
 }
 
+async function adminOfficeUserAction(action, body) {
+  const token = await ensureAuthAccessToken();
+  if (!token) {
+    throw new Error("Inicia sesión para gestionar usuarios de oficina");
+  }
+  const res = await fetch("/api/admin", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action, ...body }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Error al gestionar usuario (${res.status})`);
+  return data;
+}
+
+/** Diagnóstico auth + profiles + empresa_usuarios (owner / jefe_flota). */
+export async function diagnoseEmpresaOfficeUsers(empresaId) {
+  if (!empresaId) return [];
+  const data = await adminOfficeUserAction("diagnose_office_users", { empresa_id: empresaId });
+  return Array.isArray(data.users) ? data.users : [];
+}
+
+/** Repara profile y/o fila empresa_usuarios para un usuario oficina. */
+export function repairEmpresaOfficeUserLink(empresaId, userId) {
+  return adminOfficeUserAction("repair_office_user_link", {
+    empresa_id: empresaId,
+    user_id: userId,
+  });
+}
+
+/** Elimina definitivamente usuario oficina (solo superadmin). */
+export function purgeEmpresaOfficeUser(empresaId, userId) {
+  return adminOfficeUserAction("purge_office_user", {
+    empresa_id: empresaId,
+    user_id: userId,
+  });
+}
+
 /** Impide dejar la empresa sin ningún jefe_flota activo. */
 export function validateJefeFlotaGuard(users, targetId, patch) {
   const list = Array.isArray(users) ? users : [];

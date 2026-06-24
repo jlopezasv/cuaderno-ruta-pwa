@@ -1,10 +1,10 @@
 import { isDemoApp } from "../config/appEnvironment.js";
 import { sbFetch } from "../data/supabaseClient.js";
 import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
+import { fetchOfficeUserContextRest } from "../domain/empresa/officeUserLinkage.js";
 
-/** Una sola llamada RPC: contexto oficina del usuario autenticado. */
+/** RPC: contexto oficina del usuario autenticado (solo filas activas). */
 export async function fetchOfficeUserContextRpc() {
-  if (!isDemoApp()) return null;
   const res = await sbFetch("/rest/v1/rpc/get_current_office_user_context", {
     method: "POST",
     body: "{}",
@@ -26,10 +26,20 @@ export async function fetchOfficeUserContextRpc() {
   });
 }
 
+/** RPC primero; REST como fallback si la sesión no tiene contexto oficina. */
+export async function fetchOfficeUserContext(uid = null) {
+  const fromRpc = await fetchOfficeUserContextRpc();
+  if (fromRpc?.activo && fromRpc.empresaId) return fromRpc;
+  const fromRest = await fetchOfficeUserContextRest(uid);
+  if (fromRest?.activo && fromRest.empresaId) return fromRest;
+  return fromRpc || fromRest || null;
+}
+
 export const BOOTSTRAP_ERRORS = Object.freeze({
   NO_PROFILE: "NO_PROFILE",
   NO_EMPRESA_SHELL: "NO_EMPRESA_SHELL",
   OFFICE_INACTIVE: "OFFICE_INACTIVE",
+  OFFICE_LINK_BROKEN: "OFFICE_LINK_BROKEN",
 });
 
 export function bootstrapErrorMessage(code) {
@@ -42,6 +52,8 @@ export function bootstrapErrorMessage(code) {
       return "No tienes acceso al panel de empresa. Verifica tu cuenta de oficina.";
     case BOOTSTRAP_ERRORS.OFFICE_INACTIVE:
       return "Tu usuario de oficina está desactivado. Contacta con el jefe de flota.";
+    case BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN:
+      return "Tu cuenta de oficina no está vinculada correctamente a la empresa. Contacta con el jefe de flota o el administrador.";
     default:
       return "No se pudo iniciar la sesión de empresa.";
   }

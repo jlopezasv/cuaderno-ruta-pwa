@@ -4,6 +4,7 @@
 import { randomBytes } from "crypto";
 import { isDemoApp } from "./_lib/appEnvironment.js";
 import { getSupabaseServerEnv } from "./_lib/supabaseEnv.js";
+import { isSuperadminIdentity, supabaseAuthUser } from "./_lib/superadminAuth.js";
 
 const BREVO_KEY = process.env.BREVO_API_KEY;
 
@@ -174,6 +175,367 @@ async function authAdminDeleteUser(userId) {
     },
   );
   return r.ok || r.status === 404;
+}
+
+async function authAdminGetUser(userId) {
+  const r = await fetch(
+    `${sbServer().url}/auth/v1/admin/users/${encodeURIComponent(userId)}`,
+    { headers: srRestHeaders(false) },
+  );
+  if (!r.ok) return null;
+  return r.json().catch(() => null);
+}
+
+function evaluateOfficeUserLinkageServer({
+  userId,
+  email,
+  profile,
+  link,
+  authUser,
+  empresaId,
+}) {
+  const issues = [];
+  if (!userId) issues.push("Falta user_id");
+  if (!authUser) issues.push("Sin usuario Auth");
+  if (!profile) issues.push("Sin profile");
+  else if (String(profile.tipo_cuenta || "").toLowerCase() !== "empresa") {
+    issues.push(`profile.tipo_cuenta=${profile.tipo_cuenta || "—"}`);
+  }
+  if (!link) issues.push("Sin fila empresa_usuarios");
+  else if (empresaId && link.empresa_id && link.empresa_id !== empresaId) {
+    issues.push("empresa_id no coincide");
+  }
+  return {
+    status: issues.length ? "incomplete" : "ok",
+    issues,
+    userId: userId || link?.user_id || profile?.id || null,
+    email: email || link?.email || authUser?.email || null,
+    profileTipoCuenta: profile?.tipo_cuenta || null,
+    empresaId: link?.empresa_id || empresaId || null,
+    rol: link?.rol || null,
+    activo: link?.activo !== false,
+    hasAuth: !!authUser,
+    hasProfile: !!profile,
+    hasLink: !!link,
+  };
+}
+
+async function requireOfficeUserManager(req, empresaId) {
+  const authHeader = req.headers.authorization || req.headers.Authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return {
+      ok: false,
+      status: 401,
+      error: "Falta Authorization: Bearer",
+      code: "ADMIN_UNAUTHORIZED",
+    };
+  }
+  if (!empresaId || !UUID_RE.test(String(empresaId))) {
+    return {
+      ok: false,
+      status: 400,
+      error: "empresa_id UUID obligatorio",
+      code: "ADMIN_BAD_REQUEST",
+    };
+  }
+  if (!sbServer().serviceRoleKey) {
+    return {
+      ok: false,
+      status: 500,
+      error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY",
+      code: "CONFIG_MISSING_SERVICE_ROLE",
+    };
+  }
+  const authUid = await supabaseAuthUserId(token);
+  if (!authUid) {
+    return {
+      ok: false,
+      status: 401,
+      error: "Sesión inválida o expirada",
+      code: "ADMIN_UNAUTHORIZED",
+    };
+  }
+  const perm = await callerCanManageEmpresaUsuarios(authUid, empresaId);
+  if (!perm.ok) {
+    return {
+      ok: false,
+      status: 502,
+      error: perm.error || "No se pudo verificar permisos",
+      code: "ADMIN_PERMISSION_CHECK_FAILED",
+    };
+  }
+  if (!perm.allowed) {
+    return {
+      ok: false,
+      status: 403,
+      error: "No autorizado para gestionar usuarios de esta empresa",
+      code: "ADMIN_FORBIDDEN",
+    };
+  }
+  return { ok: true, authUid, token };
+}
+
+async function handleDiagnoseOfficeUsers(req, res) {
+  const { empresa_id } = req.body || {};
+  const auth = await requireOfficeUserManager(req, empresa_id);
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+      code: auth.code,
+    });
+  }
+
+  const links = await restSelect(
+    `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresa_id)}&select=id,empresa_id,user_id,nombre,email,rol,puede_ver_todos,activo,created_at&order=created_at.asc`,
+  );
+
+  const users = [];
+  for (const link of links) {
+    const userId = link.user_id;
+    const authUser = userId ? await authAdminGetUser(userId) : null;
+    const profiles = userId
+      ? await restSelect(
+          `profiles?id=eq.${encodeURIComponent(userId)}&select=id,tipo_cuenta,can_drive,nombre`,
+        )
+      : [];
+    const profile = profiles[0] || null;
+    const diagnosis = evaluateOfficeUserLinkageServer({
+      userId,
+      email: link.email,
+      profile,
+      link,
+      authUser,
+      empresaId: empresa_id,
+    });
+    users.push({
+      ...diagnosis,
+      empresaUsuarioId: link.id,
+      nombre: link.nombre || profile?.nombre || authUser?.user_metadata?.nombre || "",
+    });
+  }
+
+  return res.json({ ok: true, users });
+}
+
+async function handleRepairOfficeUserLink(req, res) {
+  const body = req.body || {};
+  const { empresa_id, user_id, nombre, email, rol } = body;
+  const auth = await requireOfficeUserManager(req, empresa_id);
+  if (!auth.ok) {
+    return res.status(auth.status).json({
+      ok: false,
+      error: auth.error,
+      code: auth.code,
+    });
+  }
+  if (!user_id || !UUID_RE.test(String(user_id))) {
+    return res.status(400).json({
+      ok: false,
+      error: "user_id UUID obligatorio",
+      code: "ADMIN_BAD_REQUEST",
+    });
+  }
+
+  const emps = await restSelect(
+    `empresas?id=eq.${encodeURIComponent(empresa_id)}&select=id,owner_id`,
+  );
+  if (emps[0]?.owner_id === user_id) {
+    return res.status(400).json({
+      ok: false,
+      error: "No se puede reparar el owner principal de la empresa",
+      code: "ADMIN_FORBIDDEN",
+    });
+  }
+
+  const authUser = await authAdminGetUser(user_id);
+  if (!authUser) {
+    return res.status(404).json({
+      ok: false,
+      error: "Usuario Auth no encontrado",
+      code: "ADMIN_NOT_FOUND",
+    });
+  }
+
+  const existingLinks = await restSelect(
+    `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresa_id)}&user_id=eq.${encodeURIComponent(user_id)}&select=id,rol,activo,nombre,email&limit=1`,
+  );
+  const existingLink = existingLinks[0] || null;
+
+  const allowedRoles = ["jefe_flota", "trafico", "administrativo"];
+  const normalizedRol = allowedRoles.includes(String(rol || existingLink?.rol || "trafico").trim().toLowerCase())
+    ? String(rol || existingLink?.rol || "trafico").trim().toLowerCase()
+    : "trafico";
+
+  const emailNorm = String(email || existingLink?.email || authUser.email || "")
+    .trim()
+    .toLowerCase();
+  const nombreNorm =
+    String(nombre || existingLink?.nombre || authUser.user_metadata?.nombre || "")
+      .trim() || emailNorm;
+
+  const profUpsert = await restUpsert("profiles", {
+    id: user_id,
+    nombre: nombreNorm,
+    tipo_cuenta: "empresa",
+    can_drive: false,
+  });
+  if (!profUpsert.ok) {
+    const errMsg = supabaseErrorMessage(profUpsert.detail) || "No se pudo reparar el perfil";
+    return res.status(502).json({
+      ok: false,
+      error: errMsg,
+      code: "ADMIN_SUPABASE_ERROR",
+      details: profUpsert.detail,
+    });
+  }
+
+  const euUpsert = await restUpsert("empresa_usuarios", {
+    empresa_id,
+    user_id,
+    nombre: nombreNorm,
+    email: emailNorm,
+    rol: normalizedRol,
+    activo: existingLink?.activo !== false,
+    puede_ver_todos: false,
+  });
+  if (!euUpsert.ok) {
+    const errMsg =
+      supabaseErrorMessage(euUpsert.detail) || "No se pudo reparar empresa_usuarios";
+    return res.status(502).json({
+      ok: false,
+      error: errMsg,
+      code: "ADMIN_SUPABASE_ERROR",
+      details: euUpsert.detail,
+    });
+  }
+
+  const row = Array.isArray(euUpsert.data) ? euUpsert.data[0] : euUpsert.data;
+  const profile = (
+    await restSelect(
+      `profiles?id=eq.${encodeURIComponent(user_id)}&select=id,tipo_cuenta,can_drive,nombre`,
+    )
+  )[0];
+
+  const diagnosis = evaluateOfficeUserLinkageServer({
+    userId: user_id,
+    email: emailNorm,
+    profile,
+    link: row || existingLink,
+    authUser,
+    empresaId: empresa_id,
+  });
+
+  return res.json({
+    ok: true,
+    user_id,
+    empresa_usuario: row,
+    diagnosis,
+    message: "Vínculo reparado",
+  });
+}
+
+async function handlePurgeOfficeUser(req, res) {
+  const { empresa_id, user_id } = req.body || {};
+  const authHeader = req.headers.authorization || req.headers.Authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({
+      ok: false,
+      error: "Falta Authorization: Bearer",
+      code: "ADMIN_UNAUTHORIZED",
+    });
+  }
+  if (!sbServer().serviceRoleKey) {
+    return res.status(500).json({
+      ok: false,
+      error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY",
+      code: "CONFIG_MISSING_SERVICE_ROLE",
+    });
+  }
+  if (!empresa_id || !UUID_RE.test(String(empresa_id))) {
+    return res.status(400).json({
+      ok: false,
+      error: "empresa_id UUID obligatorio",
+      code: "ADMIN_BAD_REQUEST",
+    });
+  }
+  if (!user_id || !UUID_RE.test(String(user_id))) {
+    return res.status(400).json({
+      ok: false,
+      error: "user_id UUID obligatorio",
+      code: "ADMIN_BAD_REQUEST",
+    });
+  }
+
+  const caller = await supabaseAuthUser(token);
+  if (!caller?.id) {
+    return res.status(401).json({
+      ok: false,
+      error: "Sesión inválida o expirada",
+      code: "ADMIN_UNAUTHORIZED",
+    });
+  }
+  if (!isSuperadminIdentity({ uid: caller.id, email: caller.email })) {
+    return res.status(403).json({
+      ok: false,
+      error: "Solo superadmin puede eliminar usuarios de oficina definitivamente",
+      code: "ADMIN_FORBIDDEN",
+    });
+  }
+  if (caller.id === user_id) {
+    return res.status(400).json({
+      ok: false,
+      error: "No puedes eliminar tu propio usuario",
+      code: "ADMIN_BAD_REQUEST",
+    });
+  }
+
+  const emps = await restSelect(
+    `empresas?id=eq.${encodeURIComponent(empresa_id)}&select=id,owner_id`,
+  );
+  if (!emps.length) {
+    return res.status(404).json({
+      ok: false,
+      error: "Empresa no encontrada",
+      code: "ADMIN_NOT_FOUND",
+    });
+  }
+  if (emps[0].owner_id === user_id) {
+    return res.status(400).json({
+      ok: false,
+      error: "No se puede eliminar el owner principal de la empresa",
+      code: "ADMIN_FORBIDDEN",
+    });
+  }
+
+  await restDelete(
+    `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresa_id)}&user_id=eq.${encodeURIComponent(user_id)}`,
+  );
+
+  const ownerElsewhere = await restSelect(
+    `empresas?owner_id=eq.${encodeURIComponent(user_id)}&select=id&limit=1`,
+  );
+  if (!ownerElsewhere.length) {
+    const profiles = await restSelect(
+      `profiles?id=eq.${encodeURIComponent(user_id)}&select=id,tipo_cuenta`,
+    );
+    const profile = profiles[0];
+    if (profile && String(profile.tipo_cuenta || "").toLowerCase() === "empresa") {
+      await restDelete(`profiles?id=eq.${encodeURIComponent(user_id)}`);
+    }
+  }
+
+  await authAdminDeleteUser(user_id);
+
+  return res.json({
+    ok: true,
+    purged: true,
+    user_id,
+    empresa_id,
+    message: "Usuario de oficina eliminado definitivamente",
+  });
 }
 
 /** Contraseña temporal fija solo en entorno DEMO. */
@@ -998,6 +1360,17 @@ export default async function handler(req, res) {
       });
     }
     return res.json({ ok: true, ...pr });
+  }
+
+  // ── Diagnóstico / reparación / purga usuarios oficina ──
+  if (action === "diagnose_office_users") {
+    return handleDiagnoseOfficeUsers(req, res);
+  }
+  if (action === "repair_office_user_link") {
+    return handleRepairOfficeUserLink(req, res);
+  }
+  if (action === "purge_office_user") {
+    return handlePurgeOfficeUser(req, res);
   }
 
   // ── Crear usuario oficina (service_role; jefe_flota / owner) ──

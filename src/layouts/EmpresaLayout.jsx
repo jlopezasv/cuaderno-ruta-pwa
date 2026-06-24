@@ -218,7 +218,7 @@ export default function EmpresaLayout({
     );
   }
 
-  if (isDemoApp() && bootstrapError) {
+  if (bootstrapError) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f1f5f9", padding: 24 }}>
         <div style={{ maxWidth: 420, background: "#fff", border: "1px solid #dbe4ee", borderRadius: 16, padding: 28, textAlign: "center" }}>

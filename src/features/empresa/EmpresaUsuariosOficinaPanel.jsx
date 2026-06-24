@@ -5,15 +5,24 @@ import {
   buildOfficeUserRow,
   canManageEmpresaOfficeUsers,
   createEmpresaOfficeUser,
+  diagnoseEmpresaOfficeUsers,
   fetchEmpresaOfficeUsers,
   invalidateEmpresaOfficeUsersCache,
   mergeOfficeUserLists,
+  purgeEmpresaOfficeUser,
+  repairEmpresaOfficeUserLink,
   resolveEmpresaOfficeUsersTenantId,
   officeUserRoleLabel,
   patchEmpresaOfficeUser,
   setEmpresaOfficeUserActivo,
   validateJefeFlotaGuard,
 } from "../../domain/empresa/empresaOfficeUsers.js";
+import {
+  OFFICE_LINK_STATUS,
+  officeLinkStatusLabel,
+} from "../../domain/empresa/officeUserLinkageModel.js";
+import { isSuperadminUser } from "../../config/superadminUsers.js";
+import { getSession } from "../../data/supabaseClient.js";
 import { getStoredAuthSession } from "../../data/authContext.js";
 import { ConfigCard, CONFIG_UI, configBtnPrimary, configBtnSecondary } from "./empresaConfigCards.jsx";
 
@@ -325,38 +334,78 @@ function OfficeUserCredentialsModal({ nombre, email, password, onClose, showToas
   );
 }
 
-function UserCard({ user, canManage, onEdit, onDeactivate, showToast }) {
+function UserCard({
+  user,
+  diagnosis,
+  canManage,
+  canPurge,
+  onEdit,
+  onDeactivate,
+  onReactivate,
+  onRepair,
+  onPurge,
+  showToast,
+  repairing,
+  purging,
+}) {
   const isAdmin = user.rol === "administrativo";
+  const linkStatus = diagnosis?.status || OFFICE_LINK_STATUS.OK;
+  const isIncomplete = linkStatus === OFFICE_LINK_STATUS.INCOMPLETE;
+  const diagRows = diagnosis
+    ? [
+        ["user_id", diagnosis.userId || user.userId || "—"],
+        ["email", diagnosis.email || user.email || "—"],
+        ["tipo_cuenta", diagnosis.profileTipoCuenta || "—"],
+        ["empresa_id", diagnosis.empresaId || user.empresaId || "—"],
+        ["rol", officeUserRoleLabel(diagnosis.rol || user.rol)],
+        ["activo", diagnosis.activo !== false && user.activo !== false ? "sí" : "no"],
+      ]
+    : [];
 
   return (
     <div
       style={{
-        border: `1px solid ${CONFIG_UI.border}`,
+        border: `1px solid ${isIncomplete ? "#fecaca" : CONFIG_UI.border}`,
         borderRadius: 12,
         padding: "12px 14px",
-        background: CONFIG_UI.surfaceSoft,
+        background: isIncomplete ? "#fffbfb" : CONFIG_UI.surfaceSoft,
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 750, color: CONFIG_UI.tx }}>{user.nombre || "—"}</div>
           <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginTop: 2, wordBreak: "break-all" }}>
-            {user.email || "—"}
+            {user.email || diagnosis?.email || "—"}
           </div>
         </div>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "3px 8px",
-            borderRadius: 999,
-            background: user.activo ? "#dcfce7" : "#f1f5f9",
-            color: user.activo ? CONFIG_UI.green : CONFIG_UI.muted,
-            flexShrink: 0,
-          }}
-        >
-          {user.activo ? "Activo" : "Inactivo"}
-        </span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "3px 8px",
+              borderRadius: 999,
+              background: user.activo ? "#dcfce7" : "#f1f5f9",
+              color: user.activo ? CONFIG_UI.green : CONFIG_UI.muted,
+            }}
+          >
+            {user.activo ? "Activo" : "Inactivo"}
+          </span>
+          {diagnosis ? (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "2px 7px",
+                borderRadius: 999,
+                background: isIncomplete ? "#fee2e2" : "#ecfdf5",
+                color: isIncomplete ? CONFIG_UI.red : CONFIG_UI.green,
+              }}
+            >
+              {officeLinkStatusLabel(linkStatus)}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div
@@ -379,23 +428,85 @@ function UserCard({ user, canManage, onEdit, onDeactivate, showToast }) {
         </div>
       </div>
 
+      {diagRows.length ? (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: "#f8fafc",
+            border: `1px solid ${CONFIG_UI.border}`,
+            fontSize: 10,
+            lineHeight: 1.5,
+            color: CONFIG_UI.muted,
+            wordBreak: "break-all",
+          }}
+        >
+          {diagRows.map(([k, v]) => (
+            <div key={k}>
+              <span style={{ fontWeight: 700 }}>{k}: </span>
+              {v}
+            </div>
+          ))}
+          {isIncomplete && diagnosis?.issues?.length ? (
+            <div style={{ marginTop: 6, color: CONFIG_UI.red, fontWeight: 600 }}>
+              {diagnosis.issues.join(" · ")}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {canManage ? (
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button type="button" onClick={() => onEdit(user)} style={{ ...configBtnSecondary(), flex: 1 }}>
-            Editar
-          </button>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          {isIncomplete ? (
+            <button
+              type="button"
+              disabled={repairing}
+              onClick={() => onRepair(user)}
+              style={{ ...configBtnPrimary(false), flex: "1 1 120px" }}
+            >
+              {repairing ? "Reparando…" : "Reparar vínculo"}
+            </button>
+          ) : (
+            <button type="button" onClick={() => onEdit(user)} style={{ ...configBtnSecondary(), flex: "1 1 100px" }}>
+              Editar
+            </button>
+          )}
           {user.activo ? (
             <button
               type="button"
               onClick={() => onDeactivate(user)}
               style={{
                 ...configBtnSecondary(),
-                flex: 1,
+                flex: "1 1 100px",
                 color: CONFIG_UI.red,
                 borderColor: "#fecaca",
               }}
             >
               Desactivar
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onReactivate(user)}
+              style={{ ...configBtnSecondary(), flex: "1 1 100px" }}
+            >
+              Reactivar
+            </button>
+          )}
+          {canPurge ? (
+            <button
+              type="button"
+              disabled={purging}
+              onClick={() => onPurge(user)}
+              style={{
+                ...configBtnSecondary(),
+                flex: "1 1 100%",
+                color: CONFIG_UI.red,
+                borderColor: "#fecaca",
+              }}
+            >
+              {purging ? "Eliminando…" : "Eliminar definitivamente"}
             </button>
           ) : null}
         </div>
@@ -432,11 +543,16 @@ export function EmpresaUsuariosOficinaPanel({
   const [modalError, setModalError] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [loadDebug, setLoadDebug] = useState(null);
+  const [diagnoses, setDiagnoses] = useState({});
+  const [repairingId, setRepairingId] = useState(null);
+  const [purgingId, setPurgingId] = useState(null);
   const uid = getUserId?.() || null;
   const caps = getStoredAuthSession(uid)?.capabilities;
   const sessionOffice = caps?.officeUser || officeUser || null;
   const tenantEmpresaId = resolveEmpresaOfficeUsersTenantId(empresaId, sessionOffice);
   const canManage = canManageEmpresaOfficeUsers(caps);
+  const sessionEmail = getSession()?.user?.email || null;
+  const canPurge = isSuperadminUser(uid, sessionEmail);
 
   const reload = useCallback(async () => {
     if (!tenantEmpresaId) {
@@ -486,6 +602,16 @@ export function EmpresaUsuariosOficinaPanel({
         setUsers(rows);
         setLoadError(null);
         setLoadDebug(null);
+        try {
+          const diagRows = await diagnoseEmpresaOfficeUsers(tenantEmpresaId);
+          const byUser = {};
+          for (const d of diagRows) {
+            if (d?.userId) byUser[d.userId] = d;
+          }
+          setDiagnoses(byUser);
+        } catch (diagErr) {
+          if (isDemoApp()) console.warn("[DEMO officeUsers] diagnose failed", diagErr);
+        }
       } else {
         setLoadError(result?.error || "No se pudieron cargar usuarios de oficina");
         setLoadDebug(
@@ -628,6 +754,52 @@ export function EmpresaUsuariosOficinaPanel({
       .catch((e) => showToast?.(e.message));
   }
 
+  function handleReactivate(user) {
+    setEmpresaOfficeUserActivo(user.id, true)
+      .then(() => {
+        invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
+        setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, activo: true } : u)));
+        showToast?.("Usuario reactivado");
+      })
+      .catch((e) => showToast?.(e.message));
+  }
+
+  async function handleRepair(user) {
+    if (!tenantEmpresaId || !user?.userId) return;
+    setRepairingId(user.userId);
+    try {
+      await repairEmpresaOfficeUserLink(tenantEmpresaId, user.userId);
+      invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
+      showToast?.("Vínculo reparado");
+      await reload();
+    } catch (e) {
+      showToast?.(e.message || "No se pudo reparar el vínculo");
+    }
+    setRepairingId(null);
+  }
+
+  async function handlePurge(user) {
+    if (!tenantEmpresaId || !user?.userId) return;
+    if (user.userId === uid) {
+      showToast?.("No puedes eliminar tu propio usuario");
+      return;
+    }
+    const ok = window.confirm(
+      `¿Eliminar definitivamente a ${user.nombre || user.email}? Se borrarán Auth, profile y vínculo. Los servicios históricos no se modifican.`,
+    );
+    if (!ok) return;
+    setPurgingId(user.userId);
+    try {
+      await purgeEmpresaOfficeUser(tenantEmpresaId, user.userId);
+      invalidateEmpresaOfficeUsersCache(tenantEmpresaId);
+      showToast?.("Usuario eliminado definitivamente");
+      await reload();
+    } catch (e) {
+      showToast?.(e.message || "No se pudo eliminar el usuario");
+    }
+    setPurgingId(null);
+  }
+
   const body = (
     <>
       {canManage && isDemoApp() ? <DemoOfficePasswordPill /> : null}
@@ -693,13 +865,20 @@ export function EmpresaUsuariosOficinaPanel({
             <UserCard
               key={u.id || u.userId}
               user={u}
+              diagnosis={diagnoses[u.userId] || null}
               canManage={canManage}
+              canPurge={canPurge}
               onEdit={(user) => {
                 setModalError("");
                 setModal({ mode: "edit", user });
               }}
               onDeactivate={handleDeactivate}
+              onReactivate={handleReactivate}
+              onRepair={handleRepair}
+              onPurge={handlePurge}
               showToast={showToast}
+              repairing={repairingId === u.userId}
+              purging={purgingId === u.userId}
             />
           ))}
         </div>
