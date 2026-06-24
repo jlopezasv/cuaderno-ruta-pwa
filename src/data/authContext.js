@@ -38,6 +38,7 @@ function normalizeCapabilities(caps = {}) {
     empresaStatus: caps.empresaStatus ?? null,
     officeUser: normalizeOfficeUser(caps.officeUser),
     bootstrapError: caps.bootstrapError ?? null,
+    mustChangePassword: caps.mustChangePassword === true,
     features,
   };
 }

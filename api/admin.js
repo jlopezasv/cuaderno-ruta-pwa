@@ -493,6 +493,7 @@ async function handleCreateOfficeUser(req, res, action) {
       nombre: nombreNorm,
       tipo_cuenta: "empresa",
       can_drive: false,
+      must_change_password: true,
     });
     if (!profUpsert.ok) {
       if (authResolved.authCreated) await authAdminDeleteUser(newUid);

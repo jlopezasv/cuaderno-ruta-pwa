@@ -85,6 +85,8 @@ import {
   normalizeActiveMode,
 } from "./data/authContext";
 import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
+import { MustChangePasswordGate } from "./features/auth/MustChangePasswordGate.jsx";
+import { ChangePasswordForm } from "./features/auth/ChangePasswordForm.jsx";
 import { bootstrapErrorMessage } from "./auth/officeBootstrap.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import {
@@ -7545,35 +7547,20 @@ function BorrarTodo({db,prof,showToast,embedded=false}){
 
 function CambiarPassword({embedded=false}){
   const[open,setOpen]=useState(false);
-  const[passCurrent,setPassCurrent]=useState("");
-  const[pass1,setPass1]=useState("");
-  const[pass2,setPass2]=useState("");
-  const[loading,setLoading]=useState(false);
-  const[msg,setMsg]=useState("");
+  const[done,setDone]=useState(false);
 
-  async function cambiar(){
-    if(!passCurrent){setMsg("❌ Indica la contraseña actual");return;}
-    if(!pass1||pass1.length<6){setMsg("❌ La nueva contraseña debe tener al menos 6 caracteres");return;}
-    if(pass1!==pass2){setMsg("❌ Las contraseñas nuevas no coinciden");return;}
-    if(passCurrent===pass1){setMsg("❌ La nueva contraseña debe ser distinta de la actual");return;}
-    setLoading(true);setMsg("");
-    try{
-      const session=getSession();
-      const email=session?.user?.email||session?.user?.user_metadata?.email||"";
-      await sbChangePasswordWithVerification({
-        email,
-        currentPassword: passCurrent,
-        newPassword: pass1,
-        accessToken: session?.access_token,
-      });
-      setMsg("✅ Contraseña cambiada correctamente");
-      setPassCurrent("");setPass1("");setPass2("");
-      setTimeout(()=>{setOpen(false);setMsg("");},2000);
-    }catch(e){setMsg("❌ "+(e?.message||String(e)));}
-    setLoading(false);
+  async function cambiar({currentPassword,newPassword}){
+    const session=getSession();
+    const email=session?.user?.email||session?.user?.user_metadata?.email||"";
+    await sbChangePasswordWithVerification({
+      email,
+      currentPassword,
+      newPassword,
+      accessToken:session?.access_token,
+    });
+    setDone(true);
+    setTimeout(()=>{setOpen(false);setDone(false);},2000);
   }
-
-  const inS={width:"100%",background:"#F8FAFC",border:"1.5px solid #334155",borderRadius:9,padding:"11px 13px",fontSize:15,color:"#0F172A",outline:"none",marginBottom:10};
 
   return(
     <div style={embedded?{}:{marginTop:14,borderTop:"1px solid #E2E8F0",paddingTop:14}}>
@@ -7584,16 +7571,16 @@ function CambiarPassword({embedded=false}){
       ):(
         <div>
           {!embedded&&<div style={{fontSize:13,fontWeight:700,color:"#0F172A",marginBottom:10}}>🔑 CAMBIAR CONTRASEÑA</div>}
-          <input type="password" value={passCurrent} onChange={e=>setPassCurrent(e.target.value)} placeholder="Contraseña actual" style={inS} autoComplete="current-password"/>
-          <input type="password" value={pass1} onChange={e=>setPass1(e.target.value)} placeholder="Nueva contraseña (mín. 6 caracteres)" style={inS} autoComplete="new-password"/>
-          <input type="password" value={pass2} onChange={e=>setPass2(e.target.value)} placeholder="Confirmar nueva contraseña" style={inS} autoComplete="new-password"/>
-          {msg&&<div style={{fontSize:13,color:msg.startsWith("✅")?"#166534":"#DC2626",marginBottom:10}}>{msg}</div>}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <button onClick={()=>{setOpen(false);setPassCurrent("");setPass1("");setPass2("");setMsg("");}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:9,padding:"11px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
-            <button onClick={cambiar} disabled={loading} style={{background:loading?"#94A3B8":"#0F172A",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
-              {loading?"⏳ Guardando...":"✓ Cambiar"}
-            </button>
-          </div>
+          <ChangePasswordForm
+            requireCurrent
+            showCancel
+            submitLabel="✓ Cambiar"
+            onCancel={()=>{setOpen(false);setDone(false);}}
+            onSubmit={cambiar}
+          />
+          {done?(
+            <div style={{fontSize:13,color:"#166534",marginTop:8}}>✅ Contraseña cambiada correctamente</div>
+          ):null}
         </div>
       )}
     </div>
@@ -19176,13 +19163,15 @@ export default function App(){
   const[checking,setChecking]=useState(true);
   const[pendingBlocked,setPendingBlocked]=useState(false);
   const[pendingStatus,setPendingStatus]=useState(null);
+  const[mustChangePassword,setMustChangePassword]=useState(false);
 
   useEffect(()=>{
     const uid=getUserId();
     if(!uid){setChecking(false);return;}
     bootstrapAuthSession(uid,sbSelect)
-      .then(({activeMode:mode,account,capabilities})=>{
+      .then(({activeMode:mode,account,capabilities,mustChangePassword:mustChange})=>{
         const shells={conductor:!!capabilities?.conductor,empresa:!!capabilities?.empresa};
+        setMustChangePassword(!!mustChange||!!capabilities?.mustChangePassword);
         setPendingBlocked(isEmpresaPendingBlocked(account,shells));
         setPendingStatus(account?.empresaStatus||null);
         setActiveMode(mode);
@@ -19199,6 +19188,19 @@ export default function App(){
       <div style={{fontSize:14,color:"#64748B"}}>Cargando...</div>
     </div>
   );
+
+  if(mustChangePassword&&getUserId()){
+    return (
+      <MustChangePasswordGate
+        onComplete={async()=>{
+          const uid=getUserId();
+          if(uid) await bootstrapAuthSession(uid,sbSelect);
+          window.location.reload();
+        }}
+        onSignOut={async()=>{await sbSignOut();window.location.reload();}}
+      />
+    );
+  }
 
   if(pendingBlocked){
     return (

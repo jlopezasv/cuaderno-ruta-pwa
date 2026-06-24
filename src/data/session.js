@@ -12,6 +12,8 @@ import { demoDevError, demoDevLog, demoDevWarn, isDemoDevUnlocked } from "../lib
 
 
 
+import { clearMustChangePasswordProfile } from "../domain/auth/mustChangePassword.js";
+
 export { getSession, getUserId } from "./supabaseClient";
 
 
@@ -284,6 +286,25 @@ export async function changePasswordWithVerification({ email, currentPassword, n
   }
 
   return updateData;
+}
+
+
+
+/** Cambio obligatorio tras contraseña temporal: Auth + quitar flag en profiles. */
+export async function completeMandatoryPasswordChange({
+  email,
+  currentPassword,
+  newPassword,
+  userId,
+  accessToken,
+}) {
+  await changePasswordWithVerification({
+    email,
+    currentPassword,
+    newPassword,
+    accessToken,
+  });
+  await clearMustChangePasswordProfile(userId);
 }
 
 

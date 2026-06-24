@@ -16,6 +16,7 @@ import {
   BOOTSTRAP_ERRORS,
   fetchOfficeUserContextRpc,
 } from "./officeBootstrap.js";
+import { profileMustChangePassword } from "../domain/auth/mustChangePassword.js";
 
 export { isHybridCapabilities as isHybridAccount };
 
@@ -53,6 +54,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
       activeMode: "propietario",
       officeUser: null,
       bootstrapError: null,
+      mustChangePassword: profileMustChangePassword(profile),
       features: {},
     });
   }
@@ -114,6 +116,7 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     activeMode: "conductor",
     officeUser,
     bootstrapError,
+    mustChangePassword: profileMustChangePassword(profile),
     features: deriveFeatureFlags(account, "conductor", { isDemo, officeUser }),
   });
 }
@@ -146,6 +149,7 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
       activeMode: "propietario",
       officeUser: null,
       bootstrapError: null,
+      mustChangePassword: profileMustChangePassword(profile),
       features: {},
     });
     persistAuthSession({ uid, activeMode: "propietario", capabilities });
@@ -199,9 +203,15 @@ export async function bootstrapAuthSession(uid, sbSelect, options = {}) {
     officeUser: base.officeUser || null,
   });
 
-  const capabilities = { ...base, features };
+  const capabilities = { ...base, features, mustChangePassword: !!base.mustChangePassword };
 
   persistAuthSession({ uid, activeMode, capabilities });
 
-  return { capabilities, activeMode, account, officeUser: base.officeUser || null };
+  return {
+    capabilities,
+    activeMode,
+    account,
+    officeUser: base.officeUser || null,
+    mustChangePassword: !!base.mustChangePassword,
+  };
 }

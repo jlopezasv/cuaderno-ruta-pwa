@@ -128,6 +128,7 @@ export function buildSessionCapabilities({
   features,
   officeUser,
   bootstrapError,
+  mustChangePassword = false,
 }) {
   return {
     conductor: !!shells.conductor,
@@ -137,6 +138,7 @@ export function buildSessionCapabilities({
     empresaStatus: account.empresaStatus,
     officeUser: officeUser || null,
     bootstrapError: bootstrapError || null,
+    mustChangePassword: !!mustChangePassword,
     features: features || deriveFeatureFlags(account, activeMode, { officeUser }),
   };
 }
