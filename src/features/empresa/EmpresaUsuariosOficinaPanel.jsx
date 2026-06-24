@@ -339,19 +339,20 @@ function UserCard({
   diagnosis,
   canManage,
   canPurge,
+  canSeeTechDiag,
   onEdit,
   onDeactivate,
   onReactivate,
   onRepair,
   onPurge,
-  showToast,
   repairing,
   purging,
 }) {
+  const [techOpen, setTechOpen] = useState(false);
   const isAdmin = user.rol === "administrativo";
   const linkStatus = diagnosis?.status || OFFICE_LINK_STATUS.OK;
   const isIncomplete = linkStatus === OFFICE_LINK_STATUS.INCOMPLETE;
-  const diagRows = diagnosis
+  const techRows = diagnosis
     ? [
         ["user_id", diagnosis.userId || user.userId || "—"],
         ["email", diagnosis.email || user.email || "—"],
@@ -359,6 +360,9 @@ function UserCard({
         ["empresa_id", diagnosis.empresaId || user.empresaId || "—"],
         ["rol", officeUserRoleLabel(diagnosis.rol || user.rol)],
         ["activo", diagnosis.activo !== false && user.activo !== false ? "sí" : "no"],
+        ["auth", diagnosis.hasAuth === false ? "no" : "sí"],
+        ["profile", diagnosis.hasProfile === false ? "no" : "sí"],
+        ["empresa_usuarios", diagnosis.hasLink === false ? "no" : "sí"],
       ]
     : [];
 
@@ -375,37 +379,22 @@ function UserCard({
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 750, color: CONFIG_UI.tx }}>{user.nombre || "—"}</div>
           <div style={{ fontSize: 12, color: CONFIG_UI.muted, marginTop: 2, wordBreak: "break-all" }}>
-            {user.email || diagnosis?.email || "—"}
+            {user.email || "—"}
           </div>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              padding: "3px 8px",
-              borderRadius: 999,
-              background: user.activo ? "#dcfce7" : "#f1f5f9",
-              color: user.activo ? CONFIG_UI.green : CONFIG_UI.muted,
-            }}
-          >
-            {user.activo ? "Activo" : "Inactivo"}
-          </span>
-          {diagnosis ? (
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                padding: "2px 7px",
-                borderRadius: 999,
-                background: isIncomplete ? "#fee2e2" : "#ecfdf5",
-                color: isIncomplete ? CONFIG_UI.red : CONFIG_UI.green,
-              }}
-            >
-              {officeLinkStatusLabel(linkStatus)}
-            </span>
-          ) : null}
-        </div>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            padding: "3px 8px",
+            borderRadius: 999,
+            background: user.activo ? "#dcfce7" : "#f1f5f9",
+            color: user.activo ? CONFIG_UI.green : CONFIG_UI.muted,
+            flexShrink: 0,
+          }}
+        >
+          {user.activo ? "Activo" : "Inactivo"}
+        </span>
       </div>
 
       <div
@@ -423,34 +412,51 @@ function UserCard({
           {officeUserRoleLabel(user.rol)}
         </div>
         <div>
-          <span style={{ fontWeight: 700 }}>Ver todos: </span>
+          <span style={{ fontWeight: 700 }}>Todos los servicios: </span>
           {isAdmin ? "No aplica" : user.puedeVerTodos ? "Sí" : "No"}
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <span style={{ fontWeight: 700 }}>Vinculación: </span>
+          <span style={{ color: isIncomplete ? CONFIG_UI.red : CONFIG_UI.green, fontWeight: 650 }}>
+            {officeLinkStatusLabel(linkStatus)}
+          </span>
         </div>
       </div>
 
-      {diagRows.length ? (
-        <div
-          style={{
-            marginTop: 10,
-            padding: "8px 10px",
-            borderRadius: 8,
-            background: "#f8fafc",
-            border: `1px solid ${CONFIG_UI.border}`,
-            fontSize: 10,
-            lineHeight: 1.5,
-            color: CONFIG_UI.muted,
-            wordBreak: "break-all",
-          }}
-        >
-          {diagRows.map(([k, v]) => (
-            <div key={k}>
-              <span style={{ fontWeight: 700 }}>{k}: </span>
-              {v}
-            </div>
-          ))}
-          {isIncomplete && diagnosis?.issues?.length ? (
-            <div style={{ marginTop: 6, color: CONFIG_UI.red, fontWeight: 600 }}>
-              {diagnosis.issues.join(" · ")}
+      {canSeeTechDiag && diagnosis ? (
+        <div style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            onClick={() => setTechOpen((v) => !v)}
+            style={{ ...configBtnSecondary(), width: "100%", fontSize: 11 }}
+          >
+            {techOpen ? "Ocultar diagnóstico técnico" : "Ver diagnóstico técnico"}
+          </button>
+          {techOpen ? (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "#f8fafc",
+                border: `1px solid ${CONFIG_UI.border}`,
+                fontSize: 10,
+                lineHeight: 1.5,
+                color: CONFIG_UI.muted,
+                wordBreak: "break-all",
+              }}
+            >
+              {techRows.map(([k, v]) => (
+                <div key={k}>
+                  <span style={{ fontWeight: 700 }}>{k}: </span>
+                  {v}
+                </div>
+              ))}
+              {isIncomplete && diagnosis?.issues?.length ? (
+                <div style={{ marginTop: 6, color: CONFIG_UI.red, fontWeight: 600 }}>
+                  {diagnosis.issues.join(" · ")}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -553,6 +559,7 @@ export function EmpresaUsuariosOficinaPanel({
   const canManage = canManageEmpresaOfficeUsers(caps);
   const sessionEmail = getSession()?.user?.email || null;
   const canPurge = isSuperadminUser(uid, sessionEmail);
+  const canSeeTechDiag = canPurge;
 
   const reload = useCallback(async () => {
     if (!tenantEmpresaId) {
@@ -868,6 +875,7 @@ export function EmpresaUsuariosOficinaPanel({
               diagnosis={diagnoses[u.userId] || null}
               canManage={canManage}
               canPurge={canPurge}
+              canSeeTechDiag={canSeeTechDiag}
               onEdit={(user) => {
                 setModalError("");
                 setModal({ mode: "edit", user });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
-import { getStoredAuthSession, isHybridSession, switchActiveMode } from "../data/authContext";
+import { getStoredAuthSession } from "../data/authContext";
+import { isHybridCapabilities } from "../auth/accountModel.js";
 import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "../auth/officeBootstrap.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
@@ -30,7 +31,6 @@ export default function EmpresaLayout({
   EmpresaPanelSeccion,
   ProfView,
   ConfigPassword,
-  ConfigDangerZone,
 }) {
   const [prof, setProf] = useState(PROF0);
   const [tab, setTab] = useState("servicios");
@@ -114,9 +114,9 @@ export default function EmpresaLayout({
     };
   }, []);
 
-  const authSession = getStoredAuthSession(getUserId());
   const bootstrapError = capabilities?.bootstrapError || null;
   const visibleTabs = getVisibleEmpresaTabs(capabilities);
+  const showModeSwitch = isHybridCapabilities(capabilities);
 
   const refreshEmpresaTenant = useCallback(async () => {
     const uid = getUserId();
@@ -207,8 +207,6 @@ export default function EmpresaLayout({
       })
       .catch(() => {});
   }
-
-  const showModeSwitch = isHybridSession(authSession);
 
   if (!loaded) {
     return (
@@ -471,7 +469,6 @@ export default function EmpresaLayout({
             onSave={onSave}
             showToast={showToast}
             ConfigPassword={ConfigPassword}
-            ConfigDangerZone={ConfigDangerZone}
             tx={tx}
             su={su}
           />

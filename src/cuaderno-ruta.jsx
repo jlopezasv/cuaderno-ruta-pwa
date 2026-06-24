@@ -7457,40 +7457,20 @@ function BiweekView({db,norma,prof}){
   );
 }
 
-function BorrarTodo({db,prof,showToast,embedded=false}){
-  const[paso,setPaso]=useState(0); // 0=normal, 1=confirmar, 2=escribir
+function ReiniciarTacografo({db,prof,showToast,embedded=false}){
+  const[paso,setPaso]=useState(0);
   const[texto,setTexto]=useState("");
   const[loading,setLoading]=useState(false);
 
-  function exportarBackup(){
-    const data={
-      entries:db.entries,
-      docs:db.docs||[],
-      prof,
-      exportedAt:new Date().toISOString(),
-      version:"cuaderno_backup_v1"
-    };
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    a.href=url;
-    a.download=`cuaderno_backup_${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast("✅ Backup descargado");
-  }
-
-  async function borrar(){
+  async function reiniciar(){
     setLoading(true);
     try{
-      // Borrar TODO el localStorage del usuario
       const keysToRemove=[];
       for(let i=0;i<localStorage.length;i++){
         const k=localStorage.key(i);
         if(k&&!["dark","sb_session"].includes(k))keysToRemove.push(k);
       }
       keysToRemove.forEach(k=>localStorage.removeItem(k));
-      // Borrar en Supabase
       const uid=getUserId();
       if(uid){
         await sbFetch(`/rest/v1/entries?user_id=eq.${uid}`,{method:"DELETE"}).catch(()=>{});
@@ -7503,41 +7483,39 @@ function BorrarTodo({db,prof,showToast,embedded=false}){
   }
 
   return(
-    <div style={embedded?{}:{marginTop:20,borderTop:"2px solid #FEE2E2",paddingTop:16}}>
+    <div style={embedded?{marginTop:14}:{marginTop:20,borderTop:"2px solid #FEE2E2",paddingTop:16}}>
       {!embedded&&<div style={{fontSize:11,color:"#DC2626",fontWeight:700,letterSpacing:.5,marginBottom:10}}>⚠️ ZONA PELIGROSA</div>}
-      {/* Backup primero */}
-      <button onClick={exportarBackup}
-        style={{width:"100%",background:"#F0FDF4",color:"#166534",border:"1.5px solid #BBF7D0",borderRadius:11,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8}}>
-        📥 Exportar backup antes de borrar
-      </button>
+      <div style={{fontSize:13,color:"#64748B",lineHeight:1.55,marginBottom:12}}>
+        Esto borrará tus registros personales de tacógrafo guardados en este dispositivo/cuenta. No borra servicios de empresa ni documentos.
+      </div>
       {paso===0&&(
         <button onClick={()=>setPaso(1)} style={{width:"100%",background:"#FEF2F2",color:"#DC2626",border:"1.5px solid #FECACA",borderRadius:11,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
-          🗑 Borrar todos mis registros
+          Reiniciar tacógrafo
         </button>
       )}
       {paso===1&&(
         <div style={{background:"#FEF2F2",borderRadius:12,padding:"14px",border:"1.5px solid #FECACA"}}>
-          <div style={{fontSize:14,fontWeight:700,color:"#DC2626",marginBottom:8}}>¿Estás seguro?</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#DC2626",marginBottom:8}}>¿Reiniciar tacógrafo?</div>
           <div style={{fontSize:13,color:"#7F1D1D",marginBottom:12,lineHeight:1.5}}>
-            Se borrarán <strong>todos tus registros de jornada, gastos y kilómetros</strong>. Esto no se puede deshacer.
+            Se borrarán <strong>tus jornadas, gastos y kilómetros personales</strong> de tacógrafo. Los servicios de empresa no se modifican.
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             <button onClick={()=>setPaso(0)} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:9,padding:"11px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
-            <button onClick={()=>setPaso(2)} style={{background:"#DC2626",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}}>Sí, borrar todo</button>
+            <button onClick={()=>setPaso(2)} style={{background:"#DC2626",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}}>Sí, reiniciar</button>
           </div>
         </div>
       )}
       {paso===2&&(
         <div style={{background:"#FEF2F2",borderRadius:12,padding:"14px",border:"1.5px solid #FECACA"}}>
-          <div style={{fontSize:13,color:"#7F1D1D",marginBottom:8}}>Escribe <strong>BORRAR</strong> para confirmar:</div>
+          <div style={{fontSize:13,color:"#7F1D1D",marginBottom:8}}>Escribe <strong>REINICIAR</strong> para confirmar:</div>
           <input value={texto} onChange={e=>setTexto(e.target.value.toUpperCase())}
-            placeholder="Escribe BORRAR"
+            placeholder="Escribe REINICIAR"
             style={{width:"100%",background:"white",border:"2px solid #FECACA",borderRadius:8,padding:"10px",fontSize:16,color:"#DC2626",outline:"none",fontFamily:"monospace",fontWeight:700,marginBottom:10}}/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             <button onClick={()=>{setPaso(0);setTexto("");}} style={{background:"#F1F5F9",color:"#64748B",border:"none",borderRadius:9,padding:"11px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
-            <button onClick={borrar} disabled={texto!=="BORRAR"||loading}
-              style={{background:texto==="BORRAR"&&!loading?"#DC2626":"#94A3B8",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:texto==="BORRAR"&&!loading?"pointer":"default"}}>
-              {loading?"⏳ Borrando...":"🗑 CONFIRMAR"}
+            <button onClick={reiniciar} disabled={texto!=="REINICIAR"||loading}
+              style={{background:texto==="REINICIAR"&&!loading?"#DC2626":"#94A3B8",color:"white",border:"none",borderRadius:9,padding:"11px",fontSize:13,fontWeight:700,cursor:texto==="REINICIAR"&&!loading?"pointer":"default"}}>
+              {loading?"⏳ Reiniciando...":"Confirmar reinicio"}
             </button>
           </div>
         </div>
@@ -7646,7 +7624,6 @@ function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
         <EmpresaPerfilBlock tipoCuentaProp="empresa"/>
 
         <CambiarPassword/>
-        <BorrarTodo db={db} prof={prof} showToast={showToast}/>
       </div>
     );
   }
@@ -7797,8 +7774,10 @@ function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
       {/* Cambiar contraseña */}
       <CambiarPassword/>
 
-      {/* Zona peligrosa — borrar todo */}
-      <BorrarTodo db={db} prof={prof} showToast={showToast}/>
+      <div style={{marginTop:20,borderTop:"2px solid #FEE2E2",paddingTop:16}}>
+        <div style={{fontSize:11,color:"#DC2626",fontWeight:700,letterSpacing:.5,marginBottom:10}}>REINICIAR TACÓGRAFO</div>
+        <ReiniciarTacografo db={db} prof={prof} showToast={showToast} embedded/>
+      </div>
     </div>
   );
 }
@@ -19278,6 +19257,6 @@ export default function App(){
   }
 
   if(activeMode==="propietario")return <ErrorBoundary><PropietarioLayout sbSignOut={sbSignOut} getUserId={getUserId}/></ErrorBoundary>;
-  if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView} ConfigPassword={CambiarPassword} ConfigDangerZone={BorrarTodo}/></ErrorBoundary>;
+  if(activeMode==="empresa")return <ErrorBoundary><EmpresaLayout PROF0={PROF0} getUserId={getUserId} sbSelect={sbSelect} sbUpsert={sbUpsert} sbSignOut={sbSignOut} EmpresaDashboard={EmpresaDashboard} EmpresaPanelSeccion={EmpresaPanelSeccion} ProfView={ProfView} ConfigPassword={CambiarPassword}/></ErrorBoundary>;
   return <ErrorBoundary><AppInner/></ErrorBoundary>;
 }

@@ -1,4 +1,6 @@
 import { CONFIG_GRID_CSS } from "./empresaConfigCards.jsx";
+import { ModeSwitchButton } from "../../ui/ModeSwitchButton.jsx";
+import { isHybridCapabilities } from "../../auth/accountModel.js";
 import { EmpresaPerfilConfigCard } from "./EmpresaPerfilConfigCard.jsx";
 import { EmpresaCodigoEquipoConfig } from "./EmpresaCodigoEquipoConfig.jsx";
 import { EmpresaUsuariosOficinaPanel } from "./EmpresaUsuariosOficinaPanel.jsx";
@@ -22,12 +24,12 @@ export function EmpresaConfigDashboard({
   onSave,
   showToast,
   ConfigPassword,
-  ConfigDangerZone,
   tx,
   su,
 }) {
   const showPerfil = canViewEmpresaConfigPerfil(capabilities);
   const showUsuarios = canViewEmpresaConfigUsuarios(capabilities);
+  const showModoConductor = isHybridCapabilities(capabilities);
   const empresaNombreFallback =
     empresaRecord?.nombre || officeUser?.empresaNombre || prof?.nombre || "";
 
@@ -88,13 +90,13 @@ export function EmpresaConfigDashboard({
           </div>
         ) : null}
 
-        {ConfigDangerZone ? (
+        {showModoConductor ? (
           <div className="empresa-config-card">
-            <div className="empresa-config-card-title">Zona peligrosa</div>
-            <div className="empresa-config-card-desc">
-              Exporta un backup antes de eliminar registros personales.
+            <div className="empresa-config-card-title">Modo conductor</div>
+            <div className="empresa-config-card-desc" style={{ marginBottom: 12 }}>
+              Esta cuenta también puede conducir. Cambia al tacógrafo personal sin cerrar sesión.
             </div>
-            <ConfigDangerZone embedded prof={prof} showToast={showToast} />
+            <ModeSwitchButton uid={getUserId?.()} targetMode="conductor" />
           </div>
         ) : null}
       </div>
