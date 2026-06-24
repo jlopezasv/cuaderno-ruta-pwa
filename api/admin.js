@@ -193,6 +193,34 @@ function supabaseErrorMessage(detail) {
   return detail.message || detail.msg || detail.error || detail.hint || null;
 }
 
+function isDuplicateEmailMessage(message) {
+  const m = String(message || "").toLowerCase();
+  return (
+    m.includes("already been registered") ||
+    m.includes("already registered") ||
+    m.includes("user already exists") ||
+    m.includes("email address has already") ||
+    m.includes("duplicate key") ||
+    m.includes("unique constraint") ||
+    m.includes("already exists")
+  );
+}
+
+function mapSupabaseStatusToCode(status, message) {
+  if (status === 409 || isDuplicateEmailMessage(message)) {
+    return { httpStatus: 409, code: "ADMIN_EMAIL_EXISTS" };
+  }
+  if (status === 403) return { httpStatus: 403, code: "ADMIN_FORBIDDEN" };
+  if (status === 401) return { httpStatus: 401, code: "ADMIN_UNAUTHORIZED" };
+  if (status === 400) return { httpStatus: 400, code: "ADMIN_BAD_REQUEST" };
+  return { httpStatus: 502, code: "ADMIN_SUPABASE_ERROR" };
+}
+
+/** Logging servidor create_office_user (sin contraseñas ni tokens). */
+function officeUserServerLog(event, fields = {}) {
+  console.error("[admin:create_office_user]", event, fields);
+}
+
 /** Logging seguro solo en entorno DEMO (sin contraseñas ni tokens). */
 function demoOfficeUserLog(event, fields = {}) {
   if (!isDemoApp()) return;
@@ -215,7 +243,8 @@ async function authAdminCreateUser({ email, password, nombre }) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    return { ok: false, status: r.status, error: data?.msg || data?.message || "Auth create failed" };
+    const errMsg = data?.msg || data?.message || data?.error_description || "Auth create failed";
+    return { ok: false, status: r.status, error: errMsg, detail: data };
   }
   return { ok: true, user: data };
 }
@@ -267,6 +296,7 @@ async function resolveOfficeUserAuthAccount({ email, nombre, tempPassword }) {
       ok: false,
       status: created.status,
       error: created.error || "No se pudo crear el usuario en Auth",
+      detail: created.detail,
     };
   }
   const uid = created.user?.id;
@@ -295,14 +325,266 @@ async function restUpsert(pathWithQuery, body) {
 }
 
 async function callerCanManageEmpresaUsuarios(callerUid, empresaId) {
-  const emps = await restSelect(
-    `empresas?id=eq.${encodeURIComponent(empresaId)}&select=id,owner_id`,
-  );
-  if (emps[0]?.owner_id === callerUid) return true;
-  const rows = await restSelect(
-    `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresaId)}&user_id=eq.${encodeURIComponent(callerUid)}&activo=eq.true&select=rol`,
-  );
-  return rows[0]?.rol === "jefe_flota";
+  try {
+    const emps = await restSelect(
+      `empresas?id=eq.${encodeURIComponent(empresaId)}&select=id,owner_id`,
+    );
+    if (emps[0]?.owner_id === callerUid) return { ok: true, allowed: true };
+    const rows = await restSelect(
+      `empresa_usuarios?empresa_id=eq.${encodeURIComponent(empresaId)}&user_id=eq.${encodeURIComponent(callerUid)}&activo=eq.true&select=rol`,
+    );
+    return { ok: true, allowed: rows[0]?.rol === "jefe_flota" };
+  } catch (e) {
+    return { ok: false, error: e?.message || "Error comprobando permisos" };
+  }
+}
+
+async function handleCreateOfficeUser(req, res, action) {
+  const body = req.body || {};
+  const { empresa_id, nombre, email, rol } = body;
+  let authUid = null;
+  let emailNorm = null;
+  let normalizedRol = null;
+
+  try {
+    let serverEnv;
+    try {
+      serverEnv = sbServer();
+    } catch (configErr) {
+      officeUserServerLog("config_error", {
+        action,
+        message: configErr?.message,
+        stack: configErr?.stack,
+      });
+      return res.status(500).json({
+        ok: false,
+        error: configErr?.message || "Configuración Supabase incompleta",
+        code: "CONFIG_MISSING_SUPABASE",
+      });
+    }
+
+    if (!serverEnv.serviceRoleKey) {
+      officeUserServerLog("missing_service_role", { action });
+      return res.status(500).json({
+        ok: false,
+        error: "Servidor sin SUPABASE_SERVICE_ROLE_KEY",
+        code: "CONFIG_MISSING_SERVICE_ROLE",
+      });
+    }
+
+    const authHeader = req.headers.authorization || req.headers.Authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!token) {
+      return res.status(401).json({
+        ok: false,
+        error: "Falta Authorization: Bearer",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+
+    authUid = await supabaseAuthUserId(token);
+    if (!authUid) {
+      return res.status(401).json({
+        ok: false,
+        error: "Sesión inválida o expirada",
+        code: "ADMIN_UNAUTHORIZED",
+      });
+    }
+
+    if (!empresa_id || !UUID_RE.test(String(empresa_id))) {
+      return res.status(400).json({
+        ok: false,
+        error: "empresa_id UUID obligatorio",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+    if (!nombre?.trim() || !email?.trim()) {
+      return res.status(400).json({
+        ok: false,
+        error: "nombre y email son obligatorios",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+
+    const allowedRoles = ["jefe_flota", "trafico", "administrativo"];
+    normalizedRol = String(rol || "trafico").trim().toLowerCase();
+    if (!allowedRoles.includes(normalizedRol)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Rol no válido",
+        code: "ADMIN_BAD_REQUEST",
+      });
+    }
+
+    const perm = await callerCanManageEmpresaUsuarios(authUid, empresa_id);
+    if (!perm.ok) {
+      officeUserServerLog("permission_check_failed", {
+        action,
+        authUid,
+        empresa_id,
+        rol: normalizedRol,
+        message: perm.error,
+      });
+      return res.status(502).json({
+        ok: false,
+        error: perm.error || "No se pudo verificar permisos",
+        code: "ADMIN_PERMISSION_CHECK_FAILED",
+      });
+    }
+    if (!perm.allowed) {
+      return res.status(403).json({
+        ok: false,
+        error: "No autorizado para gestionar usuarios de esta empresa",
+        code: "ADMIN_FORBIDDEN",
+      });
+    }
+
+    emailNorm = String(email).trim().toLowerCase();
+    const nombreNorm = String(nombre).trim();
+    demoOfficeUserLog("start", {
+      rol: normalizedRol,
+      empresa_id,
+      email: emailNorm,
+      caller_uid: authUid,
+    });
+
+    const officeTempPassword = resolveOfficeUserTempPassword();
+    const authResolved = await resolveOfficeUserAuthAccount({
+      email: emailNorm,
+      nombre: nombreNorm,
+      tempPassword: officeTempPassword,
+    });
+    if (!authResolved.ok) {
+      const errMsg = authResolved.error || "No se pudo crear el usuario en Auth";
+      const mapped = mapSupabaseStatusToCode(authResolved.status, errMsg);
+      officeUserServerLog("auth_create_failed", {
+        action,
+        authUid,
+        empresa_id,
+        email: emailNorm,
+        rol: normalizedRol,
+        message: errMsg,
+        status: authResolved.status,
+        code: mapped.code,
+        detail: authResolved.detail,
+      });
+      demoOfficeUserLog("auth_create_failed", {
+        rol: normalizedRol,
+        empresa_id,
+        email: emailNorm,
+        message: errMsg,
+        code: mapped.code,
+        details: { status: authResolved.status },
+      });
+      return res.status(mapped.httpStatus).json({
+        ok: false,
+        error:
+          mapped.code === "ADMIN_EMAIL_EXISTS"
+            ? "Ya existe un usuario con ese email"
+            : errMsg,
+        code: mapped.code,
+        details: { status: authResolved.status },
+      });
+    }
+
+    const newUid = authResolved.userId;
+    const profUpsert = await restUpsert("profiles", {
+      id: newUid,
+      nombre: nombreNorm,
+      tipo_cuenta: "empresa",
+      can_drive: false,
+    });
+    if (!profUpsert.ok) {
+      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
+      const errMsg = supabaseErrorMessage(profUpsert.detail) || "No se pudo crear el perfil";
+      const mapped = mapSupabaseStatusToCode(profUpsert.status, errMsg);
+      officeUserServerLog("profile_upsert_failed", {
+        action,
+        authUid,
+        empresa_id,
+        email: emailNorm,
+        rol: normalizedRol,
+        message: errMsg,
+        status: profUpsert.status,
+        code: mapped.code,
+        detail: profUpsert.detail,
+      });
+      return res.status(mapped.httpStatus).json({
+        ok: false,
+        error: errMsg,
+        code: mapped.code,
+        details: profUpsert.detail,
+      });
+    }
+
+    const euUpsert = await restUpsert("empresa_usuarios", {
+      empresa_id,
+      user_id: newUid,
+      nombre: nombreNorm,
+      email: emailNorm,
+      rol: normalizedRol,
+      activo: true,
+      puede_ver_todos: false,
+    });
+    if (!euUpsert.ok) {
+      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
+      const errMsg =
+        supabaseErrorMessage(euUpsert.detail) || "No se pudo vincular usuario a la empresa";
+      const mapped = mapSupabaseStatusToCode(euUpsert.status, errMsg);
+      officeUserServerLog("empresa_usuario_upsert_failed", {
+        action,
+        authUid,
+        empresa_id,
+        email: emailNorm,
+        rol: normalizedRol,
+        message: errMsg,
+        status: euUpsert.status,
+        code: mapped.code,
+        detail: euUpsert.detail,
+      });
+      return res.status(mapped.httpStatus).json({
+        ok: false,
+        error: errMsg,
+        code: mapped.code,
+        details: euUpsert.detail,
+      });
+    }
+
+    const row = Array.isArray(euUpsert.data) ? euUpsert.data[0] : euUpsert.data;
+    const createdPassword = authResolved.tempPassword;
+    demoOfficeUserLog("success", {
+      rol: normalizedRol,
+      empresa_id,
+      email: emailNorm,
+      user_id: newUid,
+    });
+
+    return res.json({
+      ok: true,
+      user_id: newUid,
+      email: emailNorm,
+      empresa_usuario: row,
+      password: createdPassword,
+      message: isDemoApp()
+        ? `Usuario creado con contraseña temporal: ${createdPassword}`
+        : "Usuario creado. Copia y comparte la contraseña temporal con el usuario; solo se muestra una vez.",
+    });
+  } catch (e) {
+    officeUserServerLog("unhandled", {
+      action,
+      authUid,
+      empresa_id,
+      email: emailNorm,
+      rol: normalizedRol,
+      message: e?.message,
+      stack: e?.stack,
+    });
+    return res.status(500).json({
+      ok: false,
+      error: e?.message || "Error interno al crear usuario de oficina",
+      code: "ADMIN_INTERNAL",
+    });
+  }
 }
 
 /**
@@ -719,169 +1001,7 @@ export default async function handler(req, res) {
 
   // ── Crear usuario oficina (service_role; jefe_flota / owner) ──
   if (action === "create_office_user_demo" || action === "create_office_user") {
-    if (!sbServer().serviceRoleKey) {
-      return res.status(503).json({
-        ok: false,
-        error: "Servidor sin service role key",
-        code: "ADMIN_MISCONFIGURED",
-      });
-    }
-
-    const authHeader = req.headers.authorization || req.headers.Authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-    if (!token) {
-      return res.status(401).json({
-        ok: false,
-        error: "Falta Authorization: Bearer",
-        code: "ADMIN_UNAUTHORIZED",
-      });
-    }
-
-    const authUid = await supabaseAuthUserId(token);
-    if (!authUid) {
-      return res.status(401).json({
-        ok: false,
-        error: "Sesión inválida o expirada",
-        code: "ADMIN_UNAUTHORIZED",
-      });
-    }
-
-    const { empresa_id, nombre, email, rol } = req.body || {};
-    if (
-      !empresa_id ||
-      !nombre?.trim() ||
-      !email?.trim() ||
-      !UUID_RE.test(empresa_id)
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: "empresa_id, nombre y email son obligatorios",
-        code: "ADMIN_BAD_REQUEST",
-      });
-    }
-    const allowedRoles = ["jefe_flota", "trafico", "administrativo"];
-    const normalizedRol = String(rol || "trafico").trim().toLowerCase();
-    if (!allowedRoles.includes(normalizedRol)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Rol no válido",
-        code: "ADMIN_BAD_REQUEST",
-      });
-    }
-    if (!(await callerCanManageEmpresaUsuarios(authUid, empresa_id))) {
-      return res.status(403).json({
-        ok: false,
-        error: "No autorizado para gestionar usuarios de esta empresa",
-        code: "ADMIN_FORBIDDEN",
-      });
-    }
-    const emailNorm = String(email).trim().toLowerCase();
-    const nombreNorm = String(nombre).trim();
-    demoOfficeUserLog("start", {
-      rol: normalizedRol,
-      empresa_id,
-      email: emailNorm,
-      caller_uid: authUid,
-    });
-
-    const tempPassword = resolveOfficeUserTempPassword();
-    const authResolved = await resolveOfficeUserAuthAccount({
-      email: emailNorm,
-      nombre: nombreNorm,
-      tempPassword,
-    });
-    if (!authResolved.ok) {
-      const errMsg = authResolved.error || "No se pudo crear el usuario en Auth";
-      demoOfficeUserLog("auth_create_failed", {
-        rol: normalizedRol,
-        empresa_id,
-        email: emailNorm,
-        message: errMsg,
-        code: "ADMIN_AUTH_CREATE_FAILED",
-        details: { status: authResolved.status },
-      });
-      return res.status(502).json({
-        ok: false,
-        error: errMsg,
-        code: "ADMIN_AUTH_CREATE_FAILED",
-        details: { status: authResolved.status },
-      });
-    }
-
-    const newUid = authResolved.userId;
-    const profUpsert = await restUpsert("profiles", {
-      id: newUid,
-      nombre: nombreNorm,
-      tipo_cuenta: "empresa",
-      can_drive: false,
-    });
-    if (!profUpsert.ok) {
-      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
-      const errMsg = supabaseErrorMessage(profUpsert.detail) || "No se pudo crear el perfil";
-      demoOfficeUserLog("profile_upsert_failed", {
-        rol: normalizedRol,
-        empresa_id,
-        email: emailNorm,
-        message: errMsg,
-        code: "ADMIN_SUPABASE_ERROR",
-        details: profUpsert.detail,
-      });
-      return res.status(502).json({
-        ok: false,
-        error: errMsg,
-        code: "ADMIN_SUPABASE_ERROR",
-        details: profUpsert.detail,
-      });
-    }
-    const euUpsert = await restUpsert("empresa_usuarios", {
-      empresa_id,
-      user_id: newUid,
-      nombre: nombreNorm,
-      email: emailNorm,
-      rol: normalizedRol,
-      activo: true,
-      puede_ver_todos: false,
-    });
-    if (!euUpsert.ok) {
-      if (authResolved.authCreated) await authAdminDeleteUser(newUid);
-      const errMsg =
-        supabaseErrorMessage(euUpsert.detail) || "No se pudo vincular usuario a la empresa";
-      demoOfficeUserLog("empresa_usuario_upsert_failed", {
-        rol: normalizedRol,
-        empresa_id,
-        email: emailNorm,
-        message: errMsg,
-        code: "ADMIN_SUPABASE_ERROR",
-        details: euUpsert.detail,
-      });
-      return res.status(502).json({
-        ok: false,
-        error: errMsg,
-        code: "ADMIN_SUPABASE_ERROR",
-        details: euUpsert.detail,
-      });
-    }
-    const row = Array.isArray(euUpsert.data) ? euUpsert.data[0] : euUpsert.data;
-    demoOfficeUserLog("success", {
-      rol: normalizedRol,
-      empresa_id,
-      email: emailNorm,
-      user_id: newUid,
-    });
-
-    const tempPassword = authResolved.tempPassword;
-    const response = {
-      ok: true,
-      user_id: newUid,
-      email: emailNorm,
-      empresa_usuario: row,
-      password: tempPassword,
-      message: isDemoApp()
-        ? `Usuario creado con contraseña temporal: ${tempPassword}`
-        : "Usuario creado. Copia y comparte la contraseña temporal con el usuario; solo se muestra una vez.",
-    };
-
-    return res.json(response);
+    return handleCreateOfficeUser(req, res, action);
   }
 
   if (
