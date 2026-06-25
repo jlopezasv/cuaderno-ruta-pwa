@@ -1,5 +1,6 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { parsePostgrestError } from "../service/serviceCreateStepTrace.js";
+import { sortStopsByOrdenOperacional } from "../service/stopOperationalOrder.js";
 
 const STOP_TIPOS_SAFE = new Set([
   "carga",
@@ -15,7 +16,7 @@ const STOP_TIPOS_SAFE = new Set([
  */
 export function buildStopsInsertRows(servicioId, stops) {
   if (!servicioId || !Array.isArray(stops) || !stops.length) return [];
-  const sorted = [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
+  const sorted = sortStopsByOrdenOperacional(stops);
   return sorted.map((s, index) => {
     const tipoRaw = String(s.tipo || "parada").trim().toLowerCase();
     const tipo = STOP_TIPOS_SAFE.has(tipoRaw) ? tipoRaw : "parada";

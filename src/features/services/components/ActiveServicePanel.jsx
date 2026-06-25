@@ -3,6 +3,7 @@ import { ServiceExtraDocumentsBlock } from "./ServiceExtraDocumentsBlock";
 import { ServiceEmpresaDocumentsBlock } from "./ServiceEmpresaDocumentsBlock.jsx";
 import { countServiceDocuments } from "../../../domain/service/serviceDocuments";
 import { resolveExpandedStopId } from "../../../domain/service/serviceStops";
+import { sortStopsByOrdenOperacional } from "../../../domain/service/stopOperationalOrder.js";
 import {
   buildDriverStopTimesRows,
   primaryMuelleActionLabel,
@@ -208,7 +209,7 @@ function stopTime(iso) {
 }
 
 function sortStops(stops) {
-  return [...(Array.isArray(stops) ? stops : [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  return sortStopsByOrdenOperacional(stops);
 }
 
 /** Líneas de recorrido: empresa, lugar, dirección y detalles libres (sin metadatos operativos). */

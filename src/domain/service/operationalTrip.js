@@ -1,7 +1,8 @@
 import { getOperationalTripStartedAt } from "./serviceOperacionMeta.js";
+import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 function sortStopsByOrden(stops) {
-  return [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  return sortStopsByOrdenOperacional(stops);
 }
 
 function operationalGroupFromStopTipo(tipo) {

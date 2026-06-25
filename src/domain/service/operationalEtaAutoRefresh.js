@@ -6,9 +6,10 @@ import {
 } from "./serviceOperacionMeta.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 import { isStopOperationallyComplete } from "./serviceStops.js";
+import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 export function getFirstPendingDescargaStop(stops) {
-  const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  const sorted = sortStopsByOrdenOperacional(stops);
   return sorted.find((s) => isDescargaStopTipo(s.tipo) && !isStopOperationallyComplete(s)) || null;
 }
 export function hasCompletedDescargaStop(stops) {

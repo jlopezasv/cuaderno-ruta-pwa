@@ -208,12 +208,17 @@ export function dcdtStatusLabel(status) {
   return "pendiente";
 }
 
-export function stopContractualTitle(stop, index) {
+import { stopOperationalTitleAt } from "../service/stopOperationalOrder.js";
+
+export function stopContractualTitle(stop, index, allStops = null) {
+  if (Array.isArray(allStops) && allStops.length > 0) {
+    return stopOperationalTitleAt(allStops, index);
+  }
   const n = index + 1;
   const t = String(stop?.tipo || "").toLowerCase();
-  if (t === "carga") return `📦 Carga #${n}`;
-  if (t === "descarga") return `📤 Descarga #${n}`;
-  return `📍 Parada #${n}`;
+  if (t === "carga") return `📦 Carga ${n}`;
+  if (t === "descarga") return `📤 Descarga ${n}`;
+  return `📍 Parada ${n}`;
 }
 
 export function stopContractualBlockLabel(stop) {

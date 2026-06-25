@@ -5,6 +5,7 @@
 import { getOperationalTripStartMs } from "./operationalTrip.js";
 import { getServiceClient, getServiceNumber } from "./serviceIdentity.js";
 import { getInicioOperacionMs } from "./stopOperacionMeta.js";
+import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 export function operationalGroupFromStopTipo(tipo) {
   const t = String(tipo || "").toLowerCase();
@@ -28,7 +29,7 @@ function parseTs(v) {
 }
 
 export function sortStopsByOrden(stops) {
-  return [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  return sortStopsByOrdenOperacional(stops);
 }
 
 /**

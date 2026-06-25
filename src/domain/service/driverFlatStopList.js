@@ -13,6 +13,7 @@ import {
   sortDriverOperationalCandidates,
 } from "./driverServiceQueue.js";
 import { getServiceClientReference, getServiceNumberForDisplay, getFixedServiceRoute } from "./serviceIdentity.js";
+import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 import {
   formatStopLugarDisplay,
   formatStopCardTitleLine,
@@ -336,7 +337,7 @@ export async function resolveDriverFlatPendingStops(uid, { conductorNameById = {
       participacionTipoBySvId[sv.id] ||
       (sv.conductor_id === uid ? PARTICIPACION_TIPO.TODO : PARTICIPACION_TIPO.TODO);
     const stops = await fetchStopsForServicioId(sv.id);
-    const sortedStops = [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
+    const sortedStops = sortStopsByOrdenOperacional(stops);
     if (sv?.id) stopsByServicioId[sv.id] = sortedStops;
     const assignmentMs = driverQueueAssignmentTimeMs(sv, assignedAtById);
     const cid = sv?.conductor_id || null;
