@@ -1,5 +1,6 @@
 import React from "react";
 import { masTripPickerCardLines } from "../../../domain/service/driverFlatStopList.js";
+import { ConductorManualLocationCard } from "./ConductorManualLocationCard.jsx";
 
 const UI = {
   page: "#F8FAFC",
@@ -67,11 +68,12 @@ export function ConductorMasTripPicker({ trips, onSelect }) {
   );
 }
 
-export function ConductorMasHub({ onSelect }) {
+export function ConductorMasHub({ onSelect, uid = null, showToast }) {
   return (
     <div style={{ padding: "16px 14px 88px", background: UI.page, minHeight: "70vh" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.2, marginBottom: 14 }}>MÁS</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <ConductorManualLocationCard uid={uid} showToast={showToast} />
         {HUB_ITEMS.map((item) => (
           <button
             key={item.id}

@@ -48,6 +48,7 @@ import {
   CONDUCTOR_UBICACION_DEMO_CSS,
 } from "./features/empresa/ConductorUbicacionDemoBlock.jsx";
 import { formatConductorUbicacionDemoDisplay } from "./features/empresa/conductorUbicacionDemoDisplay.js";
+import { formatUbicacionEmpresaFreshness } from "./domain/location/ubicacionSourceLabel.js";
 import {
   isConductoresEmpresaDemoUi,
   resolvePrincipalConductorIsDriving,
@@ -3345,7 +3346,7 @@ function AppInner(){
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast}/>}
 
         {showMasServicio&&(
           <>
@@ -4941,6 +4942,7 @@ async function saveDriverActionLocation(uid,point,{servicio=null,stops=null,even
     empresa_id:snap.empresa_id??null,
     servicio_id:snap.servicio_id??null,
     event_type:eventType||null,
+    source:eventType||null,
     stop_id:stopId||null,
   };
   trackingLog("operativa ubicacion payload",row);
@@ -12797,7 +12799,8 @@ function validUbicacionRow(row){
   if(Math.abs(lat)>90||Math.abs(lon)>180)return null;
   return{
     lat,lon,ts:row?.ts||null,velocidad:row?.velocidad,precision_m:row?.precision_m,
-    empresa_id:row?.empresa_id??null,servicio_id:row?.servicio_id??null,event_type:row?.event_type??null,
+    empresa_id:row?.empresa_id??null,servicio_id:row?.servicio_id??null,
+    event_type:row?.event_type??null,source:row?.source??null,
   };
 }
 
@@ -14771,8 +14774,15 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                             isRecent={ubicacionDemo.isRecent}
                           />
                         ):null}
-                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>}
-                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&<div style={{fontSize:11,color:su,marginTop:2,fontWeight:600}}>{fmtUbicacionActualizada(liveLocation)}</div>}
+                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&(()=>{
+                          const uMeta=formatUbicacionEmpresaFreshness(liveLocation,etaVisualClockMs);
+                          return(
+                            <>
+                              <div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>
+                              <div style={{fontSize:11,color:uMeta.isRecent?su:"#b45309",marginTop:2,fontWeight:600}}>{uMeta.freshness}</div>
+                            </>
+                          );
+                        })()}
                         {!c.pendiente&&<div style={{fontSize:conductoresDemoUi?11:12,color:journey.color,marginTop:conductoresDemoUi?3:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
                         {!conductoresDemoUi&&!c.pendiente&&servicioActual&&(
                           <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>

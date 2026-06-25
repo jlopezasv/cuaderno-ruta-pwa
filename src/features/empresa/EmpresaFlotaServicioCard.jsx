@@ -18,6 +18,7 @@ import { servicioSinConductorOperacional } from "../../domain/fleet/operationalP
 import { servicioAdminEditMode } from "../../domain/fleet/servicioAdminEdit.js";
 import { stripServicioOperacionDisplay } from "../../domain/service/serviceOperacionMeta.js";
 import { getServicioAlcance } from "../../domain/service/servicioAlcance.js";
+import { formatUbicacionEmpresaFreshness } from "../../domain/location/ubicacionSourceLabel.js";
 import { sbFetch } from "../../data/supabaseClient.js";
 import { ServiceEmpresaDocumentsBlock } from "../services/components/ServiceEmpresaDocumentsBlock.jsx";
 import { EmpresaServicioQuickActions } from "./EmpresaServicioQuickActions.jsx";
@@ -264,8 +265,8 @@ function EmpresaFlotaServicioCardImpl({
         : null;
   const timelineSoloTexto = operativaTimeline;
   const ubicLine = ubicInfo?.label || (ubicInfo?.missing ? "Sin ubicación registrada" : "—");
-  const ubicUpdated =
-    ubicInfo?.recent === false ? "Sin actualización reciente" : ubicInfo ? "Ubicación reciente" : null;
+  const ubicMeta = formatUbicacionEmpresaFreshness(ubicInfo);
+  const ubicUpdated = ubicInfo ? ubicMeta.freshness : null;
 
   const toggle = () => onToggleExpand();
 

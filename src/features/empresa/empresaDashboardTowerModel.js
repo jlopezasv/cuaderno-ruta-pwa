@@ -1,4 +1,4 @@
-import { formatSpanishAgo } from "../../domain/service/etaFormatter.js";
+import { formatUbicacionEmpresaFreshness } from "../../domain/location/ubicacionSourceLabel.js";
 import { hasSinUbicacionReciente, resolveConductorOperationalVisual } from "./conductorOperationalVisual.js";
 import { resolveConductorTelefonoMovil, formatConductorTelefonoDisplay } from "./conductorTelefonoMovil.js";
 
@@ -71,24 +71,14 @@ export function classifyConductorTowerState({
 
 export function formatConductorTowerUbicLine(raw, formatLugar, nowMs = Date.now()) {
   const city = typeof formatLugar === "function" ? formatLugar(raw) : "—";
+  const meta = formatUbicacionEmpresaFreshness(raw, nowMs);
   if (!raw || raw.missing || raw.fetchError) {
-    return { city, updatedLabel: "Sin actualización reciente", ubicRecent: false };
+    return { city, updatedLabel: meta.freshness, ubicRecent: false };
   }
-  const ts = raw.updatedAt || raw.ts;
-  if (!ts) {
-    return {
-      city,
-      updatedLabel: raw.recent === false ? "Sin actualización reciente" : "—",
-      ubicRecent: raw.recent !== false,
-    };
-  }
-  const ago = formatSpanishAgo(ts, new Date(nowMs));
-  const updatedLabel =
-    ago === "ahora" ? "Ahora" : ago.startsWith("hace") ? ago.charAt(0).toUpperCase() + ago.slice(1) : ago;
   return {
     city,
-    updatedLabel: raw.recent === false ? "Sin actualización reciente" : updatedLabel,
-    ubicRecent: raw.recent !== false,
+    updatedLabel: meta.freshness,
+    ubicRecent: meta.isRecent,
   };
 }
 
