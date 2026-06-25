@@ -39,30 +39,11 @@ import {
   DocsServicioEstadoPill,
   DOCUMENTOS_DEMO_ROW_CSS,
 } from "./features/documents/documentosEmpresaDemoUi.jsx";
-import {
-  ConductorOperationalProgressBand,
-  CONDUCTOR_PROGRESS_BAND_CSS,
-} from "./features/empresa/ConductorOperationalProgressBand.jsx";
-import {
-  ConductorUbicacionDemoBlock,
-  CONDUCTOR_UBICACION_DEMO_CSS,
-} from "./features/empresa/ConductorUbicacionDemoBlock.jsx";
-import { formatConductorUbicacionDemoDisplay } from "./features/empresa/conductorUbicacionDemoDisplay.js";
-import { formatUbicacionEmpresaFreshness } from "./domain/location/ubicacionSourceLabel.js";
-import {
-  isConductoresEmpresaDemoUi,
-  resolvePrincipalConductorIsDriving,
-} from "./features/empresa/conductorOperationalProgressBandModel.js";
-import {
-  ConductorNormaMetricPills,
-  CONDUCTOR_NORMA_PILLS_CSS,
-} from "./features/empresa/ConductorNormaMetricPills.jsx";
+import { isConductoresEmpresaDemoUi } from "./features/empresa/conductorOperationalProgressBandModel.js";
 import { EmpresaDashboardTower } from "./features/empresa/EmpresaDashboardTower.jsx";
 import { buildEmpresaDashboardTowerState } from "./features/empresa/empresaDashboardTowerModel.js";
-import { ConductorTelefonoMovilField } from "./features/empresa/ConductorTelefonoMovilField.jsx";
-import { ConductorVehiculoEmpresaFields } from "./features/empresa/ConductorVehiculoEmpresaFields.jsx";
+import { EmpresaFlotaConductoresPanel } from "./features/empresa/EmpresaFlotaConductoresPanel.jsx";
 import { guardarConductorVehiculoEmpresa, syncConductorVehiculoProfileToEmpresaFlota } from "./domain/empresa/conductorVehiculoEmpresa.js";
-import { resolveConductorTelefonoMovil } from "./features/empresa/conductorTelefonoMovil.js";
 import { demoDevError, demoDevWarn, isDemoDevUnlocked } from "./lib/demoDevUnlock.js";
 import { guardDemoCannotUseProduction } from "./lib/demoSafety.js";
 import {
@@ -14668,173 +14649,62 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
 
       {/* ── CONDUCTORES ── */}
       {flotaTab==="conductores"&&(
-        <div style={{padding:"14px 14px 80px"}}>
-          {isConductoresEmpresaDemoUi()?(
-            <style>{CONDUCTOR_PROGRESS_BAND_CSS}{CONDUCTOR_UBICACION_DEMO_CSS}</style>
-          ):null}
-          <style>{CONDUCTOR_NORMA_PILLS_CSS}</style>
-          {/* Invite */}
-          <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
-            {!addOpen?(
-              <button onClick={()=>setAddOpen(true)} style={{width:"100%",...empresaPrimaryBtnStyle(),padding:"11px",fontSize:14}}>
-                + Invitar conductor
-              </button>
-            ):(
-              <div>
-                <div style={{fontSize:13,fontWeight:700,color:tx,marginBottom:10}}>Invitar conductor</div>
-                {[{val:addForm.nombre,key:"nombre",ph:"Nombre completo *"},{val:addForm.matricula,key:"matricula",ph:"Matrícula del camión"},{val:addForm.email,key:"email",ph:"Email del conductor *",type:"email"}].map(({val,key,ph,type})=>(
-                  <input key={key} value={val} type={type||"text"} onChange={e=>setAddForm(p=>({...p,[key]:e.target.value}))} placeholder={ph}
-                    style={{width:"100%",background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"10px 13px",fontSize:14,color:tx,marginBottom:8,outline:"none",boxSizing:"border-box"}}/>
-                ))}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <button onClick={()=>setAddOpen(false)} style={{background:EMPRESA_UI.surfaceSoft,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"10px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
-                  <button onClick={añadirConductor} disabled={addLoading||!addForm.nombre.trim()||!addForm.email.trim()}
-                    style={{...empresaPrimaryBtnStyle(addLoading||!addForm.nombre.trim()||!addForm.email.trim()),padding:"10px",fontSize:13}}>
-                    {addLoading?"Enviando...":"Invitar"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Lista conductores */}
-          {conductores.length===0?(
-            <div style={{background:card,borderRadius:14,padding:"40px 20px",textAlign:"center",border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
-              <div style={{fontSize:16,fontWeight:650,color:tx,marginBottom:6}}>Sin conductores todavía</div>
-              <div style={{fontSize:13,color:su}}>Comparte el código con tus conductores</div>
-            </div>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              {conductores.map(c=>{
-                const sem=semaforo(c.norma);
-                const n=c.norma;
-                const journey=conductorJourneyInfo(c);
-                const liveLocation=c.user_id?ubicacionConductorByUid[c.user_id]:null;
-                const serviciosConductor=flotaServicios
-                  .filter(s=>s.conductor_id===c.user_id&&(s.estado==="en_curso"||s.estado==="asignado"))
-                  .sort((a,b)=>(a.estado==="en_curso"?0:1)-(b.estado==="en_curso"?0:1));
-                const servicioActual=serviciosConductor[0]||null;
-                const servicioRuta=servicioActual
-                  ? getFixedServiceRoute(servicioActual)
-                  : null;
-                const conductoresDemoUi=isConductoresEmpresaDemoUi();
-                const servicioStops=servicioActual?flotaStops[servicioActual.id]||[]:[];
-                const principalIsDriving=resolvePrincipalConductorIsDriving(
-                  servicioActual,
-                  conductores,
-                  conductorJourneyInfo,
-                );
-                const ubicacionDemo=conductoresDemoUi&&!c.pendiente
-                  ?formatConductorUbicacionDemoDisplay(liveLocation,fmtUbicacionConductorEmpresa,etaVisualClockMs)
-                  :null;
-                return(
-                  <div key={c.id} style={{background:card,borderRadius:14,padding:conductoresDemoUi?"12px 14px":"14px 16px",border:`1px solid ${EMPRESA_UI.border}`,borderLeft:`3px solid ${c.pendiente?"#cbd5e1":journey.open?sem.col:"#cbd5e1"}`,boxShadow:EMPRESA_UI.shadow}}>
-                    <div
-                      className={conductoresDemoUi?"conductor-card-demo-head":undefined}
-                      style={{
-                        display:"flex",
-                        justifyContent:"space-between",
-                        alignItems:"flex-start",
-                        gap:conductoresDemoUi?14:8,
-                        marginBottom:c.pendiente?0:conductoresDemoUi?8:10,
-                        flexWrap:conductoresDemoUi?"wrap":"nowrap",
-                      }}>
-                      <div style={{flex:conductoresDemoUi?"0 1 auto":"1 1 auto",minWidth:conductoresDemoUi?132:0,maxWidth:conductoresDemoUi?200:"none"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                          <span style={{width:8,height:8,borderRadius:"50%",background:c.pendiente?"#94a3b8":journey.open?sem.col:"#cbd5e1",flexShrink:0}}/>
-                          <span style={{fontSize:15,fontWeight:650,color:tx}}>{c.nombre||"Conductor"}</span>
-                          <span style={{fontSize:11,background:empresaTone(journey.open?sem.col:"#94A3B8").bg,color:empresaTone(journey.open?sem.col:"#94A3B8").fg,border:`1px solid ${empresaTone(journey.open?sem.col:"#94A3B8").border}`,borderRadius:999,padding:"2px 8px",fontWeight:600}}>{c.pendiente?"Sin vincular":journey.open?sem.label:"Fuera jornada"}</span>
-                        </div>
-                        {!c.pendiente&&(
-                          <ConductorVehiculoEmpresaFields
-                            conductorId={c.id}
-                            matricula={c.matricula||""}
-                            remolque={c.remolque||""}
-                            editable
-                            compact={conductoresDemoUi}
-                            ui={EMPRESA_UI}
-                            onSave={guardarVehiculoConductor}
-                          />
-                        )}
-                        {!c.pendiente&&(
-                          <ConductorTelefonoMovilField
-                            conductorId={c.id}
-                            value={resolveConductorTelefonoMovil(c)}
-                            editable
-                            compact={conductoresDemoUi}
-                            ui={EMPRESA_UI}
-                            onSave={guardarTelefonoMovilConductor}
-                          />
-                        )}
-                        {c.pendiente&&<div style={{fontSize:12,color:su,marginTop:4}}>Dale el código para que se vincule desde PERFIL</div>}
-                        {ubicacionDemo?(
-                          <ConductorUbicacionDemoBlock
-                            lugar={ubicacionDemo.lugar}
-                            freshness={ubicacionDemo.freshness}
-                            isRecent={ubicacionDemo.isRecent}
-                          />
-                        ):null}
-                        {!conductoresDemoUi&&!c.pendiente&&liveLocation&&(()=>{
-                          const uMeta=formatUbicacionEmpresaFreshness(liveLocation,etaVisualClockMs);
-                          return(
-                            <>
-                              <div style={{fontSize:13,color:tx,marginTop:8,fontWeight:600}}>Última ubicación · {fmtUbicacionConductorEmpresa(liveLocation)}</div>
-                              <div style={{fontSize:11,color:uMeta.isRecent?su:"#b45309",marginTop:2,fontWeight:600}}>{uMeta.freshness}</div>
-                            </>
-                          );
-                        })()}
-                        {!c.pendiente&&<div style={{fontSize:conductoresDemoUi?11:12,color:journey.color,marginTop:conductoresDemoUi?3:liveLocation?3:8,fontWeight:600}}>{journey.label.replace(/[🟢🟠⚪]/g,"").trim()}</div>}
-                        {!conductoresDemoUi&&!c.pendiente&&servicioActual&&(
-                          <div style={{fontSize:12,color:su,marginTop:4,lineHeight:1.35}}>
-                            Servicio actual: <span style={{color:tx,fontWeight:600}}>{servicioRuta}</span>
-                          </div>
-                        )}
-                      </div>
-                      {conductoresDemoUi&&!c.pendiente?(
-                        <ConductorOperationalProgressBand
-                          servicio={servicioActual}
-                          stops={servicioStops}
-                          nowMs={etaVisualClockMs}
-                          isDriving={principalIsDriving}
-                        />
-                      ):null}
-                      <div className={conductoresDemoUi?"conductor-card-demo-actions":undefined} style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end",flexShrink:0}}>
-                        <button onClick={()=>toggleActivo(c.id,c.activo)} style={{background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:8,padding:"5px 10px",fontSize:11,color:su,cursor:"pointer"}}>
-                          {c.activo?"Desactivar":"Activar"}
-                        </button>
-                        {!c.pendiente&&c.user_id&&(
-                          <button type="button" onClick={()=>actualizarConductorUbicacion(c.user_id)}
-                            disabled={!!ubicacionRefreshByUid[c.user_id]?.loading}
-                            style={{background:EMPRESA_UI.accentSoft,border:"1px solid #bfdbfe",borderRadius:8,padding:"4px 8px",fontSize:10,color:"#1d4ed8",cursor:ubicacionRefreshByUid[c.user_id]?.loading?"default":"pointer",fontWeight:600}}>
-                            {ubicacionRefreshByUid[c.user_id]?.loading?"Actualizando...":"↻ Ubicación"}
-                          </button>
-                        )}
-                        {!c.pendiente&&c.user_id&&ubicacionRefreshByUid[c.user_id]?.error&&(
-                          <div style={{fontSize:10,color:"#b45309",marginTop:4,fontWeight:700}}>{ubicacionRefreshByUid[c.user_id].error}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    {!c.pendiente&&n&&(
-                      <ConductorNormaMetricPills norma={n} fmtDur={fmtDur} empresaTone={empresaTone} />
-                    )}
-
-                    {!c.pendiente&&c.user_id&&(
-                      <button onClick={()=>setAsignarModal({id:c.user_id,nombre:c.nombre})}
-                        style={{width:"100%",...empresaPrimaryBtnStyle(),padding:"10px",fontSize:13,marginTop:10}}>
-                        Asignar servicio
-                      </button>
-                    )}
+        <EmpresaFlotaConductoresPanel
+          conductores={conductores}
+          flotaServicios={flotaServicios}
+          flotaStops={flotaStops}
+          flotaEvs={flotaEvs}
+          ubicacionConductorByUid={ubicacionConductorByUid}
+          ubicacionRefreshByUid={ubicacionRefreshByUid}
+          conductoresByUid={conductoresByUid}
+          nowMs={etaVisualClockMs}
+          ui={EMPRESA_UI}
+          empresaTone={empresaTone}
+          conductoresDemoUi={isConductoresEmpresaDemoUi()}
+          conductorJourneyInfo={conductorJourneyInfo}
+          semaforo={semaforo}
+          fmtDur={fmtDur}
+          formatLugar={fmtUbicacionConductorEmpresa}
+          empresaNombre={empresa?.nombre||"Empresa"}
+          empresaUserId={getAuthUid?.()||getUserId?.()||null}
+          nombreConductor={nombreConductor}
+          nombreResponsable={nombreResponsable}
+          showToast={showToast}
+          onToggleActivo={toggleActivo}
+          onRefreshUbicacion={actualizarConductorUbicacion}
+          onAsignarServicio={(uid,nombre)=>setAsignarModal({id:uid,nombre})}
+          onSaveVehiculo={guardarVehiculoConductor}
+          onSaveTelefono={guardarTelefonoMovilConductor}
+          onRefreshList={async()=>{await loadConductores(empresa.id);await refreshUbicacionConductores();}}
+          onAnularServicio={handleAnularServicioId}
+          onAsignarConductorServicio={handleAsignarConductorServicioId}
+          onEditarServicio={handleEditarServicioId}
+          onDcdtServicio={handleDcdtServicioId}
+          inviteBlock={(
+            <div style={{background:card,borderRadius:12,padding:"12px 14px",marginBottom:12,border:`1px solid ${EMPRESA_UI.border}`,boxShadow:EMPRESA_UI.shadow}}>
+              {!addOpen?(
+                <button onClick={()=>setAddOpen(true)} style={{width:"100%",...empresaPrimaryBtnStyle(),padding:"11px",fontSize:14}}>
+                  + Invitar conductor
+                </button>
+              ):(
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:tx,marginBottom:10}}>Invitar conductor</div>
+                  {[{val:addForm.nombre,key:"nombre",ph:"Nombre completo *"},{val:addForm.matricula,key:"matricula",ph:"Matrícula del camión"},{val:addForm.email,key:"email",ph:"Email del conductor *",type:"email"}].map(({val,key,ph,type})=>(
+                    <input key={key} value={val} type={type||"text"} onChange={e=>setAddForm(p=>({...p,[key]:e.target.value}))} placeholder={ph}
+                      style={{width:"100%",background:EMPRESA_UI.surfaceSoft,border:`1px solid ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"10px 13px",fontSize:14,color:tx,marginBottom:8,outline:"none",boxSizing:"border-box"}}/>
+                  ))}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                    <button onClick={()=>setAddOpen(false)} style={{background:EMPRESA_UI.surfaceSoft,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:9,padding:"10px",fontSize:13,cursor:"pointer"}}>Cancelar</button>
+                    <button onClick={añadirConductor} disabled={addLoading||!addForm.nombre.trim()||!addForm.email.trim()}
+                      style={{...empresaPrimaryBtnStyle(addLoading||!addForm.nombre.trim()||!addForm.email.trim()),padding:"10px",fontSize:13}}>
+                      {addLoading?"Enviando...":"Invitar"}
+                    </button>
                   </div>
-                );
-              })}
+                </div>
+              )}
             </div>
           )}
-
-          <button onClick={async()=>{await loadConductores(empresa.id);await refreshUbicacionConductores();}} style={{width:"100%",marginTop:16,background:EMPRESA_UI.surface,color:EMPRESA_UI.subtle,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:12,padding:"13px",fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:EMPRESA_UI.shadow}}>
-            Actualizar listado
-          </button>
-        </div>
+        />
       )}
 
       {/* ── SERVICIOS — centro operacional (PR-26/27) ── */}
