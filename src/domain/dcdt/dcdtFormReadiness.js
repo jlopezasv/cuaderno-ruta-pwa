@@ -7,7 +7,6 @@ import {
   isDescargaStop,
 } from "./descargaCargadorLink.js";
 import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
-import { stopOperationalTitleAt } from "../service/stopOperationalOrder.js";
 
 function hasText(val) {
   return Boolean(String(val || "").trim());
@@ -208,6 +207,8 @@ export function dcdtStatusLabel(status) {
   if (status === "parcial") return "pendiente parcial";
   return "pendiente";
 }
+
+import { stopOperationalTitleAt } from "../service/stopOperationalOrder.js";
 
 export function stopContractualTitle(stop, index, allStops = null) {
   if (Array.isArray(allStops) && allStops.length > 0) {

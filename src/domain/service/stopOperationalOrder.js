@@ -32,12 +32,12 @@ export function normalizeStopsOrden(stops) {
 }
 
 export function moveStopAtIndex(stops, index, direction) {
-  const arr = sortStopsByOrdenOperacional(stops);
+  const sorted = sortStopsByOrdenOperacional(stops);
   const j = index + direction;
-  if (j < 0 || j >= arr.length) return arr;
-  const next = [...arr];
-  [next[index], next[j]] = [next[j], next[index]];
-  return normalizeStopsOrden(next);
+  if (j < 0 || j >= sorted.length) return sorted;
+  const arr = [...sorted];
+  [arr[index], arr[j]] = [arr[j], arr[index]];
+  return normalizeStopsOrden(arr);
 }
 
 export function removeStopAtIndex(stops, index) {
@@ -74,8 +74,8 @@ const TITLE_ICON = {
 };
 
 /** Título UI según posición en la ruta operacional (Carga 1, Carga 2, Descarga 1…). */
-export function stopOperationalTitleAt(stopsInDisplayOrder, index) {
-  const list = Array.isArray(stopsInDisplayOrder) ? stopsInDisplayOrder : [];
+export function stopOperationalTitleAt(sortedStops, index) {
+  const list = sortStopsByOrdenOperacional(sortedStops);
   const stop = list[index];
   if (!stop) return "📍 Parada";
   const counters = { carga: 0, descarga: 0, carga_descarga: 0, otra: 0 };

@@ -47,7 +47,6 @@ import {
   moveStopAtIndex,
   normalizeStopsOrden,
   removeStopAtIndex,
-  sortStopsByOrdenOperacional,
 } from "../../domain/service/stopOperationalOrder.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
 import { persistDcdtVehiculoOverridesForServicio } from "../../domain/dcdt/dcdtModel.js";
@@ -128,7 +127,6 @@ export function EmpresaEditarServicioModal({
   const stopsLoadedRef = useRef(null);
 
   const rutaDesdeParadas = useMemo(() => routeTextFromStops(stops), [stops]);
-  const orderedStops = useMemo(() => sortStopsByOrdenOperacional(stops), [stops]);
   const mercanciaPreview = useMemo(() => mercanciaPreviewFromStops(stops), [stops]);
   const servicioDcdtPreview = useMemo(
     () => ({
@@ -189,7 +187,7 @@ export function EmpresaEditarServicioModal({
 
     const applyRows = (rows) => {
       if (!Array.isArray(rows) || !rows.length) return false;
-      setStops(normalizeStopsOrden(hydrateStopFormsFromRows(rows, servicio)));
+      setStops(hydrateStopFormsFromRows(rows, servicio));
       stopsLoadedRef.current = servicio.id;
       return true;
     };
@@ -226,35 +224,23 @@ export function EmpresaEditarServicioModal({
   const listaConductores = (conductores || []).filter((c) => c.user_id);
 
   function addStop() {
-    setStops((prev) => normalizeStopsOrden(appendOperationalStop(prev, emptyStopGeoForm({ tipo: "descarga" }))));
+    setStops((prev) => appendOperationalStop(prev, emptyStopGeoForm({ tipo: "descarga" })));
   }
   function addStopAfter(i) {
-    setStops((prev) =>
-      normalizeStopsOrden(insertStopAfterIndex(prev, i, emptyStopGeoForm({ tipo: "carga" }))),
-    );
+    setStops((prev) => insertStopAfterIndex(prev, i, emptyStopGeoForm({ tipo: "carga" })));
   }
   function removeStop(i) {
-    setStops((prev) => normalizeStopsOrden(removeStopAtIndex(prev, i)));
+    setStops((prev) => removeStopAtIndex(prev, i));
   }
   function moveStop(i, dir) {
-    setStops((prev) => normalizeStopsOrden(moveStopAtIndex(prev, i, dir)));
+    setStops((prev) => moveStopAtIndex(prev, i, dir));
   }
   const patchStop = useCallback((i, patch) => {
-    setStops((prev) => {
-      const ordered = sortStopsByOrdenOperacional(prev);
-      const target = ordered[i];
-      if (!target) return prev;
-      return normalizeStopsOrden(prev.map((s) => (s === target ? { ...s, ...patch } : s)));
-    });
+    setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   }, []);
 
   const changeStop = useCallback((i, field, val) => {
-    setStops((prev) => {
-      const ordered = sortStopsByOrdenOperacional(prev);
-      const target = ordered[i];
-      if (!target) return prev;
-      return normalizeStopsOrden(prev.map((s) => (s === target ? { ...s, [field]: val } : s)));
-    });
+    setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, [field]: val } : s)));
   }, []);
 
   const handlePartesCatalog = useCallback((next) => {
@@ -650,7 +636,7 @@ export function EmpresaEditarServicioModal({
         <div style={{ padding: "12px 16px", overflowY: "auto", flex: 1 }}>
           <style>{`
 @media (max-width: 900px) { .servicio-stops-grid-edit { grid-template-columns: 1fr !important; } }
-.servicio-stops-grid-edit { grid-template-columns: 1fr !important; }
+@media (min-width: 901px) { .servicio-stops-grid-edit { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
 @media (max-width: 1024px) {
   .servicio-stop-toolbar button {
     min-height: 44px !important;
@@ -738,7 +724,7 @@ export function EmpresaEditarServicioModal({
                     </div>
                   ) : null}
                   <div className="servicio-stops-grid-edit" style={{ display: "grid", gap: 12, marginBottom: 8 }}>
-                  {orderedStops.map((stop, i) => {
+                  {stops.map((stop, i) => {
                     const tone = getStopTone(stop);
                     return (
                     <div
@@ -753,7 +739,7 @@ export function EmpresaEditarServicioModal({
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
                         <div>
                           <div style={{ fontSize: 15, fontWeight: 800, color: tone.header }}>
-                            {stopContractualTitle(stop, i, orderedStops)}
+                            {stopContractualTitle(stop, i, stops)}
                           </div>
                           <select
                             value={stop.tipo}
@@ -770,7 +756,7 @@ export function EmpresaEditarServicioModal({
                         <ServicioStopToolbar
                           className="servicio-stop-toolbar"
                           index={i}
-                          total={orderedStops.length}
+                          total={stops.length}
                           onMoveUp={() => moveStop(i, -1)}
                           onMoveDown={() => moveStop(i, 1)}
                           onRemove={() => removeStop(i)}
@@ -786,10 +772,10 @@ export function EmpresaEditarServicioModal({
                         showGeoStatus={false}
                         empresaId={servicio?.empresa_id}
                         onPartesChange={handlePartesCatalog}
-                        allStops={orderedStops}
+                        allStops={stops}
                         partesCatalog={partesCatalog}
                       />
-                      {i < orderedStops.length - 1 ? (
+                      {i < stops.length - 1 ? (
                         <button
                           type="button"
                           onClick={() => addStopAfter(i)}

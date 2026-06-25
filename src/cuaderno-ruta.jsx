@@ -231,7 +231,6 @@ import {
   moveStopAtIndex,
   normalizeStopsOrden,
   removeStopAtIndex,
-  sortStopsByOrdenOperacional,
 } from "./domain/service/stopOperationalOrder.js";
 import { fetchPartesTransporte } from "./domain/dcdt/partesTransporteModel.js";
 import {
@@ -12313,7 +12312,6 @@ function AsignarServicioModal({
     empresaId,
   });
   const mercanciaPreview=useMemo(()=>mercanciaPreviewFromStops(stops),[stops]);
-  const orderedStops=useMemo(()=>sortStopsByOrdenOperacional(stops),[stops]);
   const servicioDcdtPreview=useMemo(
     ()=>({
       empresa_id:empresaId||null,
@@ -12333,29 +12331,19 @@ function AsignarServicioModal({
     overflow:"hidden",
     ...dragPanelStyle,
   };
-  function addStop(){setStops(prev=>normalizeStopsOrden(appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"}))));}
+  function addStop(){setStops(prev=>appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"})));}
   function addStopAfter(i){
-    setStops(prev=>normalizeStopsOrden(insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"}))));
+    setStops(prev=>insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"})));
   }
-  function removeStop(i){setStops(prev=>normalizeStopsOrden(removeStopAtIndex(prev,i)));}
+  function removeStop(i){setStops(prev=>removeStopAtIndex(prev,i));}
   function moveStop(i,dir){
-    setStops(prev=>normalizeStopsOrden(moveStopAtIndex(prev,i,dir)));
+    setStops(prev=>moveStopAtIndex(prev,i,dir));
   }
   function changeStop(i,field,val){
-    setStops(prev=>{
-      const ordered=sortStopsByOrdenOperacional(prev);
-      const target=ordered[i];
-      if(!target)return prev;
-      return normalizeStopsOrden(prev.map(s=>s===target?{...s,[field]:val}:s));
-    });
+    setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));
   }
   function patchStop(i,patch){
-    setStops(prev=>{
-      const ordered=sortStopsByOrdenOperacional(prev);
-      const target=ordered[i];
-      if(!target)return prev;
-      return normalizeStopsOrden(prev.map(s=>s===target?{...s,...patch}:s));
-    });
+    setStops(prev=>prev.map((s,idx)=>idx===i?{...s,...patch}:s));
   }
 
   const rutaDesdeParadas=useMemo(()=>routeTextFromStops(stops),[stops]);
@@ -12523,7 +12511,7 @@ function AsignarServicioModal({
       showGeoStatus={false}
       empresaId={empresaId}
       onPartesChange={setPartesCatalog}
-      allStops={orderedStops}
+      allStops={stops}
       partesCatalog={partesCatalog}
     />
   );
@@ -12535,17 +12523,17 @@ function AsignarServicioModal({
       <div style={{background:tone.bg,borderRadius:14,padding:"10px 12px",marginBottom:4,border:`1px solid ${tone.border}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
           <div>
-            <div style={{fontSize:15,fontWeight:800,color:tone.header}}>{stopContractualTitle(stop,i,orderedStops)}</div>
+            <div style={{fontSize:15,fontWeight:800,color:tone.header}}>{stopContractualTitle(stop,i,stops)}</div>
             <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
               style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,color:tx,outline:"none",marginTop:6}}>
               {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
             </select>
           </div>
-          <ServicioStopToolbar index={i} total={orderedStops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
+          <ServicioStopToolbar index={i} total={stops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
         </div>
         {renderStopFields(stop,i)}
       </div>
-      {i<orderedStops.length-1&&(
+      {i<stops.length-1&&(
         <button type="button" onClick={()=>addStopAfter(i)}
           style={{width:"100%",background:"transparent",border:`1px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:6,padding:"3px",fontSize:10,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4}}>
           + insertar aquí
@@ -12676,8 +12664,8 @@ function AsignarServicioModal({
                     {rutaDesdeParadas.origen||"—"} → {rutaDesdeParadas.destino||"—"}
                   </div>
                 )}
-                {orderedStops.map((stop,i)=>(
-                  <div key={`sum-${stop.orden}-${i}`} style={{fontSize:12,fontWeight:600,color:tx,lineHeight:1.45,marginBottom:i<orderedStops.length-1?3:0}}>
+                {stops.map((stop,i)=>(
+                  <div key={`sum-${stop.orden}-${i}`} style={{fontSize:12,fontWeight:600,color:tx,lineHeight:1.45,marginBottom:i<stops.length-1?3:0}}>
                     {formatNuevoServicioStopSummary(stop)}
                   </div>
                 ))}
@@ -12686,29 +12674,29 @@ function AsignarServicioModal({
           </div>
 
           {routeEditorOpen?(
-            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:"1fr",gap:isMobile?8:12}}>
-              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6}}>Editor de paradas</div>
-              {orderedStops.map((stop,i)=>renderFullStopEditor(stop,i))}
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2, minmax(0, 1fr))",gap:isMobile?8:12}}>
+              <div style={{fontSize:10,color:su,fontWeight:700,marginBottom:6,gridColumn:isMobile?"1":"1 / -1"}}>Editor de paradas</div>
+              {stops.map((stop,i)=>renderFullStopEditor(stop,i))}
               <button type="button" onClick={addStop}
                 style={{width:"100%",background:"transparent",border:`1.5px dashed ${EMPRESA_UI.borderStrong}`,borderRadius:9,padding:"8px",fontSize:13,color:EMPRESA_UI.accent,cursor:"pointer",marginBottom:4,gridColumn:isMobile?"1":"1 / -1"}}>
                 + Añadir parada
               </button>
             </div>
           ):(
-            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:"1fr",gap:isMobile?8:12}}>
-              {orderedStops.map((stop,i)=>{
+            <div style={{marginBottom:8,display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2, minmax(0, 1fr))",gap:isMobile?8:12}}>
+              {stops.map((stop,i)=>{
                 const tone=getStopTone(stop);
                 return(
                   <div key={`cmp-${stop.orden}-${i}`} style={{background:tone.bg,border:`1px solid ${tone.border}`,borderRadius:14,padding:"10px 12px",marginBottom:0}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
                       <div>
-                        <div style={{fontSize:15,fontWeight:800,color:tone.header,whiteSpace:"nowrap"}}>{stopContractualTitle(stop,i,orderedStops)}</div>
+                        <div style={{fontSize:15,fontWeight:800,color:tone.header,whiteSpace:"nowrap"}}>{stopContractualTitle(stop,i,stops)}</div>
                         <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
                           style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"2px 5px",fontSize:10,color:tx,outline:"none",maxWidth:120,marginTop:6}}>
                           {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
                         </select>
                       </div>
-                      <ServicioStopToolbar index={i} total={orderedStops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
+                      <ServicioStopToolbar index={i} total={stops.length} onMoveUp={()=>moveStop(i,-1)} onMoveDown={()=>moveStop(i,1)} onRemove={()=>removeStop(i)}/>
                     </div>
                     {renderStopFields(stop,i)}
                   </div>
@@ -17750,24 +17738,16 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
     ...dragPanelStyle,
   };
   const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
-  const orderedStops=useMemo(()=>sortStopsByOrdenOperacional(stops),[stops]);
 
-  function changeStop(i,field,val){
-    setStops(prev=>{
-      const ordered=sortStopsByOrdenOperacional(prev);
-      const target=ordered[i];
-      if(!target)return prev;
-      return normalizeStopsOrden(prev.map(s=>s===target?{...s,[field]:val}:s));
-    });
-  }
-  function addStop(){setStops(prev=>normalizeStopsOrden(appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"}))));}
+  function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
+  function addStop(){setStops(prev=>appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"})));}
   function addStopAfter(i){
-    setStops(prev=>normalizeStopsOrden(insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"}))));
+    setStops(prev=>insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"})));
   }
   function moveStop(i,dir){
-    setStops(prev=>normalizeStopsOrden(moveStopAtIndex(prev,i,dir)));
+    setStops(prev=>moveStopAtIndex(prev,i,dir));
   }
-  function removeStop(i){setStops(prev=>normalizeStopsOrden(removeStopAtIndex(prev,i)));}
+  function removeStop(i){setStops(prev=>removeStopAtIndex(prev,i));}
   function validarPaso1(){if(!origen.trim()){setError("Escribe el origen");return false;}if(!destino.trim()){setError("Escribe el destino");return false;}setError("");return true;}
   function validarPaso2(){
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return false;}
@@ -17900,11 +17880,11 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
             <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#1D4ED8",lineHeight:1.6}}>
               🗺 Escribe el nombre o dirección. Usa ↑↓ para reordenar o "+ insertar aquí" para añadir en medio.
             </div>
-            {orderedStops.map((stop,i)=>(
+            {stops.map((stop,i)=>(
               <div key={stop.orden}>
-                <StopFormRow stop={stop} index={i} total={orderedStops.length} onChange={changeStop} onRemove={removeStop}
-                  onMoveUp={i>0?()=>moveStop(i,-1):null} onMoveDown={i<orderedStops.length-1?()=>moveStop(i,1):null}/>
-                {i<orderedStops.length-1&&(
+                <StopFormRow stop={stop} index={i} total={stops.length} onChange={changeStop} onRemove={removeStop}
+                  onMoveUp={i>0?()=>moveStop(i,-1):null} onMoveDown={i<stops.length-1?()=>moveStop(i,1):null}/>
+                {i<stops.length-1&&(
                   <button onClick={()=>addStopAfter(i)}
                     style={{width:"100%",background:"transparent",border:"1px dashed #93C5FD",borderRadius:6,padding:"4px",fontSize:11,color:"#1D4ED8",cursor:"pointer",marginBottom:4}}>
                     + insertar parada aquí
