@@ -44,7 +44,7 @@ export async function fetchConductorVehiculoForDcdt(userId, empresaId = null) {
 
   let profile = null;
   const pr = await sbFetch(
-    `/rest/v1/profiles?id=eq.${userId}&select=id,nombre,matricula,remolque&limit=1`,
+    `/rest/v1/profiles?id=eq.${userId}&select=id,nombre,matricula,remolque,tipo_vehiculo&limit=1`,
   );
   if (pr.ok) {
     const rows = await pr.json().catch(() => []);
@@ -57,6 +57,7 @@ export async function fetchConductorVehiculoForDcdt(userId, empresaId = null) {
     nombre: pickStr(ce?.nombre, profile?.nombre) || null,
     matricula: pickStr(ce?.matricula, profile?.matricula) || null,
     remolque: pickStr(ce?.remolque, profile?.remolque) || null,
+    tipo_vehiculo: pickStr(profile?.tipo_vehiculo) || "articulado",
   };
 }
 

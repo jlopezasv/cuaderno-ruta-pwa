@@ -13376,6 +13376,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             nombre:nombreReal,
             matricula:matriculaReal,
             remolque:remolqueReal,
+            tipo_vehiculo:perfil[0]?.tipo_vehiculo||r.tipo_vehiculo||"articulado",
             telefono_movil:r.telefono_movil||"",
             telefono:perfil[0]?.telefono||"",
             norma:normaC,

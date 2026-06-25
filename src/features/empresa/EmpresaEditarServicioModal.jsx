@@ -135,6 +135,7 @@ export function EmpresaEditarServicioModal({
     conductorId: conductorSel || null,
     conductores,
     empresaId: servicio?.empresa_id || null,
+    servicioId: servicio?.id || null,
   });
 
   useEffect(() => {

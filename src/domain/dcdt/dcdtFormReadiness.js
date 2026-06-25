@@ -76,7 +76,11 @@ export function resolveDcdtReadinessFromForm({
         },
         mercancia: buildMercanciaDatosPatch(mercancia),
         transportista: { use_empresa: true },
-        vehiculo: { use_conductor_matricula: true, matricula_override: null },
+        vehiculo: {
+          use_conductor_matricula: true,
+          matricula_override: hasText(matricula) ? String(matricula).trim() : null,
+          remolque_override: hasText(remolque) ? String(remolque).trim() : null,
+        },
         stops: [],
       },
     });

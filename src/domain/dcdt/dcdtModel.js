@@ -701,11 +701,12 @@ export async function persistDcdtVehiculoOverridesForServicio(
   { matricula = null, remolque = null } = {},
 ) {
   if (!servicioId) return { updated: 0 };
-  const mat = String(matricula ?? "").trim();
-  const rem = String(remolque ?? "").trim();
-  if (!mat && !rem) return { updated: 0 };
+  const mat = matricula != null ? String(matricula).trim() : "";
+  const rem = remolque != null ? String(remolque).trim() : "";
 
   const rows = await fetchAllDcdtByServicio(servicioId);
+  if (!rows.length) return { updated: 0 };
+
   let updated = 0;
   for (const dcdt of rows) {
     if (!dcdt?.id) continue;
@@ -714,8 +715,8 @@ export async function persistDcdtVehiculoOverridesForServicio(
       vehiculo: {
         ...(dcdt.datos?.vehiculo || {}),
         use_conductor_matricula: true,
-        matricula_override: mat || dcdt.datos?.vehiculo?.matricula_override || null,
-        remolque_override: rem || dcdt.datos?.vehiculo?.remolque_override || null,
+        matricula_override: mat || null,
+        remolque_override: rem || null,
       },
     };
     await saveDcdtDatos(dcdt.id, nextDatos, dcdt.estado, { skipPdfStale: true });
