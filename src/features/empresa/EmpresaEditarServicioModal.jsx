@@ -41,13 +41,6 @@ import { OfficeResponsableServicioField } from "./OfficeResponsableServicioField
 import { DcdtReadinessPanel } from "../dcdt/DcdtReadinessPanel.jsx";
 import { mercanciaPreviewFromStops } from "../../domain/dcdt/stopMercanciaMeta.js";
 import { stopContractualTitle } from "../../domain/dcdt/dcdtFormReadiness.js";
-import {
-  appendOperationalStop,
-  insertStopAfterIndex,
-  moveStopAtIndex,
-  normalizeStopsOrden,
-  removeStopAtIndex,
-} from "../../domain/service/stopOperationalOrder.js";
 import { syncDcdtServiciosAfterStopsPersisted } from "../../domain/dcdt/dcdtServicioSync.js";
 import { persistDcdtVehiculoOverridesForServicio } from "../../domain/dcdt/dcdtModel.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
@@ -224,16 +217,21 @@ export function EmpresaEditarServicioModal({
   const listaConductores = (conductores || []).filter((c) => c.user_id);
 
   function addStop() {
-    setStops((prev) => appendOperationalStop(prev, emptyStopGeoForm({ tipo: "descarga" })));
-  }
-  function addStopAfter(i) {
-    setStops((prev) => insertStopAfterIndex(prev, i, emptyStopGeoForm({ tipo: "carga" })));
+    setStops((prev) => [...prev, emptyStopGeoForm({ orden: prev.length + 1, tipo: "descarga" })]);
   }
   function removeStop(i) {
-    setStops((prev) => removeStopAtIndex(prev, i));
+    setStops((prev) => prev.filter((_, idx) => idx !== i));
   }
   function moveStop(i, dir) {
-    setStops((prev) => moveStopAtIndex(prev, i, dir));
+    setStops((prev) => {
+      const arr = [...prev];
+      const j = i + dir;
+      if (j < 0 || j >= arr.length) return arr;
+      const tmpOrden = arr[i].orden;
+      arr[i] = { ...arr[i], orden: arr[j].orden };
+      arr[j] = { ...arr[j], orden: tmpOrden };
+      return [...arr].sort((a, b) => a.orden - b.orden);
+    });
   }
   const patchStop = useCallback((i, patch) => {
     setStops((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
@@ -347,9 +345,7 @@ export function EmpresaEditarServicioModal({
           pushAudit("fecha_inicio", fi0, fi1);
         }
 
-        const stopsPayload = prepareStopsGeoForPersist(
-          normalizeDescargaCargadorLinks(normalizeStopsOrden(stops)),
-        );
+        const stopsPayload = prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
         if (isDemoApp()) {
           const carga = stops.find((s) => String(s.tipo).toLowerCase() === "carga");
           const descarga = [...stops].reverse().find((s) => String(s.tipo).toLowerCase() === "descarga");
@@ -637,13 +633,6 @@ export function EmpresaEditarServicioModal({
           <style>{`
 @media (max-width: 900px) { .servicio-stops-grid-edit { grid-template-columns: 1fr !important; } }
 @media (min-width: 901px) { .servicio-stops-grid-edit { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
-@media (max-width: 1024px) {
-  .servicio-stop-toolbar button {
-    min-height: 44px !important;
-    padding: 10px 16px !important;
-    font-size: 14px !important;
-  }
-}
 `}</style>
           <div
             style={{
@@ -739,7 +728,7 @@ export function EmpresaEditarServicioModal({
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
                         <div>
                           <div style={{ fontSize: 15, fontWeight: 800, color: tone.header }}>
-                            {stopContractualTitle(stop, i, stops)}
+                            {stopContractualTitle(stop, i)}
                           </div>
                           <select
                             value={stop.tipo}
@@ -754,7 +743,6 @@ export function EmpresaEditarServicioModal({
                           </select>
                         </div>
                         <ServicioStopToolbar
-                          className="servicio-stop-toolbar"
                           index={i}
                           total={stops.length}
                           onMoveUp={() => moveStop(i, -1)}
@@ -775,25 +763,6 @@ export function EmpresaEditarServicioModal({
                         allStops={stops}
                         partesCatalog={partesCatalog}
                       />
-                      {i < stops.length - 1 ? (
-                        <button
-                          type="button"
-                          onClick={() => addStopAfter(i)}
-                          style={{
-                            width: "100%",
-                            background: "transparent",
-                            border: `1px dashed ${EMPRESA_UI.border}`,
-                            borderRadius: 8,
-                            padding: "6px",
-                            fontSize: 11,
-                            color: EMPRESA_UI.accent,
-                            cursor: "pointer",
-                            marginTop: 10,
-                          }}
-                        >
-                          + Insertar parada aquí
-                        </button>
-                      ) : null}
                     </div>
                   );
                   })}

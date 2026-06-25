@@ -1,6 +1,5 @@
 import { getServicioOperacionMeta } from "./serviceOperacionMeta.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
-import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 /** Paradas con tipo carga (incl. carga_descarga, muelle). */
 function isCargaTipo(tipo) {
@@ -233,7 +232,9 @@ function placeFromLegacyColumn(value) {
  * Extrae carga/descarga de paradas ordenadas (sin mezclar con cliente).
  */
 export function deriveOperationalPlacesFromStops(stops) {
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = Array.isArray(stops)
+    ? [...stops].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0))
+    : [];
   let carga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
   let descarga = { nombre: "", direccion: "", empresa: "", provincia: "", pais: "", codigo_postal: "" };
   for (const st of sorted) {

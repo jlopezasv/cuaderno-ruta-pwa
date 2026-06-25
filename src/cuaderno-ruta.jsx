@@ -225,13 +225,6 @@ import { syncDcdtServiciosAfterStopsPersisted, onStopEstadoOperativoChange } fro
 import { withOperationTimeout } from "./domain/service/operationTimeout.js";
 import { normalizeDescargaCargadorLinks } from "./domain/dcdt/descargaCargadorLink.js";
 import { stopContractualTitle } from "./domain/dcdt/dcdtFormReadiness.js";
-import {
-  appendOperationalStop,
-  insertStopAfterIndex,
-  moveStopAtIndex,
-  normalizeStopsOrden,
-  removeStopAtIndex,
-} from "./domain/service/stopOperationalOrder.js";
 import { fetchPartesTransporte } from "./domain/dcdt/partesTransporteModel.js";
 import {
   defaultStopCountry,
@@ -12331,13 +12324,31 @@ function AsignarServicioModal({
     overflow:"hidden",
     ...dragPanelStyle,
   };
-  function addStop(){setStops(prev=>appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"})));}
+  function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
-    setStops(prev=>insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"})));
+    // Insertar después del índice i con orden intermedio
+    setStops(prev=>{
+      const arr=[...prev];
+      const ordenAntes=arr[i].orden;
+      const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
+      const nuevoOrden=(ordenAntes+ordenDespues)/2;
+      const newStop=emptyStopGeoForm({orden:nuevoOrden,tipo:"carga"});
+      arr.splice(i+1,0,newStop);
+      return arr;
+    });
   }
-  function removeStop(i){setStops(prev=>removeStopAtIndex(prev,i));}
+  function removeStop(i){setStops(prev=>prev.filter((_,idx)=>idx!==i));}
   function moveStop(i,dir){
-    setStops(prev=>moveStopAtIndex(prev,i,dir));
+    setStops(prev=>{
+      const arr=[...prev];
+      const j=i+dir;
+      if(j<0||j>=arr.length)return arr;
+      // Intercambiar orden
+      const tmpOrden=arr[i].orden;
+      arr[i]={...arr[i],orden:arr[j].orden};
+      arr[j]={...arr[j],orden:tmpOrden};
+      return [...arr].sort((a,b)=>a.orden-b.orden);
+    });
   }
   function changeStop(i,field,val){
     setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));
@@ -12415,7 +12426,7 @@ function AsignarServicioModal({
           skipEnsureStops:true,
         });
       }
-      const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(normalizeStopsOrden(stops)));
+      const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
       await persistServicioStopsTrasCrear({
         servicioId:sv.id,
         stops:stopsPrepared,
@@ -12523,7 +12534,7 @@ function AsignarServicioModal({
       <div style={{background:tone.bg,borderRadius:14,padding:"10px 12px",marginBottom:4,border:`1px solid ${tone.border}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
           <div>
-            <div style={{fontSize:15,fontWeight:800,color:tone.header}}>{stopContractualTitle(stop,i,stops)}</div>
+            <div style={{fontSize:15,fontWeight:800,color:tone.header}}>{stopContractualTitle(stop,i)}</div>
             <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
               style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,color:tx,outline:"none",marginTop:6}}>
               {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
@@ -12690,7 +12701,7 @@ function AsignarServicioModal({
                   <div key={`cmp-${stop.orden}-${i}`} style={{background:tone.bg,border:`1px solid ${tone.border}`,borderRadius:14,padding:"10px 12px",marginBottom:0}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8,flexWrap:"wrap"}}>
                       <div>
-                        <div style={{fontSize:15,fontWeight:800,color:tone.header,whiteSpace:"nowrap"}}>{stopContractualTitle(stop,i,stops)}</div>
+                        <div style={{fontSize:15,fontWeight:800,color:tone.header,whiteSpace:"nowrap"}}>{stopContractualTitle(stop,i)}</div>
                         <select value={stop.tipo} onChange={e=>changeStop(i,"tipo",e.target.value)}
                           style={{background:EMPRESA_UI.surface,border:`1px solid ${EMPRESA_UI.border}`,borderRadius:6,padding:"2px 5px",fontSize:10,color:tx,outline:"none",maxWidth:120,marginTop:6}}>
                           {STOP_TIPOS_FORM.map(t=><option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
@@ -17740,14 +17751,29 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
   const iStyle={width:"100%",background:bg,border:"1.5px solid #CBD5E1",borderRadius:9,padding:"11px 13px",fontSize:15,color:tx,outline:"none",boxSizing:"border-box"};
 
   function changeStop(i,field,val){setStops(prev=>prev.map((s,idx)=>idx===i?{...s,[field]:val}:s));}
-  function addStop(){setStops(prev=>appendOperationalStop(prev,emptyStopGeoForm({tipo:"descarga"})));}
+  function addStop(){setStops(prev=>[...prev,emptyStopGeoForm({orden:prev.length+1,tipo:"descarga"})]);}
   function addStopAfter(i){
-    setStops(prev=>insertStopAfterIndex(prev,i,emptyStopGeoForm({tipo:"carga"})));
+    setStops(prev=>{
+      const arr=[...prev];
+      const ordenAntes=arr[i].orden;
+      const ordenDespues=arr[i+1]?.orden??ordenAntes+1;
+      const nuevoOrden=(ordenAntes+ordenDespues)/2;
+      arr.splice(i+1,0,emptyStopGeoForm({orden:nuevoOrden,tipo:"carga"}));
+      return arr;
+    });
   }
   function moveStop(i,dir){
-    setStops(prev=>moveStopAtIndex(prev,i,dir));
+    setStops(prev=>{
+      const arr=[...prev];
+      const j=i+dir;
+      if(j<0||j>=arr.length)return arr;
+      const tmpOrden=arr[i].orden;
+      arr[i]={...arr[i],orden:arr[j].orden};
+      arr[j]={...arr[j],orden:tmpOrden};
+      return [...arr].sort((a,b)=>a.orden-b.orden);
+    });
   }
-  function removeStop(i){setStops(prev=>removeStopAtIndex(prev,i));}
+  function removeStop(i){setStops(prev=>prev.filter((_,idx)=>idx!==i));}
   function validarPaso1(){if(!origen.trim()){setError("Escribe el origen");return false;}if(!destino.trim()){setError("Escribe el destino");return false;}setError("");return true;}
   function validarPaso2(){
     if(stops.some(s=>!s.nombre.trim())){setError("Todas las paradas necesitan un nombre");return false;}
@@ -17786,7 +17812,7 @@ function CrearServicioModal({uid,conductorNombre="Conductor",onClose,onCreado,on
       );
       const sv=Array.isArray(srData)?srData[0]:srData;
       if(!sv?.id)throw new Error("No se pudo crear el servicio");
-      const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(normalizeStopsOrden(stops)));
+      const stopsPrepared=prepareStopsGeoForPersist(normalizeDescargaCargadorLinks(stops));
       await traceServiceCreateStep(
         "INSERT stops",
         { servicioId: sv.id, stopCount: stops.length },

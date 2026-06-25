@@ -1,5 +1,4 @@
 import { SERVICIO_ESTADOS_ACTIVOS } from "../fleet/serviceStatus";
-import { getStopOrdenOperacional, sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 export function isServiceActive(service) {
   return SERVICIO_ESTADOS_ACTIVOS.includes(service?.estado);
@@ -10,13 +9,13 @@ export function isStopOperationallyComplete(stop) {
 }
 
 export function areAllStopsComplete(stops) {
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   if (!sorted.length) return false;
   return sorted.every(isStopOperationallyComplete);
 }
 
 export function getCurrentStop(stops) {
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   const incomplete = sorted.filter((s) => !isStopOperationallyComplete(s));
   const inMuelle = incomplete.find((s) => s.estado === "llegado");
   if (inMuelle) return inMuelle;
@@ -26,10 +25,10 @@ export function getCurrentStop(stops) {
 /** Parada anterior en `orden` que sigue pendiente (para aviso no bloqueante al saltar orden). */
 export function findEarlierPendingStopInRoute(stops, targetStop) {
   if (!targetStop?.id) return null;
-  const targetOrden = getStopOrdenOperacional(targetStop);
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const targetOrden = Number(targetStop.orden) || 0;
+  const sorted = [...(stops || [])].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
   for (const stop of sorted) {
-    if (getStopOrdenOperacional(stop) >= targetOrden) break;
+    if ((Number(stop.orden) || 0) >= targetOrden) break;
     if (!isStopOperationallyComplete(stop)) return stop;
   }
   return null;
@@ -37,7 +36,7 @@ export function findEarlierPendingStopInRoute(stops, targetStop) {
 
 /** Solo la parada operativa actual debe quedar expandida; null = todas plegadas. */
 export function resolveExpandedStopId(stops, servicio) {
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   const estado = String(servicio?.estado || "").toLowerCase();
   if (estado === "completado" || estado === "cerrado") return null;
   if (areAllStopsComplete(sorted)) return null;

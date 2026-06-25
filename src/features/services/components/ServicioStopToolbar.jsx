@@ -13,13 +13,13 @@ const toolBtn = (disabled, variant = "default") => ({
   whiteSpace: "nowrap",
 });
 
-export function ServicioStopToolbar({ className = "", index, total, onMoveUp, onMoveDown, onRemove }) {
+export function ServicioStopToolbar({ index, total, onMoveUp, onMoveDown, onRemove }) {
   const canUp = index > 0;
   const canDown = index < total - 1;
   const canRemove = total > 1;
 
   return (
-    <div className={className} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
       <button type="button" disabled={!canUp} onClick={onMoveUp} style={toolBtn(!canUp)} title="Subir parada">
         ↑ Subir
       </button>

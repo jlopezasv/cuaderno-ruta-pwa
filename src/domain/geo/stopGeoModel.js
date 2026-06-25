@@ -2,7 +2,6 @@ import { defaultStopCountry } from "./postalCodeLookup.js";
 import { formatStopNotesForDisplay, getStopOperacionMeta, mergeStopOperacionMeta } from "../service/stopOperacionMeta.js";
 import { getServicioMercanciaFromMeta } from "../dcdt/servicioMercanciaMeta.js";
 import { emptyStopMercancia, getStopMercanciaFromStop, stopMercanciaFormPatch } from "../dcdt/stopMercanciaMeta.js";
-import { sortStopsByOrdenOperacional } from "../service/stopOperationalOrder.js";
 
 const GEO_META_KEYS = ["pais", "codigo_postal", "provincia", "geo_lat", "geo_lon", "empresa_logistica"];
 
@@ -63,8 +62,7 @@ export function stopRowToGeoForm(row) {
  * Hidrata formularios de parada desde filas persistidas (+ migración mercancía legacy en servicio).
  */
 export function hydrateStopFormsFromRows(rows, servicio = null) {
-  const sorted = sortStopsByOrdenOperacional(rows);
-  const forms = (Array.isArray(sorted) ? sorted : []).map(stopRowToGeoForm);
+  const forms = (Array.isArray(rows) ? rows : []).map(stopRowToGeoForm);
   if (!servicio) return forms;
   const svcMerc = getServicioMercanciaFromMeta(servicio);
   const hasSvc =

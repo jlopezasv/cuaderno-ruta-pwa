@@ -2,14 +2,13 @@ import { geocode, getRoute, buildPlan, TRUCK_KMH } from "../route/routePlanning.
 import { formatOperationalEtaLabel } from "./etaFormatter.js";
 import { geocodeQueryFromPlace } from "./serviceOperationalPlaces.js";
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
-import { sortStopsByOrdenOperacional } from "./stopOperationalOrder.js";
 
 /**
  * Paradas relevantes para ETA: en curso solo pendientes/llegados;
  * asignado incluye todas ordenadas.
  */
 function stopsForEta(stops, serviceEstado) {
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = [...(stops || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
   if (serviceEstado === "en_curso") {
     return sorted.filter((s) => s.estado !== "completado");
   }

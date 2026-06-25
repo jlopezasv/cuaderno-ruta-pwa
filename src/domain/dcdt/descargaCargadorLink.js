@@ -1,5 +1,4 @@
 import { getStopOperacionMeta } from "../service/stopOperacionMeta.js";
-import { sortStopsByOrdenOperacional } from "../service/stopOperationalOrder.js";
 import { cargadorIdFromStop } from "./dcdtCargadorGroups.js";
 
 export function isDescargaStop(stop) {
@@ -30,7 +29,7 @@ export function collectDistinctCargadorIdsFromStops(stops) {
 /** Opciones para el selector: cargadores ya elegidos en paradas de carga. */
 export function cargadorOptionsForDescargaLink(stops, partesCatalog = []) {
   const seen = new Map();
-  const sorted = sortStopsByOrdenOperacional(stops);
+  const sorted = [...(stops || [])].sort((a, b) => (Number(a.orden) || 0) - (Number(b.orden) || 0));
   let idx = 0;
   for (const s of sorted) {
     if (!isCargaStopTipo(s)) continue;
