@@ -185,7 +185,7 @@ export function EmpresaFlotaConductorServicioModal({
             ubicRefresh={ubicRefresh}
             normaC={normaC}
             conductor={conductor}
-            nombreConductor={nombreCond}
+            nombreConductor={nombreConductor}
             responsableLine={responsableLine}
             operationalMeta={rowMeta?.operationalMeta}
             lastActivity={rowMeta?.lastActivity}
