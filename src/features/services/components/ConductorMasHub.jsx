@@ -13,6 +13,7 @@ const UI = {
 
 const HUB_ITEMS = [
   { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos del viaje" },
+  { id: "deca", icon: "📋", label: "DeCA", hint: "Mis documentos de control" },
   { id: "hoy", icon: "◷", label: "Hoy", hint: "Jornada y tacógrafo" },
   { id: "resumen", icon: "▤", label: "Resumen", hint: "Actividad · IA · Historial" },
   { id: "ruta", icon: "◎", label: "Ruta", hint: "Mapa y navegación" },
@@ -68,13 +69,14 @@ export function ConductorMasTripPicker({ trips, onSelect }) {
   );
 }
 
-export function ConductorMasHub({ onSelect, uid = null, showToast }) {
+export function ConductorMasHub({ onSelect, uid = null, showToast, showAutonomoDeca = false }) {
+  const items = showAutonomoDeca ? HUB_ITEMS : HUB_ITEMS.filter((i) => i.id !== "deca");
   return (
     <div style={{ padding: "16px 14px 88px", background: UI.page, minHeight: "70vh" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.2, marginBottom: 14 }}>MÁS</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <ConductorManualLocationCard uid={uid} showToast={showToast} />
-        {HUB_ITEMS.map((item) => (
+        {items.map((item) => (
           <button
             key={item.id}
             type="button"

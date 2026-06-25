@@ -374,6 +374,8 @@ import { EquipoInvitacionModal, buildEquipoDeepLink } from "./components/EquipoI
 import { getConductorTabs } from "./navigation/conductorTabs";
 import { ConductorSimplifiedParadasTab } from "./features/services/components/ConductorSimplifiedParadasTab.jsx";
 import { ConductorMasHub, ConductorMasBackBar, ConductorMasTripPicker } from "./features/services/components/ConductorMasHub.jsx";
+import { AutonomoDecaPanel } from "./features/dcdt/AutonomoDecaPanel.jsx";
+import { resolveCanUseAutonomoDeca } from "./domain/dcdt/decaAutonomoVisibility.js";
 import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
 import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
 import { fetchServiciosForMasTripPicker } from "./domain/service/driverFlatStopList.js";
@@ -2171,6 +2173,7 @@ function AppInner(){
   const[user,setUser]=useState(null);
   const[tab,setTab]=useState(()=>getConductorDefaultTabId());
   const[masSub,setMasSub]=useState(null);
+  const[showAutonomoDeca,setShowAutonomoDeca]=useState(false);
   const[viajeActivo,setViajeActivo]=useState(()=>{try{const v=localStorage.getItem("viaje_activo");return v?JSON.parse(v):null;}catch{return null;}});
   useEffect(()=>{
     if(!navigator.serviceWorker)return;
@@ -2231,6 +2234,15 @@ function AppInner(){
     if(caps?.accountType&&caps?.features&&Object.keys(caps.features).length>0)return;
     bootstrapAuthSession(uid,sbSelect).catch(()=>{});
   },[user,authChecked]);
+
+  useEffect(()=>{
+    const uid=getUserId();
+    if(!uid||!authChecked){setShowAutonomoDeca(false);return;}
+    const caps=getStoredAuthSession(uid)?.capabilities;
+    resolveCanUseAutonomoDeca(uid,{accountType:caps?.accountType||prof.tipo_cuenta})
+      .then(setShowAutonomoDeca)
+      .catch(()=>setShowAutonomoDeca(false));
+  },[user,authChecked,prof.tipo_cuenta]);
 
   // Detectar sesión caducada y forzar re-login
   useEffect(()=>{
@@ -3229,6 +3241,7 @@ function AppInner(){
   const openMasServicio=()=>{setTab("mas");setMasSub("servicio");};
   const openServicioTab=()=>setTab(getConductorDefaultTabId());
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
+  const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDeca;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
   const showResumen=tab==="resumen"||(conductorSimplified&&tab==="mas"&&masSub==="resumen");
@@ -3237,7 +3250,7 @@ function AppInner(){
   const showPerfil=tab==="perfil"||(conductorSimplified&&tab==="mas"&&masSub==="perfil");
   const showServicio=tab==="servicio"&&!conductorSimplified;
   const masBack=conductorSimplified&&tab==="mas"&&!!masSub?()=>setMasSub(null):null;
-  const masTitles={servicio:"Servicio",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
+  const masTitles={servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3327,7 +3340,14 @@ function AppInner(){
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDeca}/>}
+
+        {showMasDeca&&(
+          <>
+            <ConductorMasBackBar title={masTitles.deca} onBack={masBack}/>
+            <AutonomoDecaPanel uid={getUserId()} profile={prof} showToast={showToast}/>
+          </>
+        )}
 
         {showMasServicio&&(
           <>
