@@ -3,10 +3,9 @@ import { DECA_AUTONOMO_ESTADO, DECA_PORTES_OPTIONS } from "../../domain/dcdt/dec
 import {
   canEditAutonomoDeca,
   createAutonomoDeca,
-  markAutonomoDecaPdfGenerado,
   saveAutonomoDecaDatos,
 } from "../../domain/dcdt/decaAutonomoModel.js";
-import { downloadAutonomoDecaPdf } from "../../domain/dcdt/decaAutonomoPdf.js";
+import { generateAndPersistAutonomoDecaPdf } from "../../domain/dcdt/decaAutonomoPdf.js";
 import {
   autonomoDecaDatosFromProfile,
   mergeAutonomoDecaDatos,
@@ -133,14 +132,14 @@ export function AutonomoDecaFormModal({
     try {
       let row = deca;
       if (isNew) {
-        row = await createAutonomoDeca({ datos });
+        row = await createAutonomoDeca({ datos, profile });
       } else {
         row = await saveAutonomoDecaDatos(deca.id, datos);
       }
       if (andPdf) {
-        await downloadAutonomoDecaPdf(row);
-        row = await markAutonomoDecaPdfGenerado(row.id);
-        showToast?.("PDF DeCA generado");
+        const result = await generateAndPersistAutonomoDecaPdf(row);
+        row = result.deca;
+        showToast?.("PDF DeCA generado con QR");
       } else {
         showToast?.(isNew ? "DeCA guardado" : "Cambios guardados");
       }

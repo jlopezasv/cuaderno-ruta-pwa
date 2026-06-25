@@ -137,6 +137,7 @@ import {
   FEATURE_KEYS,
   hasFeature,
   isEmpresaPendingBlocked,
+  normalizeAccountType,
   normalizeRegistrationPhone,
   registrationProfilePayload,
 } from "./auth/accountModel.js";
@@ -3234,6 +3235,9 @@ function AppInner(){
   const canViewAdvancedDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ADVANCED_DOCS);
   const canViewOperationalLite=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE);
   const canViewEnterpriseDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS);
+  const isAutonomoPro=normalizeAccountType(authSession?.capabilities?.accountType||prof.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
+  const showAutonomoDecaHub=isAutonomoPro||showAutonomoDeca;
+  const showAutonomoHubFeatures=canCreateServices||canViewOperationalLite;
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
@@ -3241,7 +3245,8 @@ function AppInner(){
   const openMasServicio=()=>{setTab("mas");setMasSub("servicio");};
   const openServicioTab=()=>setTab(getConductorDefaultTabId());
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
-  const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDeca;
+  const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDecaHub;
+  const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
   const showResumen=tab==="resumen"||(conductorSimplified&&tab==="mas"&&masSub==="resumen");
@@ -3250,7 +3255,7 @@ function AppInner(){
   const showPerfil=tab==="perfil"||(conductorSimplified&&tab==="mas"&&masSub==="perfil");
   const showServicio=tab==="servicio"&&!conductorSimplified;
   const masBack=conductorSimplified&&tab==="mas"&&!!masSub?()=>setMasSub(null):null;
-  const masTitles={servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
+  const masTitles={operacion:"Operación",servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3340,7 +3345,14 @@ function AppInner(){
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDeca}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures}/>}
+
+        {showMasOperacion&&(
+          <>
+            <ConductorMasBackBar title={masTitles.operacion} onBack={masBack}/>
+            <TabServicio uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenViajeModal={openServicioViajeModal} onRecalculateOperationalRoute={recalculateOperationalRouteFromCurrentGps} canCreateServices={canCreateServices} useOperationalLite={canViewOperationalLite} hideRecorrido/>
+          </>
+        )}
 
         {showMasDeca&&(
           <>

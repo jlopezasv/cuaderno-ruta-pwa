@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DECA_AUTONOMO_ESTADO } from "../../domain/dcdt/decaAutonomoConstants.js";
+import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import {
   archiveAutonomoDeca,
   autonomoDecaListSummary,
@@ -9,8 +10,14 @@ import {
   duplicateAutonomoDeca,
   fetchAutonomoDecasForUser,
 } from "../../domain/dcdt/decaAutonomoModel.js";
-import { downloadAutonomoDecaPdf } from "../../domain/dcdt/decaAutonomoPdf.js";
+import {
+  autonomoDecaAsQrDcdt,
+  downloadAutonomoDecaPdf,
+  generateAndPersistAutonomoDecaPdf,
+} from "../../domain/dcdt/decaAutonomoPdf.js";
+import { buildDecaDownloadUrl } from "../../domain/dcdt/decaUrl.js";
 import { AutonomoDecaFormModal } from "./AutonomoDecaFormModal.jsx";
+import { DcdtQrModal } from "./DcdtQrModal.jsx";
 
 const UI = {
   page: "#f8fafc",
@@ -62,12 +69,19 @@ function actionBtn(variant = "default") {
   return base;
 }
 
+function decaHasPublicQr(deca) {
+  const st = String(deca?.estado || "").toLowerCase();
+  if (st === DECA_AUTONOMO_ESTADO.BORRADOR) return false;
+  return !!(deca?.datos?.deca_download_url || deca?.decaPublicId);
+}
+
 export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editDeca, setEditDeca] = useState(null);
+  const [qrDeca, setQrDeca] = useState(null);
 
   const reload = useCallback(async () => {
     if (!uid) {
@@ -118,7 +132,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
         <div>
           <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.1 }}>MIS DECA</div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
-            Documentos de control para transportes propios.
+            Documentos de control con QR y descarga pública.
           </div>
         </div>
         <button type="button" onClick={openCreate} style={actionBtn("primary")}>
@@ -143,7 +157,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
         >
           Aún no tienes DeCA guardados.
           <br />
-          Pulsa <strong>Crear DeCA</strong> para empezar.
+          Pulsa <strong>Crear DeCA</strong> — se rellenan matrícula, remolque y datos del transportista desde tu perfil.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -151,6 +165,11 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
             const sum = autonomoDecaListSummary(deca);
             const chip = estadoChip(sum.estado);
             const busy = busyId === deca.id;
+            const hasQr = decaHasPublicQr(deca);
+            const pdfLabel =
+              sum.estado === DECA_AUTONOMO_ESTADO.BORRADOR
+                ? `Generar PDF ${DECA_SHORT_LABEL}`
+                : "Descargar PDF";
             return (
               <div
                 key={deca.id}
@@ -188,10 +207,29 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
                     type="button"
                     disabled={busy}
                     style={actionBtn("primary")}
-                    onClick={() => runAction(deca.id, () => downloadAutonomoDecaPdf(deca))}
+                    onClick={() =>
+                      runAction(deca.id, async () => {
+                        if (sum.estado === DECA_AUTONOMO_ESTADO.BORRADOR) {
+                          await generateAndPersistAutonomoDecaPdf(deca);
+                          showToast?.(`PDF ${DECA_SHORT_LABEL} generado`);
+                        } else {
+                          await downloadAutonomoDecaPdf(deca);
+                        }
+                      })
+                    }
                   >
-                    PDF
+                    {pdfLabel}
                   </button>
+                  {hasQr ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      style={actionBtn()}
+                      onClick={() => setQrDeca(deca)}
+                    >
+                      Mostrar QR
+                    </button>
+                  ) : null}
                   {canEditAutonomoDeca(deca) ? (
                     <button type="button" disabled={busy} style={actionBtn()} onClick={() => openEdit(deca)}>
                       Editar
@@ -203,7 +241,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
                     style={actionBtn()}
                     onClick={() =>
                       runAction(deca.id, async () => {
-                        await duplicateAutonomoDeca(deca);
+                        await duplicateAutonomoDeca(deca, { profile });
                         showToast?.("DeCA duplicado");
                       })
                     }
@@ -255,6 +293,20 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
         showToast={showToast}
         onSaved={() => reload()}
       />
+
+      {qrDeca ? (
+        <DcdtQrModal
+          decaPublicId={qrDeca.decaPublicId}
+          downloadUrl={
+            qrDeca.datos?.deca_download_url ||
+            buildDecaDownloadUrl(qrDeca.decaPublicId, { allowBrowserOriginFallback: true })
+          }
+          dcdt={autonomoDecaAsQrDcdt(qrDeca)}
+          numeroDcdt={`${autonomoDecaListSummary(qrDeca).origen}-${autonomoDecaListSummary(qrDeca).destino}`}
+          showToast={showToast}
+          onClose={() => setQrDeca(null)}
+        />
+      ) : null}
     </div>
   );
 }

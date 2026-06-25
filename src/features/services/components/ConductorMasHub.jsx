@@ -12,6 +12,7 @@ const UI = {
 };
 
 const HUB_ITEMS = [
+  { id: "operacion", icon: "⚙", label: "Operación", hint: "Crear servicio e informe" },
   { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos del viaje" },
   { id: "deca", icon: "📋", label: "DeCA", hint: "Mis documentos de control" },
   { id: "hoy", icon: "◷", label: "Hoy", hint: "Jornada y tacógrafo" },
@@ -69,8 +70,16 @@ export function ConductorMasTripPicker({ trips, onSelect }) {
   );
 }
 
-export function ConductorMasHub({ onSelect, uid = null, showToast, showAutonomoDeca = false }) {
-  const items = showAutonomoDeca ? HUB_ITEMS : HUB_ITEMS.filter((i) => i.id !== "deca");
+export function ConductorMasHub({
+  onSelect,
+  uid = null,
+  showToast,
+  showAutonomoDeca = false,
+  showAutonomoOperacion = false,
+}) {
+  let items = HUB_ITEMS;
+  if (!showAutonomoOperacion) items = items.filter((i) => i.id !== "operacion");
+  if (!showAutonomoDeca) items = items.filter((i) => i.id !== "deca");
   return (
     <div style={{ padding: "16px 14px 88px", background: UI.page, minHeight: "70vh" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.2, marginBottom: 14 }}>MÁS</div>

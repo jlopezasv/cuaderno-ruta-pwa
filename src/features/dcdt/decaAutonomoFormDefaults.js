@@ -34,6 +34,7 @@ export function autonomoDecaDatosFromProfile(prof = {}) {
   const nombre = String(prof.nombre || "").trim();
   const empresa = String(prof.empresa || "").trim();
   const transportistaNombre = empresa || nombre;
+  const domicilio = [prof.direccion, prof.cp, prof.ciudad].filter((x) => String(x || "").trim()).join(", ");
   return {
     ...base,
     vehiculo: {
@@ -45,6 +46,7 @@ export function autonomoDecaDatosFromProfile(prof = {}) {
       transportista: {
         nombre: transportistaNombre,
         nif: String(prof.cif || "").trim(),
+        ...(domicilio ? { domicilio } : {}),
       },
     },
     conductor: {

@@ -1,5 +1,5 @@
 import { getUserId, sbFetch } from "../../data/supabaseClient.js";
-import { mergeAutonomoDecaDatos } from "../../features/dcdt/decaAutonomoFormDefaults.js";
+import { mergeAutonomoDecaDatos, autonomoDecaDatosFromProfile } from "../../features/dcdt/decaAutonomoFormDefaults.js";
 import { DECA_AUTONOMO_ESTADO, DECA_AUTONOMO_TABLE, DECA_PORTES_OPTIONS } from "./decaAutonomoConstants.js";
 
 const COLS = "id,user_id,estado,datos,deca_public_id,pdf_generado_at,created_at,updated_at";
@@ -119,16 +119,20 @@ export async function fetchAutonomoDecaById(id) {
   return rowToDeca(Array.isArray(rows) ? rows[0] : null);
 }
 
-export async function createAutonomoDeca({ datos, userId = null } = {}) {
+export async function createAutonomoDeca({ datos, userId = null, profile = null } = {}) {
   const uid = userId || getUserId();
   if (!uid) throw new Error("Sesión no válida");
+  const baseDatos = profile
+    ? mergeAutonomoDecaDatos(autonomoDecaDatosFromProfile(profile))
+    : mergeAutonomoDecaDatos(null);
+  const merged = mergeAutonomoDecaDatos({ ...baseDatos, ...mergeAutonomoDecaDatos(datos) });
   const r = await sbFetch(`/rest/v1/${DECA_AUTONOMO_TABLE}`, {
     method: "POST",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({
       user_id: uid,
       estado: DECA_AUTONOMO_ESTADO.BORRADOR,
-      datos: mergeAutonomoDecaDatos(datos),
+      datos: merged,
     }),
   });
   if (!r.ok) {
@@ -156,7 +160,9 @@ export async function saveAutonomoDecaDatos(id, datos, { estado } = {}) {
   return rowToDeca(Array.isArray(rows) ? rows[0] : rows);
 }
 
-export async function markAutonomoDecaPdfGenerado(id) {
+export async function markAutonomoDecaPdfGenerado(id, pdfMeta = {}) {
+  const row = await fetchAutonomoDecaById(id);
+  const datos = mergeAutonomoDecaDatos({ ...(row?.datos || {}), ...pdfMeta });
   const now = new Date().toISOString();
   const r = await sbFetch(`/rest/v1/${DECA_AUTONOMO_TABLE}?id=eq.${id}`, {
     method: "PATCH",
@@ -164,6 +170,7 @@ export async function markAutonomoDecaPdfGenerado(id) {
     body: JSON.stringify({
       estado: DECA_AUTONOMO_ESTADO.GENERADO,
       pdf_generado_at: now,
+      datos,
       updated_at: now,
     }),
   });
@@ -183,7 +190,32 @@ export async function deleteAutonomoDeca(id) {
   if (!r.ok) throw new Error(`No se pudo eliminar DeCA (${r.status})`);
 }
 
-export async function duplicateAutonomoDeca(deca) {
+const PDF_META_KEYS = [
+  "pdf_storage_bucket",
+  "pdf_storage_path",
+  "pdf_archivo_nombre",
+  "pdf_size_bytes",
+  "pdf_has_qr",
+  "deca_public_id",
+  "deca_download_url",
+  "deca_qr_png_bucket",
+  "deca_qr_png_storage_path",
+  "pdf_generado_en",
+];
+
+function stripAutonomoDecaPdfMeta(datos) {
+  const d = { ...mergeAutonomoDecaDatos(datos) };
+  for (const k of PDF_META_KEYS) delete d[k];
+  return d;
+}
+
+export async function duplicateAutonomoDeca(deca, { profile = null } = {}) {
   if (!deca?.datos) throw new Error("DeCA inválido");
-  return createAutonomoDeca({ datos: mergeAutonomoDecaDatos(deca.datos), userId: deca.userId });
+  const trip = stripAutonomoDecaPdfMeta(deca.datos);
+  const fromProfile = profile ? autonomoDecaDatosFromProfile(profile) : {};
+  return createAutonomoDeca({
+    datos: mergeAutonomoDecaDatos({ ...trip, ...fromProfile }),
+    userId: deca.userId,
+    profile,
+  });
 }

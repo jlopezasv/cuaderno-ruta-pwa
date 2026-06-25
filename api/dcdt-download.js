@@ -8,13 +8,21 @@ import {
 import { DECA_SHORT_LABEL } from "../src/domain/dcdt/decaBranding.js";
 
 const DCDT_TABLES = ["dcdt_servicio", "carta_porte_servicio"];
+const DECA_AUTONOMO_TABLE = "deca_autonomo";
 const ESTADOS_DESCARGA = new Set(["validado", "incluido_en_expediente"]);
+const ESTADOS_AUTONOMO_DESCARGA = new Set(["generado", "archivado"]);
 
 function isDecaPubliclyDownloadable(row, datos) {
   const estado = String(row?.estado || "").toLowerCase();
   if (ESTADOS_DESCARGA.has(estado)) return true;
   const hasPdf = !!(String(datos?.pdf_storage_path || "").trim() || row?.pdf_generado_at);
   return hasPdf && estado === "pendiente_validacion";
+}
+
+function isAutonomoDecaPubliclyDownloadable(row, datos) {
+  const estado = String(row?.estado || "").toLowerCase();
+  const hasPdf = !!(String(datos?.pdf_storage_path || "").trim() || row?.pdf_generado_at);
+  return hasPdf && ESTADOS_AUTONOMO_DESCARGA.has(estado);
 }
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -58,6 +66,25 @@ function resolvePdfFilename(datos, decaPublicId) {
   const raw = String(snapRef || fromArchivo || decaPublicId || "documento").trim();
   const safe = raw.replace(/[^\w.\-áéíóúñÁÉÍÓÚÑ]+/gi, "_").replace(/_+/g, "_").slice(0, 80);
   return `DeCA-${safe || "documento"}.pdf`;
+}
+
+async function fetchAutonomoDecaByPublicId(decaPublicId) {
+  const { url } = getSupabaseServerEnv();
+  const enc = encodeURIComponent(decaPublicId);
+  const select = "id,estado,datos,pdf_generado_at";
+  const apiPath = `${url}/rest/v1/${DECA_AUTONOMO_TABLE}?deca_public_id=eq.${enc}&select=${select}&limit=1`;
+  const r = await fetch(apiPath, { headers: srJsonHeaders() });
+  if (!r.ok) return null;
+  const rows = await r.json();
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+async function fetchDecaByPublicId(decaPublicId) {
+  const fleet = await fetchDcdtByDecaPublicId(decaPublicId);
+  if (fleet) return { row: fleet, kind: "fleet" };
+  const autonomo = await fetchAutonomoDecaByPublicId(decaPublicId);
+  if (autonomo) return { row: autonomo, kind: "autonomo" };
+  return null;
 }
 
 async function fetchDcdtByDecaPublicId(decaPublicId) {
@@ -176,17 +203,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const row = await fetchDcdtByDecaPublicId(decaPublicId);
-    if (!row) {
+    const hit = await fetchDecaByPublicId(decaPublicId);
+    if (!hit) {
       return notFound(
         res,
         `DeCA: no hay documento con ese id. Genera el PDF de nuevo y usa la URL exacta del QR.`,
       );
     }
 
+    const { row, kind } = hit;
     const estado = String(row.estado || "").toLowerCase();
     const datos = row.datos && typeof row.datos === "object" ? row.datos : {};
-    if (!isDecaPubliclyDownloadable(row, datos)) {
+    const downloadable =
+      kind === "autonomo"
+        ? isAutonomoDecaPubliclyDownloadable(row, datos)
+        : isDecaPubliclyDownloadable(row, datos);
+    if (!downloadable) {
       return notFound(res, `DeCA: documento en estado «${estado || "?"}». Genera el PDF o valida el documento.`);
     }
 
@@ -198,7 +230,7 @@ export default async function handler(req, res) {
     const storagePath = storage.path;
     const bucket = storage.bucket;
 
-    if (row.servicio_id) {
+    if (kind === "fleet" && row.servicio_id) {
       const servicio = await fetchServicioById(row.servicio_id);
       const finEfectivo = resolveServicioFinEfectivoAt(servicio);
       if (finEfectivo && isDecaPublicDownloadExpired(finEfectivo)) {
