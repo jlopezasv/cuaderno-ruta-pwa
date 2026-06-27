@@ -29,6 +29,7 @@ import {
 import { CARGA_ALCANCE_META_KEY, generarDecasParaExpediente, listNacionalCargas } from "./autonomoExpedienteDeca.js";
 import { SERVICIO_ALCANCE_DEFAULT, normalizeServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { cerrarExpedienteServicio } from "../../domain/service/cerrarExpedienteServicio.js";
+import { archiveAutonomoExpedienteLocal } from "./autonomoExpedienteArchive.js";
 
 async function patchServicioReferencia(servicioId, referencia) {
   const r = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
@@ -255,7 +256,7 @@ export async function registerCargaOnExpediente({
     extraMeta: { [CARGA_ALCANCE_META_KEY]: normalizeServicioAlcance(alcance) },
   });
   const result = await insertStopsForServicio(servicioId, [stopRow]);
-  if (!result.ok) throw new Error(result.error || "No se pudo registrar la carga");
+  if (!result.ok) throw new Error(result.detail || result.error || "No se pudo registrar la carga");
 
   const inserted = result.rows?.[0];
   await appendExpedienteTimeline(servicioId, {
@@ -294,7 +295,10 @@ export async function addDestinoOnExpediente({ servicioId, uid, destino, orden =
   });
 
   const result = await insertStopsForServicio(servicioId, [stopRow]);
-  if (!result.ok) throw new Error(result.error || "No se pudo añadir destino");
+  if (!result.ok) {
+    const detail = result.detail || result.error || "No se pudo añadir destino";
+    throw new Error(detail);
+  }
 
   const inserted = result.rows?.[0];
   await appendExpedienteTimeline(servicioId, {
@@ -329,9 +333,12 @@ export async function updateDestinoEstado({ stopId, servicioId, estado, geo = nu
   const pr = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ notas, updated_at: now }),
+    body: JSON.stringify({ notas }),
   });
-  if (!pr.ok) throw new Error(`No se pudo actualizar destino (${pr.status})`);
+  if (!pr.ok) {
+    const body = await pr.text().catch(() => "");
+    throw new Error(body || `No se pudo actualizar destino (${pr.status})`);
+  }
 
   if (servicioId) {
     const evtType =
@@ -393,17 +400,25 @@ export async function generarExpedienteAutonomo({
 
   const { cargas, stops, evidenciasByStop } = workspace || {};
   const nacionalCount = listNacionalCargas(cargas || []).length;
-  const decaResults = await generarDecasParaExpediente({
-    servicio,
-    cargas: cargas || [],
-    stops: stops || [],
-    evidenciasByStop: evidenciasByStop || {},
-    profile,
-    transportista,
-    conductor,
-    userId: uid,
-    downloadAfter: nacionalCount === 1,
-  });
+  let decaResults = [];
+  let decaError = null;
+  if (nacionalCount > 0) {
+    try {
+      decaResults = await generarDecasParaExpediente({
+        servicio,
+        cargas: cargas || [],
+        stops: stops || [],
+        evidenciasByStop: evidenciasByStop || {},
+        profile,
+        transportista,
+        conductor,
+        userId: uid,
+        downloadAfter: nacionalCount === 1,
+      });
+    } catch (e) {
+      decaError = e?.message || "No se pudo generar DeCA";
+    }
+  }
 
   let servicioFresh = await fetchServicioById(servicio.id);
   if (decaResults.length) {
@@ -453,7 +468,27 @@ export async function generarExpedienteAutonomo({
     at: now,
   });
 
-  return { servicio: closed.servicio, decas: decaResults, firmaUrl: closed.firmaUrl };
+  return { servicio: closed.servicio, decas: decaResults, firmaUrl: closed.firmaUrl, decaError };
+}
+
+/** Archiva expediente autónomo (oculto en lista; datos conservados). */
+export async function archiveAutonomoExpediente(servicioId, uid) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+
+  const archivedAt = new Date().toISOString();
+  const referencia = mergeAutonomoExpedientePatch(servicio.referencia, {
+    archived_at: archivedAt,
+    archive: { status: "archived", at: archivedAt, by: uid || null },
+  });
+  await patchServicioReferencia(servicioId, referencia);
+  archiveAutonomoExpedienteLocal(uid, servicioId);
+  await appendExpedienteTimeline(servicioId, {
+    type: "expediente_archivado",
+    label: "Expediente archivado",
+    at: archivedAt,
+  });
+  return fetchServicioById(servicioId);
 }
 
 export async function loadAutonomoExpedienteWorkspace(servicioId) {

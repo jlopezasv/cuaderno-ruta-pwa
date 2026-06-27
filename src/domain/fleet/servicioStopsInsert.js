@@ -23,7 +23,7 @@ export function buildStopsInsertRows(servicioId, stops) {
     if (!nombre) return null;
     return {
       servicio_id: servicioId,
-      orden: index + 1,
+      orden: Number(s.orden) > 0 ? Number(s.orden) : index + 1,
       tipo,
       nombre,
       direccion: String(s.direccion || "").trim() || null,

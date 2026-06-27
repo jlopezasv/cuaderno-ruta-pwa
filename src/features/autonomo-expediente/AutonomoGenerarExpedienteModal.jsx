@@ -155,10 +155,10 @@ export function AutonomoGenerarExpedienteModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${UI.line}` }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>Generar expediente</div>
-          <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
-            Cierra el viaje con firma. Si hay cargas nacionales, se genera el {DECA_SHORT_LABEL} con QR y enlace público.
-          </div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>Finalizar expediente</div>
+        <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
+          Firma de cierre{nacionalCargas.length ? ` y generación de ${nacionalCargas.length} DeCA` : ""}.
+        </div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", background: "#f8fafc" }}>
@@ -300,10 +300,10 @@ export function AutonomoGenerarExpedienteModal({
             }}
           >
             {busy
-              ? "Generando…"
+              ? "Finalizando…"
               : nacionalCargas.length
-                ? `Generar expediente + ${nacionalCargas.length} DeCA`
-                : "Generar expediente"}
+                ? `Finalizar + ${nacionalCargas.length} DeCA`
+                : "Finalizar expediente"}
           </button>
           <button
             type="button"

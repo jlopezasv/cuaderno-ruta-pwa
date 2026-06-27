@@ -18,6 +18,7 @@ const TYPE_LABEL = {
   deca_generado: "DeCA generado",
   expediente_generado: "Expediente generado",
   expediente_finalizado: "Expediente finalizado",
+  expediente_archivado: "Expediente archivado",
   pod: "POD firmado",
   nueva_carga: "Nueva carga",
   retorno: "Retorno / recogida",
@@ -48,12 +49,18 @@ export function buildAutonomoExpedienteTimeline({
 }) {
   const out = [];
   const { timelineEvents, startedAt } = getAutonomoExpedienteMeta(servicio);
+  const events = Array.isArray(timelineEvents) ? timelineEvents : [];
 
-  if (startedAt) {
+  const timelineStopKeys = new Set(
+    events.filter((evt) => evt?.stopId && evt?.type).map((evt) => `${evt.type}|${evt.stopId}`),
+  );
+  const hasExpedienteIniciado = events.some((evt) => evt?.type === "expediente_iniciado");
+
+  if (startedAt && !hasExpedienteIniciado) {
     pushEvent(out, { at: startedAt, type: "expediente_iniciado", label: TYPE_LABEL.expediente_iniciado });
   }
 
-  for (const evt of timelineEvents) {
+  for (const evt of events) {
     pushEvent(out, {
       at: evt.at,
       type: evt.type,
@@ -66,36 +73,50 @@ export function buildAutonomoExpedienteTimeline({
   for (const stop of stops) {
     const meta = getStopOperacionMeta(stop?.notas);
     const stopLabel = String(stop.nombre || "").trim();
-    if (meta.carga_registrada_at) {
+    const stopId = stop.id;
+
+    if (meta.carga_registrada_at && !timelineStopKeys.has(`carga_registrada|${stopId}`)) {
       pushEvent(out, {
         at: meta.carga_registrada_at,
         type: "carga_registrada",
         label: `Carga: ${stopLabel}`,
-        stopId: stop.id,
+        stopId,
       });
     }
-    if (meta.entrada_at) {
+    if (meta.destino_anadido_at && !timelineStopKeys.has(`destino_anadido|${stopId}`)) {
+      pushEvent(out, {
+        at: meta.destino_anadido_at,
+        type: "destino_anadido",
+        label: `Destino: ${stopLabel}`,
+        stopId,
+      });
+    }
+    if (meta.entrada_at && !timelineStopKeys.has(`entrega_llegada|${stopId}`)) {
       pushEvent(out, {
         at: meta.entrada_at,
         type: "entrega_llegada",
         label: `Llegada: ${stopLabel}`,
-        stopId: stop.id,
+        stopId,
       });
     }
-    if (meta.salida_at) {
+    if (meta.salida_at && !timelineStopKeys.has(`entrega_salida|${stopId}`)) {
       pushEvent(out, {
         at: meta.salida_at,
         type: "entrega_salida",
         label: `Salida: ${stopLabel}`,
-        stopId: stop.id,
+        stopId,
       });
     }
-    if (meta.destino_estado === "entregado" && meta.entrega_completada_at) {
+    if (
+      meta.destino_estado === "entregado" &&
+      meta.entrega_completada_at &&
+      !timelineStopKeys.has(`entrega_completada|${stopId}`)
+    ) {
       pushEvent(out, {
         at: meta.entrega_completada_at,
         type: "entrega_completada",
         label: `Entregado: ${stopLabel}`,
-        stopId: stop.id,
+        stopId,
       });
     }
   }
@@ -131,7 +152,8 @@ export function buildAutonomoExpedienteTimeline({
   const seen = new Set();
   const deduped = [];
   for (const e of out.sort((a, b) => new Date(a.at) - new Date(b.at))) {
-    const key = `${e.at}|${e.type}|${e.stopId || ""}|${e.refId || ""}|${e.label}`;
+    const minute = Math.floor(new Date(e.at).getTime() / 60000);
+    const key = `${e.type}|${e.stopId || ""}|${e.refId || ""}|${minute}`;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(e);

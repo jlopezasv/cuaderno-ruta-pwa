@@ -10,16 +10,17 @@ import { OperationalSummaryLite } from "../../modules/operational-lite/Operation
 import {
   createAutonomoExpediente,
   fetchAutonomoExpedientes,
-  fetchActiveAutonomoExpediente,
   loadAutonomoExpedienteWorkspace,
   registerCargaOnExpediente,
   addDestinoOnExpediente,
   updateDestinoEstado,
   generarExpedienteAutonomo,
   setExpedientePdfVisibility,
+  archiveAutonomoExpediente,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
+import { loadArchivedAutonomoExpedienteIds } from "../../modules/autonomo-expediente/autonomoExpedienteArchive.js";
 import { isIncludedInExpedientePdf } from "../../modules/autonomo-expediente/autonomoExpedienteMeta.js";
-import { getCargaAlcance } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import { getCargaAlcance, listNacionalCargas } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
 import { SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
 import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
 import { AutonomoDocAccionesModal, docActionToEvidenciaConfig } from "./AutonomoDocAccionesModal.jsx";
@@ -74,6 +75,9 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
   const [focusStop, setFocusStop] = useState(null);
   const [evidenciaTipos, setEvidenciaTipos] = useState(null);
   const [generarModal, setGenerarModal] = useState(false);
+  const [archivedIds, setArchivedIds] = useState(() => loadArchivedAutonomoExpedienteIds(uid));
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiveConfirmId, setArchiveConfirmId] = useState(null);
 
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -84,9 +88,7 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
     }
     const list = await fetchAutonomoExpedientes(uid);
     setExpedientes(list);
-    const active = await fetchActiveAutonomoExpediente(uid);
-    if (active?.id && !activeId) setActiveId(active.id);
-  }, [uid, activeId]);
+  }, [uid]);
 
   const reloadWorkspace = useCallback(async (id) => {
     const sid = id || activeId;
@@ -111,10 +113,7 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
   }, [reloadList]);
 
   useEffect(() => {
-    if (activeId) {
-      setView("workspace");
-      void reloadWorkspace(activeId);
-    }
+    if (activeId) void reloadWorkspace(activeId);
   }, [activeId, reloadWorkspace]);
 
   useEffect(() => {
@@ -220,11 +219,98 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
     }
   }
 
+  useEffect(() => {
+    setArchivedIds(loadArchivedAutonomoExpedienteIds(uid));
+  }, [uid, expedientes.length]);
+
+  const visibleExpedientes = expedientes.filter((ex) => {
+    const archived = archivedIds.has(ex.id);
+    return showArchived ? archived : !archived;
+  });
+
+  async function handleArchivarExpediente(servicioId) {
+    if (!servicioId || !uid) return;
+    setBusy(true);
+    try {
+      await archiveAutonomoExpediente(servicioId, uid);
+      setArchivedIds(loadArchivedAutonomoExpedienteIds(uid));
+      setArchiveConfirmId(null);
+      if (activeId === servicioId) {
+        setActiveId(null);
+        setView("home");
+        setWorkspace(null);
+      }
+      await reloadList();
+      showToast?.("Expediente archivado");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo archivar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderArchiveConfirm(servicioId) {
+    if (archiveConfirmId !== servicioId) return null;
+    return (
+      <div
+        style={{
+          marginTop: 8,
+          padding: "10px 12px",
+          borderRadius: 10,
+          background: "#fef2f2",
+          border: "1px solid #fecaca",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 12, color: UI.tx, marginBottom: 8, lineHeight: 1.4 }}>
+          ¿Archivar este expediente? Se ocultará de la lista pero conservarás PDF y datos.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void handleArchivarExpediente(servicioId)}
+            style={{
+              flex: 1,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "none",
+              background: "#b91c1c",
+              color: "#fff",
+              fontWeight: 800,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Sí, archivar
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setArchiveConfirmId(null)}
+            style={{
+              flex: 1,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: `1px solid ${UI.line}`,
+              background: "#fff",
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   async function handleGenerarExpediente({ transportista, conductor, comentario, firmaCanvas }) {
     if (!activeId || !workspace?.servicio) return;
     setBusy(true);
     try {
-      await generarExpedienteAutonomo({
+      const result = await generarExpedienteAutonomo({
         servicio: workspace.servicio,
         workspace,
         profile,
@@ -237,9 +323,16 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
       });
       setGenerarModal(false);
       await reloadList();
-      await reloadWorkspace(activeId);
+      const ws = await loadAutonomoExpedienteWorkspace(activeId);
+      setWorkspace(ws);
       setView("resumen");
-      showToast?.("Expediente generado");
+      if (result?.decaError) {
+        showToast?.(`Expediente cerrado. DeCA no generado: ${result.decaError}`);
+      } else if (result?.decas?.length) {
+        showToast?.(`Expediente finalizado con ${result.decas.length} DeCA`);
+      } else {
+        showToast?.("Expediente finalizado");
+      }
     } catch (e) {
       showToast?.(e?.message || "Error");
       throw e;
@@ -280,12 +373,39 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         </button>
         <OperationalSummaryLite servicio={workspace.servicio} conductorNombre={conductorNombre} showToast={showToast} />
         <AutonomoExpedienteDecaBlock servicio={workspace.servicio} showToast={showToast} />
+        {String(workspace.servicio.estado || "").toLowerCase() === "completado" ? (
+          <div style={{ marginTop: 16 }}>
+            {archiveConfirmId === workspace.servicio.id ? (
+              renderArchiveConfirm(workspace.servicio.id)
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setArchiveConfirmId(workspace.servicio.id)}
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: `1px solid ${UI.line}`,
+                  background: "#fff",
+                  color: UI.su,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: "pointer",
+                }}
+              >
+                Archivar expediente
+              </button>
+            )}
+          </div>
+        ) : null}
       </div>
     );
   }
 
   if (view === "home" || !activeId) {
     const active = expedientes.find((e) => {
+      if (archivedIds.has(e.id)) return false;
       const st = String(e.estado || "").toLowerCase();
       return st === "en_curso" || st === "asignado";
     });
@@ -322,34 +442,88 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
 
         {expedientes.length ? (
           <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 10 }}>RECIENTES</div>
-            {expedientes.slice(0, 8).map((ex) => (
-              <button
-                key={ex.id}
-                type="button"
-                onClick={() => {
-                  setActiveId(ex.id);
-                  setView(String(ex.estado).toLowerCase() === "completado" ? "resumen" : "workspace");
-                }}
-                style={{
-                  width: "100%",
-                  textAlign: "left",
-                  background: UI.card,
-                  border: `1px solid ${UI.line}`,
-                  borderRadius: 12,
-                  padding: "12px 14px",
-                  marginBottom: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ fontWeight: 800, color: UI.tx }}>
-                  {new Date(ex.fecha_inicio || ex.created_at).toLocaleDateString("es-ES")}
-                </div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
-                  {ESTADO_LABEL[String(ex.estado || "").toLowerCase()] || ex.estado}
-                </div>
-              </button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: UI.su }}>
+                {showArchived ? "ARCHIVADOS" : "RECIENTES"}
+              </div>
+              {archivedIds.size ? (
+                <button
+                  type="button"
+                  onClick={() => setShowArchived((v) => !v)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: UI.blue,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  {showArchived ? "Ver activos" : `Ver archivados (${archivedIds.size})`}
+                </button>
+              ) : null}
+            </div>
+            {visibleExpedientes.slice(0, 8).map((ex) => (
+              <div key={ex.id} style={{ marginBottom: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveId(ex.id);
+                    setView(String(ex.estado).toLowerCase() === "completado" ? "resumen" : "workspace");
+                  }}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    background: UI.card,
+                    border: `1px solid ${UI.line}`,
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontWeight: 800, color: UI.tx }}>
+                        {new Date(ex.fecha_inicio || ex.created_at).toLocaleDateString("es-ES")}
+                      </div>
+                      <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
+                        {ESTADO_LABEL[String(ex.estado || "").toLowerCase()] || ex.estado}
+                      </div>
+                    </div>
+                    {!showArchived && String(ex.estado || "").toLowerCase() === "completado" ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setArchiveConfirmId((cur) => (cur === ex.id ? null : ex.id));
+                        }}
+                        style={{
+                          flexShrink: 0,
+                          padding: "6px 10px",
+                          borderRadius: 8,
+                          border: `1px solid ${UI.line}`,
+                          background: UI.page,
+                          color: UI.su,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Archivar
+                      </button>
+                    ) : null}
+                  </div>
+                </button>
+                {renderArchiveConfirm(ex.id)}
+              </div>
             ))}
+            {!visibleExpedientes.length ? (
+              <div style={{ fontSize: 13, color: UI.su, textAlign: "center", padding: 12 }}>
+                {showArchived ? "No hay expedientes archivados." : "No hay expedientes recientes."}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -358,9 +532,10 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
 
   const { servicio, cargas, destinos, timeline, evidenciasByStop, stops } = workspace || {};
   const focusStopRow = focusStop?.id ? stops?.find((s) => s.id === focusStop.id) || focusStop : focusStop;
+  const nacionalCargasCount = listNacionalCargas(cargas || []).length;
 
   return (
-    <div style={{ padding: "14px 14px 88px", background: UI.page, minHeight: "70vh" }}>
+    <div style={{ padding: "14px 14px 120px", background: UI.page, minHeight: "70vh" }}>
       <DriverLocationGateModal
         open={!!gate}
         phase={gate?.phase}
@@ -569,14 +744,45 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         </div>
       ) : null}
 
-      <button
-        type="button"
-        style={{ ...bigBtn("#334155", busy), marginTop: 20 }}
-        disabled={busy}
-        onClick={() => setGenerarModal(true)}
+      {nacionalCargasCount > 0 ? (
+        <div
+          style={{
+            marginTop: 16,
+            padding: "12px 14px",
+            borderRadius: 12,
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            fontSize: 13,
+            color: UI.tx,
+            lineHeight: 1.45,
+          }}
+        >
+          Al finalizar se generará {nacionalCargasCount} DeCA nacional{nacionalCargasCount > 1 ? "es" : ""} con QR y enlace público.
+        </div>
+      ) : null}
+
+      <div
+        style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 56,
+          padding: "10px 14px max(10px, env(safe-area-inset-bottom))",
+          background: "rgba(255,255,255,.96)",
+          borderTop: `1px solid ${UI.line}`,
+          boxShadow: "0 -8px 24px rgba(15,23,42,.08)",
+          zIndex: 50,
+        }}
       >
-        Generar expediente
-      </button>
+        <button
+          type="button"
+          style={{ ...bigBtn("#334155", busy), marginBottom: 0 }}
+          disabled={busy}
+          onClick={() => setGenerarModal(true)}
+        >
+          Finalizar expediente · firma
+        </button>
+      </div>
 
       <AutonomoGenerarExpedienteModal
         open={generarModal}
