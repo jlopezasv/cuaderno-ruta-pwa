@@ -1,13 +1,16 @@
 import {
   ensureAuthAccessToken,
   getAuthUid,
+  jwtSubFromToken,
   sbFetch,
   sbSelect,
 } from "../../data/supabaseClient.js";
+import { isDemoApp } from "../../config/appEnvironment.js";
 import { SERVICIO_ESTADO_EN_CURSO, SERVICIO_ESTADO_COMPLETADO } from "../../domain/fleet/serviceStatus.js";
 import { insertStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
 import { prepareStopRowForPersist } from "../../domain/geo/stopGeoModel.js";
 import { mergeStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { parsePostgrestError } from "../../domain/service/serviceCreateStepTrace.js";
 import {
   resolveServicioInsertContext,
   SERVICIO_OWNERSHIP,
@@ -40,6 +43,70 @@ async function fetchServicioById(id) {
   return Array.isArray(rows) ? rows[0] : rows;
 }
 
+async function debugAutonomoInsertRls(authUid) {
+  if (!isDemoApp()) return null;
+  try {
+    const dbgRes = await sbFetch("/rest/v1/rpc/debug_servicio_insert_rls_context", {
+      method: "POST",
+      body: JSON.stringify({
+        p_empresa_id: null,
+        p_conductor_id: authUid,
+      }),
+    });
+    if (!dbgRes.ok) return null;
+    return await dbgRes.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+function rls42501Message(authUid, errText, dbg = null) {
+  const parsed = parsePostgrestError(errText);
+  const dbgHint = dbg
+    ? ` · can_insert=${dbg.user_can_insert_servicio} · is_autonomo_pro=${dbg.user_profile_is_autonomo_pro ?? "?"}`
+    : "";
+  return (
+    `RLS 42501 en servicios: tu perfil debe ser autonomo_pro y conductor_id=${authUid ?? "?"} debe coincidir con la sesión.` +
+    `${parsed.message ? ` ${parsed.message}` : ""}${dbgHint}`
+  );
+}
+
+async function createAutonomoExpedienteViaRpc(referencia, fechaInicio, estado) {
+  const r = await sbFetch("/rest/v1/rpc/create_autonomo_expediente_servicio", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      p_referencia: referencia,
+      p_fecha_inicio: fechaInicio,
+      p_estado: estado,
+    }),
+  });
+  if (!r.ok) return null;
+  const data = await r.json().catch(() => null);
+  if (!data || typeof data !== "object") return null;
+  return data;
+}
+
+async function createAutonomoExpedienteViaPost(payload, authUid) {
+  const res = await sbFetch("/rest/v1/servicios", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    const dbg = await debugAutonomoInsertRls(authUid);
+    throw new Error(rls42501Message(authUid, errText, dbg));
+  }
+  if (payload.id) {
+    const row = await fetchServicioById(payload.id);
+    if (row?.id) return row;
+    return { id: payload.id, ...payload };
+  }
+  const data = await res.json().catch(() => []);
+  return Array.isArray(data) ? data[0] : data;
+}
+
 export async function fetchAutonomoExpedientes(uid, { limit = 30 } = {}) {
   if (!uid) return [];
   const path = buildAutonomoProOwnServiciosQuery(uid, { limit });
@@ -64,8 +131,8 @@ export async function fetchActiveAutonomoExpediente(uid) {
 export async function createAutonomoExpediente(uid, { profile = {} } = {}) {
   const authToken = await ensureAuthAccessToken();
   if (!authToken) throw new Error("Sesión no válida");
-  const authUid = uid || getAuthUid();
-  if (!authUid) throw new Error("Sesión no válida");
+  const authUid = jwtSubFromToken(authToken) || uid || getAuthUid();
+  if (!authUid) throw new Error("Sesión no válida (JWT sin sub)");
 
   const now = new Date().toISOString();
   const referencia = mergeReferenciaOperacional(null, {
@@ -83,32 +150,29 @@ export async function createAutonomoExpediente(uid, { profile = {} } = {}) {
     estado: SERVICIO_ESTADO_EN_CURSO,
     uid: authUid,
   });
-
-  const servicioId =
-    typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
-
-  const payload = {
-    ...(servicioId ? { id: servicioId } : {}),
-    empresa_id: null,
-    conductor_id: insertCtx.conductor_id,
-    estado: SERVICIO_ESTADO_EN_CURSO,
-    origen: "",
-    destino: "",
-    referencia,
-    fecha_inicio: now,
-  };
-
-  const r = await sbFetch("/rest/v1/servicios", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(t || `No se pudo crear expediente (${r.status})`);
+  if (insertCtx.conductor_id !== authUid) {
+    throw new Error("Autónomo PRO: conductor_id debe coincidir con auth.uid()");
   }
-  const rows = await r.json().catch(() => []);
-  const row = Array.isArray(rows) ? rows[0] : rows;
+
+  let row = await createAutonomoExpedienteViaRpc(referencia, now, SERVICIO_ESTADO_EN_CURSO);
+  if (!row?.id) {
+    const servicioId =
+      typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined;
+    row = await createAutonomoExpedienteViaPost(
+      {
+        ...(servicioId ? { id: servicioId } : {}),
+        empresa_id: null,
+        conductor_id: authUid,
+        estado: SERVICIO_ESTADO_EN_CURSO,
+        origen: "",
+        destino: "",
+        referencia,
+        fecha_inicio: now,
+      },
+      authUid,
+    );
+  }
+
   try {
     window.dispatchEvent(new CustomEvent("cuaderno-recargar-servicio"));
   } catch {
