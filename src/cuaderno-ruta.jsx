@@ -30,6 +30,7 @@ import {
   isPlanificadorMapaBetaEnabled,
   isConductorSimplifiedParadasUiEnabled,
   getConductorDefaultTabId,
+  isAutonomoExpedienteFlowEnabled,
 } from "./config/productFeatures.js";
 import { isClienteMailEnvioEnabled } from "./config/clienteMail.js";
 import {
@@ -378,6 +379,7 @@ import { ConductorMasHub, ConductorMasBackBar, ConductorMasTripPicker } from "./
 import { AutonomoDecaPanel } from "./features/dcdt/AutonomoDecaPanel.jsx";
 import { resolveCanUseAutonomoDeca } from "./domain/dcdt/decaAutonomoVisibility.js";
 import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
+import { AutonomoExpedienteScreen } from "./features/autonomo-expediente/AutonomoExpedienteScreen.jsx";
 import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
 import { fetchServiciosForMasTripPicker } from "./domain/service/driverFlatStopList.js";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
@@ -2245,6 +2247,17 @@ function AppInner(){
       .catch(()=>setShowAutonomoDeca(false));
   },[user,authChecked,prof.tipo_cuenta]);
 
+  useEffect(()=>{
+    const uid=getUserId();
+    if(!uid||!authChecked||!conductorSimplified)return;
+    const caps=getStoredAuthSession(uid)?.capabilities;
+    const autonomoPro=normalizeAccountType(caps?.accountType||prof.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
+    const lite=hasFeature(caps,FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE);
+    if(isAutonomoExpedienteFlowEnabled()&&autonomoPro&&lite){
+      setTab((prev)=>(prev==="paradas"?"expediente":prev));
+    }
+  },[user,authChecked,prof.tipo_cuenta,conductorSimplified]);
+
   // Detectar sesión caducada y forzar re-login
   useEffect(()=>{
     // Verificar sesión al arrancar
@@ -3238,6 +3251,8 @@ function AppInner(){
   const isAutonomoPro=normalizeAccountType(authSession?.capabilities?.accountType||prof.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
   const showAutonomoDecaHub=isAutonomoPro||showAutonomoDeca;
   const showAutonomoHubFeatures=canCreateServices||canViewOperationalLite;
+  const showAutonomoExpedienteFlow=
+    isAutonomoExpedienteFlowEnabled()&&isAutonomoPro&&canViewOperationalLite;
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
@@ -3245,6 +3260,7 @@ function AppInner(){
   const openMasServicio=()=>{setTab("mas");setMasSub("servicio");};
   const openServicioTab=()=>setTab(getConductorDefaultTabId());
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
+  const showExpediente=conductorSimplified&&tab==="expediente"&&showAutonomoExpedienteFlow;
   const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDecaHub;
   const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
@@ -3327,7 +3343,7 @@ function AppInner(){
       )}
 
       <nav style={s.nav}>
-        {getConductorTabs({T,simplified:conductorSimplified}).map(t=>(
+        {getConductorTabs({T,simplified:conductorSimplified,autonomoExpediente:showAutonomoExpedienteFlow}).map(t=>(
           <button key={t.id} onClick={()=>{setTab(t.id);if(t.id!=="mas")setMasSub(null);if(t.id==="docs")setDocsTab("home");}}
             style={{...s.navBtn,color:tab===t.id?"#F59E0B":"#64748B",
               background:tab===t.id?"rgba(245,158,11,.10)":"transparent",
@@ -3341,6 +3357,15 @@ function AppInner(){
       </nav>
 
       <main style={s.main}>
+        {showExpediente&&(
+          <AutonomoExpedienteScreen
+            uid={getUserId()}
+            profile={prof}
+            conductorNombre={prof.nombre?.trim()||"Conductor"}
+            showToast={showToast}
+          />
+        )}
+
         {conductorSimplified&&tab==="paradas"&&(
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}

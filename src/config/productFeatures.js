@@ -40,8 +40,13 @@ export function isConductorSimplifiedParadasUiEnabled() {
   return true;
 }
 
+export function isAutonomoExpedienteFlowEnabled() {
+  return true;
+}
+
 /** Pestaña inicial del shell conductor. */
-export function getConductorDefaultTabId() {
+export function getConductorDefaultTabId({ autonomoExpediente = false } = {}) {
+  if (autonomoExpediente) return "expediente";
   return isConductorSimplifiedParadasUiEnabled() ? "paradas" : "servicio";
 }
 
