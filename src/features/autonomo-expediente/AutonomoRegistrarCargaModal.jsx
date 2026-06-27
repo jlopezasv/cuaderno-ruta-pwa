@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { loadAutonomoAlmacenes, searchAutonomoAlmacenes } from "../../modules/autonomo-expediente/autonomoAlmacenCatalog.js";
+import {
+  deleteAutonomoAlmacen,
+  loadAutonomoAlmacenes,
+  searchAutonomoAlmacenes,
+} from "../../modules/autonomo-expediente/autonomoAlmacenCatalog.js";
 import {
   SERVICIO_ALCANCE,
   SERVICIO_ALCANCE_DEFAULT,
@@ -35,13 +39,14 @@ const emptyForm = () => ({
   cif: "",
 });
 
-export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, busy = false }) {
+export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, busy = false, showToast }) {
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [mode, setMode] = useState("search");
   const [alcance, setAlcance] = useState(SERVICIO_ALCANCE_DEFAULT);
+  const [catalogTick, setCatalogTick] = useState(0);
 
-  const catalog = useMemo(() => loadAutonomoAlmacenes(uid), [uid, open]);
+  const catalog = useMemo(() => loadAutonomoAlmacenes(uid), [uid, open, catalogTick]);
   const results = useMemo(() => searchAutonomoAlmacenes(uid, query), [uid, query, catalog]);
 
   if (!open) return null;
@@ -53,6 +58,20 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
   function confirmNew() {
     if (!String(form.nombre || "").trim()) return;
     onConfirm?.({ almacen: { ...form }, alcance });
+  }
+
+  function handleDeleteAlmacen(almacen, event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (busy) return;
+    const label = almacen.nombre || "este almacén";
+    const ok = window.confirm(
+      `¿Eliminar «${label}» del catálogo?\n\nLas cargas ya registradas en expedientes no se borran.`,
+    );
+    if (!ok) return;
+    deleteAutonomoAlmacen(uid, almacen.id);
+    setCatalogTick((n) => n + 1);
+    showToast?.("Almacén eliminado del catálogo");
   }
 
   return (
@@ -146,25 +165,59 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflow: "auto" }}>
               {(results.length ? results : catalog).slice(0, 12).map((a) => (
-                <button
+                <div
                   key={a.id}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => pick(a)}
                   style={{
-                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "stretch",
+                    gap: 8,
                     border: `1px solid ${UI.line}`,
                     borderRadius: 12,
-                    padding: "12px 14px",
+                    overflow: "hidden",
                     background: UI.bg,
-                    cursor: "pointer",
                   }}
                 >
-                  <div style={{ fontWeight: 800, color: UI.tx }}>{a.nombre}</div>
-                  <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
-                    {[a.direccion, a.cp, a.ciudad].filter(Boolean).join(" · ") || "Sin dirección"}
-                  </div>
-                </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => pick(a)}
+                    style={{
+                      flex: 1,
+                      textAlign: "left",
+                      border: "none",
+                      padding: "12px 14px",
+                      background: "transparent",
+                      cursor: busy ? "default" : "pointer",
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: UI.tx }}>{a.nombre}</div>
+                    <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
+                      {[a.direccion, a.cp, a.ciudad].filter(Boolean).join(" · ") || "Sin dirección"}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={(e) => handleDeleteAlmacen(a, e)}
+                    aria-label={`Eliminar ${a.nombre}`}
+                    style={{
+                      flexShrink: 0,
+                      alignSelf: "center",
+                      marginRight: 8,
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "1px solid #fecaca",
+                      background: "#fef2f2",
+                      color: "#b91c1c",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      cursor: busy ? "default" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </div>
               ))}
               {!catalog.length && !query ? (
                 <div style={{ fontSize: 13, color: UI.su, textAlign: "center", padding: 16 }}>

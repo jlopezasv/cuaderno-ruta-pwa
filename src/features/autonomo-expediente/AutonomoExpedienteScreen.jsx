@@ -587,7 +587,7 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         onConfirm={handleGenerarExpediente}
       />
 
-      <AutonomoRegistrarCargaModal open={cargaModal} onClose={() => setCargaModal(false)} uid={uid} busy={busy} onConfirm={handleRegistrarCarga} />
+      <AutonomoRegistrarCargaModal open={cargaModal} onClose={() => setCargaModal(false)} uid={uid} busy={busy} showToast={showToast} onConfirm={handleRegistrarCarga} />
       <AutonomoDestinoModal open={destinoModal} onClose={() => setDestinoModal(false)} busy={busy} onConfirm={handleAddDestino} />
       <AutonomoDocAccionesModal
         open={docModal}

@@ -54,6 +54,15 @@ export function upsertAutonomoAlmacen(uid, almacen) {
   return list;
 }
 
+/** Elimina un almacén del catálogo local (no afecta paradas ya registradas). */
+export function deleteAutonomoAlmacen(uid, almacenId) {
+  if (!uid || !almacenId) return loadAutonomoAlmacenes(uid);
+  const id = String(almacenId).trim();
+  const list = loadAutonomoAlmacenes(uid).filter((a) => a.id !== id);
+  saveAutonomoAlmacenes(uid, list);
+  return list;
+}
+
 export function searchAutonomoAlmacenes(uid, query) {
   const q = String(query || "").trim().toLowerCase();
   const list = loadAutonomoAlmacenes(uid);
