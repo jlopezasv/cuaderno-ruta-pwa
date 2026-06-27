@@ -30,10 +30,11 @@ function placeLine(place) {
 function parteBlock(parte) {
   const nombre = String(parte?.nombre || "").trim();
   if (!nombre) return { nombre: null, nif: null, domicilio: null };
+  const domicilio = String(parte?.domicilio || parte?.direccion || "").trim() || null;
   return {
     nombre,
     nif: String(parte?.nif || "").trim() || null,
-    domicilio: null,
+    domicilio,
   };
 }
 

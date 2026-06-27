@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
 import { loadAutonomoAlmacenes, searchAutonomoAlmacenes } from "../../modules/autonomo-expediente/autonomoAlmacenCatalog.js";
+import {
+  SERVICIO_ALCANCE,
+  SERVICIO_ALCANCE_DEFAULT,
+  SERVICIO_ALCANCE_LABELS,
+} from "../../domain/service/servicioAlcance.js";
 
 const UI = {
   bg: "#f8fafc",
@@ -34,6 +39,7 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [mode, setMode] = useState("search");
+  const [alcance, setAlcance] = useState(SERVICIO_ALCANCE_DEFAULT);
 
   const catalog = useMemo(() => loadAutonomoAlmacenes(uid), [uid, open]);
   const results = useMemo(() => searchAutonomoAlmacenes(uid, query), [uid, query, catalog]);
@@ -41,12 +47,12 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
   if (!open) return null;
 
   function pick(almacen) {
-    onConfirm?.(almacen);
+    onConfirm?.({ almacen, alcance });
   }
 
   function confirmNew() {
     if (!String(form.nombre || "").trim()) return;
-    onConfirm?.({ ...form });
+    onConfirm?.({ almacen: { ...form }, alcance });
   }
 
   return (
@@ -76,6 +82,34 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
       >
         <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx, marginBottom: 4 }}>Registrar carga</div>
         <div style={{ fontSize: 13, color: UI.su, marginBottom: 14 }}>Elige almacén o crea uno nuevo.</div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>ALCANCE DEL TRANSPORTE</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[SERVICIO_ALCANCE.NACIONAL, SERVICIO_ALCANCE.INTERNACIONAL].map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setAlcance(id)}
+                style={{
+                  flex: 1,
+                  padding: "10px 8px",
+                  borderRadius: 10,
+                  border: `1px solid ${alcance === id ? UI.accent : UI.line}`,
+                  background: alcance === id ? "#eff6ff" : UI.bg,
+                  fontWeight: 800,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {SERVICIO_ALCANCE_LABELS[id]}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: UI.su, marginTop: 6, lineHeight: 1.4 }}>
+            DeCA solo se genera en cargas nacionales al cerrar el expediente.
+          </div>
+        </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {[

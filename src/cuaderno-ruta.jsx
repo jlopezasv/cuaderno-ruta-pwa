@@ -3249,10 +3249,10 @@ function AppInner(){
   const canViewOperationalLite=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_OPERATIONAL_LITE);
   const canViewEnterpriseDocs=hasFeature(authSession?.capabilities,FEATURE_KEYS.CAN_VIEW_ENTERPRISE_DOCS);
   const isAutonomoPro=normalizeAccountType(authSession?.capabilities?.accountType||prof.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
-  const showAutonomoDecaHub=isAutonomoPro||showAutonomoDeca;
   const showAutonomoHubFeatures=canCreateServices||canViewOperationalLite;
   const showAutonomoExpedienteFlow=
     isAutonomoExpedienteFlowEnabled()&&isAutonomoPro&&canViewOperationalLite;
+  const showAutonomoDecaHub=(isAutonomoPro||showAutonomoDeca)&&!showAutonomoExpedienteFlow;
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&

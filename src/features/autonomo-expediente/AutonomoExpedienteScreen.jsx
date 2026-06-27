@@ -15,13 +15,17 @@ import {
   registerCargaOnExpediente,
   addDestinoOnExpediente,
   updateDestinoEstado,
-  finalizarAutonomoExpediente,
+  generarExpedienteAutonomo,
   setExpedientePdfVisibility,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
 import { isIncludedInExpedientePdf } from "../../modules/autonomo-expediente/autonomoExpedienteMeta.js";
+import { getCargaAlcance } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import { SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
 import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
 import { AutonomoDocAccionesModal, docActionToEvidenciaConfig } from "./AutonomoDocAccionesModal.jsx";
 import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
+import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
+import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
 
 const UI = {
   page: "#f8fafc",
@@ -69,6 +73,7 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
   const [destinoModal, setDestinoModal] = useState(false);
   const [focusStop, setFocusStop] = useState(null);
   const [evidenciaTipos, setEvidenciaTipos] = useState(null);
+  const [generarModal, setGenerarModal] = useState(false);
 
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
@@ -141,11 +146,11 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
     }
   }
 
-  async function handleRegistrarCarga(almacen) {
-    if (!activeId) return;
+  async function handleRegistrarCarga({ almacen, alcance }) {
+    if (!activeId || !almacen) return;
     setBusy(true);
     try {
-      const { stop } = await registerCargaOnExpediente({ servicioId: activeId, uid, almacen });
+      const { stop } = await registerCargaOnExpediente({ servicioId: activeId, uid, almacen, alcance });
       setCargaModal(false);
       await reloadWorkspace(activeId);
       setFocusStop(stop);
@@ -215,16 +220,29 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
     }
   }
 
-  async function handleFinalizar() {
-    if (!activeId) return;
+  async function handleGenerarExpediente({ transportista, conductor, comentario, firmaCanvas }) {
+    if (!activeId || !workspace?.servicio) return;
     setBusy(true);
     try {
-      await finalizarAutonomoExpediente(activeId);
+      await generarExpedienteAutonomo({
+        servicio: workspace.servicio,
+        workspace,
+        profile,
+        uid,
+        transportista,
+        conductor,
+        firmaCanvas,
+        comentario,
+        conductorNombre: conductor?.nombre || conductorNombre,
+      });
+      setGenerarModal(false);
       await reloadList();
+      await reloadWorkspace(activeId);
       setView("resumen");
-      showToast?.("Expediente finalizado");
+      showToast?.("Expediente generado");
     } catch (e) {
       showToast?.(e?.message || "Error");
+      throw e;
     } finally {
       setBusy(false);
     }
@@ -261,6 +279,7 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
           ← Expedientes
         </button>
         <OperationalSummaryLite servicio={workspace.servicio} conductorNombre={conductorNombre} showToast={showToast} />
+        <AutonomoExpedienteDecaBlock servicio={workspace.servicio} showToast={showToast} />
       </div>
     );
   }
@@ -393,6 +412,34 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         + Documentación / OCR
       </button>
 
+      {cargas?.length ? (
+        <div style={{ marginTop: 16, marginBottom: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>CARGAS</div>
+          {cargas.map((c) => {
+            const alcance = getCargaAlcance(c);
+            return (
+              <div
+                key={c.id}
+                style={{
+                  background: UI.card,
+                  border: `1px solid ${UI.line}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  marginBottom: 6,
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ fontWeight: 800, color: UI.tx }}>{c.nombre}</div>
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
+                  {SERVICIO_ALCANCE_LABELS[alcance] || alcance}
+                  {alcance === "nacional" ? " · DeCA al generar expediente" : " · sin DeCA"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       {destinos?.length ? (
         <div style={{ marginTop: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>DESTINOS</div>
@@ -522,9 +569,23 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         </div>
       ) : null}
 
-      <button type="button" style={{ ...bigBtn("#334155", busy), marginTop: 20 }} disabled={busy} onClick={handleFinalizar}>
-        Finalizar expediente
+      <button
+        type="button"
+        style={{ ...bigBtn("#334155", busy), marginTop: 20 }}
+        disabled={busy}
+        onClick={() => setGenerarModal(true)}
+      >
+        Generar expediente
       </button>
+
+      <AutonomoGenerarExpedienteModal
+        open={generarModal}
+        onClose={() => !busy && setGenerarModal(false)}
+        workspace={workspace}
+        profile={profile}
+        busy={busy}
+        onConfirm={handleGenerarExpediente}
+      />
 
       <AutonomoRegistrarCargaModal open={cargaModal} onClose={() => setCargaModal(false)} uid={uid} busy={busy} onConfirm={handleRegistrarCarga} />
       <AutonomoDestinoModal open={destinoModal} onClose={() => setDestinoModal(false)} busy={busy} onConfirm={handleAddDestino} />

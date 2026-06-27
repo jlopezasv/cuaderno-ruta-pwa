@@ -17,7 +17,12 @@ export function getAutonomoExpedienteMeta(servicio) {
     timelineEvents: Array.isArray(meta.timeline_events) ? meta.timeline_events : [],
     pdfVisibility: meta.pdf_visibility && typeof meta.pdf_visibility === "object" ? meta.pdf_visibility : {},
     activeStopId: meta.active_stop_id || null,
+    decaLinks: Array.isArray(meta.deca_autonomo_links) ? meta.deca_autonomo_links : [],
   };
+}
+
+export function getExpedienteDecaLinks(servicio) {
+  return getAutonomoExpedienteMeta(servicio).decaLinks;
 }
 
 export function pdfVisibilityKey(kind, id) {

@@ -26,6 +26,9 @@ import {
   pdfVisibilityKey,
   getAutonomoExpedienteMeta,
 } from "./autonomoExpedienteMeta.js";
+import { CARGA_ALCANCE_META_KEY, generarDecasParaExpediente, listNacionalCargas } from "./autonomoExpedienteDeca.js";
+import { SERVICIO_ALCANCE_DEFAULT, normalizeServicioAlcance } from "../../domain/service/servicioAlcance.js";
+import { cerrarExpedienteServicio } from "../../domain/service/cerrarExpedienteServicio.js";
 
 async function patchServicioReferencia(servicioId, referencia) {
   const r = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
@@ -234,6 +237,7 @@ export async function registerCargaOnExpediente({
   uid,
   almacen,
   orden = null,
+  alcance = SERVICIO_ALCANCE_DEFAULT,
 }) {
   const servicio = await fetchServicioById(servicioId);
   if (!servicio) throw new Error("Expediente no encontrado");
@@ -245,7 +249,11 @@ export async function registerCargaOnExpediente({
 
   upsertAutonomoAlmacen(uid, almacen);
 
-  const stopRow = almacenToStopForm(almacen, { tipo: "carga", orden: nextOrden });
+  const stopRow = almacenToStopForm(almacen, {
+    tipo: "carga",
+    orden: nextOrden,
+    extraMeta: { [CARGA_ALCANCE_META_KEY]: normalizeServicioAlcance(alcance) },
+  });
   const result = await insertStopsForServicio(servicioId, [stopRow]);
   if (!result.ok) throw new Error(result.error || "No se pudo registrar la carga");
 
@@ -364,6 +372,88 @@ export async function finalizarAutonomoExpediente(servicioId) {
   });
   const rows = await r.json().catch(() => []);
   return Array.isArray(rows) ? rows[0] : rows;
+}
+
+/**
+ * Cierra el expediente con firma, genera DeCA por cada carga nacional y vincula QR/enlace público.
+ */
+export async function generarExpedienteAutonomo({
+  servicio,
+  workspace,
+  profile,
+  uid,
+  transportista,
+  conductor,
+  firmaCanvas,
+  comentario = "",
+  conductorNombre = null,
+}) {
+  if (!servicio?.id) throw new Error("Expediente no válido");
+  if (!firmaCanvas) throw new Error("Añade tu firma antes de generar el expediente");
+
+  const { cargas, stops, evidenciasByStop } = workspace || {};
+  const nacionalCount = listNacionalCargas(cargas || []).length;
+  const decaResults = await generarDecasParaExpediente({
+    servicio,
+    cargas: cargas || [],
+    stops: stops || [],
+    evidenciasByStop: evidenciasByStop || {},
+    profile,
+    transportista,
+    conductor,
+    userId: uid,
+    downloadAfter: nacionalCount === 1,
+  });
+
+  let servicioFresh = await fetchServicioById(servicio.id);
+  if (decaResults.length) {
+    const referencia = mergeAutonomoExpedientePatch(servicioFresh.referencia, {
+      deca_autonomo_links: decaResults.map((d) => ({
+        deca_id: d.decaId,
+        deca_public_id: d.decaPublicId,
+        carga_stop_id: d.cargaStopId,
+        carga_nombre: d.cargaNombre,
+        origen: d.origen,
+        destino: d.destino,
+        download_url: d.downloadUrl,
+        generado_at: new Date().toISOString(),
+      })),
+    });
+    servicioFresh = await patchServicioReferencia(servicio.id, referencia);
+    for (const d of decaResults) {
+      await appendExpedienteTimeline(servicio.id, {
+        type: "deca_generado",
+        label: `DeCA: ${d.origen} → ${d.destino}`,
+        stopId: d.cargaStopId,
+        refId: d.decaId,
+      });
+    }
+  }
+
+  const closed = await cerrarExpedienteServicio({
+    servicio: servicioFresh,
+    comentario,
+    firmaCanvas,
+    conductorId: uid,
+    conductorNombre: conductorNombre || conductor?.nombre || null,
+  });
+
+  const now = new Date().toISOString();
+  await sbFetch(`/rest/v1/servicios?id=eq.${servicio.id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ fecha_fin_est: now, updated_at: now }),
+  });
+
+  await appendExpedienteTimeline(servicio.id, {
+    type: "expediente_generado",
+    label: decaResults.length
+      ? `Expediente generado con ${decaResults.length} DeCA`
+      : "Expediente generado",
+    at: now,
+  });
+
+  return { servicio: closed.servicio, decas: decaResults, firmaUrl: closed.firmaUrl };
 }
 
 export async function loadAutonomoExpedienteWorkspace(servicioId) {
