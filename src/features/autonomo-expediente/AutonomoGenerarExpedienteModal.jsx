@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
-import { SERVICIO_ALCANCE, SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
-import {
-  defaultExpedienteDecaPartes,
-  listNacionalCargas,
-  previewNacionalDecas,
-} from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import { defaultExpedienteDecaPartes } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import { getExpedienteDecaLinks } from "../../modules/autonomo-expediente/autonomoExpedienteMeta.js";
 import { SignaturePad } from "../services/components/ExpedienteClosureBlock.jsx";
 
 const UI = {
@@ -14,9 +9,6 @@ const UI = {
   tx: "#0f172a",
   su: "#64748b",
   green: "#15803d",
-  greenSoft: "#dcfce7",
-  blue: "#2563eb",
-  blueSoft: "#eff6ff",
 };
 
 const inputStyle = {
@@ -51,7 +43,7 @@ function Field({ label, children }) {
 function Section({ title, children }) {
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: UI.blue, letterSpacing: 0.6, marginBottom: 10, textTransform: "uppercase" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#2563eb", letterSpacing: 0.6, marginBottom: 10, textTransform: "uppercase" }}>
         {title}
       </div>
       {children}
@@ -75,21 +67,8 @@ export function AutonomoGenerarExpedienteModal({
   const [error, setError] = useState("");
   const firmaRef = useRef(null);
 
-  const { servicio, cargas, stops, evidenciasByStop } = workspace || {};
-  const nacionalCargas = useMemo(() => listNacionalCargas(cargas || []), [cargas]);
-  const decaPreviews = useMemo(
-    () =>
-      previewNacionalDecas({
-        cargas: cargas || [],
-        stops: stops || [],
-        servicio,
-        profile,
-        evidenciasByStop: evidenciasByStop || {},
-        transportista,
-        conductor,
-      }),
-    [cargas, stops, servicio, profile, evidenciasByStop, transportista, conductor],
-  );
+  const { servicio } = workspace || {};
+  const decaCount = useMemo(() => getExpedienteDecaLinks(servicio).length, [servicio]);
 
   useEffect(() => {
     if (!open) return;
@@ -105,7 +84,7 @@ export function AutonomoGenerarExpedienteModal({
   async function handleSubmit() {
     setError("");
     if (!hasFirma) {
-      setError("Añade tu firma para generar el expediente.");
+      setError("Añade tu firma para finalizar el expediente.");
       return;
     }
     if (!String(transportista.nombre || "").trim()) {
@@ -124,7 +103,7 @@ export function AutonomoGenerarExpedienteModal({
         firmaCanvas: firmaRef.current,
       });
     } catch (e) {
-      setError(e?.message || "No se pudo generar el expediente");
+      setError(e?.message || "No se pudo finalizar el expediente");
     }
   }
 
@@ -155,10 +134,11 @@ export function AutonomoGenerarExpedienteModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${UI.line}` }}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>Finalizar expediente</div>
-        <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
-          Firma de cierre{nacionalCargas.length ? ` y generación de ${nacionalCargas.length} DeCA` : ""}.
-        </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>Finalizar expediente</div>
+          <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
+            Firma de cierre del diario operativo.
+            {decaCount ? ` Incluye ${decaCount} DeCA ya generados.` : ""}
+          </div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", background: "#f8fafc" }}>
@@ -177,19 +157,9 @@ export function AutonomoGenerarExpedienteModal({
                 onChange={(e) => setTransportista((p) => ({ ...p, nif: e.target.value }))}
               />
             </Field>
-            <Field label="Domicilio">
-              <input
-                style={inputStyle}
-                value={transportista.domicilio}
-                onChange={(e) => setTransportista((p) => ({ ...p, domicilio: e.target.value }))}
-              />
-            </Field>
           </Section>
 
           <Section title="Conductor del viaje">
-            <div style={{ fontSize: 12, color: UI.su, marginBottom: 10, lineHeight: 1.4 }}>
-              Puedes indicar otro chofer si no conduces tú.
-            </div>
             <Field label="Nombre">
               <input
                 style={inputStyle}
@@ -204,52 +174,7 @@ export function AutonomoGenerarExpedienteModal({
                 onChange={(e) => setConductor((p) => ({ ...p, dni: e.target.value }))}
               />
             </Field>
-            <Field label="Teléfono">
-              <input
-                style={inputStyle}
-                value={conductor.telefono}
-                onChange={(e) => setConductor((p) => ({ ...p, telefono: e.target.value }))}
-              />
-            </Field>
           </Section>
-
-          {nacionalCargas.length ? (
-            <Section title={`${DECA_SHORT_LABEL} nacional (${nacionalCargas.length})`}>
-              {decaPreviews.map((p) => (
-                <div
-                  key={p.cargaStopId}
-                  style={{
-                    background: UI.blueSoft,
-                    border: `1px solid #bfdbfe`,
-                    borderRadius: 12,
-                    padding: "10px 12px",
-                    marginBottom: 8,
-                    fontSize: 13,
-                  }}
-                >
-                  <div style={{ fontWeight: 800, color: UI.tx }}>{p.cargaNombre}</div>
-                  <div style={{ color: UI.su, marginTop: 4 }}>
-                    {p.origen} → {p.destino}
-                  </div>
-                  <div style={{ color: UI.su, fontSize: 12, marginTop: 2 }}>Matrícula: {p.matricula}</div>
-                </div>
-              ))}
-            </Section>
-          ) : (
-            <div
-              style={{
-                background: "#f1f5f9",
-                borderRadius: 12,
-                padding: "12px 14px",
-                fontSize: 13,
-                color: UI.su,
-                marginBottom: 16,
-                lineHeight: 1.45,
-              }}
-            >
-              Sin cargas {SERVICIO_ALCANCE_LABELS[SERVICIO_ALCANCE.NACIONAL].toLowerCase()}es — no se generará {DECA_SHORT_LABEL}.
-            </div>
-          )}
 
           <Section title="Cierre">
             <Field label="Comentario final (opcional)">
@@ -299,11 +224,7 @@ export function AutonomoGenerarExpedienteModal({
               marginBottom: 8,
             }}
           >
-            {busy
-              ? "Finalizando…"
-              : nacionalCargas.length
-                ? `Finalizar + ${nacionalCargas.length} DeCA`
-                : "Finalizar expediente"}
+            {busy ? "Finalizando…" : "Finalizar expediente"}
           </button>
           <button
             type="button"

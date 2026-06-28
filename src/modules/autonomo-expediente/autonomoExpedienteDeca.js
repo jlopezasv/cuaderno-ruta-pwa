@@ -183,6 +183,87 @@ export function buildDecaDatosFromExpedienteCarga({
   return mergeAutonomoDecaDatos(datos);
 }
 
+/** Campos obligatorios mínimos DeCA (art. 6 simplificado autónomo). */
+export function checkDecaReadinessForCarga({
+  cargaStop,
+  destinoStop,
+  servicio,
+  profile,
+  transportista,
+  conductor,
+}) {
+  const datos = buildDecaDatosFromExpedienteCarga({
+    cargaStop,
+    destinoStop,
+    servicio,
+    profile,
+    evidencias: [],
+    transportista,
+    conductor,
+  });
+  const missing = [];
+  if (!String(datos.partes?.transportista?.nombre || "").trim()) missing.push("Nombre transportista");
+  if (!String(datos.vehiculo?.matricula || "").trim()) missing.push("Matrícula tractora");
+  if (!String(datos.origen?.lugar || "").trim()) missing.push("Origen / almacén de carga");
+  if (!String(datos.destino?.lugar || "").trim()) missing.push("Destino (añade un destino al expediente)");
+  if (!String(datos.partes?.cargador?.nombre || "").trim()) missing.push("Cargador");
+  return { ok: missing.length === 0, missing, datos };
+}
+
+/** Genera DeCA de una carga nacional (antes del viaje). */
+export async function generarDecaParaCarga({
+  servicio,
+  cargaStop,
+  stops,
+  evidenciasByStop,
+  profile,
+  transportista,
+  conductor,
+  userId,
+  downloadAfter = true,
+}) {
+  if (!isCargaNacional(cargaStop)) {
+    throw new Error("DeCA solo aplica a transporte nacional");
+  }
+  const destino = destinoForCarga(stops, cargaStop);
+  const { ok, missing } = checkDecaReadinessForCarga({
+    cargaStop,
+    destinoStop: destino,
+    servicio,
+    profile,
+    transportista,
+    conductor,
+  });
+  if (!ok) {
+    throw new Error(`Faltan datos para DeCA: ${missing.join(", ")}`);
+  }
+
+  const datos = buildDecaDatosFromExpedienteCarga({
+    cargaStop,
+    destinoStop: destino,
+    servicio,
+    profile,
+    evidencias: evidenciasByStop?.[cargaStop.id] || [],
+    transportista,
+    conductor,
+  });
+
+  let deca = await createAutonomoDeca({ datos, userId, profile: null });
+  const pdf = await generateAndPersistAutonomoDecaPdf(deca, { downloadAfter });
+  deca = pdf.deca;
+
+  return {
+    decaId: deca.id,
+    decaPublicId: deca.decaPublicId,
+    cargaStopId: cargaStop.id,
+    cargaNombre: cargaStop.nombre || "Carga",
+    origen: datos.origen?.lugar || cargaStop.nombre,
+    destino: datos.destino?.lugar || destino?.nombre || "—",
+    downloadUrl: pdf.decaDownloadUrl,
+    deca,
+  };
+}
+
 export function previewNacionalDecas({ cargas, stops, servicio, profile, evidenciasByStop, transportista, conductor }) {
   return listNacionalCargas(cargas).map((carga) => {
     const destino = destinoForCarga(stops, carga);

@@ -15,18 +15,37 @@ import {
   addDestinoOnExpediente,
   updateDestinoEstado,
   generarExpedienteAutonomo,
+  generarDecaCargaExpediente,
+  terminarCargaMuelle,
+  updateCargaMercancia,
   setExpedientePdfVisibility,
   archiveAutonomoExpediente,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
 import { loadArchivedAutonomoExpedienteIds } from "../../modules/autonomo-expediente/autonomoExpedienteArchive.js";
-import { isIncludedInExpedientePdf } from "../../modules/autonomo-expediente/autonomoExpedienteMeta.js";
-import { getCargaAlcance, listNacionalCargas } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import { isIncludedInExpedientePdf, getExpedienteDecaLinks } from "../../modules/autonomo-expediente/autonomoExpedienteMeta.js";
+import { getCargaAlcance, isCargaNacional } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
+import {
+  buildExpedienteOperativoState,
+  cargaNeedsDeca,
+  decaLinkForCarga,
+} from "../../modules/autonomo-expediente/autonomoExpedienteUiModel.js";
+import {
+  getCargaMuelleResumen,
+  getDestinoTiempoResumen,
+  isCargaEnMuelle,
+  isCargaTerminada,
+  isRetornoCarga,
+} from "../../modules/autonomo-expediente/autonomoExpedienteStopModel.js";
 import { SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
+import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
 import { AutonomoDocAccionesModal, docActionToEvidenciaConfig } from "./AutonomoDocAccionesModal.jsx";
 import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
+import { AutonomoCargaEnMuelleModal } from "./AutonomoCargaEnMuelleModal.jsx";
+import { AutonomoGenerarDecaModal } from "./AutonomoGenerarDecaModal.jsx";
+import { AutonomoPostEntregaModal } from "./AutonomoPostEntregaModal.jsx";
 
 const UI = {
   page: "#f8fafc",
@@ -42,17 +61,54 @@ const UI = {
 function bigBtn(color, disabled = false) {
   return {
     width: "100%",
-    padding: "16px 14px",
-    borderRadius: 14,
+    padding: "12px 14px",
+    borderRadius: 12,
     border: "none",
     background: color,
     color: "#fff",
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 800,
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.55 : 1,
-    marginBottom: 10,
   };
+}
+
+function actionChip(color = UI.blue) {
+  return {
+    flex: "1 1 45%",
+    minWidth: 140,
+    padding: "11px 12px",
+    borderRadius: 12,
+    border: color === "#fff" ? `1px solid ${UI.line}` : "none",
+    background: color === "#fff" ? "#fff" : color,
+    color: color === "#fff" ? UI.tx : "#fff",
+    fontSize: 13,
+    fontWeight: 800,
+    cursor: "pointer",
+    textAlign: "left",
+  };
+}
+
+function Card({ title, children, style = {} }) {
+  return (
+    <div
+      style={{
+        background: UI.card,
+        border: `1px solid ${UI.line}`,
+        borderRadius: 14,
+        padding: "12px 14px",
+        marginBottom: 12,
+        ...style,
+      }}
+    >
+      {title ? (
+        <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 0.6, marginBottom: 10 }}>
+          {title}
+        </div>
+      ) : null}
+      {children}
+    </div>
+  );
 }
 
 function destinoEstadoChip(estado) {
@@ -60,6 +116,19 @@ function destinoEstadoChip(estado) {
   if (st === "entregado") return { bg: "#dcfce7", color: "#166534", label: "Entregado" };
   if (st === "incidencia") return { bg: "#fef3c7", color: UI.amber, label: "Incidencia" };
   return { bg: "#f1f5f9", color: UI.su, label: "Pendiente" };
+}
+
+function miniBtn(bg = null) {
+  return {
+    padding: "6px 10px",
+    borderRadius: 8,
+    border: `1px solid ${UI.line}`,
+    background: bg || UI.page,
+    color: bg ? "#fff" : UI.tx,
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: "pointer",
+  };
 }
 
 export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = "Conductor", showToast }) {
@@ -75,6 +144,11 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
   const [focusStop, setFocusStop] = useState(null);
   const [evidenciaTipos, setEvidenciaTipos] = useState(null);
   const [generarModal, setGenerarModal] = useState(false);
+  const [cargaEnMuelleModal, setCargaEnMuelleModal] = useState(null);
+  const [decaModalCarga, setDecaModalCarga] = useState(null);
+  const [postEntregaDestino, setPostEntregaDestino] = useState(null);
+  const [retornoDesdeStopId, setRetornoDesdeStopId] = useState(null);
+  const [showMasMenu, setShowMasMenu] = useState(false);
   const [archivedIds, setArchivedIds] = useState(() => loadArchivedAutonomoExpedienteIds(uid));
   const [showArchived, setShowArchived] = useState(false);
   const [archiveConfirmId, setArchiveConfirmId] = useState(null);
@@ -145,16 +219,33 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
     }
   }
 
-  async function handleRegistrarCarga({ almacen, alcance }) {
-    if (!activeId || !almacen) return;
+  async function handleRegistrarCarga(payload) {
+    if (!activeId || !payload?.almacen) return;
     setBusy(true);
     try {
-      const { stop } = await registerCargaOnExpediente({ servicioId: activeId, uid, almacen, alcance });
+      let geoEntrada = null;
+      try {
+        const loc = await acquireLocation("entrada_muelle", "Llegada al muelle");
+        if (loc?.ok) geoEntrada = geoPayloadFromLocationResult(loc);
+      } catch {
+        /* GPS opcional */
+      }
+      const { stop } = await registerCargaOnExpediente({
+        servicioId: activeId,
+        uid,
+        almacen: payload.almacen,
+        alcance: payload.alcance,
+        mercancia: payload.mercancia,
+        geoEntrada,
+        esRetorno: payload.esRetorno,
+        retornoDesdeStopId: payload.retornoDesdeStopId,
+        requiereDeca: payload.requiereDeca,
+      });
       setCargaModal(false);
+      setRetornoDesdeStopId(null);
       await reloadWorkspace(activeId);
-      setFocusStop(stop);
-      setDocModal(true);
-      showToast?.("Carga registrada");
+      setCargaEnMuelleModal(stop);
+      showToast?.("Carga registrada · en muelle");
     } catch (e) {
       showToast?.(e?.message || "Error");
     } finally {
@@ -211,9 +302,55 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         geo: { salida: geo },
       });
       await reloadWorkspace(activeId);
-      showToast?.("Entrega registrada");
+      setPostEntregaDestino(stop);
+      showToast?.("Descarga completada");
     } catch (e) {
       showToast?.(e?.message || "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTerminarCargaMuelle(cargaStop) {
+    setBusy(true);
+    try {
+      let geo = null;
+      try {
+        const loc = await acquireLocation("salida_muelle", "Salida del muelle");
+        if (loc?.ok) geo = geoPayloadFromLocationResult(loc);
+      } catch {
+        /* GPS opcional */
+      }
+      await terminarCargaMuelle({ stopId: cargaStop.id, servicioId: activeId, geo });
+      await reloadWorkspace(activeId);
+      showToast?.("Carga terminada");
+    } catch (e) {
+      showToast?.(e?.message || "Error");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGenerarDeca({ transportista, conductor, cargaStopId }) {
+    if (!activeId) return;
+    setBusy(true);
+    try {
+      await generarDecaCargaExpediente({
+        servicioId: activeId,
+        cargaStopId,
+        workspace,
+        profile,
+        uid,
+        transportista,
+        conductor,
+      });
+      setDecaModalCarga(null);
+      await reloadWorkspace(activeId);
+      showToast?.(`${DECA_SHORT_LABEL} generado`);
+    } catch (e) {
+      showToast?.(e?.message || "Error DeCA");
+      throw e;
     } finally {
       setBusy(false);
     }
@@ -326,10 +463,8 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
       const ws = await loadAutonomoExpedienteWorkspace(activeId);
       setWorkspace(ws);
       setView("resumen");
-      if (result?.decaError) {
-        showToast?.(`Expediente cerrado. DeCA no generado: ${result.decaError}`);
-      } else if (result?.decas?.length) {
-        showToast?.(`Expediente finalizado con ${result.decas.length} DeCA`);
+      if (result?.decas?.length) {
+        showToast?.(`Expediente finalizado · ${result.decas.length} DeCA incluidos`);
       } else {
         showToast?.("Expediente finalizado");
       }
@@ -532,10 +667,16 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
 
   const { servicio, cargas, destinos, timeline, evidenciasByStop, stops } = workspace || {};
   const focusStopRow = focusStop?.id ? stops?.find((s) => s.id === focusStop.id) || focusStop : focusStop;
-  const nacionalCargasCount = listNacionalCargas(cargas || []).length;
+  const cargaEnMuelleRow = cargaEnMuelleModal?.id
+    ? stops?.find((s) => s.id === cargaEnMuelleModal.id) || cargaEnMuelleModal
+    : null;
+  const decaModalCargaRow = decaModalCarga?.id
+    ? stops?.find((s) => s.id === decaModalCarga.id) || decaModalCarga
+    : null;
+  const operativo = buildExpedienteOperativoState({ servicio, cargas: cargas || [], destinos: destinos || [] });
 
   return (
-    <div style={{ padding: "14px 14px 120px", background: UI.page, minHeight: "70vh" }}>
+    <div style={{ padding: "14px 14px 88px", background: UI.page, minHeight: "70vh" }}>
       <DriverLocationGateModal
         open={!!gate}
         phase={gate?.phase}
@@ -546,9 +687,9 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         onCancel={cancelGate}
       />
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.1 }}>EN CURSO</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.1 }}>DIARIO OPERATIVO</div>
           <div style={{ fontSize: 14, fontWeight: 800, color: UI.tx, marginTop: 4 }}>
             {servicio?.fecha_inicio
               ? new Date(servicio.fecha_inicio).toLocaleString("es-ES", {
@@ -560,76 +701,183 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
               : "Expediente activo"}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setActiveId(null);
-            setView("home");
-          }}
-          style={{ background: "transparent", border: "none", color: UI.su, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-        >
-          Salir
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => setShowMasMenu((v) => !v)}
+            style={{
+              background: UI.card,
+              border: `1px solid ${UI.line}`,
+              borderRadius: 10,
+              padding: "8px 12px",
+              color: UI.tx,
+              fontSize: 12,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            Más
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveId(null);
+              setView("home");
+            }}
+            style={{ background: "transparent", border: "none", color: UI.su, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+          >
+            Salir
+          </button>
+        </div>
       </div>
 
-      <button type="button" style={bigBtn("#0f766e", busy)} disabled={busy} onClick={() => setCargaModal(true)}>
-        REGISTRAR CARGA
-      </button>
-      <button type="button" style={bigBtn(UI.blue, busy)} disabled={busy} onClick={() => setDestinoModal(true)}>
-        + Añadir destino
-      </button>
-      <button
-        type="button"
-        style={{ ...bigBtn("#64748b", busy), fontSize: 14 }}
-        disabled={busy}
-        onClick={() => setDocModal(true)}
-      >
-        + Documentación / OCR
-      </button>
+      <Card title="ESTADO ACTUAL">
+        <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx }}>{operativo.estadoLabel}</div>
+        {operativo.sugerencias.slice(0, 2).map((s) => (
+          <div key={s.id} style={{ fontSize: 13, color: UI.blue, marginTop: 8, fontWeight: 700 }}>
+            → {s.label}
+          </div>
+        ))}
+      </Card>
+
+      <Card title="ACCIONES RÁPIDAS">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <button type="button" style={actionChip("#0f766e")} disabled={busy} onClick={() => setCargaModal(true)}>
+            Registrar carga
+          </button>
+          <button type="button" style={actionChip(UI.blue)} disabled={busy} onClick={() => setDestinoModal(true)}>
+            Añadir destino
+          </button>
+          <button type="button" style={actionChip("#64748b")} disabled={busy} onClick={() => setDocModal(true)}>
+            Documentación / OCR
+          </button>
+          <button
+            type="button"
+            style={actionChip("#fff")}
+            disabled={busy}
+            onClick={() => {
+              const target = cargas?.[cargas.length - 1] || destinos?.[destinos.length - 1];
+              if (target) {
+                setFocusStop(target);
+                setEvidenciaTipos(["incidencia"]);
+              } else showToast?.("Registra una carga o destino primero");
+            }}
+          >
+            Incidencia
+          </button>
+        </div>
+      </Card>
+
+      {showMasMenu || operativo.canSuggestFinalizar ? (
+        <Card title="MÁS">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setGenerarModal(true)}
+            style={{
+              width: "100%",
+              padding: "11px 12px",
+              borderRadius: 10,
+              border: `1px solid ${UI.line}`,
+              background: operativo.canSuggestFinalizar ? "#f1f5f9" : UI.page,
+              color: UI.su,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Finalizar expediente
+          </button>
+        </Card>
+      ) : null}
 
       {cargas?.length ? (
-        <div style={{ marginTop: 16, marginBottom: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>CARGAS</div>
+        <Card title="CARGAS">
           {cargas.map((c) => {
             const alcance = getCargaAlcance(c);
+            const muelle = getCargaMuelleResumen(c);
+            const terminada = isCargaTerminada(c);
+            const enMuelle = isCargaEnMuelle(c);
+            const decaLink = decaLinkForCarga(servicio, c.id);
+            const needsDeca = cargaNeedsDeca(c, servicio);
             return (
               <div
                 key={c.id}
                 style={{
-                  background: UI.card,
                   border: `1px solid ${UI.line}`,
                   borderRadius: 12,
                   padding: "10px 12px",
-                  marginBottom: 6,
+                  marginBottom: 8,
                   fontSize: 13,
                 }}
               >
-                <div style={{ fontWeight: 800, color: UI.tx }}>{c.nombre}</div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
-                  {SERVICIO_ALCANCE_LABELS[alcance] || alcance}
-                  {alcance === "nacional" ? " · DeCA al generar expediente" : " · sin DeCA"}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontWeight: 800, color: UI.tx }}>
+                      {c.nombre}
+                      {isRetornoCarga(c) ? " · retorno" : ""}
+                    </div>
+                    <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
+                      {SERVICIO_ALCANCE_LABELS[alcance] || alcance}
+                      {enMuelle ? " · en muelle" : terminada && muelle.label ? ` · ${muelle.label}` : ""}
+                    </div>
+                  </div>
+                  {decaLink ? (
+                    <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: "#dcfce7", color: UI.green }}>
+                      DeCA
+                    </span>
+                  ) : needsDeca ? (
+                    <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: "#fef3c7", color: UI.amber }}>
+                      DeCA pendiente
+                    </span>
+                  ) : null}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setCargaEnMuelleModal(c)}
+                    style={miniBtn()}
+                  >
+                    {terminada ? "Ver carga" : "Terminar carga"}
+                  </button>
+                  {needsDeca && isCargaNacional(c) ? (
+                    <button type="button" disabled={busy} onClick={() => setDecaModalCarga(c)} style={miniBtn(UI.green)}>
+                      Generar DeCA
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setFocusStop(c);
+                      setEvidenciaTipos(["cmr", "foto"]);
+                    }}
+                    style={miniBtn()}
+                  >
+                    Docs
+                  </button>
                 </div>
               </div>
             );
           })}
-        </div>
+        </Card>
       ) : null}
 
       {destinos?.length ? (
-        <div style={{ marginTop: 16, marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>DESTINOS</div>
+        <Card title="DESTINOS">
           {destinos.map((d) => {
             const meta = getStopOperacionMeta(d.notas);
             const chip = destinoEstadoChip(meta.destino_estado);
+            const tiempo = getDestinoTiempoResumen(d);
             const isFocus = focusStopRow?.id === d.id;
             return (
               <div
                 key={d.id}
                 style={{
-                  background: UI.card,
                   border: `1px solid ${isFocus ? UI.blue : UI.line}`,
-                  borderRadius: 14,
-                  padding: "12px 14px",
+                  borderRadius: 12,
+                  padding: "10px 12px",
                   marginBottom: 8,
                 }}
               >
@@ -639,13 +887,16 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
                     {chip.label}
                   </span>
                 </div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>{d.direccion || "—"}</div>
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
+                  {d.direccion || "—"}
+                  {tiempo.label ? ` · ${tiempo.label}` : ""}
+                </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  <button type="button" disabled={busy} onClick={() => handleDestinoLlegada(d)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${UI.line}`, background: UI.page, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                    Hora llegada + GPS
+                  <button type="button" disabled={busy} onClick={() => handleDestinoLlegada(d)} style={miniBtn()}>
+                    Registrar llegada
                   </button>
-                  <button type="button" disabled={busy} onClick={() => handleDestinoSalida(d)} style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${UI.line}`, background: UI.page, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                    Hora salida + entregar
+                  <button type="button" disabled={busy} onClick={() => handleDestinoSalida(d)} style={miniBtn()}>
+                    Terminar descarga
                   </button>
                   <button
                     type="button"
@@ -654,22 +905,25 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
                       setFocusStop(d);
                       setEvidenciaTipos(["foto", "incidencia"]);
                     }}
-                    style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${UI.line}`, background: UI.page, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                    style={miniBtn()}
                   >
-                    POD / fotos
+                    POD / incidencia
                   </button>
                 </div>
               </div>
             );
           })}
-        </div>
+        </Card>
+      ) : null}
+
+      {servicio && getExpedienteDecaLinks(servicio).length ? (
+        <Card title="DeCA GENERADOS">
+          <AutonomoExpedienteDecaBlock servicio={servicio} showToast={showToast} />
+        </Card>
       ) : null}
 
       {focusStopRow && servicio ? (
-        <div style={{ marginBottom: 16, background: UI.card, border: `1px solid ${UI.line}`, borderRadius: 14, padding: "12px 14px" }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>
-            DOCUMENTOS · {focusStopRow.nombre}
-          </div>
+        <Card title={`DOCUMENTOS · ${focusStopRow.nombre}`}>
           <OperationalEvidenciasStop
             stopId={focusStopRow.id}
             servicioId={servicio.id}
@@ -682,38 +936,34 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
             acquireActionLocation={(type, label) => acquireLocation(type, label)}
             onEvidenciaSaved={() => void reloadWorkspace(activeId)}
           />
-        </div>
-      ) : cargas?.length ? (
-        <div style={{ fontSize: 13, color: UI.su, marginBottom: 12 }}>
-          Pulsa «Documentación / OCR» o selecciona un destino para adjuntar archivos.
-        </div>
+        </Card>
       ) : null}
 
       {servicio ? (
-        <ServiceExtraDocumentsBlock
-          servicio={servicio}
-          showToast={showToast}
-          uploaderName={conductorNombre}
-          tone="light"
-          compact
-        />
+        <Card title="DOCUMENTACIÓN LIBRE">
+          <ServiceExtraDocumentsBlock
+            servicio={servicio}
+            showToast={showToast}
+            uploaderName={conductorNombre}
+            tone="light"
+            compact
+          />
+        </Card>
       ) : null}
 
       {timeline?.length ? (
-        <div style={{ marginTop: 18 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 10 }}>TIMELINE</div>
+        <Card title="TIMELINE">
           {timeline.map((evt, i) => (
             <div key={`${evt.at}-${evt.type}-${i}`} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: UI.blue, minWidth: 44 }}>{evt.timeLabel}</div>
               <div style={{ fontSize: 13, color: UI.tx, lineHeight: 1.4 }}>{evt.label}</div>
             </div>
           ))}
-        </div>
+        </Card>
       ) : null}
 
       {Object.keys(evidenciasByStop || {}).length ? (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>INCLUIR EN PDF</div>
+        <Card title="INCLUIR EN PDF">
           {Object.entries(evidenciasByStop).flatMap(([stopId, evs]) =>
             (evs || []).map((ev) => {
               const included = isIncludedInExpedientePdf(servicio, "evidence", ev.id);
@@ -741,48 +991,8 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
               );
             }),
           )}
-        </div>
+        </Card>
       ) : null}
-
-      {nacionalCargasCount > 0 ? (
-        <div
-          style={{
-            marginTop: 16,
-            padding: "12px 14px",
-            borderRadius: 12,
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            fontSize: 13,
-            color: UI.tx,
-            lineHeight: 1.45,
-          }}
-        >
-          Al finalizar se generará {nacionalCargasCount} DeCA nacional{nacionalCargasCount > 1 ? "es" : ""} con QR y enlace público.
-        </div>
-      ) : null}
-
-      <div
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 56,
-          padding: "10px 14px max(10px, env(safe-area-inset-bottom))",
-          background: "rgba(255,255,255,.96)",
-          borderTop: `1px solid ${UI.line}`,
-          boxShadow: "0 -8px 24px rgba(15,23,42,.08)",
-          zIndex: 50,
-        }}
-      >
-        <button
-          type="button"
-          style={{ ...bigBtn("#334155", busy), marginBottom: 0 }}
-          disabled={busy}
-          onClick={() => setGenerarModal(true)}
-        >
-          Finalizar expediente · firma
-        </button>
-      </div>
 
       <AutonomoGenerarExpedienteModal
         open={generarModal}
@@ -793,7 +1003,19 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
         onConfirm={handleGenerarExpediente}
       />
 
-      <AutonomoRegistrarCargaModal open={cargaModal} onClose={() => setCargaModal(false)} uid={uid} busy={busy} showToast={showToast} onConfirm={handleRegistrarCarga} />
+      <AutonomoRegistrarCargaModal
+        open={cargaModal}
+        onClose={() => {
+          setCargaModal(false);
+          setRetornoDesdeStopId(null);
+        }}
+        uid={uid}
+        busy={busy}
+        showToast={showToast}
+        retornoMode={!!retornoDesdeStopId}
+        retornoDesdeStopId={retornoDesdeStopId}
+        onConfirm={handleRegistrarCarga}
+      />
       <AutonomoDestinoModal open={destinoModal} onClose={() => setDestinoModal(false)} busy={busy} onConfirm={handleAddDestino} />
       <AutonomoDocAccionesModal
         open={docModal}
@@ -802,6 +1024,70 @@ export function AutonomoExpedienteScreen({ uid, profile = {}, conductorNombre = 
           handleDocAction(action);
           if (!focusStopRow && cargas?.[0]) setFocusStop(cargas[cargas.length - 1]);
         }}
+      />
+
+      <AutonomoCargaEnMuelleModal
+        open={!!cargaEnMuelleRow}
+        cargaStop={cargaEnMuelleRow}
+        servicio={servicio}
+        destinos={destinos}
+        busy={busy}
+        onClose={() => setCargaEnMuelleModal(null)}
+        onUpdateMercancia={async ({ mercancia, observaciones }) => {
+          if (!cargaEnMuelleRow?.id) return;
+          await updateCargaMercancia({
+            stopId: cargaEnMuelleRow.id,
+            servicioId: activeId,
+            mercancia,
+            observaciones,
+          });
+        }}
+        onTerminarCarga={async () => {
+          if (!cargaEnMuelleRow) return;
+          await handleTerminarCargaMuelle(cargaEnMuelleRow);
+          await reloadWorkspace(activeId);
+        }}
+        onGenerarDeca={() => {
+          setCargaEnMuelleModal(null);
+          setDecaModalCarga(cargaEnMuelleRow);
+        }}
+        onAddDestino={() => {
+          setCargaEnMuelleModal(null);
+          setDestinoModal(true);
+        }}
+        onScanCmr={() => {
+          setCargaEnMuelleModal(null);
+          setFocusStop(cargaEnMuelleRow);
+          setEvidenciaTipos(["cmr"]);
+        }}
+        onSeguir={() => setCargaEnMuelleModal(null)}
+      />
+
+      <AutonomoGenerarDecaModal
+        open={!!decaModalCargaRow}
+        cargaStop={decaModalCargaRow}
+        workspace={workspace}
+        profile={profile}
+        busy={busy}
+        onClose={() => setDecaModalCarga(null)}
+        onConfirm={handleGenerarDeca}
+      />
+
+      <AutonomoPostEntregaModal
+        open={!!postEntregaDestino}
+        destinoNombre={postEntregaDestino?.nombre}
+        busy={busy}
+        onClose={() => setPostEntregaDestino(null)}
+        onRetorno={() => {
+          setRetornoDesdeStopId(postEntregaDestino?.id || null);
+          setPostEntregaDestino(null);
+          setCargaModal(true);
+        }}
+        onFinalizar={() => {
+          setPostEntregaDestino(null);
+          setGenerarModal(true);
+        }}
+        onSeguir={() => setPostEntregaDestino(null)}
       />
     </div>
   );

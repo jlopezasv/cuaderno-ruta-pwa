@@ -26,7 +26,11 @@ import {
   pdfVisibilityKey,
   getAutonomoExpedienteMeta,
 } from "./autonomoExpedienteMeta.js";
-import { CARGA_ALCANCE_META_KEY, generarDecasParaExpediente, listNacionalCargas } from "./autonomoExpedienteDeca.js";
+import { CARGA_ALCANCE_META_KEY, generarDecaParaCarga } from "./autonomoExpedienteDeca.js";
+import {
+  CARGA_ESTADO,
+  computeMuelleMinutes,
+} from "./autonomoExpedienteStopModel.js";
 import { SERVICIO_ALCANCE_DEFAULT, normalizeServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { cerrarExpedienteServicio } from "../../domain/service/cerrarExpedienteServicio.js";
 import { archiveAutonomoExpedienteLocal } from "./autonomoExpedienteArchive.js";
@@ -192,6 +196,92 @@ export async function appendExpedienteTimeline(servicioId, event) {
   return patchServicioReferencia(servicioId, referencia);
 }
 
+async function fetchStopById(stopId) {
+  const r = await sbFetch(`/rest/v1/stops?id=eq.${stopId}&select=*&limit=1`);
+  if (!r.ok) throw new Error("Parada no encontrada");
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) ? rows[0] : null;
+}
+
+export async function patchStopOperacionMeta(stopId, patch) {
+  const stop = await fetchStopById(stopId);
+  if (!stop) throw new Error("Parada no encontrada");
+  const notas = mergeStopOperacionMeta(stop.notas, patch);
+  const pr = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ notas }),
+  });
+  if (!pr.ok) {
+    const body = await pr.text().catch(() => "");
+    throw new Error(body || `No se pudo actualizar parada (${pr.status})`);
+  }
+  const rows = await pr.json().catch(() => []);
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
+async function appendDecaLinkToExpediente(servicioId, link) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  const prev = getAutonomoExpedienteMeta(servicio).decaLinks || [];
+  const next = [...prev.filter((l) => l.carga_stop_id !== link.carga_stop_id), link];
+  const referencia = mergeAutonomoExpedientePatch(servicio.referencia, {
+    deca_autonomo_links: next,
+  });
+  return patchServicioReferencia(servicioId, referencia);
+}
+
+export async function generarDecaCargaExpediente({
+  servicioId,
+  cargaStopId,
+  workspace,
+  profile,
+  uid,
+  transportista,
+  conductor,
+}) {
+  const { servicio, stops, cargas, evidenciasByStop } = workspace || {};
+  const carga = (cargas || []).find((c) => c.id === cargaStopId);
+  if (!carga) throw new Error("Carga no encontrada");
+
+  const result = await generarDecaParaCarga({
+    servicio,
+    cargaStop: carga,
+    stops: stops || [],
+    evidenciasByStop: evidenciasByStop || {},
+    profile,
+    transportista,
+    conductor,
+    userId: uid,
+    downloadAfter: true,
+  });
+
+  await appendDecaLinkToExpediente(servicioId, {
+    deca_id: result.decaId,
+    deca_public_id: result.decaPublicId,
+    carga_stop_id: result.cargaStopId,
+    carga_nombre: result.cargaNombre,
+    origen: result.origen,
+    destino: result.destino,
+    download_url: result.downloadUrl,
+    generado_at: new Date().toISOString(),
+  });
+
+  await patchStopOperacionMeta(cargaStopId, {
+    deca_id: result.decaId,
+    deca_public_id: result.decaPublicId,
+  });
+
+  await appendExpedienteTimeline(servicioId, {
+    type: "deca_generado",
+    label: `DeCA: ${result.origen} → ${result.destino}`,
+    stopId: cargaStopId,
+    refId: result.decaId,
+  });
+
+  return result;
+}
+
 export async function setExpedientePdfVisibility(servicioId, kind, id, include) {
   const servicio = await fetchServicioById(servicioId);
   if (!servicio) throw new Error("Expediente no encontrado");
@@ -224,7 +314,8 @@ function almacenToStopForm(almacen, { tipo, orden, extraMeta = {} }) {
     telefono: almacen.telefono || null,
     cif: almacen.cif || null,
     autonomo_expediente: true,
-    ...(tipo === "carga" ? { carga_registrada_at: now } : {}),
+    carga_estado: CARGA_ESTADO.EN_MUELLE,
+    ...(tipo === "carga" ? { carga_registrada_at: now, entrada_at: now } : {}),
     ...(tipo === "descarga" ? { destino_estado: "pendiente", destino_anadido_at: now } : {}),
   };
   return {
@@ -239,6 +330,11 @@ export async function registerCargaOnExpediente({
   almacen,
   orden = null,
   alcance = SERVICIO_ALCANCE_DEFAULT,
+  mercancia = null,
+  geoEntrada = null,
+  esRetorno = false,
+  retornoDesdeStopId = null,
+  requiereDeca = null,
 }) {
   const servicio = await fetchServicioById(servicioId);
   if (!servicio) throw new Error("Expediente no encontrado");
@@ -253,7 +349,14 @@ export async function registerCargaOnExpediente({
   const stopRow = almacenToStopForm(almacen, {
     tipo: "carga",
     orden: nextOrden,
-    extraMeta: { [CARGA_ALCANCE_META_KEY]: normalizeServicioAlcance(alcance) },
+    extraMeta: {
+      [CARGA_ALCANCE_META_KEY]: normalizeServicioAlcance(alcance),
+      ...(mercancia && typeof mercancia === "object" ? { mercancia } : {}),
+      ...(geoEntrada ? { entrada_geo: geoEntrada } : {}),
+      ...(esRetorno ? { es_retorno: true, retorno_desde_stop_id: retornoDesdeStopId || null } : {}),
+      ...(requiereDeca === false ? { no_requiere_deca: true } : {}),
+      ...(requiereDeca === true ? { requiere_deca: true } : {}),
+    },
   });
   const result = await insertStopsForServicio(servicioId, [stopRow]);
   if (!result.ok) throw new Error(result.detail || result.error || "No se pudo registrar la carga");
@@ -266,6 +369,71 @@ export async function registerCargaOnExpediente({
   });
 
   return { stop: inserted, servicio: await fetchServicioById(servicioId) };
+}
+
+export async function updateCargaMercancia({ stopId, servicioId, mercancia, observaciones = null }) {
+  const patch = {};
+  if (mercancia && typeof mercancia === "object") patch.mercancia = mercancia;
+  if (observaciones != null) patch.observaciones_carga = String(observaciones || "").trim() || null;
+  const updated = await patchStopOperacionMeta(stopId, patch);
+  if (servicioId) {
+    await appendExpedienteTimeline(servicioId, {
+      type: "carga_actualizada",
+      label: "Datos de carga actualizados",
+      stopId,
+    });
+  }
+  return updated;
+}
+
+export async function registrarLlegadaCarga({ stopId, servicioId, geo = null }) {
+  const now = new Date().toISOString();
+  const patch = {
+    carga_estado: CARGA_ESTADO.EN_MUELLE,
+    entrada_at: now,
+    ...(geo ? { entrada_geo: geo } : {}),
+  };
+  const updated = await patchStopOperacionMeta(stopId, patch);
+  if (servicioId) {
+    await appendExpedienteTimeline(servicioId, {
+      type: "carga_llegada_muelle",
+      label: "Llegada al muelle",
+      stopId,
+    });
+  }
+  return updated;
+}
+
+export async function terminarCargaMuelle({ stopId, servicioId, geo = null }) {
+  const stop = await fetchStopById(stopId);
+  if (!stop) throw new Error("Carga no encontrada");
+  const meta = mergeStopOperacionMeta(stop.notas, {});
+  const now = new Date().toISOString();
+  const entradaAt = meta.entrada_at || now;
+  const minutos = computeMuelleMinutes(entradaAt, now);
+  const patch = {
+    carga_estado: CARGA_ESTADO.COMPLETADA,
+    salida_at: now,
+    ...(geo ? { salida_geo: geo } : {}),
+    tiempo_muelle_min: minutos,
+  };
+  const updated = await patchStopOperacionMeta(stopId, patch);
+  if (servicioId) {
+    await appendExpedienteTimeline(servicioId, {
+      type: "carga_terminada",
+      label: `Carga terminada${minutos != null ? ` · ${minutos} min en muelle` : ""}`,
+      stopId,
+    });
+  }
+  return updated;
+}
+
+export async function setCargaRequiereDeca({ stopId, requiere, nota = "" }) {
+  return patchStopOperacionMeta(stopId, {
+    no_requiere_deca: requiere === false,
+    requiere_deca: requiere === true,
+    retorno_deca_nota: nota || null,
+  });
 }
 
 export async function addDestinoOnExpediente({ servicioId, uid, destino, orden = null }) {
@@ -327,6 +495,10 @@ export async function updateDestinoEstado({ stopId, servicioId, estado, geo = nu
   if (geo?.salida) {
     patch.salida_at = now;
     patch.salida_geo = geo.salida;
+    const meta = mergeStopOperacionMeta(stop.notas, {});
+    const entradaAt = meta.entrada_at || patch.entrada_at;
+    const minutos = computeMuelleMinutes(entradaAt, now);
+    if (minutos != null) patch.tiempo_destino_min = minutos;
   }
 
   const notas = mergeStopOperacionMeta(stop.notas, patch);
@@ -382,7 +554,7 @@ export async function finalizarAutonomoExpediente(servicioId) {
 }
 
 /**
- * Cierra el expediente con firma, genera DeCA por cada carga nacional y vincula QR/enlace público.
+ * Cierra el expediente con firma. DeCA se genera por carga durante el viaje, no aquí.
  */
 export async function generarExpedienteAutonomo({
   servicio,
@@ -396,54 +568,9 @@ export async function generarExpedienteAutonomo({
   conductorNombre = null,
 }) {
   if (!servicio?.id) throw new Error("Expediente no válido");
-  if (!firmaCanvas) throw new Error("Añade tu firma antes de generar el expediente");
-
-  const { cargas, stops, evidenciasByStop } = workspace || {};
-  const nacionalCount = listNacionalCargas(cargas || []).length;
-  let decaResults = [];
-  let decaError = null;
-  if (nacionalCount > 0) {
-    try {
-      decaResults = await generarDecasParaExpediente({
-        servicio,
-        cargas: cargas || [],
-        stops: stops || [],
-        evidenciasByStop: evidenciasByStop || {},
-        profile,
-        transportista,
-        conductor,
-        userId: uid,
-        downloadAfter: nacionalCount === 1,
-      });
-    } catch (e) {
-      decaError = e?.message || "No se pudo generar DeCA";
-    }
-  }
+  if (!firmaCanvas) throw new Error("Añade tu firma antes de finalizar el expediente");
 
   let servicioFresh = await fetchServicioById(servicio.id);
-  if (decaResults.length) {
-    const referencia = mergeAutonomoExpedientePatch(servicioFresh.referencia, {
-      deca_autonomo_links: decaResults.map((d) => ({
-        deca_id: d.decaId,
-        deca_public_id: d.decaPublicId,
-        carga_stop_id: d.cargaStopId,
-        carga_nombre: d.cargaNombre,
-        origen: d.origen,
-        destino: d.destino,
-        download_url: d.downloadUrl,
-        generado_at: new Date().toISOString(),
-      })),
-    });
-    servicioFresh = await patchServicioReferencia(servicio.id, referencia);
-    for (const d of decaResults) {
-      await appendExpedienteTimeline(servicio.id, {
-        type: "deca_generado",
-        label: `DeCA: ${d.origen} → ${d.destino}`,
-        stopId: d.cargaStopId,
-        refId: d.decaId,
-      });
-    }
-  }
 
   const closed = await cerrarExpedienteServicio({
     servicio: servicioFresh,
@@ -462,13 +589,17 @@ export async function generarExpedienteAutonomo({
 
   await appendExpedienteTimeline(servicio.id, {
     type: "expediente_generado",
-    label: decaResults.length
-      ? `Expediente generado con ${decaResults.length} DeCA`
-      : "Expediente generado",
+    label: "Expediente finalizado",
     at: now,
   });
 
-  return { servicio: closed.servicio, decas: decaResults, firmaUrl: closed.firmaUrl, decaError };
+  const { decaLinks } = getAutonomoExpedienteMeta(closed.servicio || servicioFresh);
+  return {
+    servicio: closed.servicio,
+    decas: decaLinks || [],
+    firmaUrl: closed.firmaUrl,
+    decaError: null,
+  };
 }
 
 /** Archiva expediente autónomo (oculto en lista; datos conservados). */

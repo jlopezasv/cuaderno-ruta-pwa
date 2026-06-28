@@ -36,9 +36,17 @@ const emptyForm = () => ({
   direccion: "",
   cp: "",
   ciudad: "",
+  pais: "ES",
   contacto: "",
   telefono: "",
   cif: "",
+});
+
+const emptyMercancia = () => ({
+  descripcion: "",
+  palets: "",
+  bultos: "",
+  peso_kg: "",
 });
 
 function AlmacenDeleteConfirm({ almacen, onCancel, onConfirm, busy }) {
@@ -100,11 +108,22 @@ function AlmacenDeleteConfirm({ almacen, onCancel, onConfirm, busy }) {
   );
 }
 
-export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, busy = false, showToast }) {
+export function AutonomoRegistrarCargaModal({
+  open,
+  onClose,
+  uid,
+  onConfirm,
+  busy = false,
+  showToast,
+  retornoMode = false,
+  retornoDesdeStopId = null,
+}) {
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(emptyForm);
+  const [mercancia, setMercancia] = useState(emptyMercancia);
   const [mode, setMode] = useState("search");
   const [alcance, setAlcance] = useState(SERVICIO_ALCANCE_DEFAULT);
+  const [requiereDeca, setRequiereDeca] = useState(null);
   const [catalogTick, setCatalogTick] = useState(0);
   const [pendingDelete, setPendingDelete] = useState(null);
 
@@ -113,13 +132,29 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
 
   if (!open) return null;
 
+  function buildPayload(almacen) {
+    const merc = {};
+    if (mercancia.descripcion?.trim()) merc.descripcion = mercancia.descripcion.trim();
+    if (mercancia.palets !== "") merc.palets = mercancia.palets;
+    if (mercancia.bultos !== "") merc.bultos = mercancia.bultos;
+    if (mercancia.peso_kg !== "") merc.peso_kg = mercancia.peso_kg;
+    return {
+      almacen,
+      alcance,
+      mercancia: Object.keys(merc).length ? merc : null,
+      esRetorno: retornoMode,
+      retornoDesdeStopId,
+      requiereDeca: retornoMode ? requiereDeca : null,
+    };
+  }
+
   function pick(almacen) {
-    onConfirm?.({ almacen, alcance });
+    onConfirm?.(buildPayload(almacen));
   }
 
   function confirmNew() {
     if (!String(form.nombre || "").trim()) return;
-    onConfirm?.({ almacen: { ...form }, alcance });
+    onConfirm?.(buildPayload({ ...form }));
   }
 
   function requestDelete(almacen, event) {
@@ -165,8 +200,12 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx, marginBottom: 4 }}>Registrar carga</div>
-        <div style={{ fontSize: 13, color: UI.su, marginBottom: 14 }}>Elige almacén o crea uno nuevo.</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx, marginBottom: 4 }}>
+          {retornoMode ? "Registrar retorno / nueva carga" : "Registrar carga"}
+        </div>
+        <div style={{ fontSize: 13, color: UI.su, marginBottom: 14 }}>
+          {retornoMode ? "Mercancía recogida en destino." : "Elige almacén o crea uno nuevo."}
+        </div>
 
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>ALCANCE DEL TRANSPORTE</div>
@@ -192,8 +231,56 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
             ))}
           </div>
           <div style={{ fontSize: 11, color: UI.su, marginTop: 6, lineHeight: 1.4 }}>
-            DeCA solo se genera en cargas nacionales al cerrar el expediente.
+            DeCA nacional se genera tras terminar la carga, antes de circular.
           </div>
+        </div>
+
+        {retornoMode ? (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>¿REQUIERE DeCA?</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[
+                { v: true, label: "Sí, requiere DeCA" },
+                { v: false, label: "No requiere DeCA" },
+              ].map(({ v, label }) => (
+                <button
+                  key={String(v)}
+                  type="button"
+                  onClick={() => setRequiereDeca(v)}
+                  style={{
+                    flex: 1,
+                    padding: "10px 8px",
+                    borderRadius: 10,
+                    border: `1px solid ${requiereDeca === v ? UI.accent : UI.line}`,
+                    background: requiereDeca === v ? "#eff6ff" : UI.bg,
+                    fontWeight: 800,
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div style={{ marginBottom: 12, padding: "10px 12px", background: UI.bg, borderRadius: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>MERCANCÍA (opcional)</div>
+          {[
+            ["descripcion", "Mercancía"],
+            ["palets", "Palets"],
+            ["bultos", "Bultos"],
+            ["peso_kg", "Peso (kg)"],
+          ].map(([k, label]) => (
+            <input
+              key={k}
+              style={{ ...inputStyle, marginBottom: 6 }}
+              placeholder={label}
+              value={mercancia[k]}
+              onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
+            />
+          ))}
         </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -312,6 +399,7 @@ export function AutonomoRegistrarCargaModal({ open, onClose, uid, onConfirm, bus
               ["direccion", "Dirección"],
               ["cp", "CP"],
               ["ciudad", "Ciudad"],
+              ["pais", "País"],
               ["contacto", "Persona contacto"],
               ["telefono", "Teléfono"],
               ["cif", "CIF"],
