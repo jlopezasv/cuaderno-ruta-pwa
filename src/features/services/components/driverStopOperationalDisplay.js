@@ -48,12 +48,10 @@ export function buildDriverStopTimesRows({ stop, isFirstCarga, servicio }) {
   return rows;
 }
 
+import { muelleEntradaLabel, muelleSalidaLabel } from "../../../domain/service/muelleLabels.js";
+
 export function primaryMuelleActionLabel(stop, phase) {
-  const group = String(stop?.tipo || "").toLowerCase();
-  if (phase === "entrada") return "Entrada a muelle";
-  if (group === "descarga") return "Completar descarga";
-  if (group === "carga") return "Completar carga";
-  if (group.includes("carga") && group.includes("descarga")) return "Completar operación";
-  return "Salida de muelle";
+  if (phase === "entrada") return muelleEntradaLabel(stop);
+  return muelleSalidaLabel(stop);
 }
 

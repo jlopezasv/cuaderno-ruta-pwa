@@ -13,6 +13,30 @@ import {
   CARGA_ESTADO,
 } from "./autonomoExpedienteStopModel.js";
 
+/**
+ * DeCA «vigente» en pantalla de trabajo: pendiente de generar o último tramo con documento.
+ */
+export function resolveAutonomoDecaFocus({ servicio, cargas = [], destinos = [], operativo = null }) {
+  const op = operativo || buildExpedienteOperativoState({ servicio, cargas, destinos });
+  const pending = op.nacionalSinDeca?.[0];
+  if (pending) {
+    return { kind: "pending", carga: pending, cargaId: pending.id, link: null };
+  }
+  const links = getExpedienteDecaLinks(servicio);
+  if (!links.length) return { kind: "none", carga: null, cargaId: null, link: null };
+
+  const terminadasNacional = listNacionalCargas(cargas).filter(isCargaTerminada);
+  for (let i = terminadasNacional.length - 1; i >= 0; i -= 1) {
+    const carga = terminadasNacional[i];
+    const link = decaLinkForCarga(servicio, carga.id);
+    if (link) {
+      return { kind: "ready", carga, cargaId: carga.id, link };
+    }
+  }
+  const link = links[links.length - 1];
+  return { kind: "ready", carga: null, cargaId: link?.carga_stop_id || null, link };
+}
+
 export function decaLinkForCarga(servicio, cargaStopId) {
   const links = getExpedienteDecaLinks(servicio);
   return links.find((l) => l.carga_stop_id === cargaStopId) || null;

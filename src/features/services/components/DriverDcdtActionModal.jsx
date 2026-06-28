@@ -1,4 +1,4 @@
-import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
+import { DecaVivoPanel } from "../../dcdt/DecaVivoPanel.jsx";
 import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 
 const OVERLAY = {
@@ -74,10 +74,8 @@ export function DriverDcdtActionModal({
           </button>
         </div>
         <div style={{ overflowY: "auto", padding: "12px 16px 20px", flex: 1 }}>
-          <ConductorDcdtPanel
+          <DecaVivoPanel
             servicio={servicio}
-            empresa={empresa}
-            conductorUid={conductorUid}
             stops={stops}
             showToast={showToast}
             compact

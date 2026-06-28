@@ -1,4 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
+import { DcdtQrModal } from "../../features/dcdt/DcdtQrModal.jsx";
+import { autonomoDecaAsQrDcdt } from "../../domain/dcdt/decaAutonomoPdf.js";
 import { LITE_THEME, STOP_ICON, stopAccent } from "./operationalLiteTheme.js";
 import { groupAnnexByParada } from "./collectLiteAnnexItems.js";
 
@@ -319,6 +321,95 @@ function EvidenciaCard({ item, onPreview }) {
         <div style={{ fontSize: 10, color: LITE_THEME.su, marginTop: 4 }}>{item.hora}</div>
       </div>
     </button>
+  );
+}
+
+export function LiteDecasAutonomo({ decas = [], showToast }) {
+  const [qrRow, setQrRow] = useState(null);
+  if (!decas?.length) return null;
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: LITE_THEME.su, letterSpacing: 0.7, marginBottom: 12, textTransform: "uppercase" }}>
+        Documentos DeCA
+      </div>
+      {decas.map((row) => (
+        <div
+          key={row.cargaStopId || row.publicId || row.label}
+          style={{
+            border: "1px solid #bbf7d0",
+            background: "#f0fdf4",
+            borderRadius: 14,
+            padding: "12px 14px",
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ fontWeight: 800, color: "#166534", fontSize: 14 }}>{row.cargaNombre || row.label}</div>
+          <div style={{ fontSize: 13, color: LITE_THEME.tx, marginTop: 4 }}>
+            {row.origen} → {row.destino}
+          </div>
+          {row.downloadUrl ? (
+            <div style={{ fontSize: 11, color: LITE_THEME.su, marginTop: 8, wordBreak: "break-all" }}>
+              <a href={row.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ color: LITE_THEME.blue }}>
+                {row.downloadUrl}
+              </a>
+            </div>
+          ) : null}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+            {row.publicId ? (
+              <button
+                type="button"
+                onClick={() => setQrRow(row)}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${LITE_THEME.line}`,
+                  background: "#fff",
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Mostrar QR
+              </button>
+            ) : null}
+            {row.downloadUrl ? (
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    navigator.clipboard?.writeText(row.downloadUrl);
+                    showToast?.("Enlace copiado");
+                  } catch {
+                    showToast?.(row.downloadUrl);
+                  }
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${LITE_THEME.line}`,
+                  background: "#fff",
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Copiar enlace
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ))}
+      {qrRow ? (
+        <DcdtQrModal
+          dcdt={qrRow.deca ? autonomoDecaAsQrDcdt(qrRow.deca) : undefined}
+          decaPublicId={qrRow.publicId}
+          downloadUrl={qrRow.downloadUrl}
+          onClose={() => setQrRow(null)}
+          showToast={showToast}
+        />
+      ) : null}
+    </div>
   );
 }
 

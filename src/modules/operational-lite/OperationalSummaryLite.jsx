@@ -11,6 +11,7 @@ import {
   LitePreviewModal,
   LiteResumenEjecutivo,
   LiteTimeline,
+  LiteDecasAutonomo,
 } from "./operationalLiteUiParts.jsx";
 
 function SectionTitle({ children }) {
@@ -242,6 +243,13 @@ export function OperationalSummaryLite({
 
             <SectionTitle>Resumen ejecutivo</SectionTitle>
             <LiteResumenEjecutivo resumen={doc.resumen} />
+
+            {doc.decasAutonomo?.length ? (
+              <>
+                <SectionTitle>DeCA del expediente</SectionTitle>
+                <LiteDecasAutonomo decas={doc.decasAutonomo} showToast={showToast} />
+              </>
+            ) : null}
 
             <SectionTitle>Timeline operacional</SectionTitle>
             <LiteTimeline paradas={doc.paradas} />

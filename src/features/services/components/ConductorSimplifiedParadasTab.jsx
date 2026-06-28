@@ -33,6 +33,8 @@ import { resolveEtaVisual } from "../../../domain/service/operationalEtaPresenta
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
 import { ConductorPostDescargaModal } from "./ConductorPostDescargaModal.jsx";
+import { DecaVivoPanel } from "../../dcdt/DecaVivoPanel.jsx";
+import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
@@ -409,7 +411,7 @@ export function ConductorSimplifiedParadasTab({
 
   useEffect(() => {
     if (!evidenciasSeed) return;
-    const t = setTimeout(() => setEvidenciasSeed(null), 800);
+    const t = setTimeout(() => setEvidenciasSeed(null), 5000);
     return () => clearTimeout(t);
   }, [evidenciasSeed]);
 
@@ -622,6 +624,28 @@ export function ConductorSimplifiedParadasTab({
               />
             </div>
           ) : null}
+
+          {showDcdtQuick ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: "12px 14px",
+                borderRadius: 12,
+                border: `1px solid ${DRIVER_UI.line}`,
+                background: "#fff",
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 800, color: DRIVER_UI.su, letterSpacing: 0.5, marginBottom: 8 }}>
+                CARGA ACTUAL / DeCA ACTUAL
+              </div>
+              <DecaVivoPanel
+                servicio={localServicio}
+                stops={localStops}
+                showToast={showToast}
+                compact
+              />
+            </div>
+          ) : null}
         </div>
 
         <div style={{ padding: "14px" }}>
@@ -828,7 +852,7 @@ export function ConductorSimplifiedParadasTab({
           onClose={() => setPostDescarga(null)}
           onPod={() => {
             if (postDescarga?.stopId) {
-              setEvidenciasSeed({ stopId: postDescarga.stopId, modal: "foto", source: "camera" });
+              setEvidenciasSeed({ stopId: postDescarga.stopId, modal: "foto", source: "dialog" });
             }
             setPostDescarga(null);
           }}

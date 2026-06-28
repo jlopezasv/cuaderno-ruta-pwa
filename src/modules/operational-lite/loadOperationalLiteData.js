@@ -9,6 +9,7 @@ import {
   markDcdtIncluidoExpediente,
   resolveDcdtDocument,
 } from "../../domain/dcdt/dcdtModel.js";
+import { loadAutonomoDecasForLite } from "./loadAutonomoDecasForLite.js";
 import { fetchPartesTransporte } from "../../domain/dcdt/partesTransporteModel.js";
 
 /**
@@ -93,6 +94,7 @@ export async function loadOperationalLiteData(servicio, { nombreConductor } = {}
     incidenciasExpediente,
     nombreConductor,
     dcdt: dcdtBlock,
+    decasAutonomo: await loadAutonomoDecasForLite(servicio, stopList),
   });
 
   if (dcdtRecord?.id && dcdtRecord.estado === "validado") {

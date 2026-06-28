@@ -53,6 +53,9 @@ export function OperationalEvidenciasStop({
   hideIa = false,
   initialModal = null,
   fotoSource = null,
+  fotoLabel = "Foto",
+  markAsPod = false,
+  geoOptionalOnFoto = false,
 }) {
   const [evidencias, setEvidencias] = useState([]);
   const [incidencias, setIncidencias] = useState([]);
@@ -145,6 +148,9 @@ export function OperationalEvidenciasStop({
     }
     if (initialModal === "foto" && fotoSource === "gallery") {
       requestAnimationFrame(() => fotoGaleriaRef.current?.click());
+    }
+    if (initialModal === "foto" && fotoSource === "dialog") {
+      setModal("foto");
     }
   }, [initialModal, fotoSource, stopId]);
 
@@ -285,14 +291,19 @@ export function OperationalEvidenciasStop({
         });
       }
       await preparePreview(file, { forFoto: true });
-      const geo = await captureUploadGeo("documento_foto", "adjuntar foto");
+      let geo = null;
+      try {
+        geo = await captureUploadGeo("documento_foto", markAsPod ? "adjuntar POD" : "adjuntar foto");
+      } catch (err) {
+        if (!geoOptionalOnFoto) throw err;
+      }
       const { previewUrl, docMeta } = await uploadOperationalDocument(file, {
         folder: "stops",
         tipo: "foto",
-        context: { ...uploadContext, eventoOperacional: "Foto operativa", geo },
+        context: { ...uploadContext, eventoOperacional: markAsPod ? "POD / albarán" : "Foto operativa", geo },
       });
       const url = previewUrl;
-      const datos = mergeDocMetaIntoDatos({}, docMeta);
+      const datos = mergeDocMetaIntoDatos(markAsPod ? { pod: true, es_pod: true } : {}, docMeta);
       await persistEvidencia("foto", { url, datos });
       setModal(null);
       setNotaFoto("");
@@ -557,7 +568,7 @@ export function OperationalEvidenciasStop({
         {canTipo("foto") && (
           <button type="button" onClick={() => { setModal("foto"); setError(""); }} style={gBtn(isDocsShell ? "rgba(34,197,94,.14)" : "#22C55E20", isDocsShell ? "1px solid rgba(34,197,94,.38)" : "1.5px solid #22C55E50", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📸</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#86EFAC" : "#22C55E" }}>Foto</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#86EFAC" : "#22C55E" }}>{fotoLabel}</span>
           </button>
         )}
         {canTipo("cmr") && (
@@ -647,7 +658,7 @@ export function OperationalEvidenciasStop({
           <div style={{ background: LIGHT.card, borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, padding: "16px 18px 40px" }} onClick={(e) => e.stopPropagation()}>
             <input ref={fotoRef} {...cameraProps} onChange={onFotoSelected} style={{ display: "none" }} />
             <input ref={fotoGaleriaRef} type="file" accept="image/*" onChange={onFotoSelected} style={{ display: "none" }} />
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#22C55E", marginBottom: 12 }}>📸 Foto documental</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#22C55E", marginBottom: 12 }}>📸 {fotoLabel}</div>
             <input value={notaFoto} onChange={(e) => setNotaFoto(e.target.value)} placeholder="Nota opcional…" style={iStyle} />
             <button type="button" onClick={() => fotoRef.current?.click()} disabled={saving} style={{ width: "100%", background: "#22C55E", color: "white", border: "none", borderRadius: 13, padding: "16px", fontSize: 15, fontWeight: 800, cursor: "pointer", marginBottom: 8 }}>
               {saving ? "⏳ Procesando…" : "📷 Hacer foto"}

@@ -183,6 +183,7 @@ export function buildOperationalLiteModel({
   incidenciasExpediente = null,
   nombreConductor,
   dcdt = null,
+  decasAutonomo = [],
 }) {
   if (!servicio?.id) return null;
 
@@ -266,7 +267,7 @@ export function buildOperationalLiteModel({
     hora: ev.hora || fmtClock(parseTs(ev.created_at)),
     url: ev.displayImageUrl || ev.previewUrl || ev.url || null,
     source: ev.source || "evidencia",
-    isPod: ev.tipo === "foto" && ev.bucket === "fotos",
+    isPod: ev.tipo === "foto" && (ev.bucket === "fotos" || ev.datos?.pod === true || ev.datos?.es_pod === true),
   }));
 
   const cmr = evidenciasFlat.filter((e) => e.tipo === "cmr");
@@ -349,6 +350,9 @@ export function buildOperationalLiteModel({
       subtitulo: DECA_TITLE_WITH_LEGAL,
       ...dcdt,
     };
+  }
+  if (Array.isArray(decasAutonomo) && decasAutonomo.length) {
+    model.decasAutonomo = decasAutonomo;
   }
   return model;
 }

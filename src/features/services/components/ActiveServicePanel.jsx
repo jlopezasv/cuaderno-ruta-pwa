@@ -41,6 +41,13 @@ import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
 import { DriverQuickActionsBar } from "./ServiceQuickActionsBar.jsx";
 import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
 import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
+import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
+import { ConductorPostDescargaModal } from "./ConductorPostDescargaModal.jsx";
+import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
+import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
+import { ConductorDcdtPanel } from "../../dcdt/ConductorDcdtPanel.jsx";
+import { DecaVivoPanel } from "../../dcdt/DecaVivoPanel.jsx";
+import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
 import { useServiceMessagesUnread } from "../hooks/useServiceMessagesUnread.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
@@ -1098,19 +1105,34 @@ function StopTimesBlock({ stop, isFirstCarga, servicio }) {
   );
 }
 
-function StopListRowCompact({ item, isCurrent }) {
+function StopListRowCompact({ item, isCurrent, onExpand, expandable = false }) {
   const { stop, label, group } = item;
   const { stateText, fg, bg } = stopCompactBadge(stop);
   const iconBg = group === "descarga" ? DEMO_UI.descargaSoft : DEMO_UI.cargaSoft;
   const iconColor = group === "descarga" ? DEMO_UI.descarga : DEMO_UI.carga;
   const iconChar = group === "descarga" ? "↓" : "↑";
+  const completedDescarga = group === "descarga" && isStopCompleted(stop);
 
   return (
     <div
+      role={expandable ? "button" : undefined}
+      tabIndex={expandable ? 0 : undefined}
+      onClick={expandable ? () => onExpand?.(stop.id) : undefined}
+      onKeyDown={
+        expandable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onExpand?.(stop.id);
+              }
+            }
+          : undefined
+      }
       style={{
         display: "flex",
         alignItems: "stretch",
         ...demoRowDivider(),
+        cursor: expandable ? "pointer" : "default",
       }}
     >
       {isCurrent ? (
@@ -1156,6 +1178,9 @@ function StopListRowCompact({ item, isCurrent }) {
           {stopCompletedSummary(item) ? (
             <div style={{ fontSize: 12, color: DEMO_UI.descarga, fontWeight: 700, marginTop: 3 }}>
               {stopCompletedSummary(item)}
+              {completedDescarga ? (
+                <span style={{ color: DEMO_UI.su, fontWeight: 600 }}> · Toca para POD</span>
+              ) : null}
             </div>
           ) : (
             <StopRecorridoInfoLines stop={stop} tone="demo" />
@@ -1194,6 +1219,11 @@ function DriverRecorridoStops({
   conductorNombre,
   onEvidenciaSaved,
   acquireActionLocation,
+  onExpandStop = null,
+  initialEvidenciasModal = null,
+  evidenciasFotoSource = null,
+  evidenciasSeedStopId = null,
+  operatingBusy = false,
 }) {
   if (!items.length) {
     return (
@@ -1220,10 +1250,21 @@ function DriverRecorridoStops({
               conductorNombre={conductorNombre}
               onEvidenciaSaved={onEvidenciaSaved}
               acquireActionLocation={acquireActionLocation}
+              operatingBusy={operatingBusy}
+              initialEvidenciasModal={
+                evidenciasSeedStopId === item.stop.id ? initialEvidenciasModal : null
+              }
+              evidenciasFotoSource={evidenciasSeedStopId === item.stop.id ? evidenciasFotoSource : null}
             />
           </div>
         ) : (
-          <StopListRowCompact key={item.stop.id} item={item} isCurrent={false} />
+          <StopListRowCompact
+            key={item.stop.id}
+            item={item}
+            isCurrent={false}
+            expandable={item.group === "descarga" && isStopCompleted(item.stop)}
+            onExpand={onExpandStop}
+          />
         ),
       )}
     </div>
@@ -1373,6 +1414,12 @@ function OperationalStopCard({
   const Ev = EvidenciasStopComponent;
   const icon = stopTimelineIcon(group);
   const stopId = stop?.id;
+  const isDescarga = group === "descarga";
+  const [podUiOpen, setPodUiOpen] = useState(false);
+
+  useEffect(() => {
+    setPodUiOpen(false);
+  }, [stopId, salida]);
 
   const stateBadge = (
     <span
@@ -1431,7 +1478,7 @@ function OperationalStopCard({
   ) : null;
 
   const evidenciasBlockProps = {
-    key: `${stop.id}-${initialEvidenciasModal || "default"}`,
+    key: `${stop.id}-${initialEvidenciasModal || podUiOpen || "default"}`,
     stopId: stop.id,
     servicioId,
     servicio,
@@ -1441,8 +1488,11 @@ function OperationalStopCard({
     showToast,
     onEvidenciaSaved,
     acquireActionLocation,
-    initialModal: initialEvidenciasModal,
-    fotoSource: evidenciasFotoSource,
+    initialModal: initialEvidenciasModal || (podUiOpen ? "foto" : null),
+    fotoSource: evidenciasFotoSource || (podUiOpen ? "dialog" : null),
+    fotoLabel: isDescarga && salida ? "POD / albarán" : "Foto",
+    markAsPod: isDescarga && salida,
+    geoOptionalOnFoto: isDescarga && salida,
     tiposPermitidos: group === "descarga" ? ["foto", "cmr"] : null,
   };
 
@@ -1461,6 +1511,26 @@ function OperationalStopCard({
         >
           {group === "descarga" ? "POD / albarán (opcional)" : "Documentos de la parada"}
         </div>
+        {isDescarga ? (
+          <button
+            type="button"
+            onClick={() => setPodUiOpen(true)}
+            style={{
+              width: "100%",
+              marginBottom: 10,
+              padding: "13px 14px",
+              borderRadius: 12,
+              border: "none",
+              background: DRIVER_UI.blue,
+              color: "#fff",
+              fontWeight: 800,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            Añadir POD / albarán
+          </button>
+        ) : null}
         <Ev {...evidenciasBlockProps} />
       </div>
     ) : null;
@@ -1689,6 +1759,12 @@ export function ActiveServicePanel({
   const muelleGpsRef = useRef(null);
   const [confirmMuelle, setConfirmMuelle] = useState(null);
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
+  const [descargaFirma, setDescargaFirma] = useState(null);
+  const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
+  const [postDescarga, setPostDescarga] = useState(null);
+  const [evidenciasSeed, setEvidenciasSeed] = useState(null);
+  const [podFocusStopId, setPodFocusStopId] = useState(null);
+  const [manualExpandedStopId, setManualExpandedStopId] = useState(null);
   const [cierreSaving, setCierreSaving] = useState(false);
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
   const [chatModalOpen, setChatModalOpen] = useState(false);
@@ -1713,6 +1789,8 @@ export function ActiveServicePanel({
     enabled: showChatQuick,
   });
   const expandedStopId = resolveExpandedStopId(sortedStops, servicio);
+  const effectiveExpandedStopId = podFocusStopId || manualExpandedStopId || expandedStopId;
+  const operatingBusy = confirmMuelleSaving || descargaFirmaSaving;
   const firstCargaStopId = useMemo(() => {
     let seen = 0;
     for (const item of timelineItems) {
@@ -1762,16 +1840,22 @@ export function ActiveServicePanel({
     miParticipacion !== "finalizado" &&
     typeof onFinalizarParticipacion === "function";
   const scheduleLabel = fmtServiceSchedule(servicio?.fecha_inicio);
-  const activeTimelineItem = timelineItems.find((it) => it.stop.id === expandedStopId);
+  const activeTimelineItem = timelineItems.find((it) => it.stop.id === effectiveExpandedStopId);
+
+  useEffect(() => {
+    if (!evidenciasSeed) return;
+    const t = setTimeout(() => setEvidenciasSeed(null), 5000);
+    return () => clearTimeout(t);
+  }, [evidenciasSeed]);
 
   const handleMuelleRequest = ({ kind, stopId }) => {
-    if (confirmMuelleSaving) return;
+    if (operatingBusy) return;
     muelleGpsRef.current = null;
     setConfirmMuelle({ kind, stopId });
   };
 
   const handleConfirmMuelle = async () => {
-    if (!confirmMuelle || confirmMuelleSaving) return;
+    if (!confirmMuelle || operatingBusy) return;
     const { kind, stopId } = confirmMuelle;
     const stop = sortedStops.find((s) => s.id === stopId);
     const { eventType, actionLabel } = muelleActionMeta(kind, stop);
@@ -1791,6 +1875,17 @@ export function ActiveServicePanel({
     });
     if (prefetchedGps === null) return;
     muelleGpsRef.current = prefetchedGps;
+
+    if (kind !== "entrada" && isDescargaStopTipo(stop?.tipo)) {
+      setConfirmMuelle(null);
+      setDescargaFirma({
+        stopId,
+        prefetchedGps,
+        stopLabel: activeTimelineItem?.label || stop?.nombre || "Descarga",
+      });
+      return;
+    }
+
     setConfirmMuelleSaving(true);
     try {
       if (kind === "entrada") {
@@ -1804,6 +1899,47 @@ export function ActiveServicePanel({
       showToast?.(error?.message || "No se pudo registrar el muelle");
     } finally {
       setConfirmMuelleSaving(false);
+    }
+  };
+
+  const handleConfirmDescargaFirma = async ({ firmaCanvas, comentario = "" } = {}) => {
+    if (!descargaFirma || descargaFirmaSaving || !servicio?.id) return;
+    if (!firmaCanvas) {
+      showToast?.("Añade tu firma antes de completar la descarga");
+      return;
+    }
+    const stop = sortedStops.find((s) => s.id === descargaFirma.stopId);
+    if (!stop) {
+      showToast?.("Parada no encontrada");
+      setDescargaFirma(null);
+      return;
+    }
+    setDescargaFirmaSaving(true);
+    try {
+      await persistDescargaEntregaFirma({
+        stop,
+        servicioId: servicio.id,
+        firmaCanvas,
+        comentario,
+        conductorId: conductorUid,
+        conductorNombre,
+        prefetchedGps: descargaFirma.prefetchedGps,
+      });
+      await marcarCompletado(descargaFirma.stopId, { prefetchedGps: descargaFirma.prefetchedGps });
+      setDescargaFirma(null);
+      muelleGpsRef.current = null;
+      setPodFocusStopId(descargaFirma.stopId);
+      setManualExpandedStopId(null);
+      showToast?.("Descarga completada con firma registrada", "#166534", 3200);
+      setPostDescarga({
+        stopId: descargaFirma.stopId,
+        stopLabel: descargaFirma.stopLabel,
+        showDeca: showDcdtQuick,
+      });
+    } catch (error) {
+      showToast?.(error?.message || "No se pudo guardar la firma de entrega");
+    } finally {
+      setDescargaFirmaSaving(false);
     }
   };
 
@@ -1989,11 +2125,23 @@ export function ActiveServicePanel({
             </DriverDemoSection>
           ) : null}
 
+          {showDcdtQuick ? (
+            <DriverDemoSection title="Carga actual del camión / DeCA actual" style={{ padding: "12px 16px 14px" }}>
+              <DecaVivoPanel
+                servicio={servicio}
+                stops={sortedStops}
+                conductorNombre={conductorNombre}
+                showToast={showToast}
+                compact
+              />
+            </DriverDemoSection>
+          ) : null}
+
           {!hideRecorrido ? (
           <DriverDemoSection title="Recorrido" style={{ padding: 0 }}>
             <DriverRecorridoStops
               items={timelineItems}
-              currentStopId={expandedStopId}
+              currentStopId={effectiveExpandedStopId}
               firstCargaStopId={firstCargaStopId}
               evidenciasByStop={evidenciasByStop}
               canOperate={canOperateStops}
@@ -2005,6 +2153,14 @@ export function ActiveServicePanel({
               conductorNombre={conductorNombre}
               onEvidenciaSaved={onEvidenciaSaved}
               acquireActionLocation={acquireLocation}
+              onExpandStop={(stopId) => {
+                setPodFocusStopId(null);
+                setManualExpandedStopId(stopId);
+              }}
+              initialEvidenciasModal={evidenciasSeed?.modal || null}
+              evidenciasFotoSource={evidenciasSeed?.source || null}
+              evidenciasSeedStopId={evidenciasSeed?.stopId || null}
+              operatingBusy={operatingBusy}
             />
             <div style={{ padding: "0 16px" }}>
               <EnRutaHastaProximaEntrada servicio={servicio} stops={sortedStops} />
@@ -2135,6 +2291,43 @@ export function ActiveServicePanel({
         </div>
         {confirmMuelleDialog}
         {locationGateModal}
+        <DescargaEntregaFirmaModal
+          open={!!descargaFirma}
+          stopLabel={descargaFirma?.stopLabel || "Descarga"}
+          saving={descargaFirmaSaving}
+          onCancel={() => {
+            if (descargaFirmaSaving) return;
+            setDescargaFirma(null);
+            muelleGpsRef.current = null;
+          }}
+          onConfirm={handleConfirmDescargaFirma}
+        />
+        <ConductorPostDescargaModal
+          open={!!postDescarga}
+          stopLabel={postDescarga?.stopLabel}
+          busy={descargaFirmaSaving}
+          showDeca={!!postDescarga?.showDeca}
+          onClose={() => {
+            setPostDescarga(null);
+            setPodFocusStopId(null);
+          }}
+          onPod={() => {
+            if (postDescarga?.stopId) {
+              setPodFocusStopId(postDescarga.stopId);
+              setManualExpandedStopId(postDescarga.stopId);
+              setEvidenciasSeed({ stopId: postDescarga.stopId, modal: "foto", source: "dialog" });
+            }
+            setPostDescarga(null);
+          }}
+          onDeca={() => {
+            setPostDescarga(null);
+            setDcdtModalOpen(true);
+          }}
+          onSeguir={() => {
+            setPostDescarga(null);
+            setPodFocusStopId(null);
+          }}
+        />
         <DriverDcdtActionModal
           open={dcdtModalOpen}
           onClose={() => {

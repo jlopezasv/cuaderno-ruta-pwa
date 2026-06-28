@@ -14,7 +14,7 @@ const UI = {
 const HUB_ITEMS = [
   { id: "operacion", icon: "⚙", label: "Operación", hint: "Crear servicio e informe" },
   { id: "servicio", icon: "🚛", label: "Servicio", hint: "Documentos del viaje" },
-  { id: "deca", icon: "📋", label: "DeCA", hint: "Mis documentos de control" },
+  { id: "deca", icon: "📋", label: "DeCA", hint: "Viaje esporádico o documento suelto" },
   { id: "hoy", icon: "◷", label: "Hoy", hint: "Jornada y tacógrafo" },
   { id: "resumen", icon: "▤", label: "Resumen", hint: "Actividad · IA · Historial" },
   { id: "ruta", icon: "◎", label: "Ruta", hint: "Mapa y navegación" },

@@ -130,7 +130,7 @@ export function AutonomoRegistrarCargaModal({
   if (!open) return null;
 
   const esNacional = alcance === SERVICIO_ALCANCE.NACIONAL;
-  const title = retornoMode ? "Carga retorno" : "Entrada en muelle";
+  const title = retornoMode ? "Carga retorno" : "Entrada muelle (carga)";
   const subtitle = retornoMode
     ? "Indica dónde recoges el retorno. Después registra la hora de entrada en muelle."
     : "Elige almacén y alcance. La hora de entrada se registra al entrar en muelle; datos de carga y DeCA después.";

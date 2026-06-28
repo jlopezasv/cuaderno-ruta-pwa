@@ -42,6 +42,7 @@ import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity
 import { isDecaAplicable } from "../../domain/service/servicioAlcance.js";
 import { fetchConductorVehiculoForDcdt } from "../../domain/empresa/conductorVehiculoEmpresa.js";
 import { DECA_FULL_TITLE, DECA_LEGAL_REF, DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
+import { DecaVivoPanel } from "./DecaVivoPanel.jsx";
 import { isDemoApp } from "../../config/appEnvironment.js";
 import { DcdtParteConfirmFlash, DcdtPartePicker } from "./DcdtPartePicker.jsx";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
@@ -922,6 +923,26 @@ export function EmpresaDcdtModal({
             <div style={{ color: UI.su }}>Cargando…</div>
           ) : (
             <>
+              <div
+                style={{
+                  marginBottom: 18,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: `1px solid ${UI.border}`,
+                  background: "#f0fdf4",
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>
+                  DeCA VIVO · CARGA ACTUAL DEL CAMIÓN
+                </div>
+                <DecaVivoPanel
+                  servicio={servicio}
+                  stops={stops}
+                  showToast={showToast}
+                  modoEmpresa
+                  compact
+                />
+              </div>
               {visibleDcdts.length > 1 ? (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>

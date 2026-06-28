@@ -1,6 +1,7 @@
 import { enrichEvidenciaDisplay } from "../../domain/documents/operationalDocumentRecord.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { getAutonomoExpedienteMeta } from "./autonomoExpedienteMeta.js";
+import { sortAutonomoTimelineEvents } from "./sortAutonomoTimeline.js";
 
 const TYPE_LABEL = {
   expediente_iniciado: "Expediente iniciado",
@@ -187,7 +188,7 @@ export function buildAutonomoExpedienteTimeline({
 
   const seen = new Set();
   const deduped = [];
-  for (const e of out.sort((a, b) => new Date(a.at) - new Date(b.at))) {
+  for (const e of sortAutonomoTimelineEvents(out, stops)) {
     const minute = Math.floor(new Date(e.at).getTime() / 60000);
     const key = `${e.type}|${e.stopId || ""}|${e.refId || ""}|${minute}`;
     if (seen.has(key)) continue;

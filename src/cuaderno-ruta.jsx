@@ -3253,7 +3253,7 @@ function AppInner(){
   const showAutonomoHubFeatures=canCreateServices||canViewOperationalLite;
   const showAutonomoExpedienteFlow=
     isAutonomoExpedienteFlowEnabled()&&isAutonomoPro&&canViewOperationalLite;
-  const showAutonomoDecaHub=(isAutonomoPro||showAutonomoDeca)&&!showAutonomoExpedienteFlow;
+  const showAutonomoDecaHub=isAutonomoPro||showAutonomoDeca;
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&

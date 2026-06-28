@@ -38,11 +38,13 @@ import {
   isRetornoCarga,
 } from "../../modules/autonomo-expediente/autonomoExpedienteStopModel.js";
 import { SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
+import { muelleCargaRapidaLabel, muelleEntradaLabel, muelleSalidaLabel } from "../../domain/service/muelleLabels.js";
 import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
 import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
+import { DecaVivoPanel } from "../dcdt/DecaVivoPanel.jsx";
 import { AutonomoCargaEnMuelleModal } from "./AutonomoCargaEnMuelleModal.jsx";
 import { AutonomoPostCargaModal } from "./AutonomoPostCargaModal.jsx";
 import { AutonomoGenerarDecaModal } from "./AutonomoGenerarDecaModal.jsx";
@@ -724,19 +726,71 @@ export function AutonomoExpedienteScreen({
         ))}
       </Card>
 
+      <Card title="CARGA ACTUAL DEL CAMIÓN / DeCA ACTUAL">
+        <DecaVivoPanel
+          servicio={servicio}
+          stops={[...(cargas || []), ...(destinos || [])]}
+          showToast={showToast}
+        />
+      </Card>
+
       <Card title="ACCIONES RÁPIDAS">
         <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.45, marginBottom: 10 }}>
           Tacógrafo → Otros trabajos registra tiempos legales. Aquí va el expediente operacional y DeCA.
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" style={{ ...actionChip("#0f766e"), flex: 1 }} disabled={busy} onClick={() => setCargaModal(true)}>
-            Entrada en muelle
-          </button>
-          <button type="button" style={{ ...actionChip(UI.blue), flex: 1 }} disabled={busy} onClick={() => setDestinoModal(true)}>
-            Añadir destino
-          </button>
-        </div>
+        <button
+          type="button"
+          style={{ ...actionChip("#0f766e"), width: "100%", flex: "none", marginBottom: 8, whiteSpace: "nowrap" }}
+          disabled={busy}
+          onClick={() => setCargaModal(true)}
+        >
+          {muelleCargaRapidaLabel()}
+        </button>
+        <button type="button" style={{ ...actionChip(UI.blue), width: "100%", flex: "none" }} disabled={busy} onClick={() => setDestinoModal(true)}>
+          Añadir destino
+        </button>
       </Card>
+
+      {stops?.length ? (
+        <Card title="RECORRIDO">
+          {stops.map((s) => {
+            const tipo = String(s.tipo || "").toLowerCase();
+            const isCarga = tipo === "carga";
+            const muelle = isCarga ? getCargaMuelleResumen(s) : getDestinoTiempoResumen(s);
+            const meta = getStopOperacionMeta(s.notas);
+            const chip = isCarga
+              ? isCargaPendienteEntrada(s)
+                ? "Pendiente muelle carga"
+                : isCargaEnMuelle(s)
+                  ? "En muelle carga"
+                  : isCargaTerminada(s)
+                    ? "Carga terminada"
+                    : "Carga"
+              : destinoEstadoChip(meta.destino_estado).label;
+            return (
+              <div
+                key={s.id}
+                style={{
+                  border: `1px solid ${UI.line}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  marginBottom: 8,
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ fontWeight: 800, color: UI.tx }}>
+                  {isCarga ? "Carga" : "Descarga"} · {s.nombre}
+                  {isCarga && isRetornoCarga(s) ? " · retorno" : ""}
+                </div>
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
+                  {chip}
+                  {muelle?.label ? ` · ${muelle.label}` : ""}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      ) : null}
 
       {cargas?.length ? (
         <Card title="CARGAS ACTIVAS">
@@ -797,7 +851,7 @@ export function AutonomoExpedienteScreen({
                       onClick={() => void handleEntradaMuellePendiente(c)}
                       style={miniBtn(UI.green)}
                     >
-                      Entrada en muelle
+                      {muelleEntradaLabel(c)}
                     </button>
                   ) : (
                     <button
@@ -858,10 +912,10 @@ export function AutonomoExpedienteScreen({
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
                   <button type="button" disabled={busy} onClick={() => handleDestinoLlegada(d)} style={miniBtn()}>
-                    Registrar llegada
+                    {muelleEntradaLabel(d)}
                   </button>
                   <button type="button" disabled={busy} onClick={() => handleDestinoSalida(d)} style={miniBtn()}>
-                    Terminar descarga
+                    {muelleSalidaLabel(d)}
                   </button>
                 </div>
                 <StopDocumentacionInline
@@ -904,7 +958,7 @@ export function AutonomoExpedienteScreen({
 
       {timeline?.length ? (
         <Card title="CRONOLOGÍA">
-          {[...timeline].reverse().slice(0, 14).map((evt, idx, arr) => (
+          {timeline.slice(-20).map((evt, idx, arr) => (
             <div
               key={`${evt.type}-${evt.at}-${evt.stopId || idx}`}
               style={{
