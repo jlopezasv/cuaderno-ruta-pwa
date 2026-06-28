@@ -132,6 +132,8 @@ export function AutonomoRegistrarCargaModal({
 
   if (!open) return null;
 
+  const esNacional = alcance === SERVICIO_ALCANCE.NACIONAL;
+
   function buildPayload(almacen) {
     const merc = {};
     if (mercancia.descripcion?.trim()) merc.descripcion = mercancia.descripcion.trim();
@@ -231,11 +233,13 @@ export function AutonomoRegistrarCargaModal({
             ))}
           </div>
           <div style={{ fontSize: 11, color: UI.su, marginTop: 6, lineHeight: 1.4 }}>
-            DeCA nacional se genera tras terminar la carga, antes de circular.
+            {esNacional
+              ? "Nacional: datos de mercancía y peso para DeCA antes de circular."
+              : "Transporte internacional: usa CMR / carta de porte."}
           </div>
         </div>
 
-        {retornoMode ? (
+        {retornoMode && esNacional ? (
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>¿REQUIERE DeCA?</div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -265,23 +269,27 @@ export function AutonomoRegistrarCargaModal({
           </div>
         ) : null}
 
-        <div style={{ marginBottom: 12, padding: "10px 12px", background: UI.bg, borderRadius: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>MERCANCÍA (opcional)</div>
-          {[
-            ["descripcion", "Mercancía"],
-            ["palets", "Palets"],
-            ["bultos", "Bultos"],
-            ["peso_kg", "Peso (kg)"],
-          ].map(([k, label]) => (
-            <input
-              key={k}
-              style={{ ...inputStyle, marginBottom: 6 }}
-              placeholder={label}
-              value={mercancia[k]}
-              onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
-            />
-          ))}
-        </div>
+        {esNacional ? (
+          <div style={{ marginBottom: 12, padding: "10px 12px", background: UI.bg, borderRadius: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>
+              DATOS PARA DeCA
+            </div>
+            {[
+              ["descripcion", "Mercancía *"],
+              ["peso_kg", "Peso (kg) *"],
+              ["palets", "Palets (opcional)"],
+              ["bultos", "Bultos (opcional)"],
+            ].map(([k, label]) => (
+              <input
+                key={k}
+                style={{ ...inputStyle, marginBottom: 6 }}
+                placeholder={label}
+                value={mercancia[k]}
+                onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
+              />
+            ))}
+          </div>
+        ) : null}
 
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {[

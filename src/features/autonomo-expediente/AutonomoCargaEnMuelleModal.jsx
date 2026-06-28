@@ -135,27 +135,35 @@ export function AutonomoCargaEnMuelleModal({
               <div style={{ fontSize: 12, color: UI.su }}>GPS registrado si estaba disponible</div>
             </div>
 
-            <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>MERCANCÍA (opcional)</div>
-            {[
-              ["descripcion", "Mercancía"],
-              ["palets", "Palets"],
-              ["bultos", "Bultos"],
-              ["peso_kg", "Peso (kg)"],
-            ].map(([k, label]) => (
-              <input
-                key={k}
-                style={inputStyle}
-                placeholder={label}
-                value={mercancia[k] ?? ""}
-                onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
-              />
-            ))}
-            <textarea
-              style={{ ...inputStyle, minHeight: 56, resize: "vertical" }}
-              placeholder="Observaciones"
-              value={observaciones}
-              onChange={(e) => setObservaciones(e.target.value)}
-            />
+            {esNacional ? (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>DATOS PARA DeCA</div>
+                {[
+                  ["descripcion", "Mercancía *"],
+                  ["peso_kg", "Peso (kg) *"],
+                  ["palets", "Palets (opcional)"],
+                  ["bultos", "Bultos (opcional)"],
+                ].map(([k, label]) => (
+                  <input
+                    key={k}
+                    style={inputStyle}
+                    placeholder={label}
+                    value={mercancia[k] ?? ""}
+                    onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
+                  />
+                ))}
+                <textarea
+                  style={{ ...inputStyle, minHeight: 56, resize: "vertical" }}
+                  placeholder="Observaciones (opcional)"
+                  value={observaciones}
+                  onChange={(e) => setObservaciones(e.target.value)}
+                />
+              </>
+            ) : (
+              <div style={{ fontSize: 13, color: UI.su, lineHeight: 1.45, marginBottom: 14 }}>
+                Transporte internacional: usa CMR / carta de porte.
+              </div>
+            )}
 
             <button
               type="button"
@@ -204,10 +212,10 @@ export function AutonomoCargaEnMuelleModal({
                   onClick={() => onGenerarDeca?.()}
                   style={suggestBtn(UI.green)}
                 >
-                  Generar {DECA_SHORT_LABEL} antes del viaje
+                  Generar {DECA_SHORT_LABEL} antes de circular
                 </button>
               ) : null}
-              {decaLink ? (
+              {esNacional && decaLink ? (
                 <div style={{ fontSize: 13, color: UI.green, fontWeight: 700, padding: "8px 0" }}>
                   {DECA_SHORT_LABEL} ya generado
                 </div>
@@ -217,9 +225,15 @@ export function AutonomoCargaEnMuelleModal({
                   Añadir destino
                 </button>
               ) : null}
-              <button type="button" disabled={busy} onClick={() => onScanCmr?.()} style={suggestBtn("#64748b")}>
-                Escanear CMR / carta de porte (opcional)
-              </button>
+              {!esNacional ? (
+                <button type="button" disabled={busy} onClick={() => onScanCmr?.()} style={suggestBtn("#64748b")}>
+                  Escanear / subir CMR (opcional)
+                </button>
+              ) : (
+                <button type="button" disabled={busy} onClick={() => onScanCmr?.()} style={suggestBtn("#64748b")}>
+                  Escanear CMR (opcional)
+                </button>
+              )}
               <button type="button" disabled={busy} onClick={() => onSeguir?.()} style={suggestBtn("#fff", true)}>
                 Seguir trabajando
               </button>

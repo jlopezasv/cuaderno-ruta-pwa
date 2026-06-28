@@ -76,10 +76,17 @@ export function ConductorMasHub({
   showToast,
   showAutonomoDeca = false,
   showAutonomoOperacion = false,
+  showAutonomoExpedienteHistorico = false,
 }) {
   let items = HUB_ITEMS;
   if (!showAutonomoOperacion) items = items.filter((i) => i.id !== "operacion");
   if (!showAutonomoDeca) items = items.filter((i) => i.id !== "deca");
+  if (showAutonomoExpedienteHistorico) {
+    items = [
+      { id: "expediente-historico", icon: "📁", label: "Expedientes", hint: "Histórico y cerrados" },
+      ...items,
+    ];
+  }
   return (
     <div style={{ padding: "16px 14px 88px", background: UI.page, minHeight: "70vh" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.2, marginBottom: 14 }}>MÁS</div>

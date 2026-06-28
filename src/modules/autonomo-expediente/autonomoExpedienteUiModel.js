@@ -26,22 +26,60 @@ export function cargaNeedsDeca(stop, servicio) {
   return true;
 }
 
+export function filterDestinosActivos(destinos = []) {
+  const pendientes = destinos.filter((d) => !isDestinoEntregado(d));
+  if (pendientes.length) return pendientes;
+  return destinos.slice(-2);
+}
+
+export function collectRecentExpedienteDocumentos({ evidenciasByStop = {}, extraDocumentos = [], stops = [], limit = 5 }) {
+  const stopById = Object.fromEntries((stops || []).map((s) => [s.id, s]));
+  const rows = [];
+  for (const [stopId, evs] of Object.entries(evidenciasByStop || {})) {
+    for (const ev of evs || []) {
+      rows.push({
+        id: ev.id,
+        kind: "evidence",
+        tipo: ev.tipo || "doc",
+        label: `${ev.tipo || "doc"} · ${stopById[stopId]?.nombre || "parada"}`,
+        at: ev.created_at || ev.fecha || null,
+        stopId,
+      });
+    }
+  }
+  for (const doc of extraDocumentos || []) {
+    rows.push({
+      id: doc.id,
+      kind: "extra",
+      tipo: doc.tipo || doc.categoria || "doc",
+      label: doc.nombre || doc.tipo || "Documento",
+      at: doc.created_at || null,
+      stopId: null,
+    });
+  }
+  return rows
+    .sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
+    .slice(0, limit);
+}
+
 export function buildExpedienteOperativoState({ servicio, cargas = [], destinos = [] }) {
   const cargasTerminadas = cargas.filter(isCargaTerminada);
   const cargasEnMuelle = cargas.filter((c) => getCargaEstado(c) === CARGA_ESTADO.EN_MUELLE);
   const destinosEntregados = destinos.filter(isDestinoEntregado);
+  const destinosPendientes = destinos.filter((d) => !isDestinoEntregado(d));
   const nacionalSinDeca = listNacionalCargas(cargas).filter(
     (c) => isCargaTerminada(c) && !decaLinkForCarga(servicio, c.id),
   );
+  const hasInternacional = cargas.some((c) => !isCargaNacional(c));
 
   let estadoLabel = "Expediente iniciado";
-  if (cargasEnMuelle.length) estadoLabel = `En muelle · ${cargasEnMuelle[0].nombre}`;
-  else if (cargasTerminadas.length && !destinos.length) estadoLabel = "Carga lista · sin destino";
-  else if (destinos.length && destinosEntregados.length < destinos.length) estadoLabel = "En ruta / entregas";
-  else if (destinosEntregados.length) estadoLabel = "Entregas completadas";
+  if (!cargas.length && !destinos.length) estadoLabel = "Sin carga registrada";
+  else if (cargasEnMuelle.length) estadoLabel = `En muelle · ${cargasEnMuelle[0].nombre}`;
+  else if (cargasTerminadas.length && !destinos.length) estadoLabel = "Carga registrada · falta destino";
+  else if (destinosPendientes.length) estadoLabel = "En ruta / entregas";
+  else if (destinosEntregados.length && cargasTerminadas.length) estadoLabel = "Expediente listo para cerrar";
 
-  const canSuggestFinalizar =
-    cargasTerminadas.length > 0 && (destinosEntregados.length > 0 || destinos.length === 0);
+  const canSuggestFinalizar = cargasTerminadas.length > 0 && destinosEntregados.length > 0;
 
   const sugerencias = [];
   for (const c of nacionalSinDeca) {
@@ -49,7 +87,7 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
       id: `deca-${c.id}`,
       type: "deca",
       priority: 1,
-      label: "Generar DeCA antes del viaje",
+      label: "Generar DeCA antes de circular",
       cargaId: c.id,
     });
   }
@@ -61,12 +99,19 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
       label: "Añadir destino",
     });
   }
-  if (cargasTerminadas.length) {
+  if (hasInternacional || cargas.some((c) => !isCargaNacional(c))) {
+    sugerencias.push({
+      id: "cmr-int",
+      type: "doc",
+      priority: 3,
+      label: "Escanear / subir CMR (opcional)",
+    });
+  } else if (cargasTerminadas.length) {
     sugerencias.push({
       id: "cmr-optional",
       type: "doc",
-      priority: 3,
-      label: "Escanear CMR / carta de porte (opcional)",
+      priority: 4,
+      label: "Escanear CMR (opcional)",
     });
   }
 
@@ -75,6 +120,7 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
     cargasTerminadas,
     cargasEnMuelle,
     destinosEntregados,
+    destinosPendientes,
     nacionalSinDeca,
     canSuggestFinalizar,
     sugerencias: sugerencias.sort((a, b) => a.priority - b.priority),

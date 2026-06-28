@@ -102,6 +102,7 @@ export function defaultExpedienteDecaPartes(profile = {}) {
   const fromProfile = autonomoDecaDatosFromProfile(profile);
   const t = fromProfile.partes?.transportista || {};
   const c = fromProfile.conductor || {};
+  const v = fromProfile.vehiculo || {};
   return {
     transportista: {
       nombre: String(t.nombre || "").trim(),
@@ -112,6 +113,10 @@ export function defaultExpedienteDecaPartes(profile = {}) {
       nombre: String(c.nombre || "").trim(),
       dni: String(c.dni || "").trim(),
       telefono: String(c.telefono || "").trim(),
+    },
+    vehiculo: {
+      matricula: String(v.matricula || "").trim(),
+      remolque: String(v.remolque || "").trim(),
     },
   };
 }
@@ -124,6 +129,7 @@ export function buildDecaDatosFromExpedienteCarga({
   evidencias = [],
   transportista = {},
   conductor = {},
+  vehiculo = {},
 }) {
   const srvMeta = getServicioOperacionMeta(servicio);
   let datos = autonomoDecaDatosFromProfile(profile);
@@ -143,6 +149,22 @@ export function buildDecaDatosFromExpedienteCarga({
   }
   if (!String(datos.partes?.cargador?.nombre || "").trim() && cargaStop?.nombre) {
     datos.partes.cargador = { ...datos.partes.cargador, nombre: cargaStop.nombre };
+  }
+  const merc = cargaMeta.mercancia;
+  if (merc && typeof merc === "object") {
+    if (merc.descripcion) datos.mercancia = { ...datos.mercancia, descripcion: String(merc.descripcion).trim() };
+    if (merc.peso_kg != null && String(merc.peso_kg).trim()) {
+      datos.mercancia = { ...datos.mercancia, peso_kg: merc.peso_kg };
+    }
+    if (merc.bultos != null && String(merc.bultos).trim()) {
+      datos.mercancia = { ...datos.mercancia, bultos: merc.bultos };
+    }
+    if (merc.palets != null && String(merc.palets).trim()) {
+      datos.mercancia = { ...datos.mercancia, palets: merc.palets };
+    }
+  }
+  if (cargaMeta.observaciones_carga) {
+    datos.observaciones = String(cargaMeta.observaciones_carga).trim();
   }
 
   if (destinoStop) {
@@ -177,6 +199,11 @@ export function buildDecaDatosFromExpedienteCarga({
   if (conductor?.dni) datos.conductor = { ...datos.conductor, dni: conductor.dni };
   if (conductor?.telefono) datos.conductor = { ...datos.conductor, telefono: conductor.telefono };
 
+  if (vehiculo?.matricula) datos.vehiculo = { ...datos.vehiculo, matricula: String(vehiculo.matricula).trim() };
+  if (vehiculo?.remolque != null) {
+    datos.vehiculo = { ...datos.vehiculo, remolque: String(vehiculo.remolque || "").trim() };
+  }
+
   datos.autonomo_expediente_servicio_id = servicio?.id || null;
   datos.autonomo_expediente_carga_stop_id = cargaStop?.id || null;
 
@@ -191,6 +218,7 @@ export function checkDecaReadinessForCarga({
   profile,
   transportista,
   conductor,
+  vehiculo = {},
 }) {
   const datos = buildDecaDatosFromExpedienteCarga({
     cargaStop,
@@ -200,13 +228,21 @@ export function checkDecaReadinessForCarga({
     evidencias: [],
     transportista,
     conductor,
+    vehiculo,
   });
   const missing = [];
-  if (!String(datos.partes?.transportista?.nombre || "").trim()) missing.push("Nombre transportista");
+  if (!String(datos.partes?.cargador?.nombre || "").trim()) missing.push("Cargador contractual");
+  if (!String(datos.partes?.transportista?.nombre || "").trim()) missing.push("Transportista efectivo");
+  if (!String(datos.origen?.lugar || "").trim()) missing.push("Origen");
+  if (!String(datos.destino?.lugar || "").trim()) missing.push("Destino");
+  if (!String(datos.mercancia?.descripcion || "").trim()) missing.push("Mercancía / naturaleza");
+  if (!String(datos.mercancia?.peso_kg ?? "").trim()) missing.push("Peso");
+  if (!String(datos.fecha || "").trim()) missing.push("Fecha transporte");
   if (!String(datos.vehiculo?.matricula || "").trim()) missing.push("Matrícula tractora");
-  if (!String(datos.origen?.lugar || "").trim()) missing.push("Origen / almacén de carga");
-  if (!String(datos.destino?.lugar || "").trim()) missing.push("Destino (añade un destino al expediente)");
-  if (!String(datos.partes?.cargador?.nombre || "").trim()) missing.push("Cargador");
+  const remolqueRequired = Boolean(String(profile?.remolque || vehiculo?.remolque || "").trim());
+  if (remolqueRequired && !String(datos.vehiculo?.remolque || "").trim()) {
+    missing.push("Matrícula remolque");
+  }
   return { ok: missing.length === 0, missing, datos };
 }
 
@@ -219,6 +255,7 @@ export async function generarDecaParaCarga({
   profile,
   transportista,
   conductor,
+  vehiculo = {},
   userId,
   downloadAfter = true,
 }) {
@@ -233,6 +270,7 @@ export async function generarDecaParaCarga({
     profile,
     transportista,
     conductor,
+    vehiculo,
   });
   if (!ok) {
     throw new Error(`Faltan datos para DeCA: ${missing.join(", ")}`);
@@ -246,6 +284,7 @@ export async function generarDecaParaCarga({
     evidencias: evidenciasByStop?.[cargaStop.id] || [],
     transportista,
     conductor,
+    vehiculo,
   });
 
   let deca = await createAutonomoDeca({ datos, userId, profile: null });

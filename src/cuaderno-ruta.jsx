@@ -380,6 +380,7 @@ import { AutonomoDecaPanel } from "./features/dcdt/AutonomoDecaPanel.jsx";
 import { resolveCanUseAutonomoDeca } from "./domain/dcdt/decaAutonomoVisibility.js";
 import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
 import { AutonomoExpedienteScreen } from "./features/autonomo-expediente/AutonomoExpedienteScreen.jsx";
+import { AutonomoExpedienteHistoricoPanel } from "./features/autonomo-expediente/AutonomoExpedienteHistoricoPanel.jsx";
 import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
 import { fetchServiciosForMasTripPicker } from "./domain/service/driverFlatStopList.js";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
@@ -3262,6 +3263,7 @@ function AppInner(){
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
   const showExpediente=conductorSimplified&&tab==="expediente"&&showAutonomoExpedienteFlow;
   const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDecaHub;
+  const showMasExpedienteHistorico=conductorSimplified&&tab==="mas"&&masSub==="expediente-historico"&&showAutonomoExpedienteFlow;
   const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures;
   const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
@@ -3271,7 +3273,7 @@ function AppInner(){
   const showPerfil=tab==="perfil"||(conductorSimplified&&tab==="mas"&&masSub==="perfil");
   const showServicio=tab==="servicio"&&!conductorSimplified;
   const masBack=conductorSimplified&&tab==="mas"&&!!masSub?()=>setMasSub(null):null;
-  const masTitles={operacion:"Operación",servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
+  const masTitles={operacion:"Operación",servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil","expediente-historico":"Expedientes"};
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3363,14 +3365,35 @@ function AppInner(){
             profile={prof}
             conductorNombre={prof.nombre?.trim()||"Conductor"}
             showToast={showToast}
+            onProfileUpdate={(next) => setProf((p) => ({ ...p, ...next }))}
           />
+        )}
+
+        {showMasExpedienteHistorico&&(
+          <>
+            <ConductorMasBackBar title={masTitles["expediente-historico"]} onBack={masBack}/>
+            <AutonomoExpedienteHistoricoPanel
+              uid={getUserId()}
+              showToast={showToast}
+              onOpenExpediente={(id)=>{
+                setMasSub(null);
+                setTab("expediente");
+                window.dispatchEvent(new CustomEvent("autonomo-expediente-open",{detail:{id,view:"workspace"}}));
+              }}
+              onOpenResumen={(id)=>{
+                setMasSub(null);
+                setTab("expediente");
+                window.dispatchEvent(new CustomEvent("autonomo-expediente-open",{detail:{id,view:"resumen"}}));
+              }}
+            />
+          </>
         )}
 
         {conductorSimplified&&tab==="paradas"&&(
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures} showAutonomoExpedienteHistorico={showAutonomoExpedienteFlow}/>}
 
         {showMasOperacion&&(
           <>
@@ -7670,11 +7693,16 @@ function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
 
   // ── PERFIL CONDUCTOR ──
   const isInt=p.tipoServicio==="internacional"||p.abroadNow;
+  const isAutonomoPro=normalizeAccountType(p.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
   const TT=useT(p.lang||"es");
   return(
     <div style={{padding:"14px 14px 80px",maxWidth:580,margin:"0 auto"}}>
-      <div style={{fontSize:15,fontWeight:800,color:"#0F172A",marginBottom:3}}>PERFIL DEL CONDUCTOR</div>
-      <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>Aparece en todos los PDFs exportados</div>
+      <div style={{fontSize:15,fontWeight:800,color:"#0F172A",marginBottom:3}}>{isAutonomoPro?"PERFIL AUTÓNOMO PRO":"PERFIL DEL CONDUCTOR"}</div>
+      <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>
+        {isAutonomoPro
+          ? "Transportista, conductor y matrículas se usan en DeCA y expediente operacional."
+          : "Aparece en todos los PDFs exportados"}
+      </div>
 
       {/* IDIOMA */}
       <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>

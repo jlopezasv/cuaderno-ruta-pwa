@@ -30,6 +30,16 @@ const inputStyle = {
   color: UI.tx,
 };
 
+function SummaryRow({ label, value }) {
+  if (!String(value || "").trim()) return null;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, marginBottom: 6 }}>
+      <span style={{ color: UI.su }}>{label}</span>
+      <span style={{ fontWeight: 700, color: UI.tx, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+}
+
 export function AutonomoGenerarDecaModal({
   open,
   onClose,
@@ -42,6 +52,9 @@ export function AutonomoGenerarDecaModal({
   const defaults = useMemo(() => defaultExpedienteDecaPartes(profile), [profile, open]);
   const [transportista, setTransportista] = useState(defaults.transportista);
   const [conductor, setConductor] = useState(defaults.conductor);
+  const [vehiculo, setVehiculo] = useState(defaults.vehiculo);
+  const [editOpen, setEditOpen] = useState(false);
+  const [saveProfile, setSaveProfile] = useState(false);
   const [error, setError] = useState("");
 
   const { servicio, stops } = workspace || {};
@@ -59,13 +72,17 @@ export function AutonomoGenerarDecaModal({
       profile,
       transportista,
       conductor,
+      vehiculo,
     });
-  }, [cargaStop, destino, servicio, profile, transportista, conductor]);
+  }, [cargaStop, destino, servicio, profile, transportista, conductor, vehiculo]);
 
   useEffect(() => {
     if (!open) return;
     setTransportista(defaults.transportista);
     setConductor(defaults.conductor);
+    setVehiculo(defaults.vehiculo);
+    setEditOpen(false);
+    setSaveProfile(false);
     setError("");
   }, [open, defaults]);
 
@@ -80,7 +97,13 @@ export function AutonomoGenerarDecaModal({
       return;
     }
     try {
-      await onConfirm?.({ transportista, conductor, cargaStopId: cargaStop.id });
+      await onConfirm?.({
+        transportista,
+        conductor,
+        vehiculo,
+        cargaStopId: cargaStop.id,
+        saveProfile,
+      });
     } catch (e) {
       setError(e?.message || "No se pudo generar DeCA");
     }
@@ -115,17 +138,95 @@ export function AutonomoGenerarDecaModal({
         <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${UI.line}` }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: UI.tx }}>Generar {DECA_SHORT_LABEL}</div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4 }}>
-            {cargaStop.nombre} · antes de iniciar viaje
+            {cargaStop.nombre} · antes de circular
           </div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", background: "#f8fafc" }}>
           {!esNacional ? (
             <div style={{ fontSize: 13, color: UI.su, lineHeight: 1.45 }}>
-              Esta carga es internacional. Usa CMR u otros documentos en lugar de DeCA nacional.
+              Transporte internacional: usa CMR / carta de porte.
             </div>
           ) : (
             <>
+              <div
+                style={{
+                  background: UI.card,
+                  border: `1px solid ${UI.line}`,
+                  borderRadius: 12,
+                  padding: "12px 14px",
+                  marginBottom: 12,
+                }}
+              >
+                <SummaryRow label="Transportista" value={transportista.nombre} />
+                <SummaryRow label="NIF/CIF" value={transportista.nif} />
+                <SummaryRow label="Conductor" value={conductor.nombre} />
+                <SummaryRow label="Tractora" value={vehiculo.matricula} />
+                <SummaryRow label="Remolque" value={vehiculo.remolque} />
+                <button
+                  type="button"
+                  onClick={() => setEditOpen((v) => !v)}
+                  style={{
+                    marginTop: 8,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${UI.line}`,
+                    background: "#fff",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    width: "100%",
+                  }}
+                >
+                  {editOpen ? "Ocultar datos" : "Editar datos"}
+                </button>
+              </div>
+
+              {editOpen ? (
+                <div style={{ marginBottom: 12 }}>
+                  <input
+                    style={inputStyle}
+                    placeholder="Transportista"
+                    value={transportista.nombre}
+                    onChange={(e) => setTransportista((p) => ({ ...p, nombre: e.target.value }))}
+                  />
+                  <input
+                    style={inputStyle}
+                    placeholder="NIF / CIF"
+                    value={transportista.nif}
+                    onChange={(e) => setTransportista((p) => ({ ...p, nif: e.target.value }))}
+                  />
+                  <input
+                    style={inputStyle}
+                    placeholder="Conductor"
+                    value={conductor.nombre}
+                    onChange={(e) => setConductor((p) => ({ ...p, nombre: e.target.value }))}
+                  />
+                  <input
+                    style={inputStyle}
+                    placeholder="Teléfono conductor"
+                    value={conductor.telefono}
+                    onChange={(e) => setConductor((p) => ({ ...p, telefono: e.target.value }))}
+                  />
+                  <input
+                    style={inputStyle}
+                    placeholder="Matrícula tractora"
+                    value={vehiculo.matricula}
+                    onChange={(e) => setVehiculo((p) => ({ ...p, matricula: e.target.value }))}
+                  />
+                  <input
+                    style={inputStyle}
+                    placeholder="Matrícula remolque"
+                    value={vehiculo.remolque}
+                    onChange={(e) => setVehiculo((p) => ({ ...p, remolque: e.target.value }))}
+                  />
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: UI.tx }}>
+                    <input type="checkbox" checked={saveProfile} onChange={(e) => setSaveProfile(e.target.checked)} />
+                    Guardar en mi perfil
+                  </label>
+                </div>
+              ) : null}
+
               {!readiness.ok ? (
                 <div
                   style={{
@@ -137,18 +238,13 @@ export function AutonomoGenerarDecaModal({
                   }}
                 >
                   <div style={{ fontWeight: 800, color: UI.amber, fontSize: 14, marginBottom: 8 }}>
-                    Faltan datos para generar DeCA
+                    Faltan datos para DeCA
                   </div>
                   <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: UI.tx, lineHeight: 1.5 }}>
                     {readiness.missing.map((m) => (
                       <li key={m}>{m}</li>
                     ))}
                   </ul>
-                  {!destino ? (
-                    <div style={{ fontSize: 12, color: UI.su, marginTop: 10 }}>
-                      Añade un destino al expediente para completar el DeCA.
-                    </div>
-                  ) : null}
                 </div>
               ) : (
                 <div
@@ -168,30 +264,6 @@ export function AutonomoGenerarDecaModal({
                   </div>
                 </div>
               )}
-
-              <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8 }}>TRANSPORTISTA</div>
-              <input
-                style={inputStyle}
-                placeholder="Nombre transportista"
-                value={transportista.nombre}
-                onChange={(e) => setTransportista((p) => ({ ...p, nombre: e.target.value }))}
-              />
-              <input
-                style={inputStyle}
-                placeholder="NIF / CIF"
-                value={transportista.nif}
-                onChange={(e) => setTransportista((p) => ({ ...p, nif: e.target.value }))}
-              />
-
-              <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, marginBottom: 8, marginTop: 4 }}>
-                CONDUCTOR
-              </div>
-              <input
-                style={inputStyle}
-                placeholder="Nombre conductor"
-                value={conductor.nombre}
-                onChange={(e) => setConductor((p) => ({ ...p, nombre: e.target.value }))}
-              />
             </>
           )}
 

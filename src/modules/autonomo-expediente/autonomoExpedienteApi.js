@@ -239,6 +239,7 @@ export async function generarDecaCargaExpediente({
   uid,
   transportista,
   conductor,
+  vehiculo = {},
 }) {
   const { servicio, stops, cargas, evidenciasByStop } = workspace || {};
   const carga = (cargas || []).find((c) => c.id === cargaStopId);
@@ -252,6 +253,7 @@ export async function generarDecaCargaExpediente({
     profile,
     transportista,
     conductor,
+    vehiculo,
     userId: uid,
     downloadAfter: true,
   });

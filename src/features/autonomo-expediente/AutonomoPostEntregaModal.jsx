@@ -7,7 +7,16 @@ const UI = {
   blue: "#2563eb",
 };
 
-export function AutonomoPostEntregaModal({ open, onClose, destinoNombre, busy = false, onRetorno, onFinalizar, onSeguir }) {
+export function AutonomoPostEntregaModal({
+  open,
+  onClose,
+  destinoNombre,
+  busy = false,
+  onRetorno,
+  onPod,
+  onFinalizar,
+  onSeguir,
+}) {
   if (!open) return null;
 
   return (
@@ -47,14 +56,16 @@ export function AutonomoPostEntregaModal({ open, onClose, destinoNombre, busy = 
           >
             Registrar retorno / nueva carga
           </button>
-          <button type="button" disabled={busy} onClick={() => onFinalizar?.()} style={btn("#64748b")}>
+          <button type="button" disabled={busy} onClick={() => onPod?.()} style={btn(UI.blue)}>
+            Añadir POD / albarán (opcional)
+          </button>
+          <button type="button" disabled={busy} onClick={() => onFinalizar?.()} style={btnOutline()}>
             Finalizar expediente
           </button>
           <button type="button" disabled={busy} onClick={() => onSeguir?.()} style={btnOutline()}>
             Seguir trabajando
           </button>
-        </div>
-      </div>
+        </div>      </div>
     </div>
   );
 }
