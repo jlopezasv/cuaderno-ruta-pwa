@@ -35,6 +35,7 @@ import {
 import { SERVICIO_ALCANCE_DEFAULT, normalizeServicioAlcance } from "../../domain/service/servicioAlcance.js";
 import { cerrarExpedienteServicio } from "../../domain/service/cerrarExpedienteServicio.js";
 import { archiveAutonomoExpedienteLocal } from "./autonomoExpedienteArchive.js";
+import { isOperacionAnulada } from "../../domain/service/operationalVisualModel.js";
 
 async function patchServicioReferencia(servicioId, referencia) {
   const r = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
@@ -202,6 +203,33 @@ async function fetchStopById(stopId) {
   if (!r.ok) throw new Error("Parada no encontrada");
   const rows = await r.json().catch(() => []);
   return Array.isArray(rows) ? rows[0] : null;
+}
+
+/**
+ * Cancela o anula una operación no confirmada (sin DeCA vinculado).
+ */
+export async function cancelAutonomoStopOperacion({ stopId, servicioId, mode = "delete", motivo = "" }) {
+  if (!stopId) throw new Error("Parada no válida");
+  if (mode === "delete") {
+    const r = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "DELETE" });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(body || `No se pudo cancelar la operación (${r.status})`);
+    }
+  } else {
+    await patchStopOperacionMeta(stopId, {
+      operacion_estado: "anulada",
+      anulacion_motivo: String(motivo || "Anulado por error").trim(),
+      anulada_at: new Date().toISOString(),
+    });
+  }
+  if (servicioId) {
+    await appendExpedienteTimeline(servicioId, {
+      type: mode === "delete" ? "operacion_cancelada" : "operacion_anulada",
+      label: mode === "delete" ? "Operación cancelada" : "Operación anulada por error",
+      stopId,
+    });
+  }
 }
 
 export async function patchStopOperacionMeta(stopId, patch) {
@@ -682,8 +710,12 @@ export async function loadAutonomoExpedienteWorkspace(servicioId) {
     extraDocumentos: Array.isArray(extraDocumentos) ? extraDocumentos : [],
   });
 
-  const cargas = stopList.filter((s) => String(s.tipo).toLowerCase() === "carga");
-  const destinos = stopList.filter((s) => String(s.tipo).toLowerCase() === "descarga");
+  const cargas = stopList.filter(
+    (s) => String(s.tipo).toLowerCase() === "carga" && !isOperacionAnulada(s),
+  );
+  const destinos = stopList.filter(
+    (s) => String(s.tipo).toLowerCase() === "descarga" && !isOperacionAnulada(s),
+  );
 
   return {
     servicio,

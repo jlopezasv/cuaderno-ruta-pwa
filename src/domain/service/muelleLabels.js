@@ -17,12 +17,12 @@ export function isCargaOperacionStop(stop) {
   return t === "carga" || (t.includes("carga") && !t.includes("descarga"));
 }
 
-/** Entrada en muelle — misma lógica en carga y descarga. */
+/** Entrada en muelle — textos explícitos (nunca genérico «Entrada en muelle»). */
 export function muelleEntradaLabel(stop) {
-  if (isRetornoStop(stop)) return "Muelle retorno";
-  if (isDescargaOperacionStop(stop)) return "Muelle descarga";
-  if (isCargaOperacionStop(stop)) return "Muelle carga";
-  return "Muelle";
+  if (isRetornoStop(stop)) return "Entrada muelle retorno";
+  if (isDescargaOperacionStop(stop)) return "Entrada muelle descarga";
+  if (isCargaOperacionStop(stop)) return "Entrada muelle carga";
+  return "Entrada muelle";
 }
 
 /** Salida / fin de operación en muelle. */
@@ -33,7 +33,7 @@ export function muelleSalidaLabel(stop) {
   return "Salida muelle";
 }
 
-/** Alias para acciones rápidas autónomo (nueva carga en almacén). */
+/** Alias acciones rápidas autónomo. */
 export function muelleCargaRapidaLabel() {
-  return "Muelle carga";
+  return "Entrada muelle carga";
 }

@@ -2,6 +2,10 @@ import { getExpedienteDecaLinks } from "./autonomoExpedienteMeta.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import {
+  resolveProximaAccionPrincipal,
+  splitCargasByRole,
+} from "../../domain/service/operationalVisualModel.js";
+import {
   isCargaNacional,
   listNacionalCargas,
 } from "./autonomoExpedienteDeca.js";
@@ -89,51 +93,86 @@ export function collectRecentExpedienteDocumentos({ evidenciasByStop = {}, extra
 }
 
 export function buildExpedienteOperativoState({ servicio, cargas = [], destinos = [] }) {
-  const cargasTerminadas = cargas.filter(isCargaTerminada);
-  const cargasPendienteEntrada = cargas.filter(isCargaPendienteEntrada);
-  const cargasEnMuelle = cargas.filter((c) => getCargaEstado(c) === CARGA_ESTADO.EN_MUELLE);
+  const { cargasPrincipal, cargasRetorno } = splitCargasByRole(cargas);
+  const cargasTerminadas = cargasPrincipal.filter(isCargaTerminada);
+  const cargasPendienteEntrada = cargasPrincipal.filter(isCargaPendienteEntrada);
+  const cargasEnMuelle = cargasPrincipal.filter((c) => getCargaEstado(c) === CARGA_ESTADO.EN_MUELLE);
   const destinosEntregados = destinos.filter(isDestinoEntregado);
   const destinosPendientes = destinos.filter((d) => !isDestinoEntregado(d));
-  const nacionalSinDeca = listNacionalCargas(cargas).filter(
+  const nacionalSinDeca = listNacionalCargas(cargasPrincipal).filter(
     (c) => isCargaTerminada(c) && !decaLinkForCarga(servicio, c.id),
   );
   const hasInternacional = cargas.some((c) => !isCargaNacional(c));
 
+  const proxima = resolveProximaAccionPrincipal({ cargas, destinos, stockActual: [] });
+
   let estadoLabel = "Expediente iniciado";
   if (!cargas.length && !destinos.length) estadoLabel = "Sin carga registrada";
-  else if (cargasPendienteEntrada.length) {
-    estadoLabel = `Pendiente entrada muelle · ${cargasPendienteEntrada[0].nombre}`;
-  } else if (cargasEnMuelle.length) estadoLabel = `En muelle · ${cargasEnMuelle[0].nombre}`;
+  else if (destinosPendientes.length) {
+    estadoLabel = `Descarga pendiente · ${destinosPendientes[0].nombre}`;
+  } else if (cargasPendienteEntrada.length) {
+    estadoLabel = `Pendiente entrada muelle carga · ${cargasPendienteEntrada[0].nombre}`;
+  } else if (cargasEnMuelle.length) estadoLabel = `En muelle carga · ${cargasEnMuelle[0].nombre}`;
   else if (cargasTerminadas.length && !destinos.length) estadoLabel = "Carga terminada · falta destino";
-  else if (destinosPendientes.length) estadoLabel = "En ruta / entregas";
-  else if (destinosEntregados.length && cargasTerminadas.length) estadoLabel = "Expediente listo para cerrar";
+  else if (destinosPendientes.length === 0 && destinosEntregados.length) {
+    const retornoPend = cargasRetorno.filter(isCargaPendienteEntrada);
+    if (retornoPend.length) estadoLabel = `Retorno pendiente · ${retornoPend[0].nombre}`;
+    else if (cargasRetorno.length) estadoLabel = "Retorno acumulado en transporte";
+    else estadoLabel = "Expediente listo para cerrar";
+  }
 
   const canSuggestFinalizar = cargasTerminadas.length > 0 && destinosEntregados.length > 0;
 
   const sugerencias = [];
-  for (const c of cargasPendienteEntrada) {
+
+  if (proxima?.stop && proxima.kind !== "idle" && proxima.kind !== "cerrar") {
     sugerencias.push({
-      id: `entrada-${c.id}`,
-      type: "entrada_muelle",
+      id: `proxima-${proxima.stop.id || proxima.kind}`,
+      type: proxima.kind,
       priority: 0,
-      label: `Registrar entrada en muelle · ${c.nombre}`,
-      cargaId: c.id,
+      label: `${proxima.primaryLabel} · ${proxima.stop.nombre || proxima.title}`,
+      stopId: proxima.stop.id,
     });
   }
+
   for (const c of nacionalSinDeca) {
     sugerencias.push({
       id: `deca-${c.id}`,
       type: "deca",
-      priority: 1,
+      priority: 2,
       label: "Generar DeCA antes de circular",
       cargaId: c.id,
     });
   }
+
+  // Retornos: solo sugerencia secundaria si hay descargas pendientes
+  if (destinosPendientes.length) {
+    for (const c of cargasRetorno.filter(isCargaPendienteEntrada)) {
+      sugerencias.push({
+        id: `retorno-${c.id}`,
+        type: "retorno",
+        priority: 5,
+        label: `Retorno en paralelo · ${c.nombre} (no bloquea descargas)`,
+        cargaId: c.id,
+      });
+    }
+  } else {
+    for (const c of cargasRetorno.filter(isCargaPendienteEntrada)) {
+      sugerencias.push({
+        id: `retorno-${c.id}`,
+        type: "retorno",
+        priority: 1,
+        label: `Registrar retorno · ${c.nombre}`,
+        cargaId: c.id,
+      });
+    }
+  }
+
   if (cargasTerminadas.length && !destinos.length) {
     sugerencias.push({
       id: "add-destino",
       type: "destino",
-      priority: 2,
+      priority: 3,
       label: "Añadir destino",
     });
   }
@@ -141,23 +180,26 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
     sugerencias.push({
       id: "cmr-int",
       type: "doc",
-      priority: 3,
+      priority: 4,
       label: "Escanear / subir CMR (opcional)",
     });
   } else if (cargasTerminadas.length) {
     sugerencias.push({
       id: "cmr-optional",
       type: "doc",
-      priority: 4,
+      priority: 6,
       label: "Escanear CMR (opcional)",
     });
   }
 
   return {
     estadoLabel,
+    proximaAccion: proxima,
     cargasTerminadas,
     cargasEnMuelle,
     cargasPendienteEntrada,
+    cargasRetorno,
+    cargasPrincipal,
     destinosEntregados,
     destinosPendientes,
     nacionalSinDeca,

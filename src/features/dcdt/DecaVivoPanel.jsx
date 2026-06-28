@@ -12,6 +12,7 @@ import {
   registrarMovimientoCarga,
 } from "../../domain/dcdt/decaVivoModel.js";
 import { formatStockLineLabel } from "../../domain/dcdt/decaVivoStock.js";
+import { splitStockForDisplay } from "../../domain/service/operationalVisualModel.js";
 import { downloadDecaVivoPdf } from "../../domain/dcdt/decaVivoPdf.js";
 import { generateDecaQrDataUrl } from "../../domain/dcdt/decaQrImage.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
@@ -59,6 +60,9 @@ export function DecaVivoPanel({
   showToast,
   modoEmpresa = false,
   compact = false,
+  hideStockList = false,
+  hidden = false,
+  onStockChange,
 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -84,6 +88,7 @@ export function DecaVivoPanel({
     try {
       const next = await fetchDecaActualVisible(servicioId);
       setData(next);
+      onStockChange?.(next?.stock_actual || []);
     } catch (e) {
       if (showToast) showToast(e.message || "No se pudo cargar DeCA actual", "error");
     } finally {
@@ -174,9 +179,13 @@ export function DecaVivoPanel({
     }
   }
 
+  if (hidden) return null;
+
   if (loading) {
     return <div style={{ fontSize: 13, color: UI.su, padding: compact ? 0 : 8 }}>Cargando DeCA actual…</div>;
   }
+
+  const stockSplit = splitStockForDisplay(stock);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -205,24 +214,51 @@ export function DecaVivoPanel({
         ) : null}
       </div>
 
+      {!hideStockList ? (
       <div>
         <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 0.4, marginBottom: 6 }}>
-          CARGA ACTUAL DEL CAMIÓN
+          MERCANCÍA A BORDO (DeCA)
         </div>
         {!stock.length ? (
           <div style={{ fontSize: 13, color: UI.su, fontStyle: "italic" }}>
             Vacío — sin mercancía registrada a bordo
           </div>
         ) : (
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: UI.tx }}>
-            {stock.map((line, i) => (
-              <li key={line.line_key || line.id || i} style={{ marginBottom: 4 }}>
-                {formatStockLineLabel(line)}
-              </li>
-            ))}
-          </ul>
+          <>
+            {stockSplit.mercanciaIda.length ? (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#15803d", marginBottom: 4 }}>Pendiente de entrega</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: UI.tx }}>
+                  {stockSplit.mercanciaIda.map((line, i) => (
+                    <li key={line.line_key || i}>{formatStockLineLabel(line)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {stockSplit.retornos.length ? (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", marginBottom: 4 }}>Retornos / envases</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: UI.tx }}>
+                  {stockSplit.retornos.map((line, i) => (
+                    <li key={line.line_key || i}>{formatStockLineLabel(line)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {stockSplit.devoluciones.length ? (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#7e22ce", marginBottom: 4 }}>Devoluciones</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: UI.tx }}>
+                  {stockSplit.devoluciones.map((line, i) => (
+                    <li key={line.line_key || i}>{formatStockLineLabel(line)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
+      ) : null}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <button

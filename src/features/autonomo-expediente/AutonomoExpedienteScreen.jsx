@@ -18,6 +18,7 @@ import {
   terminarCargaMuelle,
   updateCargaMercancia,
   archiveAutonomoExpediente,
+  cancelAutonomoStopOperacion,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
 import { loadArchivedAutonomoExpedienteIds } from "../../modules/autonomo-expediente/autonomoExpedienteArchive.js";
 import { getCargaAlcance, isCargaNacional } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
@@ -45,6 +46,8 @@ import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
 import { DecaVivoPanel } from "../dcdt/DecaVivoPanel.jsx";
+import { ConductorOperativoDashboard } from "../operational/ConductorOperativoDashboard.jsx";
+import { OPERATION_KIND, visualForStop } from "../../domain/service/operationalVisualModel.js";
 import { AutonomoCargaEnMuelleModal } from "./AutonomoCargaEnMuelleModal.jsx";
 import { AutonomoPostCargaModal } from "./AutonomoPostCargaModal.jsx";
 import { AutonomoGenerarDecaModal } from "./AutonomoGenerarDecaModal.jsx";
@@ -196,6 +199,9 @@ export function AutonomoExpedienteScreen({
   const [postCargaStop, setPostCargaStop] = useState(null);
   const [decaModalCarga, setDecaModalCarga] = useState(null);
   const [postEntregaDestino, setPostEntregaDestino] = useState(null);
+  const [stockActual, setStockActual] = useState([]);
+  const [decaPanelOpen, setDecaPanelOpen] = useState(false);
+  const [cargaModalRetorno, setCargaModalRetorno] = useState(false);
   const [retornoDesdeStopId, setRetornoDesdeStopId] = useState(null);
   const [workspaceDismissed, setWorkspaceDismissed] = useState(false);
   const [archivedIds, setArchivedIds] = useState(() => loadArchivedAutonomoExpedienteIds(uid));
@@ -403,6 +409,68 @@ export function AutonomoExpedienteScreen({
     } finally {
       setBusy(false);
     }
+  }
+
+  function handlePrimaryAction(proxima) {
+    if (!proxima) return;
+    if (proxima.kind === OPERATION_KIND.DESCARGA && proxima.stop) {
+      if (proxima.phase === "en_muelle") void handleDestinoSalida(proxima.stop);
+      else void handleDestinoLlegada(proxima.stop);
+      return;
+    }
+    if ((proxima.kind === OPERATION_KIND.CARGA || proxima.kind === OPERATION_KIND.RETORNO) && proxima.stop) {
+      if (proxima.phase === "en_muelle") setCargaEnMuelleModal(proxima.stop);
+      else void handleEntradaMuellePendiente(proxima.stop);
+      return;
+    }
+    if (proxima.kind === "cerrar") {
+      setGenerarModal(true);
+      return;
+    }
+    if (proxima.kind === "idle") {
+      if (proxima.secondaryLabel?.includes("destino")) setDestinoModal(true);
+      else setCargaModal(true);
+    }
+  }
+
+  async function handleCancelOperacion({ stop, mode }) {
+    if (!activeId || !stop?.id) return;
+    const motivo =
+      mode === "anular"
+        ? window.prompt("Motivo de anulación (obligatorio):", "")?.trim()
+        : "";
+    if (mode === "anular" && !motivo) {
+      showToast?.("Indique el motivo de anulación");
+      return;
+    }
+    if (mode === "delete" && !window.confirm("¿Cancelar esta operación? No se ha confirmado aún.")) return;
+    setBusy(true);
+    try {
+      await cancelAutonomoStopOperacion({
+        stopId: stop.id,
+        servicioId: activeId,
+        mode,
+        motivo,
+      });
+      await reloadWorkspace(activeId);
+      showToast?.(mode === "delete" ? "Operación cancelada" : "Operación anulada");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo cancelar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openRegistrarRetorno() {
+    setRetornoDesdeStopId(null);
+    setCargaModalRetorno(true);
+    setCargaModal(true);
+  }
+
+  function openRegistrarDevolucion() {
+    setRetornoDesdeStopId(null);
+    setCargaModalRetorno(true);
+    setCargaModal(true);
   }
 
   async function handleTerminarCargaMuelle(cargaStop) {
@@ -726,13 +794,53 @@ export function AutonomoExpedienteScreen({
         ))}
       </Card>
 
-      <Card title="CARGA ACTUAL DEL CAMIÓN / DeCA ACTUAL">
+      <Card title="CARGA ACTUAL Y OPERACIONES">
+        <ConductorOperativoDashboard
+          servicio={servicio}
+          cargas={cargas || []}
+          destinos={destinos || []}
+          stockActual={stockActual}
+          busy={busy}
+          onPrimaryAction={handlePrimaryAction}
+          onDescargaEntrada={handleDestinoLlegada}
+          onDescargaSalida={handleDestinoSalida}
+          onCargaEntrada={handleEntradaMuellePendiente}
+          onCargaOpen={setCargaEnMuelleModal}
+          onRegistrarRetorno={openRegistrarRetorno}
+          onRegistrarDevolucion={openRegistrarDevolucion}
+          onVerRetornoAcumulado={() => setDecaPanelOpen(true)}
+          onCancelOperacion={handleCancelOperacion}
+          onVerDeca={() => setDecaPanelOpen(true)}
+        />
+      </Card>
+
+      {decaPanelOpen ? (
+        <Card title="DeCA ACTUAL · QR / PDF / MOVIMIENTOS">
+          <DecaVivoPanel
+            servicio={servicio}
+            stops={[...(cargas || []), ...(destinos || [])]}
+            showToast={showToast}
+            hideStockList
+            onStockChange={setStockActual}
+          />
+          <button
+            type="button"
+            onClick={() => setDecaPanelOpen(false)}
+            style={{ marginTop: 8, width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${UI.line}`, background: "#fff", fontWeight: 700, cursor: "pointer" }}
+          >
+            Cerrar DeCA
+          </button>
+        </Card>
+      ) : (
         <DecaVivoPanel
           servicio={servicio}
           stops={[...(cargas || []), ...(destinos || [])]}
           showToast={showToast}
+          compact
+          hidden
+          onStockChange={setStockActual}
         />
-      </Card>
+      )}
 
       <Card title="ACCIONES RÁPIDAS">
         <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.45, marginBottom: 10 }}>
@@ -754,182 +862,46 @@ export function AutonomoExpedienteScreen({
       {stops?.length ? (
         <Card title="RECORRIDO">
           {stops.map((s) => {
-            const tipo = String(s.tipo || "").toLowerCase();
-            const isCarga = tipo === "carga";
+            const vis = visualForStop(s);
+            if (!vis) return null;
+            const isCarga = String(s.tipo || "").toLowerCase() === "carga";
             const muelle = isCarga ? getCargaMuelleResumen(s) : getDestinoTiempoResumen(s);
-            const meta = getStopOperacionMeta(s.notas);
-            const chip = isCarga
-              ? isCargaPendienteEntrada(s)
-                ? "Pendiente muelle carga"
-                : isCargaEnMuelle(s)
-                  ? "En muelle carga"
-                  : isCargaTerminada(s)
-                    ? "Carga terminada"
-                    : "Carga"
-              : destinoEstadoChip(meta.destino_estado).label;
             return (
               <div
                 key={s.id}
                 style={{
-                  border: `1px solid ${UI.line}`,
+                  border: `2px solid ${vis.border}`,
                   borderRadius: 12,
                   padding: "10px 12px",
                   marginBottom: 8,
                   fontSize: 13,
-                }}
-              >
-                <div style={{ fontWeight: 800, color: UI.tx }}>
-                  {isCarga ? "Carga" : "Descarga"} · {s.nombre}
-                  {isCarga && isRetornoCarga(s) ? " · retorno" : ""}
-                </div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
-                  {chip}
-                  {muelle?.label ? ` · ${muelle.label}` : ""}
-                </div>
-              </div>
-            );
-          })}
-        </Card>
-      ) : null}
-
-      {cargas?.length ? (
-        <Card title="CARGAS ACTIVAS">
-          {cargas.map((c) => {
-            const alcance = getCargaAlcance(c);
-            const muelle = getCargaMuelleResumen(c);
-            const terminada = isCargaTerminada(c);
-            const enMuelle = isCargaEnMuelle(c);
-            const pendienteEntrada = isCargaPendienteEntrada(c);
-            const decaLink = decaLinkForCarga(servicio, c.id);
-            const needsDeca = cargaNeedsDeca(c, servicio);
-            const estadoLine = pendienteEntrada
-              ? "Pendiente entrada muelle"
-              : enMuelle
-                ? `En muelle desde ${muelle.entradaAt ? new Date(muelle.entradaAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—"}`
-                : terminada && muelle.label
-                  ? `Carga terminada · ${muelle.label} en muelle`
-                  : terminada
-                    ? "Carga terminada"
-                    : "";
-            return (
-              <div
-                key={c.id}
-                style={{
-                  border: `1px solid ${UI.line}`,
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  marginBottom: 8,
-                  fontSize: 13,
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontWeight: 800, color: UI.tx }}>
-                      {c.nombre}
-                      {isRetornoCarga(c) ? " · retorno" : ""}
-                    </div>
-                    <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
-                      {SERVICIO_ALCANCE_LABELS[alcance] || alcance}
-                      {estadoLine ? ` · ${estadoLine}` : ""}
-                    </div>
-                  </div>
-                  {isCargaNacional(c) && decaLink ? (
-                    <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: "#dcfce7", color: UI.green }}>
-                      DeCA
-                    </span>
-                  ) : isCargaNacional(c) && needsDeca ? (
-                    <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: "#fef3c7", color: UI.amber }}>
-                      DeCA pendiente
-                    </span>
-                  ) : null}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  {pendienteEntrada ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handleEntradaMuellePendiente(c)}
-                      style={miniBtn(UI.green)}
-                    >
-                      {muelleEntradaLabel(c)}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setCargaEnMuelleModal(c)}
-                      style={miniBtn()}
-                    >
-                      {terminada ? "Ver carga" : enMuelle ? "En muelle" : "Ver carga"}
-                    </button>
-                  )}
-                  {needsDeca && isCargaNacional(c) ? (
-                    <button type="button" disabled={busy} onClick={() => setDecaModalCarga(c)} style={miniBtn(UI.green)}>
-                      DeCA
-                    </button>
-                  ) : null}
-                </div>
-                <StopDocumentacionInline
-                  stop={c}
-                  servicio={servicio}
-                  uid={uid}
-                  conductorNombre={conductorNombre}
-                  showToast={showToast}
-                  acquireLocation={acquireLocation}
-                  onSaved={reloadDocs}
-                />
-              </div>
-            );
-          })}
-        </Card>
-      ) : null}
-
-      {destinosActivos?.length ? (
-        <Card title="DESTINOS ACTIVOS">
-          {destinosActivos.map((d) => {
-            const meta = getStopOperacionMeta(d.notas);
-            const chip = destinoEstadoChip(meta.destino_estado);
-            const tiempo = getDestinoTiempoResumen(d);
-            return (
-              <div
-                key={d.id}
-                style={{
-                  border: `1px solid ${UI.line}`,
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  marginBottom: 8,
+                  background: vis.bg,
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{ fontWeight: 800, color: UI.tx }}>{d.nombre}</div>
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 999, background: chip.bg, color: chip.color }}>
-                    {chip.label}
-                  </span>
+                  <div style={{ fontWeight: 800, color: vis.color }}>
+                    {vis.icon} {vis.label} · {s.nombre}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
-                  {d.direccion || "—"}
-                  {tiempo.label ? ` · ${tiempo.label}` : ""}
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
+                  {muelle?.label ? muelle.label : "—"}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  <button type="button" disabled={busy} onClick={() => handleDestinoLlegada(d)} style={miniBtn()}>
-                    {muelleEntradaLabel(d)}
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => handleDestinoSalida(d)} style={miniBtn()}>
-                    {muelleSalidaLabel(d)}
-                  </button>
-                </div>
-                <StopDocumentacionInline
-                  stop={d}
-                  servicio={servicio}
-                  uid={uid}
-                  conductorNombre={conductorNombre}
-                  showToast={showToast}
-                  acquireLocation={acquireLocation}
-                  onSaved={reloadDocs}
-                />
               </div>
             );
           })}
+        </Card>
+      ) : null}
+
+      {operativo.nacionalSinDeca?.length ? (
+        <Card title="DeCA PENDIENTE">
+          {operativo.nacionalSinDeca.map((c) => (
+            <div key={c.id} style={{ marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>{c.nombre}</span>
+              <button type="button" disabled={busy} onClick={() => setDecaModalCarga(c)} style={miniBtn(UI.green)}>
+                Generar DeCA
+              </button>
+            </div>
+          ))}
         </Card>
       ) : null}
 
@@ -989,11 +961,12 @@ export function AutonomoExpedienteScreen({
         onClose={() => {
           setCargaModal(false);
           setRetornoDesdeStopId(null);
+          setCargaModalRetorno(false);
         }}
         uid={uid}
         busy={busy}
         showToast={showToast}
-        retornoMode={!!retornoDesdeStopId}
+        retornoMode={cargaModalRetorno || !!retornoDesdeStopId}
         retornoDesdeStopId={retornoDesdeStopId}
         onConfirm={handleRegistrarCarga}
       />
