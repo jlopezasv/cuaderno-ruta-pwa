@@ -77,10 +77,17 @@ export function ConductorMasHub({
   showAutonomoDeca = false,
   showAutonomoOperacion = false,
   showAutonomoExpedienteHistorico = false,
+  autonomoExpedienteMode = false,
 }) {
   let items = HUB_ITEMS;
-  if (!showAutonomoOperacion) items = items.filter((i) => i.id !== "operacion");
+  if (!showAutonomoOperacion || autonomoExpedienteMode) items = items.filter((i) => i.id !== "operacion");
   if (!showAutonomoDeca) items = items.filter((i) => i.id !== "deca");
+  if (autonomoExpedienteMode) {
+    items = items.filter((i) => i.id !== "servicio" && i.id !== "resumen");
+    items = items.map((i) =>
+      i.id === "docs" ? { ...i, hint: "Gastos, km y cuaderno" } : i,
+    );
+  }
   if (showAutonomoExpedienteHistorico) {
     items = [
       { id: "expediente-historico", icon: "📁", label: "Expedientes", hint: "Histórico y cerrados" },

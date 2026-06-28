@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
+import { getStopOperacionMeta, mergeStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import {
   checkDecaReadinessForCarga,
   defaultExpedienteDecaPartes,
@@ -48,6 +49,8 @@ export function AutonomoGenerarDecaModal({
   profile = {},
   busy = false,
   onConfirm,
+  onUpdateMercancia,
+  onAddDestino,
 }) {
   const defaults = useMemo(() => defaultExpedienteDecaPartes(profile), [profile, open]);
   const [transportista, setTransportista] = useState(defaults.transportista);
@@ -56,6 +59,8 @@ export function AutonomoGenerarDecaModal({
   const [editOpen, setEditOpen] = useState(false);
   const [saveProfile, setSaveProfile] = useState(false);
   const [error, setError] = useState("");
+  const [mercanciaForm, setMercanciaForm] = useState({ descripcion: "", peso_kg: "", palets: "", bultos: "" });
+  const [mercanciaDirty, setMercanciaDirty] = useState(false);
 
   const { servicio, stops } = workspace || {};
   const destino = useMemo(
@@ -63,10 +68,20 @@ export function AutonomoGenerarDecaModal({
     [cargaStop, stops],
   );
 
+  const cargaForCheck = useMemo(() => {
+    if (!cargaStop) return null;
+    const meta = getStopOperacionMeta(cargaStop.notas);
+    const mergedMerc = { ...(meta.mercancia || {}), ...mercanciaForm };
+    return {
+      ...cargaStop,
+      notas: mergeStopOperacionMeta(cargaStop.notas, { mercancia: mergedMerc }),
+    };
+  }, [cargaStop, mercanciaForm]);
+
   const readiness = useMemo(() => {
-    if (!cargaStop) return { ok: false, missing: ["Carga no seleccionada"], datos: null };
+    if (!cargaForCheck) return { ok: false, missing: ["Carga no seleccionada"], datos: null };
     return checkDecaReadinessForCarga({
-      cargaStop,
+      cargaStop: cargaForCheck,
       destinoStop: destino,
       servicio,
       profile,
@@ -74,7 +89,20 @@ export function AutonomoGenerarDecaModal({
       conductor,
       vehiculo,
     });
-  }, [cargaStop, destino, servicio, profile, transportista, conductor, vehiculo]);
+  }, [cargaForCheck, destino, servicio, profile, transportista, conductor, vehiculo]);
+
+  useEffect(() => {
+    if (!open || !cargaStop) return;
+    const meta = getStopOperacionMeta(cargaStop.notas);
+    const merc = meta.mercancia || {};
+    setMercanciaForm({
+      descripcion: String(merc.descripcion || "").trim(),
+      peso_kg: merc.peso_kg != null ? String(merc.peso_kg) : "",
+      palets: merc.palets != null ? String(merc.palets) : "",
+      bultos: merc.bultos != null ? String(merc.bultos) : "",
+    });
+    setMercanciaDirty(false);
+  }, [open, cargaStop?.id, cargaStop?.notas]);
 
   useEffect(() => {
     if (!open) return;
@@ -90,8 +118,26 @@ export function AutonomoGenerarDecaModal({
 
   const esNacional = isCargaNacional(cargaStop);
 
+  async function handleSaveMercancia() {
+    setError("");
+    try {
+      const merc = {};
+      if (mercanciaForm.descripcion?.trim()) merc.descripcion = mercanciaForm.descripcion.trim();
+      if (mercanciaForm.peso_kg !== "") merc.peso_kg = mercanciaForm.peso_kg;
+      if (mercanciaForm.palets !== "") merc.palets = mercanciaForm.palets;
+      if (mercanciaForm.bultos !== "") merc.bultos = mercanciaForm.bultos;
+      await onUpdateMercancia?.({ mercancia: merc });
+      setMercanciaDirty(false);
+    } catch (e) {
+      setError(e?.message || "No se pudo guardar mercancía");
+    }
+  }
+
   async function handleSubmit() {
     setError("");
+    if (mercanciaDirty) {
+      await handleSaveMercancia();
+    }
     if (!readiness.ok) {
       setError(`Faltan datos: ${readiness.missing.join(", ")}`);
       return;
@@ -224,6 +270,87 @@ export function AutonomoGenerarDecaModal({
                     <input type="checkbox" checked={saveProfile} onChange={(e) => setSaveProfile(e.target.checked)} />
                     Guardar en mi perfil
                   </label>
+                </div>
+              ) : null}
+
+              <div
+                style={{
+                  background: UI.card,
+                  border: `1px solid ${UI.line}`,
+                  borderRadius: 12,
+                  padding: "12px 14px",
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 8 }}>MERCANCÍA</div>
+                {[
+                  ["descripcion", "Mercancía / naturaleza *"],
+                  ["peso_kg", "Peso (kg) *"],
+                  ["palets", "Palets"],
+                  ["bultos", "Bultos"],
+                ].map(([k, label]) => (
+                  <input
+                    key={k}
+                    style={inputStyle}
+                    placeholder={label}
+                    value={mercanciaForm[k]}
+                    onChange={(e) => {
+                      setMercanciaForm((p) => ({ ...p, [k]: e.target.value }));
+                      setMercanciaDirty(true);
+                    }}
+                  />
+                ))}
+                {mercanciaDirty ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleSaveMercancia()}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: UI.blue,
+                      color: "#fff",
+                      fontWeight: 800,
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Guardar mercancía
+                  </button>
+                ) : null}
+              </div>
+
+              {!destino ? (
+                <div
+                  style={{
+                    background: UI.amberSoft,
+                    border: "1px solid #fde68a",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div style={{ fontWeight: 800, color: UI.amber, fontSize: 14, marginBottom: 8 }}>Falta destino</div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onAddDestino?.()}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: UI.blue,
+                      color: "#fff",
+                      fontWeight: 800,
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Añadir destino
+                  </button>
                 </div>
               ) : null}
 

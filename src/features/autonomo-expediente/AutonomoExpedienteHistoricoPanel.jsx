@@ -6,6 +6,7 @@ import {
   fetchAutonomoExpedientes,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
 import { loadArchivedAutonomoExpedienteIds } from "../../modules/autonomo-expediente/autonomoExpedienteArchive.js";
+import { summarizeAutonomoExpedienteListItem } from "../../modules/autonomo-expediente/autonomoExpedienteUiModel.js";
 
 const UI = {
   page: "#f8fafc",
@@ -103,6 +104,7 @@ export function AutonomoExpedienteHistoricoPanel({
         filtered.slice(0, 20).map((ex) => {
           const st = String(ex.estado || "").toLowerCase();
           const enCurso = st === SERVICIO_ESTADO_EN_CURSO || st === "asignado";
+          const summary = summarizeAutonomoExpedienteListItem(ex);
           return (
             <button
               key={ex.id}
@@ -119,9 +121,13 @@ export function AutonomoExpedienteHistoricoPanel({
                 cursor: "pointer",
               }}
             >
-              <div style={{ fontWeight: 800, color: UI.tx }}>
-                {new Date(ex.fecha_inicio || ex.created_at).toLocaleDateString("es-ES")}
-              </div>
+              <div style={{ fontWeight: 800, color: UI.tx }}>{summary.title}</div>
+              {summary.subtitle ? (
+                <div style={{ fontSize: 13, color: UI.tx, marginTop: 4, lineHeight: 1.35 }}>{summary.subtitle}</div>
+              ) : null}
+              {summary.meta ? (
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>{summary.meta}</div>
+              ) : null}
               <div style={{ fontSize: 12, color: UI.su, marginTop: 4 }}>
                 {ESTADO_LABEL[st] || ex.estado}
                 {enCurso ? " · continuar" : ""}

@@ -25,7 +25,6 @@ import {
   cargaNeedsDeca,
   decaLinkForCarga,
   filterDestinosActivos,
-  collectRecentExpedienteDocumentos,
 } from "../../modules/autonomo-expediente/autonomoExpedienteUiModel.js";
 import { saveAutonomoProProfileFromDeca } from "../../modules/autonomo-expediente/autonomoProProfileApi.js";
 import {
@@ -33,12 +32,12 @@ import {
   getDestinoTiempoResumen,
   isCargaEnMuelle,
   isCargaTerminada,
+  isDestinoEntregado,
   isRetornoCarga,
 } from "../../modules/autonomo-expediente/autonomoExpedienteStopModel.js";
 import { SERVICIO_ALCANCE_LABELS } from "../../domain/service/servicioAlcance.js";
 import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
-import { AutonomoDocAccionesModal, docActionToEvidenciaConfig } from "./AutonomoDocAccionesModal.jsx";
 import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
@@ -130,6 +129,48 @@ function miniBtn(bg = null) {
   };
 }
 
+function stopAllowsDocumentacion(stop) {
+  if (!stop) return false;
+  const tipo = String(stop.tipo || "").toLowerCase();
+  if (tipo === "carga") {
+    if (isCargaEnMuelle(stop)) return true;
+    if (!isCargaNacional(stop) && isCargaTerminada(stop)) return true;
+    return false;
+  }
+  if (tipo === "descarga") return !isDestinoEntregado(stop);
+  return false;
+}
+
+function StopDocumentacionInline({
+  stop,
+  servicio,
+  uid,
+  conductorNombre,
+  showToast,
+  acquireLocation,
+  onSaved,
+}) {
+  if (!stopAllowsDocumentacion(stop)) return null;
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${UI.line}` }}>
+      <OperationalEvidenciasStop
+        stopId={stop.id}
+        servicioId={servicio?.id}
+        servicio={servicio}
+        stop={stop}
+        conductorName={conductorNombre}
+        conductorId={uid}
+        showToast={showToast}
+        variant="docsShell"
+        hideIa
+        tiposPermitidos={["cmr", "foto", "incidencia"]}
+        acquireActionLocation={(type, label) => acquireLocation(type, label)}
+        onEvidenciaSaved={onSaved}
+      />
+    </div>
+  );
+}
+
 export function AutonomoExpedienteScreen({
   uid,
   profile = {},
@@ -144,16 +185,13 @@ export function AutonomoExpedienteScreen({
   const [workspace, setWorkspace] = useState(null);
   const [view, setView] = useState("home");
   const [cargaModal, setCargaModal] = useState(false);
-  const [docModal, setDocModal] = useState(false);
   const [destinoModal, setDestinoModal] = useState(false);
-  const [focusStop, setFocusStop] = useState(null);
-  const [evidenciaTipos, setEvidenciaTipos] = useState(null);
   const [generarModal, setGenerarModal] = useState(false);
   const [cargaEnMuelleModal, setCargaEnMuelleModal] = useState(null);
   const [decaModalCarga, setDecaModalCarga] = useState(null);
   const [postEntregaDestino, setPostEntregaDestino] = useState(null);
   const [retornoDesdeStopId, setRetornoDesdeStopId] = useState(null);
-  const [docPanelOpen, setDocPanelOpen] = useState(false);
+  const [workspaceDismissed, setWorkspaceDismissed] = useState(false);
   const [archivedIds, setArchivedIds] = useState(() => loadArchivedAutonomoExpedienteIds(uid));
   const [archiveConfirmId, setArchiveConfirmId] = useState(null);
 
@@ -212,6 +250,7 @@ export function AutonomoExpedienteScreen({
       const id = ev?.detail?.id;
       const mode = ev?.detail?.view || "workspace";
       if (!id) return;
+      setWorkspaceDismissed(false);
       setActiveId(id);
       setView(mode === "resumen" ? "resumen" : "workspace");
     };
@@ -220,7 +259,7 @@ export function AutonomoExpedienteScreen({
   }, []);
 
   useEffect(() => {
-    if (loading || activeId) return;
+    if (loading || activeId || workspaceDismissed) return;
     const active = expedientes.find((e) => {
       if (archivedIds.has(e.id)) return false;
       const st = String(e.estado || "").toLowerCase();
@@ -230,12 +269,13 @@ export function AutonomoExpedienteScreen({
       setActiveId(active.id);
       setView("workspace");
     }
-  }, [loading, expedientes, activeId, archivedIds]);
+  }, [loading, expedientes, activeId, archivedIds, workspaceDismissed]);
 
   async function handleNuevoExpediente() {
     setBusy(true);
     try {
       const row = await createAutonomoExpediente(uid, { profile });
+      setWorkspaceDismissed(false);
       setActiveId(row.id);
       setView("workspace");
       await reloadList();
@@ -510,12 +550,6 @@ export function AutonomoExpedienteScreen({
     }
   }
 
-  function handleDocAction(action) {
-    const cfg = docActionToEvidenciaConfig(action);
-    setEvidenciaTipos(cfg.tipos);
-    setDocModal(false);
-  }
-
   if (loading) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: UI.su, background: UI.page, minHeight: "60vh" }}>
@@ -589,6 +623,7 @@ export function AutonomoExpedienteScreen({
             style={bigBtn(UI.blue, busy)}
             disabled={busy}
             onClick={() => {
+              setWorkspaceDismissed(false);
               setActiveId(active.id);
               setView("workspace");
             }}
@@ -604,8 +639,7 @@ export function AutonomoExpedienteScreen({
     );
   }
 
-  const { servicio, cargas, destinos, evidenciasByStop, stops, extraDocumentos } = workspace || {};
-  const focusStopRow = focusStop?.id ? stops?.find((s) => s.id === focusStop.id) || focusStop : focusStop;
+  const { servicio, cargas, destinos, stops, timeline } = workspace || {};
   const cargaEnMuelleRow = cargaEnMuelleModal?.id
     ? stops?.find((s) => s.id === cargaEnMuelleModal.id) || cargaEnMuelleModal
     : null;
@@ -614,12 +648,7 @@ export function AutonomoExpedienteScreen({
     : null;
   const operativo = buildExpedienteOperativoState({ servicio, cargas: cargas || [], destinos: destinos || [] });
   const destinosActivos = filterDestinosActivos(destinos || []);
-  const recentDocs = collectRecentExpedienteDocumentos({
-    evidenciasByStop,
-    extraDocumentos,
-    stops,
-    limit: 5,
-  });
+  const reloadDocs = () => void reloadWorkspace(activeId);
 
   return (
     <div style={{ padding: "14px 14px 88px", background: UI.page, minHeight: "70vh" }}>
@@ -650,6 +679,7 @@ export function AutonomoExpedienteScreen({
         <button
           type="button"
           onClick={() => {
+            setWorkspaceDismissed(true);
             setActiveId(null);
             setView("home");
           }}
@@ -669,29 +699,12 @@ export function AutonomoExpedienteScreen({
       </Card>
 
       <Card title="ACCIONES RÁPIDAS">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <button type="button" style={actionChip("#0f766e")} disabled={busy} onClick={() => setCargaModal(true)}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" style={{ ...actionChip("#0f766e"), flex: 1 }} disabled={busy} onClick={() => setCargaModal(true)}>
             Registrar carga
           </button>
-          <button type="button" style={actionChip(UI.blue)} disabled={busy} onClick={() => setDestinoModal(true)}>
+          <button type="button" style={{ ...actionChip(UI.blue), flex: 1 }} disabled={busy} onClick={() => setDestinoModal(true)}>
             Añadir destino
-          </button>
-          <button type="button" style={actionChip("#64748b")} disabled={busy} onClick={() => setDocModal(true)}>
-            Documentación / OCR
-          </button>
-          <button
-            type="button"
-            style={actionChip("#fff")}
-            disabled={busy}
-            onClick={() => {
-              const target = cargas?.[cargas.length - 1] || destinos?.[destinos.length - 1];
-              if (target) {
-                setFocusStop(target);
-                setEvidenciaTipos(["incidencia"]);
-              } else showToast?.("Registra una carga o destino primero");
-            }}
-          >
-            Incidencia
           </button>
         </div>
       </Card>
@@ -751,21 +764,16 @@ export function AutonomoExpedienteScreen({
                       DeCA
                     </button>
                   ) : null}
-                  {!isCargaNacional(c) ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setFocusStop(c);
-                        setEvidenciaTipos(["cmr"]);
-                        setDocPanelOpen(true);
-                      }}
-                      style={miniBtn()}
-                    >
-                      CMR
-                    </button>
-                  ) : null}
                 </div>
+                <StopDocumentacionInline
+                  stop={c}
+                  servicio={servicio}
+                  uid={uid}
+                  conductorNombre={conductorNombre}
+                  showToast={showToast}
+                  acquireLocation={acquireLocation}
+                  onSaved={reloadDocs}
+                />
               </div>
             );
           })}
@@ -778,12 +786,11 @@ export function AutonomoExpedienteScreen({
             const meta = getStopOperacionMeta(d.notas);
             const chip = destinoEstadoChip(meta.destino_estado);
             const tiempo = getDestinoTiempoResumen(d);
-            const isFocus = focusStopRow?.id === d.id;
             return (
               <div
                 key={d.id}
                 style={{
-                  border: `1px solid ${isFocus ? UI.blue : UI.line}`,
+                  border: `1px solid ${UI.line}`,
                   borderRadius: 12,
                   padding: "10px 12px",
                   marginBottom: 8,
@@ -806,63 +813,24 @@ export function AutonomoExpedienteScreen({
                   <button type="button" disabled={busy} onClick={() => handleDestinoSalida(d)} style={miniBtn()}>
                     Terminar descarga
                   </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setFocusStop(d);
-                      setEvidenciaTipos(["foto", "incidencia"]);
-                      setDocPanelOpen(true);
-                    }}
-                    style={miniBtn()}
-                  >
-                    POD
-                  </button>
                 </div>
+                <StopDocumentacionInline
+                  stop={d}
+                  servicio={servicio}
+                  uid={uid}
+                  conductorNombre={conductorNombre}
+                  showToast={showToast}
+                  acquireLocation={acquireLocation}
+                  onSaved={reloadDocs}
+                />
               </div>
             );
           })}
         </Card>
       ) : null}
 
-      {recentDocs.length ? (
-        <Card title="DOCUMENTOS RECIENTES">
-          {recentDocs.map((doc) => (
-            <button
-              key={`${doc.kind}-${doc.id}`}
-              type="button"
-              onClick={() => {
-                if (doc.stopId) {
-                  const stop = stops?.find((s) => s.id === doc.stopId);
-                  if (stop) setFocusStop(stop);
-                }
-                setEvidenciaTipos(["cmr", "foto"]);
-                setDocPanelOpen(true);
-              }}
-              style={{
-                width: "100%",
-                textAlign: "left",
-                border: `1px solid ${UI.line}`,
-                borderRadius: 10,
-                padding: "10px 12px",
-                marginBottom: 6,
-                background: UI.page,
-                cursor: "pointer",
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: 13, color: UI.tx }}>{doc.label}</div>
-              {doc.at ? (
-                <div style={{ fontSize: 11, color: UI.su, marginTop: 2 }}>
-                  {new Date(doc.at).toLocaleString("es-ES", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </div>
-              ) : null}
-            </button>
-          ))}
-        </Card>
-      ) : null}
-
       {operativo.canSuggestFinalizar ? (
-        <div style={{ marginTop: 8, marginBottom: 16 }}>
+        <div style={{ marginTop: 8, marginBottom: 12 }}>
           <button
             type="button"
             disabled={busy}
@@ -884,38 +852,22 @@ export function AutonomoExpedienteScreen({
         </div>
       ) : null}
 
-      {docPanelOpen && focusStopRow && servicio ? (
-        <Card title={`AÑADIR · ${focusStopRow.nombre}`}>
-          <OperationalEvidenciasStop
-            stopId={focusStopRow.id}
-            servicioId={servicio.id}
-            servicio={servicio}
-            stop={focusStopRow}
-            conductorName={conductorNombre}
-            conductorId={uid}
-            showToast={showToast}
-            tiposPermitidos={evidenciaTipos || ["cmr", "foto", "incidencia"]}
-            acquireActionLocation={(type, label) => acquireLocation(type, label)}
-            onEvidenciaSaved={() => {
-              void reloadWorkspace(activeId);
-              setDocPanelOpen(false);
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => setDocPanelOpen(false)}
-            style={{
-              width: "100%",
-              marginTop: 8,
-              padding: "10px",
-              borderRadius: 10,
-              border: `1px solid ${UI.line}`,
-              background: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            Cerrar
-          </button>
+      {timeline?.length ? (
+        <Card title="CRONOLOGÍA">
+          {[...timeline].reverse().slice(0, 14).map((evt, idx, arr) => (
+            <div
+              key={`${evt.type}-${evt.at}-${evt.stopId || idx}`}
+              style={{
+                display: "flex",
+                gap: 10,
+                padding: "8px 0",
+                borderBottom: idx < arr.length - 1 ? `1px solid ${UI.line}` : "none",
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 800, color: UI.blue, minWidth: 44 }}>{evt.timeLabel}</div>
+              <div style={{ fontSize: 13, color: UI.tx, lineHeight: 1.4 }}>{evt.label}</div>
+            </div>
+          ))}
         </Card>
       ) : null}
 
@@ -941,15 +893,13 @@ export function AutonomoExpedienteScreen({
         retornoDesdeStopId={retornoDesdeStopId}
         onConfirm={handleRegistrarCarga}
       />
-      <AutonomoDestinoModal open={destinoModal} onClose={() => setDestinoModal(false)} busy={busy} onConfirm={handleAddDestino} />
-      <AutonomoDocAccionesModal
-        open={docModal}
-        onClose={() => setDocModal(false)}
-        onSelect={(action) => {
-          handleDocAction(action);
-          if (!focusStopRow && cargas?.[0]) setFocusStop(cargas[cargas.length - 1]);
-          setDocPanelOpen(true);
-        }}
+      <AutonomoDestinoModal
+        open={destinoModal}
+        onClose={() => setDestinoModal(false)}
+        uid={uid}
+        busy={busy}
+        showToast={showToast}
+        onConfirm={handleAddDestino}
       />
 
       <AutonomoCargaEnMuelleModal
@@ -983,9 +933,6 @@ export function AutonomoExpedienteScreen({
         }}
         onScanCmr={() => {
           setCargaEnMuelleModal(null);
-          setFocusStop(cargaEnMuelleRow);
-          setEvidenciaTipos(["cmr"]);
-          setDocPanelOpen(true);
         }}
         onSeguir={() => setCargaEnMuelleModal(null)}
       />
@@ -998,6 +945,19 @@ export function AutonomoExpedienteScreen({
         busy={busy}
         onClose={() => setDecaModalCarga(null)}
         onConfirm={handleGenerarDeca}
+        onUpdateMercancia={async ({ mercancia }) => {
+          if (!decaModalCargaRow?.id) return;
+          await updateCargaMercancia({
+            stopId: decaModalCargaRow.id,
+            servicioId: activeId,
+            mercancia,
+          });
+          await reloadWorkspace(activeId);
+        }}
+        onAddDestino={() => {
+          setDecaModalCarga(null);
+          setDestinoModal(true);
+        }}
       />
 
       <AutonomoPostEntregaModal
@@ -1011,11 +971,6 @@ export function AutonomoExpedienteScreen({
           setCargaModal(true);
         }}
         onPod={() => {
-          if (postEntregaDestino) {
-            setFocusStop(postEntregaDestino);
-            setEvidenciaTipos(["foto"]);
-            setDocPanelOpen(true);
-          }
           setPostEntregaDestino(null);
         }}
         onFinalizar={() => {

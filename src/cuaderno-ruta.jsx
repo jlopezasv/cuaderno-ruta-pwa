@@ -3264,8 +3264,8 @@ function AppInner(){
   const showExpediente=conductorSimplified&&tab==="expediente"&&showAutonomoExpedienteFlow;
   const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDecaHub;
   const showMasExpedienteHistorico=conductorSimplified&&tab==="mas"&&masSub==="expediente-historico"&&showAutonomoExpedienteFlow;
-  const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures;
-  const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
+  const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures&&!showAutonomoExpedienteFlow;
+  const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio"&&!showAutonomoExpedienteFlow;
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
   const showResumen=tab==="resumen"||(conductorSimplified&&tab==="mas"&&masSub==="resumen");
   const showRuta=tab==="ruta"||(conductorSimplified&&tab==="mas"&&masSub==="ruta");
@@ -3393,7 +3393,7 @@ function AppInner(){
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures} showAutonomoExpedienteHistorico={showAutonomoExpedienteFlow}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures} showAutonomoExpedienteHistorico={showAutonomoExpedienteFlow} autonomoExpedienteMode={showAutonomoExpedienteFlow}/>}
 
         {showMasOperacion&&(
           <>

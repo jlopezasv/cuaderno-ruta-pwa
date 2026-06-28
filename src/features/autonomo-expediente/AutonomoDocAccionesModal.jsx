@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const UI = {
   card: "#ffffff",
   line: "#e2e8f0",
@@ -5,17 +7,31 @@ const UI = {
   su: "#64748b",
 };
 
-const OPTIONS = [
-  { id: "ocr_cmr", label: "OCR CMR", hint: "Escanear y extraer datos" },
-  { id: "foto_cmr", label: "Foto CMR", hint: "Sin OCR" },
-  { id: "foto_carga", label: "Foto carga", hint: "Mercancía en muelle" },
-  { id: "foto_mercancia", label: "Foto mercancía", hint: "Detalle de bultos" },
-  { id: "documento", label: "Documento", hint: "PDF u otro archivo" },
+const MAIN_OPTIONS = [
+  { id: "cmr", label: "CMR / OCR", hint: "Escanear documento" },
+  { id: "foto", label: "Foto", hint: "Captura o galería" },
   { id: "incidencia", label: "Incidencia", hint: "Avería, daño, retraso…" },
 ];
 
-export function AutonomoDocAccionesModal({ open, onClose, onSelect, title = "¿Qué quieres hacer?" }) {
+const FOTO_SUB_OPTIONS = [
+  { id: "foto_camara", label: "Hacer foto", hint: "Cámara del dispositivo" },
+  { id: "foto_galeria", label: "Subir de galería", hint: "Elegir imagen guardada" },
+];
+
+export function AutonomoDocAccionesModal({
+  open,
+  onClose,
+  onSelect,
+  title = "Documentación",
+  compact = false,
+}) {
+  const [fotoSub, setFotoSub] = useState(false);
+
   if (!open) return null;
+
+  const options = fotoSub ? FOTO_SUB_OPTIONS : MAIN_OPTIONS;
+  const heading = fotoSub ? "Foto" : title;
+
   return (
     <div
       style={{
@@ -27,7 +43,10 @@ export function AutonomoDocAccionesModal({ open, onClose, onSelect, title = "¿Q
         alignItems: "flex-end",
         justifyContent: "center",
       }}
-      onClick={onClose}
+      onClick={() => {
+        setFotoSub(false);
+        onClose?.();
+      }}
     >
       <div
         style={{
@@ -39,27 +58,60 @@ export function AutonomoDocAccionesModal({ open, onClose, onSelect, title = "¿Q
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx, marginBottom: 12 }}>{title}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {OPTIONS.map((opt) => (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          {fotoSub ? (
+            <button
+              type="button"
+              onClick={() => setFotoSub(false)}
+              style={{
+                border: "none",
+                background: "#f1f5f9",
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontWeight: 800,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              ←
+            </button>
+          ) : null}
+          <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx }}>{heading}</div>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: compact ? "row" : "column",
+            gap: compact ? 6 : 8,
+          }}
+        >
+          {options.map((opt) => (
             <button
               key={opt.id}
               type="button"
               onClick={() => {
+                if (opt.id === "foto") {
+                  setFotoSub(true);
+                  return;
+                }
                 onSelect?.(opt.id);
+                setFotoSub(false);
                 onClose?.();
               }}
               style={{
-                textAlign: "left",
+                flex: compact ? 1 : undefined,
+                textAlign: compact ? "center" : "left",
                 border: `1px solid ${UI.line}`,
                 borderRadius: 12,
-                padding: "12px 14px",
+                padding: compact ? "12px 8px" : "12px 14px",
                 background: "#f8fafc",
                 cursor: "pointer",
               }}
             >
-              <div style={{ fontWeight: 800, color: UI.tx }}>{opt.label}</div>
-              <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>{opt.hint}</div>
+              <div style={{ fontWeight: 800, color: UI.tx, fontSize: compact ? 12 : 14 }}>{opt.label}</div>
+              {!compact ? (
+                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>{opt.hint}</div>
+              ) : null}
             </button>
           ))}
         </div>
@@ -68,16 +120,17 @@ export function AutonomoDocAccionesModal({ open, onClose, onSelect, title = "¿Q
   );
 }
 
-/** Mapeo acción → tipos permitidos en OperationalEvidenciasStop */
+/** Mapeo acción → tipos permitidos y modal inicial en OperationalEvidenciasStop */
 export function docActionToEvidenciaConfig(action) {
   switch (action) {
+    case "cmr":
     case "ocr_cmr":
-      return { modal: "cmr", ocr: true, tipos: ["cmr"] };
-    case "foto_cmr":
-      return { modal: "cmr", ocr: false, tipos: ["cmr"] };
-    case "foto_carga":
-    case "foto_mercancia":
-      return { modal: "foto", tipos: ["foto"] };
+      return { modal: "cmr", tipos: ["cmr"] };
+    case "foto":
+    case "foto_camara":
+      return { modal: "foto", tipos: ["foto"], fotoSource: "camera" };
+    case "foto_galeria":
+      return { modal: "foto", tipos: ["foto"], fotoSource: "gallery" };
     case "incidencia":
       return { modal: "incidencia", tipos: ["incidencia"] };
     default:
@@ -87,8 +140,6 @@ export function docActionToEvidenciaConfig(action) {
 
 /** Acciones de entrega en destino */
 export const ENTREGA_DOC_OPTIONS = [
-  { id: "pod", label: "Foto POD / albarán firmado" },
-  { id: "foto_mercancia", label: "Foto mercancía descargada" },
+  { id: "foto_camara", label: "Foto POD / albarán" },
   { id: "incidencia", label: "Incidencia" },
-  { id: "comentario", label: "Comentario" },
 ];

@@ -50,6 +50,9 @@ export function OperationalEvidenciasStop({
   tiposPermitidos = null,
   onOpenDocument = null,
   acquireActionLocation = null,
+  hideIa = false,
+  initialModal = null,
+  fotoSource = null,
 }) {
   const [evidencias, setEvidencias] = useState([]);
   const [incidencias, setIncidencias] = useState([]);
@@ -68,6 +71,7 @@ export function OperationalEvidenciasStop({
   const fileRef = useRef(null);
   const fileSinOcrRef = useRef(null);
   const fotoRef = useRef(null);
+  const fotoGaleriaRef = useRef(null);
   const incFotoRef = useRef(null);
   const previewBlobRef = useRef(null);
   /** Archivo CMR original de cámara/galería; el PDF y storage deben usar este, no solo previewBlob. */
@@ -126,6 +130,23 @@ export function OperationalEvidenciasStop({
       })
       .catch(() => {});
   }, [servicioId, servicio?.id, stopId]);
+
+  useEffect(() => {
+    if (!initialModal) return;
+    setModal(initialModal);
+    setError("");
+    if (initialModal === "cmr") {
+      setCmrFase("scan");
+      setCmrOcrUsed(false);
+      revokePreview();
+    }
+    if (initialModal === "foto" && fotoSource === "camera") {
+      requestAnimationFrame(() => fotoRef.current?.click());
+    }
+    if (initialModal === "foto" && fotoSource === "gallery") {
+      requestAnimationFrame(() => fotoGaleriaRef.current?.click());
+    }
+  }, [initialModal, fotoSource, stopId]);
 
   const visibleEvs = useMemo(() => {
     const list = !allowedTipos ? evidencias : evidencias.filter((ev) => allowedTipos.has(String(ev?.tipo || "").toLowerCase()));
@@ -532,7 +553,7 @@ export function OperationalEvidenciasStop({
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: isDocsShell ? 6 : 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isDocsShell && hideIa ? "1fr 1fr 1fr" : "1fr 1fr", gap: isDocsShell ? 6 : 8 }}>
         {canTipo("foto") && (
           <button type="button" onClick={() => { setModal("foto"); setError(""); }} style={gBtn(isDocsShell ? "rgba(34,197,94,.14)" : "#22C55E20", isDocsShell ? "1px solid rgba(34,197,94,.38)" : "1.5px solid #22C55E50", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📸</span>
@@ -542,7 +563,7 @@ export function OperationalEvidenciasStop({
         {canTipo("cmr") && (
           <button type="button" onClick={() => { setModal("cmr"); setCmrFase("scan"); setCmrOcrUsed(false); setError(""); revokePreview(); }} style={gBtn(isDocsShell ? "rgba(56,189,248,.12)" : "#0EA5E920", isDocsShell ? "1px solid rgba(56,189,248,.35)" : "1.5px solid #0EA5E950", isDocsShell ? "10px 4px" : "12px 6px")}>
             <span style={{ fontSize: isDocsShell ? 22 : 24 }}>📄</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#7DD3FC" : "#0EA5E9" }}>Documento</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#7DD3FC" : "#0EA5E9" }}>{isDocsShell ? "CMR/OCR" : "Documento"}</span>
           </button>
         )}
         {canTipo("incidencia") && (
@@ -551,10 +572,12 @@ export function OperationalEvidenciasStop({
             <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#FCA5A5" : "#EF4444" }}>Incidencia</span>
           </button>
         )}
+        {!hideIa ? (
         <button type="button" onClick={() => setModal("ia")} style={gBtn(isDocsShell ? "rgba(99,102,241,.14)" : "#6366F120", isDocsShell ? "1px solid rgba(129,140,248,.35)" : "1.5px solid #6366F150", isDocsShell ? "10px 4px" : "12px 6px")}>
           <span style={{ fontSize: isDocsShell ? 22 : 24 }}>🤖</span>
           <span style={{ fontSize: 11, fontWeight: 700, color: isDocsShell ? "#C7D2FE" : "#4F46E5" }}>IA</span>
         </button>
+        ) : null}
       </div>
 
       {modal === "cmr" && (
@@ -623,10 +646,14 @@ export function OperationalEvidenciasStop({
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.35)", zIndex: 400, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setModal(null)}>
           <div style={{ background: LIGHT.card, borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, padding: "16px 18px 40px" }} onClick={(e) => e.stopPropagation()}>
             <input ref={fotoRef} {...cameraProps} onChange={onFotoSelected} style={{ display: "none" }} />
+            <input ref={fotoGaleriaRef} type="file" accept="image/*" onChange={onFotoSelected} style={{ display: "none" }} />
             <div style={{ fontSize: 16, fontWeight: 800, color: "#22C55E", marginBottom: 12 }}>📸 Foto documental</div>
             <input value={notaFoto} onChange={(e) => setNotaFoto(e.target.value)} placeholder="Nota opcional…" style={iStyle} />
-            <button type="button" onClick={() => fotoRef.current?.click()} disabled={saving} style={{ width: "100%", background: "#22C55E", color: "white", border: "none", borderRadius: 13, padding: "18px", fontSize: 16, fontWeight: 800, cursor: "pointer" }}>
-              {saving ? "⏳ Procesando…" : "📷 Capturar"}
+            <button type="button" onClick={() => fotoRef.current?.click()} disabled={saving} style={{ width: "100%", background: "#22C55E", color: "white", border: "none", borderRadius: 13, padding: "16px", fontSize: 15, fontWeight: 800, cursor: "pointer", marginBottom: 8 }}>
+              {saving ? "⏳ Procesando…" : "📷 Hacer foto"}
+            </button>
+            <button type="button" onClick={() => fotoGaleriaRef.current?.click()} disabled={saving} style={{ width: "100%", background: "white", color: "#0F172A", border: "1.5px solid #CBD5E1", borderRadius: 13, padding: "14px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
+              🖼 Subir de galería
             </button>
           </div>
         </div>

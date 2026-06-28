@@ -18,6 +18,7 @@ import {
 } from "../../domain/service/serviceOwnership.js";
 import { mergeReferenciaOperacional } from "../../domain/service/serviceOperacionMeta.js";
 import { upsertAutonomoAlmacen } from "./autonomoAlmacenCatalog.js";
+import { upsertAutonomoDestino } from "./autonomoDestinoCatalog.js";
 import {
   AUTONOMO_EXPEDIENTE_MARK,
   appendTimelineEvent,
@@ -453,7 +454,7 @@ export async function addDestinoOnExpediente({ servicioId, uid, destino, orden =
     cp: destino.cp,
     ciudad: destino.ciudad,
   };
-  if (almacen.nombre) upsertAutonomoAlmacen(uid, almacen);
+  if (almacen.nombre) upsertAutonomoDestino(uid, almacen);
 
   const stopRow = almacenToStopForm(almacen, {
     tipo: "descarga",

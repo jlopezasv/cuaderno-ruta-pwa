@@ -1,5 +1,6 @@
 import { getExpedienteDecaLinks } from "./autonomoExpedienteMeta.js";
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { getServicioOperacionMeta } from "../../domain/service/serviceOperacionMeta.js";
 import {
   isCargaNacional,
   listNacionalCargas,
@@ -125,4 +126,33 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
     canSuggestFinalizar,
     sugerencias: sugerencias.sort((a, b) => a.priority - b.priority),
   };
+}
+
+/** Resumen corto para listado histórico (sin cargar workspace completo). */
+export function summarizeAutonomoExpedienteListItem(servicio) {
+  if (!servicio) return { title: "Expediente", subtitle: "", meta: "" };
+  const meta = getServicioOperacionMeta(servicio);
+  const events = Array.isArray(meta.timeline_events) ? meta.timeline_events : [];
+  const cargas = events.filter((e) => e.type === "carga_registrada");
+  const destinos = events.filter((e) => e.type === "destino_anadido");
+  const origen =
+    String(servicio.origen || "").trim() ||
+    cargas[0]?.label?.replace(/^Carga:\s*/i, "") ||
+    "";
+  const destino =
+    String(servicio.destino || "").trim() ||
+    destinos[destinos.length - 1]?.label?.replace(/^Destino:\s*/i, "") ||
+    "";
+  const matricula = String(meta.matricula || "").trim();
+  const route =
+    origen && destino ? `${origen} → ${destino}` : origen || destino || "Sin ruta definida";
+  const counts = [];
+  if (cargas.length) counts.push(`${cargas.length} carga${cargas.length > 1 ? "s" : ""}`);
+  if (destinos.length) counts.push(`${destinos.length} destino${destinos.length > 1 ? "s" : ""}`);
+  const metaLine = [matricula, counts.join(" · ")].filter(Boolean).join(" · ");
+  const fecha = servicio.fecha_inicio || servicio.created_at;
+  const title = fecha
+    ? new Date(fecha).toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" })
+    : "Expediente";
+  return { title, subtitle: route, meta: metaLine };
 }
