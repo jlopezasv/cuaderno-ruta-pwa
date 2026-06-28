@@ -1355,6 +1355,8 @@ function OperationalStopCard({
   acquireActionLocation,
   driverDetailLayout = false,
   operatingBusy = false,
+  initialEvidenciasModal = null,
+  evidenciasFotoSource = null,
 }) {
   const { stop, label, group } = item;
   const entrada = !!stop.hora_llegada_real;
@@ -1428,22 +1430,44 @@ function OperationalStopCard({
     </div>
   ) : null;
 
+  const evidenciasBlockProps = {
+    key: `${stop.id}-${initialEvidenciasModal || "default"}`,
+    stopId: stop.id,
+    servicioId,
+    servicio,
+    stop,
+    conductorName: conductorNombre,
+    conductorId: servicio?.conductor_id,
+    showToast,
+    onEvidenciaSaved,
+    acquireActionLocation,
+    initialModal: initialEvidenciasModal,
+    fotoSource: evidenciasFotoSource,
+    tiposPermitidos: group === "descarga" ? ["foto", "cmr"] : null,
+  };
+
+  const postOperacionBlock =
+    salida && Ev ? (
+      <div style={{ marginTop: driverDetailLayout ? 8 : 12 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 800,
+            color: DRIVER_UI.su,
+            letterSpacing: 0.3,
+            marginBottom: 8,
+            textTransform: "uppercase",
+          }}
+        >
+          {group === "descarga" ? "POD / albarán (opcional)" : "Documentos de la parada"}
+        </div>
+        <Ev {...evidenciasBlockProps} />
+      </div>
+    ) : null;
+
   const inOperationBlock = inOperation ? (
     <div style={{ marginTop: driverDetailLayout ? 8 : 12 }}>
-      {Ev ? (
-        <Ev
-          key={stop.id}
-          stopId={stop.id}
-          servicioId={servicioId}
-          servicio={servicio}
-          stop={stop}
-          conductorName={conductorNombre}
-          conductorId={servicio?.conductor_id}
-          showToast={showToast}
-          onEvidenciaSaved={onEvidenciaSaved}
-          acquireActionLocation={acquireActionLocation}
-        />
-      ) : null}
+      {Ev ? <Ev {...evidenciasBlockProps} /> : null}
       <button
         type="button"
         onClick={() => onConfirmMuelle?.({ kind: "salida", stopId: stop.id })}
@@ -1531,12 +1555,14 @@ function OperationalStopCard({
             <>
               {entradaAction}
               {inOperationBlock}
+              {postOperacionBlock}
               <div style={{ marginTop: 10 }}>{locationDetails}</div>
             </>
           ) : (
             <>
               {entradaAction}
               {inOperationBlock}
+              {postOperacionBlock}
             </>
           )}
 

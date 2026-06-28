@@ -5,6 +5,9 @@ import { getAutonomoExpedienteMeta } from "./autonomoExpedienteMeta.js";
 const TYPE_LABEL = {
   expediente_iniciado: "Expediente iniciado",
   carga_registrada: "Carga registrada",
+  carga_preparada: "Almacén preparado",
+  entrada_muelle: "Entrada en muelle",
+  salida_muelle: "Salida de muelle",
   ocr_cmr: "OCR CMR",
   foto_cmr: "Foto CMR",
   foto_carga: "Foto carga",
@@ -74,6 +77,39 @@ export function buildAutonomoExpedienteTimeline({
     const meta = getStopOperacionMeta(stop?.notas);
     const stopLabel = String(stop.nombre || "").trim();
     const stopId = stop.id;
+    const tipo = String(stop.tipo || "").toLowerCase();
+
+    if (tipo === "carga") {
+      if (
+        meta.carga_registrada_at &&
+        !timelineStopKeys.has(`carga_preparada|${stopId}`) &&
+        !timelineStopKeys.has(`carga_registrada|${stopId}`)
+      ) {
+        pushEvent(out, {
+          at: meta.carga_registrada_at,
+          type: "carga_preparada",
+          label: `Almacén: ${stopLabel}`,
+          stopId,
+        });
+      }
+      if (meta.entrada_at && !timelineStopKeys.has(`entrada_muelle|${stopId}`)) {
+        pushEvent(out, {
+          at: meta.entrada_at,
+          type: "entrada_muelle",
+          label: `Entrada en muelle · ${stopLabel}`,
+          stopId,
+        });
+      }
+      if (meta.salida_at && !timelineStopKeys.has(`salida_muelle|${stopId}`)) {
+        pushEvent(out, {
+          at: meta.salida_at,
+          type: "salida_muelle",
+          label: `Salida muelle · carga terminada${meta.tiempo_muelle_min != null ? ` · ${meta.tiempo_muelle_min} min` : ""}`,
+          stopId,
+        });
+      }
+      continue;
+    }
 
     if (meta.carga_registrada_at && !timelineStopKeys.has(`carga_registrada|${stopId}`)) {
       pushEvent(out, {

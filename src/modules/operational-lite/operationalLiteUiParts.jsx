@@ -162,9 +162,28 @@ export function LiteTimeline({ paradas }) {
                   fontSize: 13,
                 }}
               >
-                <TimeCell label="Llegada" value={p.llegadaHora} />
-                <TimeCell label="Salida" value={p.salidaHora} />
+                <TimeCell label="Entrada muelle" value={p.entradaMuelleHora || p.llegadaHora} />
+                <TimeCell label="Salida muelle" value={p.salidaMuelleHora || p.salidaHora} />
               </div>
+
+              {p.tiempoEnMuelleLabel ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 13,
+                    background: "#fff",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    border: `1px solid ${LITE_THEME.line}`,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 10,
+                  }}
+                >
+                  <span style={{ fontWeight: 700, color: LITE_THEME.su }}>Tiempo en muelle</span>
+                  <span style={{ fontWeight: 800, color: LITE_THEME.tx }}>{p.tiempoEnMuelleLabel}</span>
+                </div>
+              ) : null}
 
               {p.muelle ? (
                 <div style={{ fontSize: 12, marginTop: 10, color: LITE_THEME.su }}>

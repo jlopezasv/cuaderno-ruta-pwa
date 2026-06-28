@@ -7,6 +7,7 @@ import {
 } from "./autonomoExpedienteDeca.js";
 import {
   getCargaEstado,
+  isCargaPendienteEntrada,
   isCargaTerminada,
   isDestinoEntregado,
   CARGA_ESTADO,
@@ -65,6 +66,7 @@ export function collectRecentExpedienteDocumentos({ evidenciasByStop = {}, extra
 
 export function buildExpedienteOperativoState({ servicio, cargas = [], destinos = [] }) {
   const cargasTerminadas = cargas.filter(isCargaTerminada);
+  const cargasPendienteEntrada = cargas.filter(isCargaPendienteEntrada);
   const cargasEnMuelle = cargas.filter((c) => getCargaEstado(c) === CARGA_ESTADO.EN_MUELLE);
   const destinosEntregados = destinos.filter(isDestinoEntregado);
   const destinosPendientes = destinos.filter((d) => !isDestinoEntregado(d));
@@ -75,14 +77,25 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
 
   let estadoLabel = "Expediente iniciado";
   if (!cargas.length && !destinos.length) estadoLabel = "Sin carga registrada";
-  else if (cargasEnMuelle.length) estadoLabel = `En muelle · ${cargasEnMuelle[0].nombre}`;
-  else if (cargasTerminadas.length && !destinos.length) estadoLabel = "Carga registrada · falta destino";
+  else if (cargasPendienteEntrada.length) {
+    estadoLabel = `Pendiente entrada muelle · ${cargasPendienteEntrada[0].nombre}`;
+  } else if (cargasEnMuelle.length) estadoLabel = `En muelle · ${cargasEnMuelle[0].nombre}`;
+  else if (cargasTerminadas.length && !destinos.length) estadoLabel = "Carga terminada · falta destino";
   else if (destinosPendientes.length) estadoLabel = "En ruta / entregas";
   else if (destinosEntregados.length && cargasTerminadas.length) estadoLabel = "Expediente listo para cerrar";
 
   const canSuggestFinalizar = cargasTerminadas.length > 0 && destinosEntregados.length > 0;
 
   const sugerencias = [];
+  for (const c of cargasPendienteEntrada) {
+    sugerencias.push({
+      id: `entrada-${c.id}`,
+      type: "entrada_muelle",
+      priority: 0,
+      label: `Registrar entrada en muelle · ${c.nombre}`,
+      cargaId: c.id,
+    });
+  }
   for (const c of nacionalSinDeca) {
     sugerencias.push({
       id: `deca-${c.id}`,
@@ -120,6 +133,7 @@ export function buildExpedienteOperativoState({ servicio, cargas = [], destinos 
     estadoLabel,
     cargasTerminadas,
     cargasEnMuelle,
+    cargasPendienteEntrada,
     destinosEntregados,
     destinosPendientes,
     nacionalSinDeca,

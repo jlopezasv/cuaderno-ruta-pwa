@@ -10,6 +10,7 @@ import {
   fetchAutonomoExpedientes,
   loadAutonomoExpedienteWorkspace,
   registerCargaOnExpediente,
+  registrarEntradaMuelleCarga,
   addDestinoOnExpediente,
   updateDestinoEstado,
   generarExpedienteAutonomo,
@@ -31,6 +32,7 @@ import {
   getCargaMuelleResumen,
   getDestinoTiempoResumen,
   isCargaEnMuelle,
+  isCargaPendienteEntrada,
   isCargaTerminada,
   isDestinoEntregado,
   isRetornoCarga,
@@ -42,6 +44,7 @@ import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
 import { AutonomoCargaEnMuelleModal } from "./AutonomoCargaEnMuelleModal.jsx";
+import { AutonomoPostCargaModal } from "./AutonomoPostCargaModal.jsx";
 import { AutonomoGenerarDecaModal } from "./AutonomoGenerarDecaModal.jsx";
 import { AutonomoPostEntregaModal } from "./AutonomoPostEntregaModal.jsx";
 
@@ -188,6 +191,7 @@ export function AutonomoExpedienteScreen({
   const [destinoModal, setDestinoModal] = useState(false);
   const [generarModal, setGenerarModal] = useState(false);
   const [cargaEnMuelleModal, setCargaEnMuelleModal] = useState(null);
+  const [postCargaStop, setPostCargaStop] = useState(null);
   const [decaModalCarga, setDecaModalCarga] = useState(null);
   const [postEntregaDestino, setPostEntregaDestino] = useState(null);
   const [retornoDesdeStopId, setRetornoDesdeStopId] = useState(null);
@@ -292,20 +296,12 @@ export function AutonomoExpedienteScreen({
     if (!activeId || !payload?.almacen) return;
     setBusy(true);
     try {
-      let geoEntrada = null;
-      try {
-        const loc = await acquireLocation("entrada_muelle", "Llegada al muelle");
-        if (loc?.ok) geoEntrada = geoPayloadFromLocationResult(loc);
-      } catch {
-        /* GPS opcional */
-      }
       const { stop } = await registerCargaOnExpediente({
         servicioId: activeId,
         uid,
         almacen: payload.almacen,
         alcance: payload.alcance,
         mercancia: payload.mercancia,
-        geoEntrada,
         esRetorno: payload.esRetorno,
         retornoDesdeStopId: payload.retornoDesdeStopId,
         requiereDeca: payload.requiereDeca,
@@ -314,7 +310,34 @@ export function AutonomoExpedienteScreen({
       setRetornoDesdeStopId(null);
       await reloadWorkspace(activeId);
       setCargaEnMuelleModal(stop);
-      showToast?.("Carga registrada · en muelle");
+      showToast?.("Almacén preparado · registra entrada en muelle");
+    } catch (e) {
+      showToast?.(e?.message || "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEntradaMuellePendiente(cargaStop) {
+    if (!activeId || !cargaStop?.id) return;
+    setBusy(true);
+    try {
+      let geoEntrada = null;
+      try {
+        const loc = await acquireLocation("entrada_muelle", "Entrada en muelle");
+        if (loc?.ok) geoEntrada = geoPayloadFromLocationResult(loc);
+        else if (loc === null) return;
+      } catch {
+        /* GPS opcional */
+      }
+      const stop = await registrarEntradaMuelleCarga({
+        stopId: cargaStop.id,
+        servicioId: activeId,
+        geo: geoEntrada,
+      });
+      await reloadWorkspace(activeId);
+      setCargaEnMuelleModal(stop);
+      showToast?.("Entrada en muelle registrada");
     } catch (e) {
       showToast?.(e?.message || "Error");
     } finally {
@@ -643,6 +666,9 @@ export function AutonomoExpedienteScreen({
   const cargaEnMuelleRow = cargaEnMuelleModal?.id
     ? stops?.find((s) => s.id === cargaEnMuelleModal.id) || cargaEnMuelleModal
     : null;
+  const postCargaRow = postCargaStop?.id
+    ? stops?.find((s) => s.id === postCargaStop.id) || postCargaStop
+    : null;
   const decaModalCargaRow = decaModalCarga?.id
     ? stops?.find((s) => s.id === decaModalCarga.id) || decaModalCarga
     : null;
@@ -699,9 +725,12 @@ export function AutonomoExpedienteScreen({
       </Card>
 
       <Card title="ACCIONES RÁPIDAS">
+        <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.45, marginBottom: 10 }}>
+          Tacógrafo → Otros trabajos registra tiempos legales. Aquí va el expediente operacional y DeCA.
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" style={{ ...actionChip("#0f766e"), flex: 1 }} disabled={busy} onClick={() => setCargaModal(true)}>
-            Registrar carga
+            Entrada en muelle
           </button>
           <button type="button" style={{ ...actionChip(UI.blue), flex: 1 }} disabled={busy} onClick={() => setDestinoModal(true)}>
             Añadir destino
@@ -716,8 +745,18 @@ export function AutonomoExpedienteScreen({
             const muelle = getCargaMuelleResumen(c);
             const terminada = isCargaTerminada(c);
             const enMuelle = isCargaEnMuelle(c);
+            const pendienteEntrada = isCargaPendienteEntrada(c);
             const decaLink = decaLinkForCarga(servicio, c.id);
             const needsDeca = cargaNeedsDeca(c, servicio);
+            const estadoLine = pendienteEntrada
+              ? "Pendiente entrada muelle"
+              : enMuelle
+                ? `En muelle desde ${muelle.entradaAt ? new Date(muelle.entradaAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—"}`
+                : terminada && muelle.label
+                  ? `Carga terminada · ${muelle.label} en muelle`
+                  : terminada
+                    ? "Carga terminada"
+                    : "";
             return (
               <div
                 key={c.id}
@@ -737,7 +776,7 @@ export function AutonomoExpedienteScreen({
                     </div>
                     <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
                       {SERVICIO_ALCANCE_LABELS[alcance] || alcance}
-                      {enMuelle ? " · en muelle" : terminada && muelle.label ? ` · ${muelle.label}` : ""}
+                      {estadoLine ? ` · ${estadoLine}` : ""}
                     </div>
                   </div>
                   {isCargaNacional(c) && decaLink ? (
@@ -751,14 +790,25 @@ export function AutonomoExpedienteScreen({
                   ) : null}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setCargaEnMuelleModal(c)}
-                    style={miniBtn()}
-                  >
-                    {terminada ? "Ver carga" : "Terminar carga"}
-                  </button>
+                  {pendienteEntrada ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleEntradaMuellePendiente(c)}
+                      style={miniBtn(UI.green)}
+                    >
+                      Entrada en muelle
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setCargaEnMuelleModal(c)}
+                      style={miniBtn()}
+                    >
+                      {terminada ? "Ver carga" : enMuelle ? "En muelle" : "Ver carga"}
+                    </button>
+                  )}
                   {needsDeca && isCargaNacional(c) ? (
                     <button type="button" disabled={busy} onClick={() => setDecaModalCarga(c)} style={miniBtn(UI.green)}>
                       DeCA
@@ -905,10 +955,10 @@ export function AutonomoExpedienteScreen({
       <AutonomoCargaEnMuelleModal
         open={!!cargaEnMuelleRow}
         cargaStop={cargaEnMuelleRow}
-        servicio={servicio}
-        destinos={destinos}
         busy={busy}
+        showToast={showToast}
         onClose={() => setCargaEnMuelleModal(null)}
+        onEntradaPendiente={(stop) => void handleEntradaMuellePendiente(stop)}
         onUpdateMercancia={async ({ mercancia, observaciones }) => {
           if (!cargaEnMuelleRow?.id) return;
           await updateCargaMercancia({
@@ -923,18 +973,35 @@ export function AutonomoExpedienteScreen({
           await handleTerminarCargaMuelle(cargaEnMuelleRow);
           await reloadWorkspace(activeId);
         }}
-        onGenerarDeca={() => {
+        onCargaTerminada={(stop) => {
           setCargaEnMuelleModal(null);
-          setDecaModalCarga(cargaEnMuelleRow);
+          setPostCargaStop(stop);
         }}
+      />
+
+      <AutonomoPostCargaModal
+        open={!!postCargaRow}
+        cargaStop={postCargaRow}
+        busy={busy}
+        sinDestino={!(destinos?.length)}
+        showDeca={
+          postCargaRow
+            ? isCargaNacional(postCargaRow) && getStopOperacionMeta(postCargaRow.notas).no_requiere_deca !== true
+            : false
+        }
+        hasDeca={postCargaRow ? !!decaLinkForCarga(servicio, postCargaRow.id) : false}
+        esInternacional={postCargaRow ? !isCargaNacional(postCargaRow) : false}
+        onClose={() => setPostCargaStop(null)}
         onAddDestino={() => {
-          setCargaEnMuelleModal(null);
+          setPostCargaStop(null);
           setDestinoModal(true);
         }}
-        onScanCmr={() => {
-          setCargaEnMuelleModal(null);
+        onGenerarDeca={() => {
+          setPostCargaStop(null);
+          setDecaModalCarga(postCargaRow);
         }}
-        onSeguir={() => setCargaEnMuelleModal(null)}
+        onScanCmr={() => setPostCargaStop(null)}
+        onSeguir={() => setPostCargaStop(null)}
       />
 
       <AutonomoGenerarDecaModal

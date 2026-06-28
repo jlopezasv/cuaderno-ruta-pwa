@@ -1,8 +1,3 @@
-import { getStopOperacionMeta } from "../../../domain/service/stopOperacionMeta.js";
-import { getServicioOperacionMeta } from "../../../domain/service/serviceOperacionMeta.js";
-import { formatDriverGeoTimelineLines } from "../../../domain/service/operationalGeo.js";
-import { logMuelleGpsTimelineFromStop } from "../../../data/muelleGeoTrace.js";
-
 function stopClock(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
@@ -35,41 +30,19 @@ export function buildDriverStopTimesRows({ stop, isFirstCarga, servicio }) {
 
   if (isFirstCarga && inicioServicioReal) {
     rows.push({ kind: "clock", label: "Inicio servicio", value: stopClock(inicioServicioReal) });
-    const svcMeta = getServicioOperacionMeta(servicio);
-    for (const line of formatDriverGeoTimelineLines(svcMeta?.inicio_servicio_geo)) {
-      rows.push({ kind: "geo", label: line.label, value: line.value });
-    }
   }
   if (entrada) {
     rows.push({ kind: "clock", label: "Entrada muelle", value: stopClock(entrada) });
-    const meta = getStopOperacionMeta(stop?.notasOperacion ?? stop?.notas);
-    const geoLines = formatDriverGeoTimelineLines(meta.entrada_geo);
-    logMuelleGpsTimelineFromStop("entrada_muelle", stop, {
-      entrada_geo: meta.entrada_geo ?? null,
-      timelineLines: geoLines,
-    });
-    for (const line of geoLines) {
-      rows.push({ kind: "geo", label: line.label, value: line.value });
-    }
   }
   if (isFirstCarga && !inicioServicioReal && !entrada && !salida) {
     rows.push({ kind: "pending", label: "Inicio servicio", value: "Pendiente de inicio" });
   }
   if (salida) {
     rows.push({ kind: "clock", label: "Salida muelle", value: stopClock(salida) });
-    const meta = getStopOperacionMeta(stop?.notasOperacion ?? stop?.notas);
-    const geoLines = formatDriverGeoTimelineLines(meta.salida_geo);
-    logMuelleGpsTimelineFromStop("salida_muelle", stop, {
-      salida_geo: meta.salida_geo ?? null,
-      timelineLines: geoLines,
-    });
-    for (const line of geoLines) {
-      rows.push({ kind: "geo", label: line.label, value: line.value });
-    }
   }
   if (entrada && salida) {
     const enPlanta = fmtDurationBetween(entrada, salida);
-    if (enPlanta) rows.push({ kind: "duration", label: "Tiempo en planta", value: enPlanta });
+    if (enPlanta) rows.push({ kind: "duration", label: "Tiempo en muelle", value: enPlanta });
   }
 
   return rows;

@@ -17471,9 +17471,23 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     });
     const now=new Date().toISOString();
     const stopSalidaRow=stops.find(s=>s.id===stopId);
+    let llegadaBackfill = stopSalidaRow?.hora_llegada_real || null;
+    if (!llegadaBackfill) {
+      const inicioMs = getInicioOperacionMs(stopSalidaRow);
+      llegadaBackfill = inicioMs ? new Date(inicioMs).toISOString() : now;
+    }
     const notasSalida=mergeStopOperacionMeta(stopSalidaRow?.notas,{salida_geo:geoSalida});
+    const patchBody = {
+      estado: "completado",
+      hora_salida_real: now,
+      notas: notasSalida,
+    };
+    if (!stopSalidaRow?.hora_llegada_real) {
+      patchBody.hora_llegada_real = llegadaBackfill;
+      if (stopSalidaRow?.estado === "pendiente") patchBody.estado = "completado";
+    }
     const res = await withOperationTimeout(
-      sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "PATCH", body: JSON.stringify({ estado: "completado", hora_salida_real: now, notas: notasSalida }) }),
+      sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "PATCH", body: JSON.stringify(patchBody) }),
       25000,
       "No se pudo contactar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
     );
@@ -17494,7 +17508,13 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       });
       throw new Error("No se pudo guardar la salida de muelle");
     }
-    let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now,notas:notasSalida}:s);
+    let updated=stops.map(s=>s.id===stopId?{
+      ...s,
+      estado:"completado",
+      hora_salida_real:now,
+      hora_llegada_real: s.hora_llegada_real || llegadaBackfill,
+      notas:notasSalida,
+    }:s);
 
     const stop=stopSalidaRow;
     await autoTacografoTramoMuelle({ alEntrada: false, stop });

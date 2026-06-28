@@ -19,6 +19,7 @@ const UI = {
   accent: "#2563eb",
   danger: "#b91c1c",
   dangerBg: "#fef2f2",
+  green: "#15803d",
 };
 
 const inputStyle = {
@@ -40,13 +41,6 @@ const emptyForm = () => ({
   contacto: "",
   telefono: "",
   cif: "",
-});
-
-const emptyMercancia = () => ({
-  descripcion: "",
-  palets: "",
-  bultos: "",
-  peso_kg: "",
 });
 
 function AlmacenDeleteConfirm({ almacen, onCancel, onConfirm, busy }) {
@@ -108,6 +102,10 @@ function AlmacenDeleteConfirm({ almacen, onCancel, onConfirm, busy }) {
   );
 }
 
+/**
+ * Fase 0: solo almacén + alcance. La entrada en muelle se registra al confirmar (GPS opcional).
+ * Mercancía / DeCA se completan después, en muelle o al terminar carga.
+ */
 export function AutonomoRegistrarCargaModal({
   open,
   onClose,
@@ -120,7 +118,6 @@ export function AutonomoRegistrarCargaModal({
 }) {
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(emptyForm);
-  const [mercancia, setMercancia] = useState(emptyMercancia);
   const [mode, setMode] = useState("search");
   const [alcance, setAlcance] = useState(SERVICIO_ALCANCE_DEFAULT);
   const [requiereDeca, setRequiereDeca] = useState(null);
@@ -133,20 +130,19 @@ export function AutonomoRegistrarCargaModal({
   if (!open) return null;
 
   const esNacional = alcance === SERVICIO_ALCANCE.NACIONAL;
+  const title = retornoMode ? "Carga retorno" : "Entrada en muelle";
+  const subtitle = retornoMode
+    ? "Indica dónde recoges el retorno. Después registra la hora de entrada en muelle."
+    : "Elige almacén y alcance. La hora de entrada se registra al entrar en muelle; datos de carga y DeCA después.";
 
   function buildPayload(almacen) {
-    const merc = {};
-    if (mercancia.descripcion?.trim()) merc.descripcion = mercancia.descripcion.trim();
-    if (mercancia.palets !== "") merc.palets = mercancia.palets;
-    if (mercancia.bultos !== "") merc.bultos = mercancia.bultos;
-    if (mercancia.peso_kg !== "") merc.peso_kg = mercancia.peso_kg;
     return {
       almacen,
       alcance,
-      mercancia: Object.keys(merc).length ? merc : null,
+      mercancia: null,
       esRetorno: retornoMode,
       retornoDesdeStopId,
-      requiereDeca: retornoMode ? requiereDeca : null,
+      requiereDeca: retornoMode && esNacional ? requiereDeca : null,
     };
   }
 
@@ -202,12 +198,8 @@ export function AutonomoRegistrarCargaModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx, marginBottom: 4 }}>
-          {retornoMode ? "Registrar retorno / nueva carga" : "Registrar carga"}
-        </div>
-        <div style={{ fontSize: 13, color: UI.su, marginBottom: 14 }}>
-          {retornoMode ? "Mercancía recogida en destino." : "Elige almacén o crea uno nuevo."}
-        </div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: UI.tx, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 13, color: UI.su, marginBottom: 14, lineHeight: 1.45 }}>{subtitle}</div>
 
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>ALCANCE DEL TRANSPORTE</div>
@@ -234,8 +226,8 @@ export function AutonomoRegistrarCargaModal({
           </div>
           <div style={{ fontSize: 11, color: UI.su, marginTop: 6, lineHeight: 1.4 }}>
             {esNacional
-              ? "Nacional: datos de mercancía y peso para DeCA antes de circular."
-              : "Transporte internacional: usa CMR / carta de porte."}
+              ? "Nacional: DeCA al terminar la carga, antes de circular."
+              : "Internacional: CMR / carta de porte en muelle."}
           </div>
         </div>
 
@@ -269,31 +261,9 @@ export function AutonomoRegistrarCargaModal({
           </div>
         ) : null}
 
-        {esNacional ? (
-          <div style={{ marginBottom: 12, padding: "10px 12px", background: UI.bg, borderRadius: 12 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: UI.su, marginBottom: 6 }}>
-              DATOS PARA DeCA
-            </div>
-            {[
-              ["descripcion", "Mercancía *"],
-              ["peso_kg", "Peso (kg) *"],
-              ["palets", "Palets (opcional)"],
-              ["bultos", "Bultos (opcional)"],
-            ].map(([k, label]) => (
-              <input
-                key={k}
-                style={{ ...inputStyle, marginBottom: 6 }}
-                placeholder={label}
-                value={mercancia[k]}
-                onChange={(e) => setMercancia((m) => ({ ...m, [k]: e.target.value }))}
-              />
-            ))}
-          </div>
-        ) : null}
-
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {[
-            { id: "search", label: "Buscar" },
+            { id: "search", label: "Buscar almacén" },
             { id: "new", label: "Nuevo almacén" },
           ].map((t) => (
             <button
@@ -386,7 +356,6 @@ export function AutonomoRegistrarCargaModal({
                       fontWeight: 800,
                       cursor: busy ? "default" : "pointer",
                       opacity: busy ? 0.6 : 1,
-                      touchAction: "manipulation",
                     }}
                   >
                     Eliminar
@@ -431,7 +400,7 @@ export function AutonomoRegistrarCargaModal({
                 padding: "14px 12px",
                 borderRadius: 12,
                 border: "none",
-                background: "#15803d",
+                background: UI.green,
                 color: "#fff",
                 fontWeight: 800,
                 fontSize: 15,
@@ -439,7 +408,7 @@ export function AutonomoRegistrarCargaModal({
                 opacity: busy || !form.nombre.trim() ? 0.6 : 1,
               }}
             >
-              Registrar carga aquí
+              Preparar carga
             </button>
           </>
         )}

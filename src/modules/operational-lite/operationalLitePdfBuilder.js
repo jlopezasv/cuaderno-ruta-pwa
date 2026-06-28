@@ -344,8 +344,11 @@ export async function buildOperationalLitePdfBlob(doc) {
     rect(margin, y + 2, contentWidth, 36, "#f8fafc");
     rect(margin, y + 2, 3, 36, accent);
     text(`${parada.tipoLabel} · ${parada.ubicacion}`, margin + 10, y - 12, 11, "#0f172a");
+    const entrada = parada.entradaMuelleHora || parada.llegadaHora || "—";
+    const salida = parada.salidaMuelleHora || parada.salidaHora || "—";
+    const muelleTime = parada.tiempoEnMuelleLabel ? ` · Muelle ${parada.tiempoEnMuelleLabel}` : "";
     text(
-      `Llegada ${parada.llegadaHora}  ·  Salida ${parada.salidaHora}  ·  ${parada.estadoLabel || ""}  ·  ${parada.docCount || 0} docs`,
+      `Entrada ${entrada}  ·  Salida ${salida}${muelleTime}  ·  ${parada.estadoLabel || ""}  ·  ${parada.docCount || 0} docs`,
       margin + 10,
       y - 26,
       9,

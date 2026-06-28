@@ -317,8 +317,12 @@ function almacenToStopForm(almacen, { tipo, orden, extraMeta = {} }) {
     telefono: almacen.telefono || null,
     cif: almacen.cif || null,
     autonomo_expediente: true,
-    carga_estado: CARGA_ESTADO.EN_MUELLE,
-    ...(tipo === "carga" ? { carga_registrada_at: now, entrada_at: now } : {}),
+    ...(tipo === "carga"
+      ? {
+          carga_estado: CARGA_ESTADO.PENDIENTE_ENTRADA,
+          carga_registrada_at: now,
+        }
+      : {}),
     ...(tipo === "descarga" ? { destino_estado: "pendiente", destino_anadido_at: now } : {}),
   };
   return {
@@ -355,23 +359,51 @@ export async function registerCargaOnExpediente({
     extraMeta: {
       [CARGA_ALCANCE_META_KEY]: normalizeServicioAlcance(alcance),
       ...(mercancia && typeof mercancia === "object" ? { mercancia } : {}),
-      ...(geoEntrada ? { entrada_geo: geoEntrada } : {}),
       ...(esRetorno ? { es_retorno: true, retorno_desde_stop_id: retornoDesdeStopId || null } : {}),
       ...(requiereDeca === false ? { no_requiere_deca: true } : {}),
       ...(requiereDeca === true ? { requiere_deca: true } : {}),
     },
   });
   const result = await insertStopsForServicio(servicioId, [stopRow]);
-  if (!result.ok) throw new Error(result.detail || result.error || "No se pudo registrar la carga");
+  if (!result.ok) throw new Error(result.detail || result.error || "No se pudo preparar la carga");
 
-  const inserted = result.rows?.[0];
+  let inserted = result.rows?.[0];
   await appendExpedienteTimeline(servicioId, {
-    type: "carga_registrada",
-    label: `Carga: ${almacen.nombre}`,
+    type: "carga_preparada",
+    label: `Almacén: ${almacen.nombre}`,
     stopId: inserted?.id,
   });
 
   return { stop: inserted, servicio: await fetchServicioById(servicioId) };
+}
+
+/** Entrada en muelle: solo hora (+ GPS opcional). Separado de preparar almacén/carga. */
+export async function registrarEntradaMuelleCarga({ stopId, servicioId, geo = null }) {
+  const now = new Date().toISOString();
+  const patch = {
+    carga_estado: CARGA_ESTADO.EN_MUELLE,
+    entrada_at: now,
+    ...(geo ? { entrada_geo: geo } : {}),
+  };
+  const updated = await patchStopOperacionMeta(stopId, patch);
+  const pr = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ estado: "llegado", hora_llegada_real: now }),
+  });
+  let row = updated;
+  if (pr.ok) {
+    const rows = await pr.json().catch(() => []);
+    row = Array.isArray(rows) ? rows[0] : updated;
+  }
+  if (servicioId) {
+    await appendExpedienteTimeline(servicioId, {
+      type: "entrada_muelle",
+      label: `Entrada en muelle · ${row?.nombre || "carga"}`,
+      stopId,
+    });
+  }
+  return row;
 }
 
 export async function updateCargaMercancia({ stopId, servicioId, mercancia, observaciones = null }) {
@@ -389,22 +421,9 @@ export async function updateCargaMercancia({ stopId, servicioId, mercancia, obse
   return updated;
 }
 
+/** @deprecated Usar registrarEntradaMuelleCarga */
 export async function registrarLlegadaCarga({ stopId, servicioId, geo = null }) {
-  const now = new Date().toISOString();
-  const patch = {
-    carga_estado: CARGA_ESTADO.EN_MUELLE,
-    entrada_at: now,
-    ...(geo ? { entrada_geo: geo } : {}),
-  };
-  const updated = await patchStopOperacionMeta(stopId, patch);
-  if (servicioId) {
-    await appendExpedienteTimeline(servicioId, {
-      type: "carga_llegada_muelle",
-      label: "Llegada al muelle",
-      stopId,
-    });
-  }
-  return updated;
+  return registrarEntradaMuelleCarga({ stopId, servicioId, geo });
 }
 
 export async function terminarCargaMuelle({ stopId, servicioId, geo = null }) {
@@ -421,14 +440,24 @@ export async function terminarCargaMuelle({ stopId, servicioId, geo = null }) {
     tiempo_muelle_min: minutos,
   };
   const updated = await patchStopOperacionMeta(stopId, patch);
+  const pr = await sbFetch(`/rest/v1/stops?id=eq.${stopId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ estado: "completado", hora_salida_real: now }),
+  });
+  let row = updated;
+  if (pr.ok) {
+    const rows = await pr.json().catch(() => []);
+    row = Array.isArray(rows) ? rows[0] : updated;
+  }
   if (servicioId) {
     await appendExpedienteTimeline(servicioId, {
-      type: "carga_terminada",
-      label: `Carga terminada${minutos != null ? ` · ${minutos} min en muelle` : ""}`,
+      type: "salida_muelle",
+      label: `Salida muelle · carga terminada${minutos != null ? ` · ${minutos} min` : ""}`,
       stopId,
     });
   }
-  return updated;
+  return row;
 }
 
 export async function setCargaRequiereDeca({ stopId, requiere, nota = "" }) {

@@ -338,10 +338,16 @@ function appendEntregaCompletadaTimelineEvent(timeline, servicio, stopRows) {
  * La timeline operacional queda separada de incidencias/documentos.
  */
 function filterExpedienteTimelineOperacional(items, servicio) {
+  const seenSalidaByStop = new Set();
   const out = [];
   for (const ev of items || []) {
     const ty = String(ev.type || "");
     if (ty.startsWith("tacografo_") || ty === "entrega_completada" || ty === "entrega_servicio") continue;
+    if ((ty === "salida_muelle" || ty === "carga_finalizada" || ty === "descarga_finalizada") && ev.stopId) {
+      const key = String(ev.stopId);
+      if (seenSalidaByStop.has(key)) continue;
+      seenSalidaByStop.add(key);
+    }
     let title = ev.title;
     if (ty === "entrada_muelle" && typeof title === "string" && title.startsWith("Entrada muelle")) {
       title = title.replace(/^Entrada muelle/, "Llegada muelle");

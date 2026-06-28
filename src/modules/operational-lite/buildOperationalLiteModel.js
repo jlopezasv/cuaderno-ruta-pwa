@@ -143,6 +143,17 @@ function resolveVehiculo(servicio) {
   return label ? String(label).trim() : null;
 }
 
+function fmtDurationBetween(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  const ms = new Date(toIso).getTime() - new Date(fromIso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const m = Math.round(ms / 60000);
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  if (h > 0) return `${h}h ${r}m`;
+  return `${r} m`;
+}
+
 function paradaEstado(stop) {
   if (stop.hora_salida_real) return { key: "completado", label: "Completada" };
   if (stop.hora_llegada_real) return { key: "en_planta", label: "En planta" };
@@ -197,6 +208,13 @@ export function buildOperationalLiteModel({
 
     const estado = paradaEstado(stop);
     const docCount = evs.length + (incidenciasByStop[stop.id]?.length || 0);
+    const llegadaMs = parseTs(stop.hora_llegada_real);
+    const salidaMs = parseTs(stop.hora_salida_real);
+    const tiempoEnMuelleMin =
+      llegadaMs != null && salidaMs != null && salidaMs >= llegadaMs
+        ? Math.round((salidaMs - llegadaMs) / 60000)
+        : null;
+    const tiempoEnMuelleLabel = fmtDurationBetween(stop.hora_llegada_real, stop.hora_salida_real);
     const entregaFirmaSignedMs = parseTs(getStopEntregaFirmaMeta(stop)?.signed_at);
     const entregaFirma = mapStopEntregaFirmaForExpediente(stop, {
       stopLabel: label,
@@ -221,8 +239,12 @@ export function buildOperationalLiteModel({
       muelle: stopMeta?.muelle || stopMeta?.dock || stopMeta?.plataforma || null,
       llegada: stop.hora_llegada_real || null,
       salida: stop.hora_salida_real || null,
-      llegadaHora: fmtClock(parseTs(stop.hora_llegada_real)),
-      salidaHora: fmtClock(parseTs(stop.hora_salida_real)),
+      llegadaHora: fmtClock(llegadaMs),
+      salidaHora: fmtClock(salidaMs),
+      entradaMuelleHora: fmtClock(llegadaMs),
+      salidaMuelleHora: fmtClock(salidaMs),
+      tiempoEnMuelleMin,
+      tiempoEnMuelleLabel: tiempoEnMuelleLabel || (tiempoEnMuelleMin != null ? `${tiempoEnMuelleMin} m` : null),
       observaciones: formatStopNotesForDisplay(stop.notas) || "",
       entregaFirma,
       incidencias: incidenciasByStop[stop.id] || [],

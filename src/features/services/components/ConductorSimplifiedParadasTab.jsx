@@ -32,6 +32,7 @@ import {
 import { resolveEtaVisual } from "../../../domain/service/operationalEtaPresentation.js";
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
+import { ConductorPostDescargaModal } from "./ConductorPostDescargaModal.jsx";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
@@ -218,6 +219,9 @@ export function ConductorSimplifiedParadasTab({
   const [detailReadOnly, setDetailReadOnly] = useState(false);
   const [descargaFirma, setDescargaFirma] = useState(null);
   const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
+  const [postDescarga, setPostDescarga] = useState(null);
+  const [evidenciasSeed, setEvidenciasSeed] = useState(null);
+  const [listDcdtServicioId, setListDcdtServicioId] = useState(null);
   const [orderSkipConfirm, setOrderSkipConfirm] = useState(null);
   const [participacionResumen, setParticipacionResumen] = useState(null);
   const muelleGpsRef = useRef(null);
@@ -226,10 +230,14 @@ export function ConductorSimplifiedParadasTab({
   const detailServicio = active ? localServicio : null;
   const detailServicioForAlcance = active?.servicio ?? detailServicio;
   const detailStops = active ? localStops : NO_STOPS;
-  const serviciosForEmpresaLookup = useMemo(
-    () => (detailServicioForAlcance ? [detailServicioForAlcance] : NO_SERVICIOS),
-    [detailServicioForAlcance],
-  );
+  const serviciosForEmpresaLookup = useMemo(() => {
+    const byId = new Map();
+    if (detailServicioForAlcance?.id) byId.set(detailServicioForAlcance.id, detailServicioForAlcance);
+    for (const it of items) {
+      if (it.servicio?.id) byId.set(it.servicio.id, it.servicio);
+    }
+    return [...byId.values()];
+  }, [detailServicioForAlcance, items]);
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicioForAlcance?.empresa_id ? empresaById[detailServicioForAlcance.empresa_id] : null;
   const showDcdtQuick = !!detailServicioForAlcance?.empresa_id && isDecaAplicable(detailServicioForAlcance);
@@ -286,6 +294,19 @@ export function ConductorSimplifiedParadasTab({
     [openItem],
   );
 
+  const listDcdtItem = useMemo(
+    () => items.find((it) => it.servicio?.id === listDcdtServicioId) || null,
+    [items, listDcdtServicioId],
+  );
+  const listDcdtEmpresa = listDcdtItem?.servicio?.empresa_id ? empresaById[listDcdtItem.servicio.empresa_id] : null;
+  const listDcdtQuick = useConductorDcdtQuickStatus({
+    servicio: listDcdtItem?.servicio ?? null,
+    empresa: listDcdtEmpresa,
+    conductorUid: uid,
+    stops: listDcdtItem?.stops ?? NO_STOPS,
+    pollWhileIncomplete: !!listDcdtServicioId,
+  });
+
   const closeDetail = useCallback(() => {
     setActive(null);
     setLocalServicio(null);
@@ -296,6 +317,8 @@ export function ConductorSimplifiedParadasTab({
     setDcdtModalOpen(false);
     setChatModalOpen(false);
     setDetailReadOnly(false);
+    setPostDescarga(null);
+    setEvidenciasSeed(null);
   }, []);
 
   const stopsSig = useMemo(() => stopsOperativaSig(localStops), [localStops]);
@@ -383,6 +406,12 @@ export function ConductorSimplifiedParadasTab({
     if (!ev?.id || !stopId) return;
     setEvidenciasByStop((prev) => mergeEvidenciaIntoByStop(prev, stopId, ev));
   }, []);
+
+  useEffect(() => {
+    if (!evidenciasSeed) return;
+    const t = setTimeout(() => setEvidenciasSeed(null), 800);
+    return () => clearTimeout(t);
+  }, [evidenciasSeed]);
 
   const handleMuelleRequest = ({ kind, stopId }) => {
     if (confirmMuelleSaving || operatingBusy) return;
@@ -478,9 +507,18 @@ export function ConductorSimplifiedParadasTab({
       );
       if (result?.servicio) setLocalServicio(result.servicio);
       if (result?.stops) setLocalStops(result.stops);
+      const completedStop = (result?.stops || stopsWithFirma).find((s) => s.id === descargaFirma.stopId);
       setDescargaFirma(null);
       muelleGpsRef.current = null;
       showToast?.("Descarga completada con firma registrada", "#166534", 3200);
+      setPostDescarga({
+        stopId: stop.id,
+        stopLabel: active?.tipoOrdenLabel || active?.tipoLabel || stop?.nombre || "Descarga",
+        showDeca: showDcdtQuick,
+      });
+      if (completedStop) {
+        setActive((prev) => (prev ? { ...prev, stop: completedStop } : prev));
+      }
     } catch (error) {
       showToast?.(error?.message || "No se pudo guardar la firma de entrega");
     } finally {
@@ -641,6 +679,8 @@ export function ConductorSimplifiedParadasTab({
             acquireActionLocation={acquireLocation}
             driverDetailLayout
             operatingBusy={operatingBusy}
+            initialEvidenciasModal={evidenciasSeed?.stopId === timelineItem.stop.id ? evidenciasSeed.modal : null}
+            evidenciasFotoSource={evidenciasSeed?.stopId === timelineItem.stop.id ? evidenciasSeed.source : null}
           />
 
           <ConductorDropStopAction
@@ -780,6 +820,25 @@ export function ConductorSimplifiedParadasTab({
           onConfirm={handleConfirmDescargaFirma}
         />
 
+        <ConductorPostDescargaModal
+          open={!!postDescarga}
+          stopLabel={postDescarga?.stopLabel}
+          busy={descargaFirmaSaving}
+          showDeca={!!postDescarga?.showDeca}
+          onClose={() => setPostDescarga(null)}
+          onPod={() => {
+            if (postDescarga?.stopId) {
+              setEvidenciasSeed({ stopId: postDescarga.stopId, modal: "foto", source: "camera" });
+            }
+            setPostDescarga(null);
+          }}
+          onDeca={() => {
+            setPostDescarga(null);
+            setDcdtModalOpen(true);
+          }}
+          onSeguir={() => setPostDescarga(null)}
+        />
+
         <DriverDcdtActionModal
           open={dcdtModalOpen}
           onClose={() => {
@@ -846,6 +905,7 @@ export function ConductorSimplifiedParadasTab({
                 : etaVisual?.tier === "plan"
                   ? etaVisual.etaLabel
                   : null;
+            const cardShowDeca = !!item.servicio?.empresa_id && isDecaAplicable(item.servicio);
             return (
             <article
               key={`${item.servicio?.id}-${item.stop?.id}`}
@@ -889,6 +949,16 @@ export function ConductorSimplifiedParadasTab({
                   {showEtaToFirstDescarga && etaLabel ? (
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
                       ETA primera descarga: {etaLabel}
+                    </div>
+                  ) : null}
+                  {cardShowDeca ? (
+                    <div style={{ marginTop: 10 }}>
+                      <DriverQuickActionsBar
+                        showDcdt
+                        dcdtVisual="none"
+                        onDcdtClick={() => setListDcdtServicioId(item.servicio.id)}
+                        showChat={false}
+                      />
                     </div>
                   ) : null}
                 </div>
@@ -936,6 +1006,19 @@ export function ConductorSimplifiedParadasTab({
           })}
         </div>
       )}
+
+      <DriverDcdtActionModal
+        open={!!listDcdtServicioId && !active}
+        onClose={() => {
+          setListDcdtServicioId(null);
+          void listDcdtQuick.reload();
+        }}
+        servicio={listDcdtItem?.servicio ?? null}
+        empresa={listDcdtEmpresa}
+        conductorUid={uid}
+        stops={listDcdtItem?.stops ?? NO_STOPS}
+        showToast={showToast}
+      />
 
       {orderSkipConfirm ? (
         <div

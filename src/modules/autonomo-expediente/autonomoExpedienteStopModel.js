@@ -1,6 +1,8 @@
 import { getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 
 export const CARGA_ESTADO = Object.freeze({
+  /** Parada creada (almacén elegido) pero aún sin hora de entrada en muelle. */
+  PENDIENTE_ENTRADA: "pendiente_entrada",
   EN_MUELLE: "en_muelle",
   COMPLETADA: "completada",
 });
@@ -10,10 +12,19 @@ export function getCargaOperacionMeta(stop) {
 }
 
 export function getCargaEstado(stop) {
-  const st = String(getCargaOperacionMeta(stop).carga_estado || "").toLowerCase();
+  const meta = getCargaOperacionMeta(stop);
+  const st = String(meta.carga_estado || "").toLowerCase();
   if (st === CARGA_ESTADO.COMPLETADA) return CARGA_ESTADO.COMPLETADA;
   if (st === CARGA_ESTADO.EN_MUELLE) return CARGA_ESTADO.EN_MUELLE;
+  if (st === CARGA_ESTADO.PENDIENTE_ENTRADA) return CARGA_ESTADO.PENDIENTE_ENTRADA;
+  // Legacy: paradas con entrada_at pero sin carga_estado explícito
+  if (meta.entrada_at && !meta.salida_at) return CARGA_ESTADO.EN_MUELLE;
+  if (meta.carga_registrada_at && !meta.entrada_at) return CARGA_ESTADO.PENDIENTE_ENTRADA;
   return null;
+}
+
+export function isCargaPendienteEntrada(stop) {
+  return getCargaEstado(stop) === CARGA_ESTADO.PENDIENTE_ENTRADA;
 }
 
 export function isCargaTerminada(stop) {
