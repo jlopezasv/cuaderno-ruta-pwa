@@ -85,34 +85,12 @@ export function ExpedienteOperacionalConductor({
   const hayStock = stockActual?.length > 0;
 
   async function confirmEntrada(payload) {
-    let geo = null;
-    try {
-      const loc = await acquireLocation?.("entrada_muelle", "Entrada en muelle");
-      if (loc === null) return;
-      if (loc?.ok) {
-        const { geoPayloadFromLocationResult } = await import("../../data/driverActionGps.js");
-        geo = geoPayloadFromLocationResult(loc);
-      }
-    } catch {
-      /* GPS opcional */
-    }
-    await onEntradaMuelle({ ...payload, geo });
+    await onEntradaMuelle({ ...payload, geo: null });
     setEntradaOpen(false);
   }
 
   async function confirmSalida(opts) {
-    let geo = null;
-    try {
-      const loc = await acquireLocation?.("salida_muelle", "Salida de muelle");
-      if (loc === null) return;
-      if (loc?.ok) {
-        const { geoPayloadFromLocationResult } = await import("../../data/driverActionGps.js");
-        geo = geoPayloadFromLocationResult(loc);
-      }
-    } catch {
-      /* GPS opcional */
-    }
-    await onSalidaMuelle({ ...opts, geo });
+    await onSalidaMuelle({ ...opts, geo: null });
     setSalidaOpen(false);
   }
 
@@ -143,10 +121,7 @@ export function ExpedienteOperacionalConductor({
           <div style={{ fontSize: 11, fontWeight: 800, color: "#047857", letterSpacing: 0.8, marginBottom: 6 }}>
             PRÓXIMA ACCIÓN
           </div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>{proxima.title}</div>
-          {proxima.subtitle ? (
-            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 12 }}>{proxima.subtitle}</div>
-          ) : null}
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", marginBottom: 12 }}>{proxima.title}</div>
           <button
             type="button"
             disabled={busy}

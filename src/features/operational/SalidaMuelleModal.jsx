@@ -33,7 +33,7 @@ export function SalidaMuelleModal({ open, operacion, busy, onClose, onConfirm })
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14 }}>{operacion.lugar_nombre}</div>
 
         {!movs.length ? (
-          <p style={{ fontSize: 13, color: "#64748b" }}>No hay movimientos registrados. Se cerrará como operación sin cambios de mercancía.</p>
+          <p style={{ fontSize: 13, color: "#64748b", marginBottom: 14 }}>Sin movimientos registrados.</p>
         ) : (
           <ul style={{ margin: "0 0 14px", paddingLeft: 18, fontSize: 13 }}>
             {movs.map((m) => (

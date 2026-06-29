@@ -376,8 +376,8 @@ export function AutonomoExpedienteScreen({
     setBusy(true);
     try {
       const loc = await acquireLocation("entrada_muelle", "Llegada al destino");
-      if (!loc?.ok) return;
-      const geo = geoPayloadFromLocationResult(loc);
+      if (loc === null) return;
+      const geo = loc?.ok ? geoPayloadFromLocationResult(loc) : null;
       await updateDestinoEstado({
         stopId: stop.id,
         servicioId: activeId,
@@ -397,8 +397,8 @@ export function AutonomoExpedienteScreen({
     setBusy(true);
     try {
       const loc = await acquireLocation("salida_muelle", "Salida del destino");
-      if (!loc?.ok) return;
-      const geo = geoPayloadFromLocationResult(loc);
+      if (loc === null) return;
+      const geo = loc?.ok ? geoPayloadFromLocationResult(loc) : null;
       await updateDestinoEstado({
         stopId: stop.id,
         servicioId: activeId,
@@ -896,7 +896,7 @@ export function AutonomoExpedienteScreen({
         actionLabel={gate?.actionLabel}
         error={gate?.error}
         onRetry={retry}
-        onContinueWithout={continueWithout}
+        onContinue={continueWithout}
         onCancel={cancelGate}
       />
 

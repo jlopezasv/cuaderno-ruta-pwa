@@ -194,7 +194,7 @@ export function DecaVivoPanel({
     ? "Camión vacío según expediente"
     : doc?.qr_token
       ? "DeCA disponible para inspección"
-      : "Se actualiza automáticamente según la mercancía a bordo";
+      : "Automático según mercancía a bordo";
 
   if (conductorMode) {
     return (

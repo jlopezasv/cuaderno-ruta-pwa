@@ -69,10 +69,7 @@ export function EntradaMuelleModal({ open, uid, busy, onClose, onConfirm }) {
           overflowY: "auto",
         }}
       >
-        <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Entrada en muelle</div>
-        <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14 }}>
-          Registra la llegada. Los destinos y la mercancía se indican al operar, no ahora.
-        </div>
+        <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 12 }}>Entrada en muelle</div>
 
         <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>Lugar actual</label>
         <input

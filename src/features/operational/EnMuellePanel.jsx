@@ -76,11 +76,7 @@ export function EnMuellePanel({
             .filter(Boolean)
             .join(" · ")}
         </div>
-      ) : (
-        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 12, fontStyle: "italic" }}>
-          Registra lo ocurrido o confirma «sin cambios» al salir.
-        </div>
-      )}
+      ) : null}
 
       <button
         type="button"
