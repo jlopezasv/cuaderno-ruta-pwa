@@ -6,10 +6,14 @@ import {
   sbSelect,
 } from "../../data/supabaseClient.js";
 import { isDemoApp } from "../../config/appEnvironment.js";
-import { SERVICIO_ESTADO_EN_CURSO, SERVICIO_ESTADO_COMPLETADO } from "../../domain/fleet/serviceStatus.js";
+import {
+  SERVICIO_ESTADO_EN_CURSO,
+  SERVICIO_ESTADO_COMPLETADO,
+  SERVICIO_ESTADO_ANULADO,
+} from "../../domain/fleet/serviceStatus.js";
 import { insertStopsForServicio } from "../../domain/fleet/servicioStopsInsert.js";
 import { prepareStopRowForPersist } from "../../domain/geo/stopGeoModel.js";
-import { mergeStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
+import { mergeStopOperacionMeta, getStopOperacionMeta } from "../../domain/service/stopOperacionMeta.js";
 import { parsePostgrestError } from "../../domain/service/serviceCreateStepTrace.js";
 import {
   resolveServicioInsertContext,
@@ -36,6 +40,15 @@ import { SERVICIO_ALCANCE_DEFAULT, normalizeServicioAlcance } from "../../domain
 import { cerrarExpedienteServicio } from "../../domain/service/cerrarExpedienteServicio.js";
 import { archiveAutonomoExpedienteLocal } from "./autonomoExpedienteArchive.js";
 import { isOperacionAnulada } from "../../domain/service/operationalVisualModel.js";
+import { humanizeApiError } from "../../domain/api/humanizeApiError.js";
+import { insertarMovimientoCarga, recalcularDecaActual } from "../../domain/dcdt/decaVivoModel.js";
+import {
+  EXPEDIENTE_ESTADO,
+  MUELLE_ESTADO,
+  getHistorialOperacionesMuelle,
+  getOperacionMuelleActiva,
+  mapMovimientoToDecaTipo,
+} from "./operacionMuelleModel.js";
 
 async function patchServicioReferencia(servicioId, referencia) {
   const r = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
@@ -682,6 +695,417 @@ export async function archiveAutonomoExpediente(servicioId, uid) {
   return fetchServicioById(servicioId);
 }
 
+async function patchServicioOperacionMeta(servicioId, patch) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  const referencia = mergeAutonomoExpedientePatch(servicio.referencia, patch);
+  return patchServicioReferencia(servicioId, referencia);
+}
+
+function newMuelleOpId() {
+  return `muelle-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function decaTipoFromMovimiento(mov) {
+  const tipo = String(mov.tipo || "").toLowerCase();
+  const desc = String(mov.descripcion_mercancia || "").toLowerCase();
+  if (tipo === "retorno") {
+    if (desc.includes("caja") || desc.includes("envase") || desc.includes("jaula")) {
+      return "RECOGIDA_ENVASES";
+    }
+    return "CARGA_RETORNO";
+  }
+  return mapMovimientoToDecaTipo(tipo);
+}
+
+function categoriaFromMovimiento(mov) {
+  const tipo = String(mov.tipo || "").toLowerCase();
+  if (tipo === "retorno") return "retorno";
+  if (tipo === "devolucion") return "devolucion";
+  return mov.categoria_mercancia || "mercancia";
+}
+
+function destinoFromMovimiento(mov) {
+  if (Array.isArray(mov.repartos) && mov.repartos.length) {
+    return mov.repartos.map((r) => `${r.nombre}: ${r.cantidad}`).join(" · ");
+  }
+  if (mov.destino_pendiente) return "Pendiente de reparto";
+  return mov.destino_nombre || null;
+}
+
+async function nextStopOrden(servicioId) {
+  const stopsRes = await sbFetch(
+    `/rest/v1/stops?servicio_id=eq.${servicioId}&select=id,orden&order=orden.desc&limit=1`,
+  );
+  const stopsRows = stopsRes.ok ? await stopsRes.json().catch(() => []) : [];
+  const maxOrden = Array.isArray(stopsRows) && stopsRows[0] ? Number(stopsRows[0].orden) || 0 : 0;
+  return maxOrden + 1;
+}
+
+/** Entrada en muelle sin destino — crea sesión operativa dentro del expediente. */
+export async function abrirOperacionMuelle({
+  servicioId,
+  uid,
+  lugar,
+  tipo_previsto = "indefinido",
+  observacion = null,
+  geo = null,
+}) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  if (getOperacionMuelleActiva(servicio)) throw new Error("Ya hay una operación de muelle abierta");
+
+  const opId = newMuelleOpId();
+  const now = new Date().toISOString();
+  const nextOrden = await nextStopOrden(servicioId);
+
+  upsertAutonomoAlmacen(uid, {
+    nombre: lugar.nombre,
+    direccion: lugar.direccion || "",
+    cp: "",
+    ciudad: "",
+  });
+
+  const stopRow = prepareStopRowForPersist({
+    orden: nextOrden,
+    tipo: "carga",
+    nombre: lugar.nombre,
+    empresa: lugar.nombre,
+    direccion: lugar.direccion || "",
+    codigo_postal: "",
+    provincia: "",
+    pais: "ES",
+    detalles: observacion ? `Obs. entrada: ${observacion}` : "",
+  });
+  stopRow.notas = mergeStopOperacionMeta(stopRow.notas, {
+    es_session_muelle: true,
+    operacion_muelle_id: opId,
+    autonomo_expediente: true,
+    entrada_at: now,
+    carga_estado: "en_muelle",
+    tipo_previsto_muelle: tipo_previsto,
+  });
+
+  const insertResult = await insertStopsForServicio(servicioId, [stopRow]);
+  if (!insertResult.ok) throw new Error(insertResult.detail || insertResult.error || "No se pudo abrir muelle");
+  const sessionStop = insertResult.rows?.[0];
+
+  const operacion = {
+    id: opId,
+    estado: MUELLE_ESTADO.ABIERTA,
+    lugar_nombre: lugar.nombre,
+    lugar_direccion: lugar.direccion || null,
+    tipo_previsto,
+    observacion_entrada: observacion,
+    entrada_at: now,
+    entrada_geo: geo,
+    stop_session_id: sessionStop?.id || null,
+    movimientos: [],
+  };
+
+  await patchServicioOperacionMeta(servicioId, {
+    operacion_muelle_activa: operacion,
+    expediente_estado: EXPEDIENTE_ESTADO.EN_MUELLE,
+  });
+
+  await appendExpedienteTimeline(servicioId, {
+    type: "entrada_muelle",
+    label: `Entrada en muelle · ${lugar.nombre}`,
+    stopId: sessionStop?.id,
+    meta: { operacion_muelle_id: opId, tipo_previsto },
+  });
+
+  return {
+    operacion,
+    stop: sessionStop,
+    servicio: await fetchServicioById(servicioId),
+  };
+}
+
+/** Registra movimiento dentro de la operación de muelle activa. FASE A obligatoria, DeCA opcional. */
+export async function registrarMovimientoEnMuelle({
+  servicioId,
+  movimiento,
+  stockActual = [],
+}) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  const op = getOperacionMuelleActiva(servicio);
+  if (!op) throw new Error("No hay operación de muelle abierta");
+
+  const movId = `mov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const now = new Date().toISOString();
+  const session = {
+    id: movId,
+    at: now,
+    ...movimiento,
+  };
+
+  console.debug("[carga] registrarMovimientoEnMuelle", {
+    servicioId,
+    operacionMuelleId: op.id,
+    movimiento: session,
+  });
+
+  const decaTipo = decaTipoFromMovimiento(movimiento);
+  const destinoNombre = destinoFromMovimiento(movimiento);
+  const origenNombre =
+    movimiento.origen_nombre ||
+    (movimiento.tipo === "carga" ? op.lugar_nombre : null) ||
+    null;
+
+  let decaPending = false;
+  let stockFromDb = null;
+
+  if (movimiento.tipo !== "incidencia") {
+    const payload = {
+      servicio_id: servicioId,
+      parada_id: op.stop_session_id || null,
+      tipo_movimiento: decaTipo,
+      descripcion_mercancia: movimiento.descripcion_mercancia,
+      categoria_mercancia: categoriaFromMovimiento(movimiento),
+      cantidad: movimiento.cantidad,
+      unidad: movimiento.unidad,
+      peso_kg: movimiento.peso_kg,
+      origen_nombre: origenNombre,
+      destino_nombre:
+        destinoNombre ||
+        (movimiento.destino_pendiente ? "Pendiente de reparto" : null) ||
+        (decaTipo === "CARGA_RETORNO" || decaTipo === "RECOGIDA_ENVASES"
+          ? movimiento.destino_nombre || "Pendiente de asignar"
+          : null),
+      observaciones: movimiento.observaciones || null,
+      documento_referencia: movimiento.documento_referencia || null,
+      lugar_nombre: op.lugar_nombre,
+      fecha_hora: now,
+    };
+
+    // FASE A — movimiento + inventario (obligatorio)
+    try {
+      const inserted = await insertarMovimientoCarga(payload, stockActual);
+      stockFromDb = inserted?.stock_actual || null;
+      console.debug("[carga] FASE A ok", inserted?.movimiento_id);
+    } catch (phaseAError) {
+      console.error("[carga] FASE A falló", phaseAError);
+      throw humanizeApiError(phaseAError, "No se pudo registrar la carga.");
+    }
+
+    // FASE B — documento DeCA (opcional, no bloquea)
+    try {
+      await recalcularDecaActual(servicioId);
+      console.debug("[carga] FASE B DeCA ok");
+    } catch (decaError) {
+      console.warn("[carga] FASE B DeCA pendiente", decaError);
+      decaPending = true;
+    }
+  }
+
+  // Persistir en sesión de muelle (expediente)
+  const nextOp = {
+    ...op,
+    movimientos: [...(op.movimientos || []), session],
+  };
+  await patchServicioOperacionMeta(servicioId, { operacion_muelle_activa: nextOp });
+
+  await appendExpedienteTimeline(servicioId, {
+    type: movimiento.tipo === "carga" ? "carga_registrada" : `muelle_${movimiento.tipo}`,
+    label:
+      movimiento.tipo === "carga"
+        ? `Carga registrada: ${movimiento.descripcion_mercancia}`
+        : `${movimiento.tipo}: ${movimiento.descripcion_mercancia}`,
+    stopId: op.stop_session_id,
+    meta: { movimiento_id: movId },
+  });
+
+  return {
+    movimiento: session,
+    servicio: await fetchServicioById(servicioId),
+    decaPending,
+    stockActual: stockFromDb,
+  };
+}
+
+/** Cierra operación de muelle y archiva en historial del expediente. */
+export async function cerrarOperacionMuelle({
+  servicioId,
+  observacion = null,
+  sin_cambios = false,
+  geo = null,
+}) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  const op = getOperacionMuelleActiva(servicio);
+  if (!op) throw new Error("No hay operación de muelle abierta");
+
+  const now = new Date().toISOString();
+  const cerrada = {
+    ...op,
+    estado: MUELLE_ESTADO.CERRADA,
+    salida_at: now,
+    salida_geo: geo,
+    observacion_salida: observacion,
+    sin_cambios: !!sin_cambios,
+    minutos_muelle: computeMuelleMinutes(op.entrada_at, now),
+  };
+
+  const historial = getHistorialOperacionesMuelle(servicio);
+  historial.push(cerrada);
+
+  await patchServicioOperacionMeta(servicioId, {
+    operacion_muelle_activa: null,
+    historial_operaciones_muelle: historial,
+    expediente_estado: EXPEDIENTE_ESTADO.EN_RUTA,
+  });
+
+  if (op.stop_session_id) {
+    await patchStopOperacionMeta(op.stop_session_id, {
+      salida_at: now,
+      carga_estado: "completada",
+      ...(geo ? { salida_geo: geo } : {}),
+    });
+    await sbFetch(`/rest/v1/stops?id=eq.${op.stop_session_id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ estado: "completado", hora_salida_real: now }),
+    });
+  }
+
+  try {
+    await recalcularDecaActual(servicioId);
+  } catch (decaError) {
+    console.warn("[muelle] DeCA no recalculado al cerrar", decaError);
+  }
+
+  await appendExpedienteTimeline(servicioId, {
+    type: "salida_muelle",
+    label: `Salida de muelle · ${op.lugar_nombre}`,
+    stopId: op.stop_session_id,
+    meta: { operacion_muelle_id: op.id, sin_cambios },
+  });
+
+  return { operacion: cerrada, servicio: await fetchServicioById(servicioId) };
+}
+
+/** Cancela entrada en muelle si no hay movimientos registrados. */
+export async function anularOperacionMuelle({ servicioId, motivo = "" }) {
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+  const op = getOperacionMuelleActiva(servicio);
+  if (!op) throw new Error("No hay operación de muelle abierta");
+
+  const hasMovs = Array.isArray(op.movimientos) && op.movimientos.length > 0;
+  const now = new Date().toISOString();
+
+  if (!hasMovs) {
+    if (op.stop_session_id) {
+      await cancelAutonomoStopOperacion({ stopId: op.stop_session_id, servicioId, mode: "delete" });
+    }
+    await patchServicioOperacionMeta(servicioId, {
+      operacion_muelle_activa: null,
+      expediente_estado: EXPEDIENTE_ESTADO.ACTIVO,
+    });
+    return { mode: "deleted", servicio: await fetchServicioById(servicioId) };
+  }
+
+  const anulada = {
+    ...op,
+    estado: MUELLE_ESTADO.ANULADA,
+    anulada_at: now,
+    anulacion_motivo: String(motivo || "Entrada en muelle por error").trim(),
+  };
+  const historial = getHistorialOperacionesMuelle(servicio);
+  historial.push(anulada);
+
+  if (op.stop_session_id) {
+    await patchStopOperacionMeta(op.stop_session_id, {
+      operacion_estado: "anulada",
+      anulacion_motivo: anulada.anulacion_motivo,
+      anulada_at: now,
+    });
+  }
+
+  await patchServicioOperacionMeta(servicioId, {
+    operacion_muelle_activa: null,
+    historial_operaciones_muelle: historial,
+    expediente_estado: EXPEDIENTE_ESTADO.ACTIVO,
+  });
+
+  await appendExpedienteTimeline(servicioId, {
+    type: "muelle_anulada",
+    label: `Operación de muelle anulada · ${op.lugar_nombre}`,
+    stopId: op.stop_session_id,
+  });
+
+  return { mode: "anulada", servicio: await fetchServicioById(servicioId) };
+}
+
+/** Anula expediente recién creado o lo marca como anulado con trazabilidad. */
+export async function anularExpedienteAutonomo({ servicioId, uid, motivo }) {
+  const motivoTrim = String(motivo || "").trim();
+  if (!motivoTrim) throw new Error("Indique el motivo de anulación");
+
+  const servicio = await fetchServicioById(servicioId);
+  if (!servicio) throw new Error("Expediente no encontrado");
+
+  const op = getOperacionMuelleActiva(servicio);
+  const historial = getHistorialOperacionesMuelle(servicio);
+  const { timelineEvents } = getAutonomoExpedienteMeta(servicio);
+  const stopsRes = await sbFetch(`/rest/v1/stops?servicio_id=eq.${servicioId}&select=id,notas`);
+  const stops = stopsRes.ok ? await stopsRes.json().catch(() => []) : [];
+  const stopsReales = (Array.isArray(stops) ? stops : []).filter(
+    (s) => !getStopOperacionMeta(s.notas)?.es_session_muelle,
+  );
+
+  const sinMovimientos =
+    !op?.movimientos?.length &&
+    !historial.length &&
+    stopsReales.length === 0 &&
+    timelineEvents.length <= 1;
+
+  if (op && !op.movimientos?.length) {
+    await anularOperacionMuelle({ servicioId, motivo: motivoTrim });
+  } else if (op) {
+    throw new Error("Cierre la operación de muelle antes de anular el expediente");
+  }
+
+  if (sinMovimientos) {
+    const del = await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, { method: "DELETE" });
+    if (!del.ok) {
+      const body = await del.text().catch(() => "");
+      throw new Error(body || "No se pudo eliminar el expediente");
+    }
+    archiveAutonomoExpedienteLocal(uid, servicioId);
+    return { mode: "deleted" };
+  }
+
+  const now = new Date().toISOString();
+  await patchServicioOperacionMeta(servicioId, {
+    expediente_estado: EXPEDIENTE_ESTADO.ANULADO,
+    anulacion_motivo: motivoTrim,
+    anulada_at: now,
+  });
+  await sbFetch(`/rest/v1/servicios?id=eq.${servicioId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ estado: SERVICIO_ESTADO_ANULADO, updated_at: now }),
+  });
+  await appendExpedienteTimeline(servicioId, {
+    type: "expediente_anulado",
+    label: `Expediente anulado: ${motivoTrim}`,
+    at: now,
+  });
+  archiveAutonomoExpedienteLocal(uid, servicioId);
+  return { mode: "anulado", servicio: await fetchServicioById(servicioId) };
+}
+
+/** Incidencia general del expediente (sin operación de muelle abierta). */
+export async function registrarIncidenciaExpediente({ servicioId, descripcion, observaciones = null }) {
+  await appendExpedienteTimeline(servicioId, {
+    type: "incidencia",
+    label: descripcion,
+    meta: observaciones ? { observaciones } : null,
+  });
+  return fetchServicioById(servicioId);
+}
+
 export async function loadAutonomoExpedienteWorkspace(servicioId) {
   if (!servicioId) return null;
   const [servicioRes, stopsRes, extraRes] = await Promise.all([
@@ -710,9 +1134,10 @@ export async function loadAutonomoExpedienteWorkspace(servicioId) {
     extraDocumentos: Array.isArray(extraDocumentos) ? extraDocumentos : [],
   });
 
-  const cargas = stopList.filter(
-    (s) => String(s.tipo).toLowerCase() === "carga" && !isOperacionAnulada(s),
-  );
+  const cargas = stopList.filter((s) => {
+    if (String(s.tipo).toLowerCase() !== "carga" || isOperacionAnulada(s)) return false;
+    return getStopOperacionMeta(s.notas)?.es_session_muelle !== true;
+  });
   const destinos = stopList.filter(
     (s) => String(s.tipo).toLowerCase() === "descarga" && !isOperacionAnulada(s),
   );

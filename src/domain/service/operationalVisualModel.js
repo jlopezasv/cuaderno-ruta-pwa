@@ -1,5 +1,6 @@
 import { getStopOperacionMeta } from "./stopOperacionMeta.js";
 import { muelleEntradaLabel, muelleSalidaLabel } from "./muelleLabels.js";
+import { getOperacionMuelleActiva } from "../../modules/autonomo-expediente/operacionMuelleModel.js";
 
 function isRetornoStop(stop) {
   return getStopOperacionMeta(stop?.notas)?.es_retorno === true;
@@ -139,9 +140,24 @@ function cargaPhase(stop) {
 
 /**
  * Próxima acción principal — regla de oro transporte real.
- * Descargas del viaje principal > cargas principales > retorno acumulado.
+ * Operación muelle abierta > descargas ida > cargas > retorno acumulado.
  */
-export function resolveProximaAccionPrincipal({ cargas = [], destinos = [], stockActual = [] } = {}) {
+export function resolveProximaAccionPrincipal({ servicio = null, cargas = [], destinos = [], stockActual = [] } = {}) {
+  const opMuelle = servicio ? getOperacionMuelleActiva(servicio) : null;
+  if (opMuelle) {
+    return {
+      kind: "en_muelle",
+      phase: "en_muelle",
+      stop: null,
+      operacionMuelle: opMuelle,
+      title: "En muelle",
+      subtitle: opMuelle.lugar_nombre,
+      primaryLabel: "Salida de muelle",
+      secondaryLabel: null,
+      visual: OPERATION_VISUAL[OPERATION_KIND.CARGA],
+    };
+  }
+
   const destinosActivos = destinos.filter((d) => !isDestinoEntregadoStop(d) && !isOperacionAnulada(d));
   const { cargasPrincipal, cargasRetorno } = splitCargasByRole(cargas);
 
@@ -247,10 +263,10 @@ export function resolveProximaAccionPrincipal({ cargas = [], destinos = [], stoc
     kind: "idle",
     phase: "idle",
     stop: null,
-    title: "Sin acción urgente",
-    subtitle: "Registre carga o destino",
-    primaryLabel: "Muelle carga",
-    secondaryLabel: "Añadir destino",
+    title: "Sin acción pendiente",
+    subtitle: "Registre lo que hace al llegar a un punto",
+    primaryLabel: "Entrada en muelle",
+    secondaryLabel: "Añadir carga prevista",
     visual: OPERATION_VISUAL[OPERATION_KIND.CARGA],
   };
 }

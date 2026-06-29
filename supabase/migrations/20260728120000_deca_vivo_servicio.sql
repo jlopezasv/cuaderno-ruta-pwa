@@ -370,7 +370,7 @@ BEGIN
     )
     VALUES (
       p_servicio_id, v_serv.empresa_id, v_serv.conductor_id,
-      v_serv.matricula, NULL,
+      NULL, NULL,
       'actual', 1, true, v_snapshot,
       CASE WHEN v_serv.empresa_id IS NULL THEN v_serv.conductor_id ELSE NULL END,
       v_uid, v_uid

@@ -59,6 +59,7 @@ export function DecaVivoPanel({
   conductorNombre = null,
   showToast,
   modoEmpresa = false,
+  conductorMode = false,
   compact = false,
   hideStockList = false,
   hidden = false,
@@ -70,6 +71,7 @@ export function DecaVivoPanel({
   const [movModal, setMovModal] = useState(null);
   const [historialOpen, setHistorialOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  const [verDecaOpen, setVerDecaOpen] = useState(false);
   const [qrUrl, setQrUrl] = useState("");
   const [historial, setHistorial] = useState({ movimientos: [], versiones: [] });
 
@@ -181,11 +183,78 @@ export function DecaVivoPanel({
 
   if (hidden) return null;
 
-  if (loading) {
+  if (loading && !conductorMode) {
     return <div style={{ fontSize: 13, color: UI.su, padding: compact ? 0 : 8 }}>Cargando DeCA actual…</div>;
   }
 
   const stockSplit = splitStockForDisplay(stock);
+  const hayStock = stock.length > 0;
+
+  const conductorStatusText = !hayStock
+    ? "Camión vacío según expediente"
+    : doc?.qr_token
+      ? "DeCA disponible para inspección"
+      : "Se actualiza automáticamente según la mercancía a bordo";
+
+  if (conductorMode) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <section
+          style={{
+            borderRadius: 12,
+            padding: "12px 14px",
+            border: "1px solid #e2e8f0",
+            background: "#fff",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 0.5, marginBottom: 6 }}>
+            DeCA ACTUAL
+          </div>
+          <div style={{ fontSize: 13, color: UI.tx, lineHeight: 1.45, marginBottom: 10 }}>{conductorStatusText}</div>
+          {doc?.matricula_tractora ? (
+            <div style={{ fontSize: 12, color: UI.su, marginBottom: 8 }}>
+              {doc.matricula_tractora}
+              {doc.matricula_remolque ? ` · ${doc.matricula_remolque}` : ""}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8, fontStyle: "italic" }}>
+              Matrícula no informada
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <button type="button" style={btnStyle("full")} disabled={busy} onClick={() => setVerDecaOpen(true)}>
+              Ver DeCA
+            </button>
+            <button type="button" style={btnStyle("full")} disabled={busy} onClick={handleQr}>
+              QR inspección
+            </button>
+          </div>
+          <button
+            type="button"
+            style={{ ...btnStyle("full"), marginTop: 8 }}
+            disabled={busy || !hayStock}
+            onClick={handlePdf}
+          >
+            Descargar PDF
+          </button>
+        </section>
+
+        {verDecaOpen ? (
+          <DecaVivoVerOverlay
+            stock={stock}
+            stockSplit={stockSplit}
+            doc={doc}
+            onClose={() => setVerDecaOpen(false)}
+          />
+        ) : null}
+        {qrOpen && qrUrl ? <DecaVivoQrOverlay url={qrUrl} onClose={() => setQrOpen(false)} /> : null}
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div style={{ fontSize: 13, color: UI.su, padding: compact ? 0 : 8 }}>Cargando DeCA actual…</div>;
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -346,6 +415,81 @@ export function DecaVivoPanel({
       {qrOpen && qrUrl ? (
         <DecaVivoQrOverlay url={qrUrl} onClose={() => setQrOpen(false)} />
       ) : null}
+    </div>
+  );
+}
+
+function DecaVivoVerOverlay({ stock, stockSplit, doc, onClose }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 790,
+        background: "rgba(15,23,42,.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 16,
+          padding: 20,
+          maxWidth: 400,
+          width: "100%",
+          maxHeight: "80vh",
+          overflowY: "auto",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 8 }}>DeCA actual</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+          {doc?.fecha_actualizacion
+            ? `Actualizado ${new Date(doc.fecha_actualizacion).toLocaleString("es-ES")}`
+            : "Generado automáticamente desde el expediente"}
+        </div>
+        {!stock?.length ? (
+          <div style={{ fontSize: 13, color: "#94a3b8", fontStyle: "italic" }}>Camión vacío según expediente</div>
+        ) : (
+          <>
+            {stockSplit.mercanciaIda.map((line, i) => (
+              <div key={line.line_key || i} style={{ fontSize: 13, marginBottom: 6 }}>
+                {formatStockLineLabel(line)}
+              </div>
+            ))}
+            {stockSplit.retornos.map((line, i) => (
+              <div key={line.line_key || i} style={{ fontSize: 13, marginBottom: 6, color: "#ea580c" }}>
+                {formatStockLineLabel(line)}
+              </div>
+            ))}
+            {stockSplit.devoluciones.map((line, i) => (
+              <div key={line.line_key || i} style={{ fontSize: 13, marginBottom: 6, color: "#7e22ce" }}>
+                {formatStockLineLabel(line)}
+              </div>
+            ))}
+          </>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            marginTop: 16,
+            width: "100%",
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #e2e8f0",
+            background: "#f8fafc",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Cerrar
+        </button>
+      </div>
     </div>
   );
 }

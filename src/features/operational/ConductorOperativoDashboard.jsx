@@ -94,8 +94,8 @@ export function ConductorOperativoDashboard({
   compact = false,
 }) {
   const proxima = useMemo(
-    () => resolveProximaAccionPrincipal({ cargas, destinos, stockActual }),
-    [cargas, destinos, stockActual],
+    () => resolveProximaAccionPrincipal({ servicio, cargas, destinos, stockActual }),
+    [servicio, cargas, destinos, stockActual],
   );
 
   const { mercanciaIda, retornos: stockRetorno, devoluciones } = useMemo(

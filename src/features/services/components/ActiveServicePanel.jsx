@@ -2132,6 +2132,7 @@ export function ActiveServicePanel({
                 stops={sortedStops}
                 conductorNombre={conductorNombre}
                 showToast={showToast}
+                conductorMode
                 compact
               />
             </DriverDemoSection>

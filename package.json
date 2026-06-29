@@ -21,6 +21,8 @@
     "deploy:demo:agenda-comercial": "node scripts/apply-agenda-comercial-demo.mjs",
     "deploy:demo:dcdt": "node scripts/apply-demo-dcdt.mjs",
     "deploy:demo:deca-vivo": "node scripts/apply-sql-file.mjs supabase/migrations/20260728120000_deca_vivo_servicio.sql",
+    "deploy:demo:deca-matricula-fix": "node scripts/apply-sql-file.mjs supabase/migrations/20260729120000_fix_deca_vivo_matricula.sql",
+    "deploy:demo:registrar-carga-fix": "node scripts/apply-sql-file.mjs supabase/migrations/20260729160000_registrar_carga_sin_bloquear_deca.sql",
     "deploy:demo:dcdt-rls-fix": "node scripts/apply-sql-file.mjs supabase/migrations/20260710130000_fix_dcdt_rls_function_volatility.sql",
     "deploy:demo:service-messages": "node scripts/apply-sql-file.mjs supabase/migrations/20260711120000_service_messages_demo.sql",
     "deploy:demo:viaje-codigo": "node scripts/apply-sql-file.mjs supabase/migrations/20260713120000_servicio_viaje_codigo_demo.sql",

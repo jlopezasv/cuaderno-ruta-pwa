@@ -40,4 +40,21 @@ describe("resolveProximaAccionPrincipal", () => {
     expect(cargasPrincipal).toHaveLength(1);
     expect(cargasRetorno).toHaveLength(1);
   });
+
+  it("prioriza operación de muelle abierta sobre todo", () => {
+    const servicio = {
+      referencia: `\n__SRV_OP__:${JSON.stringify({
+        operacion_muelle_activa: {
+          id: "m1",
+          estado: "abierta",
+          lugar_nombre: "Alicante",
+          entrada_at: new Date().toISOString(),
+          movimientos: [],
+        },
+      })}`,
+    };
+    const proxima = resolveProximaAccionPrincipal({ servicio, cargas: [], destinos: [], stockActual: [] });
+    expect(proxima.kind).toBe("en_muelle");
+    expect(proxima.primaryLabel).toBe("Salida de muelle");
+  });
 });

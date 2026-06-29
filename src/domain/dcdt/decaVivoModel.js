@@ -1,10 +1,11 @@
 import { sbFetch } from "../../data/supabaseClient.js";
 import { validarMovimientoDeCaVivo } from "./decaVivoStock.js";
+import { humanizeApiError } from "../api/humanizeApiError.js";
 
-function parseRpcJson(response) {
+function parseRpcJson(response, userMessage = "No se pudo completar la operación.") {
   if (!response.ok) {
     return response.text().then((t) => {
-      throw new Error(t || `RPC error ${response.status}`);
+      throw humanizeApiError(new Error(t || `RPC error ${response.status}`), userMessage);
     });
   }
   return response.json();
@@ -36,19 +37,54 @@ export async function fetchDecaActualVisible(servicioId) {
 }
 
 /**
- * Registra un movimiento de carga/descarga y regenera el DeCA actual.
+ * FASE A — Inserta movimiento y recalcula inventario a bordo (sin documento DeCA).
  * @param {object} payload
- * @returns {Promise<DecaVivoVisible>}
+ * @returns {Promise<{ ok: boolean, movimiento_id: string, stock_actual: Array }>}
+ */
+export async function insertarMovimientoCarga(payload, stockActual = []) {
+  const check = validarMovimientoDeCaVivo(payload, stockActual);
+  if (!check.ok) throw new Error(check.error);
+
+  console.debug("[carga] insertar_movimiento_carga", {
+    servicio_id: payload.servicio_id,
+    tipo: payload.tipo_movimiento,
+    descripcion: payload.descripcion_mercancia,
+    cantidad: payload.cantidad,
+    unidad: payload.unidad,
+  });
+
+  const r = await sbFetch("/rest/v1/rpc/insertar_movimiento_carga", {
+    method: "POST",
+    body: JSON.stringify({ p_payload: payload }),
+  });
+  const data = await parseRpcJson(r, "No se pudo registrar la carga.");
+  console.debug("[carga] movimiento insertado", data?.movimiento_id, data?.stock_actual?.length);
+  return data;
+}
+
+/**
+ * Registra movimiento (FASE A) e intenta actualizar DeCA (FASE B, no bloquea).
+ * @param {object} payload
+ * @returns {Promise<DecaVivoVisible & { deca_pending?: boolean }>}
  */
 export async function registrarMovimientoCarga(payload, stockActual = []) {
   const check = validarMovimientoDeCaVivo(payload, stockActual);
   if (!check.ok) throw new Error(check.error);
 
+  console.debug("[carga] registrar_movimiento_carga", {
+    servicio_id: payload.servicio_id,
+    tipo: payload.tipo_movimiento,
+  });
+
   const r = await sbFetch("/rest/v1/rpc/registrar_movimiento_carga", {
     method: "POST",
     body: JSON.stringify({ p_payload: payload }),
   });
-  return parseRpcJson(r);
+  const data = await parseRpcJson(r, "No se pudo registrar la carga.");
+  if (data?.deca_pending) {
+    console.warn("[carga] DeCA pendiente tras movimiento", data.movimiento_id);
+  }
+  return data;
 }
 
 /**

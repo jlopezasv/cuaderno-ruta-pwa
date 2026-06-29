@@ -18,8 +18,15 @@ import {
   terminarCargaMuelle,
   updateCargaMercancia,
   archiveAutonomoExpediente,
+  abrirOperacionMuelle,
+  registrarMovimientoEnMuelle,
+  cerrarOperacionMuelle,
+  anularOperacionMuelle,
+  anularExpedienteAutonomo,
   cancelAutonomoStopOperacion,
+  registrarIncidenciaExpediente,
 } from "../../modules/autonomo-expediente/autonomoExpedienteApi.js";
+import { getOperacionMuelleActiva } from "../../modules/autonomo-expediente/operacionMuelleModel.js";
 import { loadArchivedAutonomoExpedienteIds } from "../../modules/autonomo-expediente/autonomoExpedienteArchive.js";
 import { getCargaAlcance, isCargaNacional } from "../../modules/autonomo-expediente/autonomoExpedienteDeca.js";
 import {
@@ -45,8 +52,7 @@ import { AutonomoRegistrarCargaModal } from "./AutonomoRegistrarCargaModal.jsx";
 import { AutonomoDestinoModal } from "./AutonomoDestinoModal.jsx";
 import { AutonomoGenerarExpedienteModal } from "./AutonomoGenerarExpedienteModal.jsx";
 import { AutonomoExpedienteDecaBlock } from "./AutonomoExpedienteDecaBlock.jsx";
-import { DecaVivoPanel } from "../dcdt/DecaVivoPanel.jsx";
-import { ConductorOperativoDashboard } from "../operational/ConductorOperativoDashboard.jsx";
+import { ExpedienteOperacionalConductor } from "../operational/ExpedienteOperacionalConductor.jsx";
 import { OPERATION_KIND, visualForStop } from "../../domain/service/operationalVisualModel.js";
 import { AutonomoCargaEnMuelleModal } from "./AutonomoCargaEnMuelleModal.jsx";
 import { AutonomoPostCargaModal } from "./AutonomoPostCargaModal.jsx";
@@ -200,7 +206,6 @@ export function AutonomoExpedienteScreen({
   const [decaModalCarga, setDecaModalCarga] = useState(null);
   const [postEntregaDestino, setPostEntregaDestino] = useState(null);
   const [stockActual, setStockActual] = useState([]);
-  const [decaPanelOpen, setDecaPanelOpen] = useState(false);
   const [cargaModalRetorno, setCargaModalRetorno] = useState(false);
   const [retornoDesdeStopId, setRetornoDesdeStopId] = useState(null);
   const [workspaceDismissed, setWorkspaceDismissed] = useState(false);
@@ -317,8 +322,7 @@ export function AutonomoExpedienteScreen({
       setCargaModal(false);
       setRetornoDesdeStopId(null);
       await reloadWorkspace(activeId);
-      setCargaEnMuelleModal(stop);
-      showToast?.("Almacén preparado · registra entrada en muelle");
+      showToast?.("Carga prevista registrada");
     } catch (e) {
       showToast?.(e?.message || "Error");
     } finally {
@@ -430,6 +434,144 @@ export function AutonomoExpedienteScreen({
     if (proxima.kind === "idle") {
       if (proxima.secondaryLabel?.includes("destino")) setDestinoModal(true);
       else setCargaModal(true);
+    }
+  }
+
+  async function handleAbrirEntradaMuelle({ lugar, tipo_previsto, observacion, geo }) {
+    if (!activeId) return;
+    setBusy(true);
+    try {
+      await abrirOperacionMuelle({
+        servicioId: activeId,
+        uid,
+        lugar,
+        tipo_previsto,
+        observacion,
+        geo,
+      });
+      await reloadWorkspace(activeId);
+      showToast?.("Entrada en muelle registrada");
+    } catch (e) {
+      showToast?.(e?.message || "Error al abrir muelle");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRegistrarMovimientoMuelle(movimiento) {
+    if (!activeId) return;
+    setBusy(true);
+    try {
+      if (movimiento.tipo === "incidencia" && !getOperacionMuelleActiva(workspace?.servicio)) {
+        await registrarIncidenciaExpediente({
+          servicioId: activeId,
+          descripcion: movimiento.descripcion_mercancia || movimiento.observaciones || "Incidencia",
+          observaciones: movimiento.observaciones,
+        });
+        await reloadWorkspace(activeId);
+        showToast?.("Incidencia registrada");
+        return;
+      }
+
+      const result = await registrarMovimientoEnMuelle({
+        servicioId: activeId,
+        movimiento,
+        stockActual,
+      });
+
+      if (result.stockActual) {
+        setStockActual(result.stockActual);
+      } else {
+        try {
+          const { fetchDecaActualVisible } = await import("../../domain/dcdt/decaVivoModel.js");
+          const deca = await fetchDecaActualVisible(activeId);
+          setStockActual(deca?.stock_actual || []);
+        } catch {
+          /* stock se refrescará al recargar */
+        }
+      }
+
+      await reloadWorkspace(activeId);
+
+      if (movimiento.tipo === "carga") {
+        showToast?.(
+          result.decaPending
+            ? "Carga guardada. DeCA pendiente de actualizar."
+            : "Carga registrada correctamente",
+        );
+      } else {
+        showToast?.(
+          result.decaPending ? "Registrado. DeCA pendiente de actualizar." : "Registrado correctamente",
+        );
+      }
+    } catch (e) {
+      console.error("[carga] Error guardando", e);
+      showToast?.(humanizeApiError(e, "No se pudo registrar la carga.").message);
+      throw humanizeApiError(e, "No se pudo registrar la carga.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSalidaMuelle({ sin_cambios, geo, observacion = null }) {
+    if (!activeId) return;
+    setBusy(true);
+    try {
+      await cerrarOperacionMuelle({
+        servicioId: activeId,
+        sin_cambios,
+        geo,
+        observacion,
+      });
+      await reloadWorkspace(activeId);
+      showToast?.("Salida de muelle registrada");
+    } catch (e) {
+      showToast?.(e?.message || "Error al cerrar muelle");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancelarEntradaMuelle() {
+    if (!activeId) return;
+    if (!window.confirm("¿Cancelar la entrada en muelle?")) return;
+    setBusy(true);
+    try {
+      await anularOperacionMuelle({ servicioId: activeId });
+      await reloadWorkspace(activeId);
+      showToast?.("Entrada cancelada");
+    } catch (e) {
+      showToast?.(e?.message || "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAnularExpediente(motivo) {
+    if (!activeId) return;
+    setBusy(true);
+    try {
+      const result = await anularExpedienteAutonomo({ servicioId: activeId, uid, motivo });
+      await reloadList();
+      if (result.mode === "deleted") {
+        setActiveId(null);
+        setWorkspace(null);
+        setView("home");
+        setWorkspaceDismissed(true);
+      } else {
+        setActiveId(null);
+        setWorkspace(null);
+        setView("home");
+        setWorkspaceDismissed(true);
+      }
+      showToast?.(result.mode === "deleted" ? "Expediente eliminado" : "Expediente anulado");
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo anular");
+      throw e;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -794,101 +936,71 @@ export function AutonomoExpedienteScreen({
         ))}
       </Card>
 
-      <Card title="CARGA ACTUAL Y OPERACIONES">
-        <ConductorOperativoDashboard
-          servicio={servicio}
-          cargas={cargas || []}
-          destinos={destinos || []}
-          stockActual={stockActual}
-          busy={busy}
-          onPrimaryAction={handlePrimaryAction}
-          onDescargaEntrada={handleDestinoLlegada}
-          onDescargaSalida={handleDestinoSalida}
-          onCargaEntrada={handleEntradaMuellePendiente}
-          onCargaOpen={setCargaEnMuelleModal}
-          onRegistrarRetorno={openRegistrarRetorno}
-          onRegistrarDevolucion={openRegistrarDevolucion}
-          onVerRetornoAcumulado={() => setDecaPanelOpen(true)}
-          onCancelOperacion={handleCancelOperacion}
-          onVerDeca={() => setDecaPanelOpen(true)}
-        />
-      </Card>
+      <ExpedienteOperacionalConductor
+        servicio={servicio}
+        stockActual={stockActual}
+        busy={busy}
+        uid={uid}
+        conductorNombre={conductorNombre}
+        showToast={showToast}
+        acquireLocation={acquireLocation}
+        onReload={() => reloadWorkspace(activeId)}
+        onEntradaMuelle={handleAbrirEntradaMuelle}
+        onRegistrarMovimiento={handleRegistrarMovimientoMuelle}
+        onSalidaMuelle={handleSalidaMuelle}
+        onCancelarEntradaMuelle={handleCancelarEntradaMuelle}
+        onAnularExpediente={handleAnularExpediente}
+        onAñadirCargaPrevista={() => setCargaModal(true)}
+        onAñadirDestinoPrevisto={() => setDestinoModal(true)}
+        onFinalizar={() => setGenerarModal(true)}
+        onStockChange={setStockActual}
+        stops={[...(cargas || []), ...(destinos || [])]}
+        canFinalizar={operativo.canSuggestFinalizar}
+      />
 
-      {decaPanelOpen ? (
-        <Card title="DeCA ACTUAL · QR / PDF / MOVIMIENTOS">
-          <DecaVivoPanel
-            servicio={servicio}
-            stops={[...(cargas || []), ...(destinos || [])]}
-            showToast={showToast}
-            hideStockList
-            onStockChange={setStockActual}
-          />
-          <button
-            type="button"
-            onClick={() => setDecaPanelOpen(false)}
-            style={{ marginTop: 8, width: "100%", padding: 10, borderRadius: 10, border: `1px solid ${UI.line}`, background: "#fff", fontWeight: 700, cursor: "pointer" }}
-          >
-            Cerrar DeCA
-          </button>
-        </Card>
-      ) : (
-        <DecaVivoPanel
-          servicio={servicio}
-          stops={[...(cargas || []), ...(destinos || [])]}
-          showToast={showToast}
-          compact
-          hidden
-          onStockChange={setStockActual}
-        />
-      )}
-
-      <Card title="ACCIONES RÁPIDAS">
-        <div style={{ fontSize: 11, color: UI.su, lineHeight: 1.45, marginBottom: 10 }}>
-          Tacógrafo → Otros trabajos registra tiempos legales. Aquí va el expediente operacional y DeCA.
-        </div>
-        <button
-          type="button"
-          style={{ ...actionChip("#0f766e"), width: "100%", flex: "none", marginBottom: 8, whiteSpace: "nowrap" }}
-          disabled={busy}
-          onClick={() => setCargaModal(true)}
-        >
-          {muelleCargaRapidaLabel()}
-        </button>
-        <button type="button" style={{ ...actionChip(UI.blue), width: "100%", flex: "none" }} disabled={busy} onClick={() => setDestinoModal(true)}>
-          Añadir destino
-        </button>
-      </Card>
-
-      {stops?.length ? (
+      {(timeline?.length || stops?.filter((s) => !getStopOperacionMeta(s.notas)?.es_session_muelle)?.length) ? (
         <Card title="RECORRIDO">
-          {stops.map((s) => {
-            const vis = visualForStop(s);
-            if (!vis) return null;
-            const isCarga = String(s.tipo || "").toLowerCase() === "carga";
-            const muelle = isCarga ? getCargaMuelleResumen(s) : getDestinoTiempoResumen(s);
-            return (
-              <div
-                key={s.id}
-                style={{
-                  border: `2px solid ${vis.border}`,
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  marginBottom: 8,
-                  fontSize: 13,
-                  background: vis.bg,
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{ fontWeight: 800, color: vis.color }}>
-                    {vis.icon} {vis.label} · {s.nombre}
-                  </div>
+          {timeline?.length
+            ? timeline.slice(-15).map((evt, idx, arr) => (
+                <div
+                  key={`${evt.type}-${evt.at}-${evt.stopId || idx}`}
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    padding: "8px 0",
+                    borderBottom: idx < arr.length - 1 ? `1px solid ${UI.line}` : "none",
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, color: UI.blue, minWidth: 44 }}>{evt.timeLabel}</div>
+                  <div style={{ fontSize: 13, color: UI.tx, lineHeight: 1.4 }}>{evt.label}</div>
                 </div>
-                <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>
-                  {muelle?.label ? muelle.label : "—"}
-                </div>
-              </div>
-            );
-          })}
+              ))
+            : stops
+                .filter((s) => !getStopOperacionMeta(s.notas)?.es_session_muelle)
+                .map((s) => {
+                  const vis = visualForStop(s);
+                  if (!vis) return null;
+                  const isCarga = String(s.tipo || "").toLowerCase() === "carga";
+                  const muelle = isCarga ? getCargaMuelleResumen(s) : getDestinoTiempoResumen(s);
+                  return (
+                    <div
+                      key={s.id}
+                      style={{
+                        border: `2px solid ${vis.border}`,
+                        borderRadius: 12,
+                        padding: "10px 12px",
+                        marginBottom: 8,
+                        fontSize: 13,
+                        background: vis.bg,
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, color: vis.color }}>
+                        {vis.icon} {vis.label} · {s.nombre}
+                      </div>
+                      <div style={{ fontSize: 12, color: UI.su, marginTop: 2 }}>{muelle?.label || "—"}</div>
+                    </div>
+                  );
+                })}
         </Card>
       ) : null}
 
@@ -926,25 +1038,6 @@ export function AutonomoExpedienteScreen({
             Finalizar expediente
           </button>
         </div>
-      ) : null}
-
-      {timeline?.length ? (
-        <Card title="CRONOLOGÍA">
-          {timeline.slice(-20).map((evt, idx, arr) => (
-            <div
-              key={`${evt.type}-${evt.at}-${evt.stopId || idx}`}
-              style={{
-                display: "flex",
-                gap: 10,
-                padding: "8px 0",
-                borderBottom: idx < arr.length - 1 ? `1px solid ${UI.line}` : "none",
-              }}
-            >
-              <div style={{ fontSize: 11, fontWeight: 800, color: UI.blue, minWidth: 44 }}>{evt.timeLabel}</div>
-              <div style={{ fontSize: 13, color: UI.tx, lineHeight: 1.4 }}>{evt.label}</div>
-            </div>
-          ))}
-        </Card>
       ) : null}
 
       <AutonomoGenerarExpedienteModal
