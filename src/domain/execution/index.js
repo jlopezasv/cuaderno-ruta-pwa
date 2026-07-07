@@ -42,5 +42,15 @@ export {
   inMemoryOperationalSessionRepository,
 } from "./repositories/InMemoryOperationalSessionRepository.js";
 
+export { OperationalSessionRepository } from "./repositories/OperationalSessionRepository.js";
+
+export {
+  extractMovementRefsFromLegacyMovimientos,
+  toOperationalSessionFromLegacyOp,
+  toOperationalSessionActiveFromServicio,
+  toOperationalSessionsFromHistorial,
+  toLegacyOperacionMuelleProjection,
+} from "./adapters/LegacyOperacionMuelleAdapter.js";
+
 export * from "./queries/index.js";
 export * from "./commands/index.js";
