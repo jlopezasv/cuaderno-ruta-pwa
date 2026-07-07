@@ -30,3 +30,4 @@ export { toParada, toParadas } from "./adapters/LegacyStopAdapter.js";
 
 export { ExpedicionRepository, expedicionRepository } from "./repositories/ExpedicionRepository.js";
 export { InventarioRepository, inventarioRepository } from "./repositories/InventarioRepository.js";
+export { MovimientoRepository, movimientoRepository } from "./repositories/MovimientoRepository.js";
