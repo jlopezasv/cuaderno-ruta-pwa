@@ -24,3 +24,5 @@ export {
 } from "./constants/TiposMovimiento.js";
 
 export * from "./types/expedicion.types.js";
+
+export { toExpedicion, toOperacionMuelleActiva } from "./adapters/LegacyServicioAdapter.js";
