@@ -22,3 +22,5 @@ export {
   DECA_VIVO_SUMA_TIPOS,
   DECA_VIVO_RESTA_TIPOS,
 } from "./constants/TiposMovimiento.js";
+
+export * from "./types/expedicion.types.js";
