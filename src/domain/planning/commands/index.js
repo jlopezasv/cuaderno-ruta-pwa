@@ -1,6 +1,9 @@
 export { CrearTransportObligationCommand } from "./CrearTransportObligationCommand.js";
+export { ActualizarTransportObligationCommand } from "./ActualizarTransportObligationCommand.js";
 export { PlanificarTransportObligationCommand } from "./PlanificarTransportObligationCommand.js";
 export { CancelarTransportObligationCommand } from "./CancelarTransportObligationCommand.js";
 export { ReplanificarTransportObligationCommand } from "./ReplanificarTransportObligationCommand.js";
 export { VincularExpedicionObligationCommand } from "./VincularExpedicionObligationCommand.js";
+export { GenerarExpedicionDesdeObligationCommand } from "./GenerarExpedicionDesdeObligationCommand.js";
+export { EnviarExpedicionObligationCommand } from "./EnviarExpedicionObligationCommand.js";
 export { createPlanningCommands } from "./createPlanningCommands.js";

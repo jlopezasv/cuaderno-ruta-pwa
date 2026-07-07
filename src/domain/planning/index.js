@@ -42,6 +42,11 @@ export {
 } from "./repositories/TransportObligationRepository.js";
 
 export {
+  PlanningExpeditionRepository,
+  planningExpeditionRepository,
+} from "./repositories/PlanningExpeditionRepository.js";
+
+export {
   InMemoryTransportObligationRepository,
   inMemoryTransportObligationRepository,
 } from "./repositories/InMemoryTransportObligationRepository.js";

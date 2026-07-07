@@ -5,6 +5,7 @@ import { PlanificarTransportObligationCommand } from "./PlanificarTransportOblig
 import { CancelarTransportObligationCommand } from "./CancelarTransportObligationCommand.js";
 import { ReplanificarTransportObligationCommand } from "./ReplanificarTransportObligationCommand.js";
 import { VincularExpedicionObligationCommand } from "./VincularExpedicionObligationCommand.js";
+import { ActualizarTransportObligationCommand } from "./ActualizarTransportObligationCommand.js";
 import { TRANSPORT_OBLIGATION_STATE } from "../constants/EstadosTransportObligation.js";
 import { ObtenerObligationPorExpedicionQuery } from "../queries/ObtenerObligationPorExpedicionQuery.js";
 
@@ -64,5 +65,23 @@ describe("Planning commands", () => {
 
     const queryResult = await new ObtenerObligationPorExpedicionQuery(repo).execute("srv-link-1");
     expect(queryResult?.obligation.id).toBe("to-cmd-5");
+  });
+
+  it("ActualizarTransportObligationCommand updates lines", async () => {
+    await new CrearTransportObligationCommand(repo).execute({ id: "to-cmd-6", empresaId: "emp-1" });
+    const result = await new ActualizarTransportObligationCommand(repo).execute("to-cmd-6", {
+      lines: [
+        {
+          lineId: "line-1",
+          description: "Carga general",
+          quantity: 5,
+          unit: "pal",
+          originLocationRef: "Origen A",
+          destinationLocationRef: "Destino B",
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.value.obligation.lines[0].originLocationRef).toBe("Origen A");
   });
 });
