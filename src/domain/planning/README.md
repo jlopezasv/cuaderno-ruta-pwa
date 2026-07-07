@@ -21,3 +21,4 @@ Capa de dominio del **Planning Bounded Context**. Introduce el agregado **Transp
 
 - `docs/ARCHITECTURE_FREEZE_V1.md` (ADR-008 Planning BC)
 - `docs/PLANNING_TRANSPORT_OBLIGATION.md` (reglas de dominio)
+- `src/domain/planning/ports/` (conectores futuros)
