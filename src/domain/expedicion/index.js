@@ -29,3 +29,4 @@ export { toExpedicion, toOperacionMuelleActiva } from "./adapters/LegacyServicio
 export { toParada, toParadas } from "./adapters/LegacyStopAdapter.js";
 
 export { ExpedicionRepository, expedicionRepository } from "./repositories/ExpedicionRepository.js";
+export { InventarioRepository, inventarioRepository } from "./repositories/InventarioRepository.js";
