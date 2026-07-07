@@ -44,6 +44,81 @@
  * @property {string|null} unidad
  * @property {number|null} pesoKg
  * @property {string|null} fechaHora ISO
+ * @property {string|null} paradaId
+ */
+
+/**
+ * Línea de stock a bordo.
+ *
+ * @typedef {Object} LineaStock
+ * @property {string} lineKey
+ * @property {string} descripcionMercancia
+ * @property {string|null} categoriaMercancia
+ * @property {number} cantidadActual
+ * @property {string|null} unidad
+ * @property {number|null} pesoKgActual
+ * @property {string|null} destinoPrevisto
+ */
+
+/**
+ * @typedef {Object} CartaDePorteResumen
+ * @property {string} id
+ * @property {string} estado
+ * @property {number} version
+ * @property {string|null} qrToken
+ * @property {string|null} fechaActualizacion
+ */
+
+/**
+ * Inventario actual a bordo (lectura).
+ *
+ * @typedef {Object} InventarioActual
+ * @property {string} servicioId
+ * @property {LineaStock[]} lineas
+ * @property {CartaDePorteResumen|null} cartaDePorte
+ */
+
+/**
+ * Vista completa inventario DeCA vivo.
+ *
+ * @typedef {Object} InventarioVivo
+ * @property {string} servicioId
+ * @property {LineaStock[]} lineas
+ * @property {CartaDePorteResumen|null} cartaDePorte
+ * @property {MovimientoMercancia[]} ultimosMovimientos
+ */
+
+/**
+ * Versión histórica DeCA.
+ *
+ * @typedef {Object} VersionDecaHistorial
+ * @property {string} id
+ * @property {number} version
+ * @property {string|null} motivo
+ * @property {string} creadoEn
+ */
+
+/**
+ * Evento en timeline operativo.
+ *
+ * @typedef {Object} EventoTimeline
+ * @property {string} id
+ * @property {string} tipo
+ * @property {string} at ISO
+ * @property {string} etiqueta
+ * @property {string|null} paradaId
+ */
+
+/**
+ * Workspace de lectura del agregado Expedición.
+ *
+ * @typedef {Object} ExpedicionWorkspace
+ * @property {Expedicion} expedicion
+ * @property {Parada[]} paradas
+ * @property {Parada[]} cargas
+ * @property {Parada[]} destinos
+ * @property {OperacionMuelle|null} operacionMuelle
+ * @property {EventoTimeline[]} timeline
  */
 
 /**
