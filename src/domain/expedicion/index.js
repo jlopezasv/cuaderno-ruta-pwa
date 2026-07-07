@@ -27,3 +27,5 @@ export * from "./types/expedicion.types.js";
 
 export { toExpedicion, toOperacionMuelleActiva } from "./adapters/LegacyServicioAdapter.js";
 export { toParada, toParadas } from "./adapters/LegacyStopAdapter.js";
+
+export { ExpedicionRepository, expedicionRepository } from "./repositories/ExpedicionRepository.js";
