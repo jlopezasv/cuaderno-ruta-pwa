@@ -31,3 +31,13 @@ export { toParada, toParadas } from "./adapters/LegacyStopAdapter.js";
 export { ExpedicionRepository, expedicionRepository } from "./repositories/ExpedicionRepository.js";
 export { InventarioRepository, inventarioRepository } from "./repositories/InventarioRepository.js";
 export { MovimientoRepository, movimientoRepository } from "./repositories/MovimientoRepository.js";
+
+export * from "./queries/index.js";
+
+export { toMovimientoMercancia, toMovimientosMercancia } from "./adapters/LegacyMovimientoAdapter.js";
+export {
+  toInventarioActual,
+  toInventarioVivo,
+  toVersionesDecaHistorial,
+  toEventosTimeline,
+} from "./adapters/LegacyInventarioAdapter.js";
