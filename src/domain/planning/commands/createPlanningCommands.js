@@ -3,6 +3,7 @@ import { CrearTransportObligationCommand } from "./CrearTransportObligationComma
 import { PlanificarTransportObligationCommand } from "./PlanificarTransportObligationCommand.js";
 import { CancelarTransportObligationCommand } from "./CancelarTransportObligationCommand.js";
 import { ReplanificarTransportObligationCommand } from "./ReplanificarTransportObligationCommand.js";
+import { VincularExpedicionObligationCommand } from "./VincularExpedicionObligationCommand.js";
 
 /**
  * Factory con repositorio Supabase por defecto (runtime).
@@ -21,5 +22,6 @@ export function createPlanningCommands(deps = {}) {
     planificarTransportObligation: new PlanificarTransportObligationCommand(repo),
     cancelarTransportObligation: new CancelarTransportObligationCommand(repo),
     replanificarTransportObligation: new ReplanificarTransportObligationCommand(repo),
+    vincularExpedicionObligation: new VincularExpedicionObligationCommand(repo),
   };
 }

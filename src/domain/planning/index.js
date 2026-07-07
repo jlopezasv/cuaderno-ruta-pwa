@@ -32,16 +32,24 @@ export {
 } from "./aggregate/TransportObligation.js";
 
 export {
-  TransportObligationRepository,
-  transportObligationRepository,
   rowToTransportObligation,
   transportObligationToRow,
+} from "./repositories/TransportObligationRowMapper.js";
+
+export {
+  TransportObligationRepository,
+  transportObligationRepository,
 } from "./repositories/TransportObligationRepository.js";
 
 export {
   InMemoryTransportObligationRepository,
   inMemoryTransportObligationRepository,
 } from "./repositories/InMemoryTransportObligationRepository.js";
+
+export {
+  getTransportObligationIdFromServicio,
+  enrichExpedicionWithTransportObligationId,
+} from "./adapters/ExpeditionObligationLinkAdapter.js";
 
 export * from "./queries/index.js";
 export * from "./commands/index.js";

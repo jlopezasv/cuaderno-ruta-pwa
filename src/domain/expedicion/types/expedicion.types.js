@@ -17,6 +17,7 @@
  * @property {string|null} startedAt
  * @property {string|null} conductorId
  * @property {string|null} empresaId
+ * @property {string|null} transportObligationId Vínculo opcional Planning BC (meta o junction).
  */
 
 /**

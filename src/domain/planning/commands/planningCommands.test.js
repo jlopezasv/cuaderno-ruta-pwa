@@ -4,7 +4,9 @@ import { CrearTransportObligationCommand } from "./CrearTransportObligationComma
 import { PlanificarTransportObligationCommand } from "./PlanificarTransportObligationCommand.js";
 import { CancelarTransportObligationCommand } from "./CancelarTransportObligationCommand.js";
 import { ReplanificarTransportObligationCommand } from "./ReplanificarTransportObligationCommand.js";
+import { VincularExpedicionObligationCommand } from "./VincularExpedicionObligationCommand.js";
 import { TRANSPORT_OBLIGATION_STATE } from "../constants/EstadosTransportObligation.js";
+import { ObtenerObligationPorExpedicionQuery } from "../queries/ObtenerObligationPorExpedicionQuery.js";
 
 describe("Planning commands", () => {
   /** @type {InMemoryTransportObligationRepository} */
@@ -49,5 +51,18 @@ describe("Planning commands", () => {
     expect(result.ok).toBe(true);
     expect(result.value.supersededObligation.state).toBe(TRANSPORT_OBLIGATION_STATE.SUPERSEDED);
     expect(result.value.replacementObligation.id).toBe("to-cmd-4-r");
+  });
+
+  it("VincularExpedicionObligationCommand links expedition without side effects", async () => {
+    await new CrearTransportObligationCommand(repo).execute({ id: "to-cmd-5" });
+    const linkResult = await new VincularExpedicionObligationCommand(repo).execute({
+      transportObligationId: "to-cmd-5",
+      expeditionId: "srv-link-1",
+    });
+    expect(linkResult.ok).toBe(true);
+    expect(linkResult.value.obligation.expeditionIds).toContain("srv-link-1");
+
+    const queryResult = await new ObtenerObligationPorExpedicionQuery(repo).execute("srv-link-1");
+    expect(queryResult?.obligation.id).toBe("to-cmd-5");
   });
 });

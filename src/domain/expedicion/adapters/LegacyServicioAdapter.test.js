@@ -32,6 +32,21 @@ describe("LegacyServicioAdapter", () => {
     expect(exp.startedAt).toBe("2026-06-01T08:00:00Z");
     expect(exp.conductorId).toBe("cond-1");
     expect(exp.empresaId).toBeNull();
+    expect(exp.transportObligationId).toBeNull();
+  });
+
+  it("maps optional transportObligationId from meta without changing other fields", () => {
+    const servicio = {
+      id: "srv-obl",
+      estado: "en_curso",
+      referencia: "REF\n__SRV_OP__:" + JSON.stringify({
+        transport_obligation_id: "to-99",
+        expediente_estado: EXPEDIENTE_ESTADO.ACTIVO,
+      }),
+    };
+    const exp = toExpedicion(servicio);
+    expect(exp?.transportObligationId).toBe("to-99");
+    expect(exp?.referenciaVisible).toBe("REF");
   });
 
   it("returns null for invalid input", () => {

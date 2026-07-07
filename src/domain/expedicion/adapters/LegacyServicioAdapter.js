@@ -5,6 +5,7 @@ import {
 import { getTipoTransporte } from "../../service/tipoTransporte.js";
 import { DOMAIN_SCHEMA_META_KEY } from "../constants/DomainSchemaVersion.js";
 import { EXPEDIENTE_ESTADO } from "../constants/EstadosExpedicion.js";
+import { getTransportObligationIdFromServicio } from "../../planning/adapters/ExpeditionObligationLinkAdapter.js";
 
 const AUTONOMO_EXPEDIENTE_MARK = "autonomo_expediente_v1";
 
@@ -37,6 +38,7 @@ export function toExpedicion(servicio) {
       null,
     conductorId: servicio.conductor_id ? String(servicio.conductor_id) : null,
     empresaId: servicio.empresa_id ? String(servicio.empresa_id) : null,
+    transportObligationId: getTransportObligationIdFromServicio(servicio),
   };
 }
 
