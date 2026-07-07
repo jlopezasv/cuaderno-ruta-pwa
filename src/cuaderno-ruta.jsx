@@ -259,6 +259,7 @@ import { OperationalEtaSnapshotBlock } from "./features/services/components/Oper
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { AsignarConductorServicioModal } from "./features/empresa/AsignarConductorServicioModal.jsx";
+import { EmpresaTransportObligationsPanel } from "./features/empresa/EmpresaTransportObligationsPanel.jsx";
 import { EmpresaPlanificadorPanel } from "./features/empresa/EmpresaPlanificadorPanel.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
@@ -13026,6 +13027,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[loading,setLoading]=useState(true);
   const[toast,setToast]=useState("");
   const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
+  const[serviciosOfficeSubVista,setServiciosOfficeSubVista]=useState("servicios"); // servicios | obligaciones
   useEffect(()=>{if(initialTab)setFlotaTab(initialTab);},[initialTab]);
   const[asignarModal,setAsignarModal]=useState(null);
   const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
@@ -14796,6 +14798,37 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── SERVICIOS — centro operacional (PR-26/27) ── */}
       {flotaTab==="servicios"&&(
         <div style={{padding:"6px 12px 72px"}}>
+          <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto"}}>
+            {[{id:"servicios",label:"Servicios"},{id:"obligaciones",label:"Obligaciones"}].map(tab=>(
+              <button key={tab.id} type="button" onClick={()=>setServiciosOfficeSubVista(tab.id)}
+                style={{
+                  flexShrink:0,
+                  background:serviciosOfficeSubVista===tab.id?EMPRESA_UI.accentSoft:"#f8fafc",
+                  border:`1px solid ${serviciosOfficeSubVista===tab.id?"#93c5fd":EMPRESA_UI.border}`,
+                  borderRadius:20,
+                  padding:"8px 14px",
+                  fontSize:12,
+                  fontWeight:serviciosOfficeSubVista===tab.id?700:550,
+                  color:serviciosOfficeSubVista===tab.id?"#1d4ed8":EMPRESA_UI.subtle,
+                  cursor:"pointer",
+                }}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          {serviciosOfficeSubVista==="obligaciones"?(
+            <EmpresaTransportObligationsPanel
+              empresaId={officeUserPanel?.empresaId||empresa?.id||null}
+              authUid={getUserId?.()||null}
+              conductores={conductores}
+              showToast={showToast}
+              onFlotaRefresh={()=>{void loadFlotaServicios({force:true});}}
+              onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
+              responsableUserId={officeUserPanel?.userId||getUserId?.()||null}
+              responsableNombre={officeUserPanel?.nombre||null}
+            />
+          ):(
+          <>
           {!flotaBootstrapped&&flotaLoading?(
             <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando servicios...</div>
           ):flotaServicios.length===0?(
@@ -14966,6 +14999,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
                 ):null}
               </div>
             </>
+          )}
+          </>
           )}
         </div>
       )}
