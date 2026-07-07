@@ -110,3 +110,46 @@ export function toEventosTimeline(events) {
     paradaId: event.stopId ? String(event.stopId) : null,
   }));
 }
+
+/**
+ * Proyección inversa: dominio → forma legacy consumida por UI existente.
+ * @param {import('../types/expedicion.types.js').LineaStock|null|undefined} linea
+ */
+export function lineaStockToLegacyRow(linea) {
+  if (!linea) return null;
+  return {
+    line_key: linea.lineKey,
+    descripcion_mercancia: linea.descripcionMercancia,
+    categoria_mercancia: linea.categoriaMercancia,
+    cantidad_actual: linea.cantidadActual,
+    unidad: linea.unidad,
+    peso_kg_actual: linea.pesoKgActual,
+    destino_previsto: linea.destinoPrevisto,
+  };
+}
+
+/**
+ * @param {import('../types/expedicion.types.js').CartaDePorteResumen|null|undefined} carta
+ */
+export function cartaDePorteToLegacyDocumento(carta) {
+  if (!carta) return null;
+  return {
+    id: carta.id,
+    estado: carta.estado,
+    version: carta.version,
+    qr_token: carta.qrToken,
+    fecha_actualizacion: carta.fechaActualizacion,
+  };
+}
+
+/**
+ * @param {import('../types/expedicion.types.js').InventarioActual|null|undefined} inventario
+ * @returns {{ stock: Array<object>, documento: object|null }}
+ */
+export function toLegacyInventarioPayload(inventario) {
+  if (!inventario) return { stock: [], documento: null };
+  return {
+    stock: (inventario.lineas || []).map(lineaStockToLegacyRow).filter(Boolean),
+    documento: cartaDePorteToLegacyDocumento(inventario.cartaDePorte),
+  };
+}

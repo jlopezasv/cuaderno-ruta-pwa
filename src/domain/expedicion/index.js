@@ -40,4 +40,7 @@ export {
   toInventarioVivo,
   toVersionesDecaHistorial,
   toEventosTimeline,
+  toLegacyInventarioPayload,
+  lineaStockToLegacyRow,
+  cartaDePorteToLegacyDocumento,
 } from "./adapters/LegacyInventarioAdapter.js";

@@ -4,6 +4,9 @@ import {
   toInventarioVivo,
   toVersionesDecaHistorial,
   toEventosTimeline,
+  toLegacyInventarioPayload,
+  lineaStockToLegacyRow,
+  cartaDePorteToLegacyDocumento,
 } from "./LegacyInventarioAdapter.js";
 
 describe("LegacyInventarioAdapter", () => {
@@ -42,5 +45,16 @@ describe("LegacyInventarioAdapter", () => {
       { id: "e1", type: "carga", at: "2026-01-01", label: "Carga", stopId: "p1" },
     ]);
     expect(events[0].paradaId).toBe("p1");
+  });
+
+  it("roundtrips inventario actual to legacy payload", () => {
+    const legacy = {
+      stock: [{ line_key: "k1", descripcion_mercancia: "Cajas", cantidad_actual: 3, unidad: "cajas" }],
+      documento: { id: "d1", estado: "actual", version: 2, qr_token: "qr" },
+    };
+    const domain = toInventarioActual("s1", legacy);
+    const back = toLegacyInventarioPayload(domain);
+    expect(back.stock[0].descripcion_mercancia).toBe("Cajas");
+    expect(back.documento.qr_token).toBe("qr");
   });
 });
