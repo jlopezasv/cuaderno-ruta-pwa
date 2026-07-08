@@ -4,6 +4,7 @@ import { createPlanningQueries } from "../../domain/planning/queries/createPlann
 import { TRANSPORT_OBLIGATION_STATE } from "../../domain/planning/constants/EstadosTransportObligation.js";
 import {
   OBLIGATION_STATE_LABELS,
+  conductorAuthUid,
   obligationRouteLabel,
   resolveWizardStep,
 } from "./transportObligationOfficeUi.js";
@@ -106,7 +107,7 @@ export function TransportObligationWizardModal({
 
   useEffect(() => {
     if (!conductorId) return;
-    const c = conductores.find((x) => String(x.uid || x.id) === String(conductorId));
+    const c = conductores.find((x) => conductorAuthUid(x) === String(conductorId));
     if (c?.matricula) setMatricula(String(c.matricula));
     if (c?.remolque) setRemolque(String(c.remolque));
   }, [conductorId, conductores]);
@@ -223,7 +224,7 @@ export function TransportObligationWizardModal({
     setLoading(true);
     setError("");
     try {
-      const conductor = conductores.find((c) => String(c.uid || c.id) === String(conductorId));
+      const conductor = conductores.find((c) => conductorAuthUid(c) === String(conductorId));
       const result = await commands.enviarExpedicionObligation.execute({
         transportObligationId: obligationId,
         expeditionId,
@@ -372,11 +373,14 @@ export function TransportObligationWizardModal({
                 style={inputStyle}
               >
                 <option value="">Seleccionar…</option>
-                {conductores.map((c) => (
-                  <option key={c.uid || c.id} value={c.uid || c.id}>
-                    {c.nombre || c.email || c.uid}
+                {conductores.filter((c) => conductorAuthUid(c)).map((c) => {
+                  const uid = conductorAuthUid(c);
+                  return (
+                  <option key={uid} value={uid}>
+                    {c.nombre || c.email || uid}
                   </option>
-                ))}
+                  );
+                })}
               </select>
             </label>
             <label style={{ fontSize: 12, color: UI.muted }}>

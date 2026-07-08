@@ -10,6 +10,7 @@ import {
   obligationStateLabel,
   resolveCentroLogisticoWizardStep,
 } from "./centroLogisticoUi.js";
+import { conductorAuthUid } from "../empresa/transportObligationOfficeUi.js";
 
 const UI = {
   border: "#dbe4ee",
@@ -121,7 +122,7 @@ export function NuevaOperacionWizardModal({
 
   useEffect(() => {
     if (!conductorId) return;
-    const c = conductores.find((x) => String(x.uid || x.id) === String(conductorId));
+    const c = conductores.find((x) => conductorAuthUid(x) === String(conductorId));
     if (c?.matricula) setMatricula(String(c.matricula));
     if (c?.remolque) setRemolque(String(c.remolque));
   }, [conductorId, conductores]);
@@ -237,7 +238,7 @@ export function NuevaOperacionWizardModal({
     setLoading(true);
     setError("");
     try {
-      const conductor = conductores.find((c) => String(c.uid || c.id) === String(conductorId));
+      const conductor = conductores.find((c) => conductorAuthUid(c) === String(conductorId));
       const result = await commands.enviarExpedicionObligation.execute({
         transportObligationId: obligationId,
         expeditionId,
@@ -381,11 +382,14 @@ export function NuevaOperacionWizardModal({
                 style={inputStyle}
               >
                 <option value="">Seleccionar…</option>
-                {conductores.map((c) => (
-                  <option key={c.uid || c.id} value={c.uid || c.id}>
-                    {c.nombre || c.email || c.uid}
-                  </option>
-                ))}
+                {conductores.filter((c) => conductorAuthUid(c)).map((c) => {
+                  const uid = conductorAuthUid(c);
+                  return (
+                    <option key={uid} value={uid}>
+                      {c.nombre || c.email || uid}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <label style={labelStyle}>
@@ -414,7 +418,7 @@ export function NuevaOperacionWizardModal({
               {conductorId ? (
                 <div style={{ marginTop: 4 }}>
                   <strong>Conductor:</strong>{" "}
-                  {conductores.find((c) => String(c.uid || c.id) === String(conductorId))?.nombre ||
+                  {conductores.find((c) => conductorAuthUid(c) === String(conductorId))?.nombre ||
                     conductorId}
                 </div>
               ) : null}
@@ -442,7 +446,7 @@ export function NuevaOperacionWizardModal({
               Confirma el envío al conductor seleccionado.
             </p>
             <div style={{ fontSize: 12, color: UI.tx }}>
-              {conductores.find((c) => String(c.uid || c.id) === String(conductorId))?.nombre ||
+              {conductores.find((c) => conductorAuthUid(c) === String(conductorId))?.nombre ||
                 "Conductor no seleccionado"}
               {matricula ? ` · ${matricula}` : ""}
               {remolque ? ` · ${remolque}` : ""}

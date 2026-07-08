@@ -32,3 +32,9 @@ export function obligationRouteLabel(obligation) {
   const d = line.destinationLocationRef || "Destino";
   return `${o} → ${d}`;
 }
+
+/** UUID auth.users — requerido por servicios.conductor_id (no usar conductor_empresa.id). */
+export function conductorAuthUid(conductor) {
+  if (!conductor) return "";
+  return String(conductor.user_id || conductor.uid || "").trim();
+}
