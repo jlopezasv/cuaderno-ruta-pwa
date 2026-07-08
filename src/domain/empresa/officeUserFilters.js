@@ -128,10 +128,10 @@ export function getVisibleEmpresaTabs(capabilities) {
   let tabs;
   switch (rol) {
     case "jefe_flota":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador, TAB.config];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.centro_logistico, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador, TAB.config];
       break;
     case "trafico":
-      tabs = [TAB.dashboard, TAB.servicios, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador];
+      tabs = [TAB.dashboard, TAB.servicios, TAB.centro_logistico, TAB.conductores, TAB.documentos, TAB.estadisticas, TAB.planificador];
       break;
     case "administrativo":
       tabs = [TAB.documentos, TAB.estadisticas];

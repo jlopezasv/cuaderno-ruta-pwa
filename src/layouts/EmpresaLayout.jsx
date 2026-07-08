@@ -435,6 +435,10 @@ export default function EmpresaLayout({
         {/* SERVICIOS */}
         {tab === "servicios" && <EmpresaPanelSeccion seccion="servicios" prof={prof} showToast={showToast} />}
 
+        {tab === "centro_logistico" && (
+          <EmpresaPanelSeccion seccion="centro_logistico" prof={prof} showToast={showToast} />
+        )}
+
         {/* CONDUCTORES */}
         {tab === "conductores" && <EmpresaPanelSeccion seccion="conductores" prof={prof} showToast={showToast} />}
 

@@ -260,6 +260,7 @@ import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServic
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { AsignarConductorServicioModal } from "./features/empresa/AsignarConductorServicioModal.jsx";
 import { EmpresaTransportObligationsPanel } from "./features/empresa/EmpresaTransportObligationsPanel.jsx";
+import { CentroLogisticoPanel } from "./features/centro-logistico/CentroLogisticoPanel.jsx";
 import { EmpresaPlanificadorPanel } from "./features/empresa/EmpresaPlanificadorPanel.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
@@ -15003,6 +15004,20 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
           </>
           )}
         </div>
+      )}
+
+      {/* ── CENTRO LOGÍSTICO MVP (Sprint 6) ── */}
+      {flotaTab==="centro_logistico"&&(
+        <CentroLogisticoPanel
+          empresaId={officeUserPanel?.empresaId||empresa?.id||null}
+          authUid={getUserId?.()||null}
+          conductores={conductores}
+          showToast={showToast}
+          onFlotaRefresh={()=>{void loadFlotaServicios({force:true});}}
+          onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
+          responsableUserId={officeUserPanel?.userId||getUserId?.()||null}
+          responsableNombre={officeUserPanel?.nombre||null}
+        />
       )}
 
       {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
