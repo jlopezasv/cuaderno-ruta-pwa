@@ -24,9 +24,9 @@ export class TransportObligationRepository {
    */
   async save(obligation) {
     const payload = transportObligationToRow(obligation);
-    const res = await sbFetch("/rest/v1/transport_obligations", {
+    const res = await sbFetch("/rest/v1/transport_obligations?on_conflict=id", {
       method: "POST",
-      prefer: "resolution=merge-duplicates,return=representation",
+      headers: { Prefer: "resolution=merge-duplicates,return=representation" },
       body: JSON.stringify(payload),
     });
 
@@ -34,7 +34,13 @@ export class TransportObligationRepository {
 
     const rows = await res.json().catch(() => []);
     const row = Array.isArray(rows) ? rows[0] : rows;
-    return rowToTransportObligation(row);
+    if (row?.id) {
+      return rowToTransportObligation(row);
+    }
+
+    const refreshed = await this.findById(obligation.id);
+    if (refreshed) return refreshed;
+    throw new Error("No se pudo guardar la obligación de transporte");
   }
 
   /**
@@ -101,7 +107,7 @@ export class TransportObligationRepository {
   async saveExpeditionLink(link) {
     const res = await sbFetch("/rest/v1/transport_obligation_expeditions", {
       method: "POST",
-      prefer: "return=representation",
+      headers: { Prefer: "return=representation" },
       body: JSON.stringify({
         servicio_id: link.expeditionId,
         transport_obligation_id: link.transportObligationId,
@@ -114,6 +120,9 @@ export class TransportObligationRepository {
 
     const rows = await res.json().catch(() => []);
     const row = Array.isArray(rows) ? rows[0] : rows;
+    if (!row?.servicio_id) {
+      throw new Error("No se pudo vincular la expedición a la obligación");
+    }
     return {
       expeditionId: String(row.servicio_id),
       transportObligationId: String(row.transport_obligation_id),
@@ -137,7 +146,7 @@ export class TransportObligationRepository {
 
     const res = await sbFetch("/rest/v1/transport_obligation_events", {
       method: "POST",
-      prefer: "return=minimal",
+      headers: { Prefer: "return=minimal" },
       body: JSON.stringify(body),
     });
 
