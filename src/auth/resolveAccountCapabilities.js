@@ -11,12 +11,14 @@ import {
   isHybridCapabilities,
   parseProfileAccount,
 } from "./accountModel.js";
-import { userIsEmpresaOwner } from "../domain/empresa/officeUserLinkage.js";
+import {
+  fetchOfficeUserLinkState,
+  userIsEmpresaOwner,
+} from "../domain/empresa/officeUserLinkage.js";
 import {
   BOOTSTRAP_ERRORS,
   fetchOfficeUserContext,
 } from "./officeBootstrap.js";
-import { fetchOfficeUserLinkRow } from "../domain/empresa/officeUserLinkage.js";
 import { profileMustChangePassword } from "../domain/auth/mustChangePassword.js";
 
 export { isHybridCapabilities as isHybridAccount };
@@ -104,18 +106,25 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
   let bootstrapError = null;
   if (!profile) {
     bootstrapError = BOOTSTRAP_ERRORS.NO_PROFILE;
-  } else if (officeUser && !officeUser.activo) {
+  } else if (officeUser && officeUser.activo === false) {
     bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
+  } else if (officeUser?.empresaId) {
+    // RPC/REST ya resolvieron el vínculo; no exigir una segunda lectura REST
+    // (eu_sel puede fallar por RLS y se interpretaba como enlace roto).
+    bootstrapError = null;
   } else if (
     account.accountType === ACCOUNT_TYPES.EMPRESA &&
     !account.canDrive &&
-  !(await userIsEmpresaOwner(uid, sbSelect))
+    !(await userIsEmpresaOwner(uid, sbSelect))
   ) {
-    const linkRow = await fetchOfficeUserLinkRow(uid).catch(() => null);
-    if (!linkRow) {
-      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
-    } else if (!officeUser?.activo) {
+    const linkState = await fetchOfficeUserLinkState(uid).catch(() => ({
+      status: "error",
+      row: null,
+    }));
+    if (linkState.status === "ok" && linkState.row?.activo === false) {
       bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
+    } else if (linkState.status === "empty") {
+      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
     }
   }
 

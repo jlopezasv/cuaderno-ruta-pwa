@@ -71,7 +71,7 @@ import { bootstrapAuthSession } from "./auth/resolveAccountCapabilities.js";
 import { MustChangePasswordGate } from "./features/auth/MustChangePasswordGate.jsx";
 import { ChangePasswordForm } from "./features/auth/ChangePasswordForm.jsx";
 import { bootstrapErrorMessage, BOOTSTRAP_ERRORS } from "./auth/officeBootstrap.js";
-import { fetchOfficeUserContextRest, fetchOfficeUserLinkRow } from "./domain/empresa/officeUserLinkage.js";
+import { fetchOfficeUserContextRest, fetchOfficeUserLinkRow, fetchOfficeUserLinkState } from "./domain/empresa/officeUserLinkage.js";
 import { resolveEmpresaRecordForUser } from "./domain/empresa/empresaOfficeContext.js";
 import {
   invalidateEmpresaRecordCache,
@@ -13399,8 +13399,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             }
             return;
           }
-          const linkRow=await fetchOfficeUserLinkRow(uid);
-          setModo(linkRow&&!linkRow.activo?"office_sin_empresa":"office_link_broken");
+          const linkState=await fetchOfficeUserLinkState(uid).catch(()=>({status:"error",row:null}));
+          setModo(linkState.row&&linkState.row.activo===false?"office_sin_empresa":"office_link_broken");
           setLoading(false);
           return;
         }

@@ -33,16 +33,28 @@ export async function fetchOfficeUserContextRest(uid = null) {
   });
 }
 
-/** ¿Existe alguna fila empresa_usuarios para el usuario (activa o no)? */
-export async function fetchOfficeUserLinkRow(uid = null) {
+/**
+ * Lectura de empresa_usuarios del usuario actual.
+ * Distingue fila ausente (HTTP 200 vacío) de fallo de lectura (RLS/500).
+ * @returns {{ status: "ok"|"empty"|"error", row: object|null, httpStatus?: number }}
+ */
+export async function fetchOfficeUserLinkState(uid = null) {
   const userId = uid || getAuthUid();
-  if (!userId) return null;
+  if (!userId) return { status: "empty", row: null };
   const res = await sbFetch(
     `/rest/v1/empresa_usuarios?user_id=eq.${encodeURIComponent(userId)}&select=id,empresa_id,user_id,activo,rol,email,nombre&limit=1`,
   );
-  if (!res.ok) return null;
+  if (!res.ok) return { status: "error", row: null, httpStatus: res.status };
   const rows = await res.json().catch(() => []);
-  return Array.isArray(rows) ? rows[0] : null;
+  const row = Array.isArray(rows) ? rows[0] || null : rows || null;
+  if (!row) return { status: "empty", row: null };
+  return { status: "ok", row };
+}
+
+/** ¿Existe alguna fila empresa_usuarios para el usuario (activa o no)? */
+export async function fetchOfficeUserLinkRow(uid = null) {
+  const state = await fetchOfficeUserLinkState(uid).catch(() => ({ status: "error", row: null }));
+  return state.row;
 }
 
 /** ¿El usuario es owner de alguna empresa? */

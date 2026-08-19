@@ -7,7 +7,6 @@ import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "../auth/officeBootstrap.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
 import { EMPRESA_PAGE_SHELL_CSS } from "../ui/empresaPageShell.js";
-import { isDemoApp } from "../config/appEnvironment.js";
 import {
   canAccessEmpresaConfigTab,
   getDefaultEmpresaTab,
@@ -114,7 +113,8 @@ export default function EmpresaLayout({
     };
   }, []);
 
-  const bootstrapError = capabilities?.bootstrapError || null;
+  const officeUserOk = !!(capabilities?.officeUser?.empresaId && capabilities?.officeUser?.activo !== false);
+  const bootstrapError = officeUserOk ? null : capabilities?.bootstrapError || null;
   const visibleTabs = getVisibleEmpresaTabs(capabilities);
   const showModeSwitch = isHybridCapabilities(capabilities);
 
@@ -224,16 +224,33 @@ export default function EmpresaLayout({
           <div style={{ fontSize: 14, color: "#64748b", lineHeight: 1.6, marginBottom: 20 }}>
             {bootstrapErrorMessage(bootstrapError)}
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await sbSignOut();
-              window.location.reload();
-            }}
-            style={{ background: "#b91c1c", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}
-          >
-            Cerrar sesión
-          </button>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={async () => {
+                const uid = getUserId();
+                if (uid) {
+                  try {
+                    await bootstrapAuthSession(uid, sbSelect);
+                  } catch (_) {}
+                }
+                window.location.reload();
+              }}
+              style={{ background: "#0f172a", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Reintentar
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await sbSignOut();
+                window.location.reload();
+              }}
+              style={{ background: "#b91c1c", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
       </div>
     );
