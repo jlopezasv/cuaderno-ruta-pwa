@@ -13431,11 +13431,8 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
             return;
           }
           const linkState=await fetchOfficeUserLinkState(uid).catch(()=>({status:"error",row:null}));
-          const invitedOffice=perfilesSelf[0]?.must_change_password===true;
           if(linkState.row&&linkState.row.activo===false){
             setModo("office_sin_empresa");
-          }else if(invitedOffice&&(linkState.status==="empty"||!linkState.row?.empresa_id)){
-            setModo("office_link_broken");
           }else if(linkState.status==="ok"&&linkState.row&&!linkState.row.empresa_id){
             setModo("office_link_broken");
           }else{

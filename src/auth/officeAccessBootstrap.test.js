@@ -20,7 +20,7 @@ describe("resolveOfficeAccessBootstrapError", () => {
     expect(code).toBe(null);
   });
 
-  it("oficina invitada sin vínculo sigue OFFICE_LINK_BROKEN", () => {
+  it("oficina invitada sin fila empresa_usuarios no bloquea el alta de empresa", () => {
     const code = resolveOfficeAccessBootstrapError({
       hasProfile: true,
       officeUser: null,
@@ -30,7 +30,7 @@ describe("resolveOfficeAccessBootstrapError", () => {
       linkState: { status: "empty", row: null },
       mustChangePassword: true,
     });
-    expect(code).toBe(BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN);
+    expect(code).toBe(null);
   });
 
   it("oficina con vínculo activo no bloquea", () => {

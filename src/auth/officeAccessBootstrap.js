@@ -7,8 +7,8 @@ export const BOOTSTRAP_ERRORS = Object.freeze({
 
 /**
  * Distingue alta de empresa (sin empresas ni empresa_usuarios) de oficina mal vinculada.
- * Alta nueva: sin officeUser, sin owner, lectura de vínculo vacía y sin must_change_password.
- * Oficina: fila inactiva, fila sin empresa_id, o invitación (must_change_password) sin vínculo.
+ * Alta nueva: sin officeUser, sin owner y lectura de vínculo vacía → acceso válido.
+ * Oficina: fila inactiva, o fila sin empresa_id.
  */
 export function resolveOfficeAccessBootstrapError({
   hasProfile,
@@ -17,7 +17,6 @@ export function resolveOfficeAccessBootstrapError({
   canDrive = false,
   isEmpresaOwner = false,
   linkState = null,
-  mustChangePassword = false,
 } = {}) {
   if (!hasProfile) return BOOTSTRAP_ERRORS.NO_PROFILE;
   if (officeUser && officeUser.activo === false) return BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
@@ -28,6 +27,5 @@ export function resolveOfficeAccessBootstrapError({
   const row = linkState?.row || null;
   if (status === "ok" && row?.activo === false) return BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
   if (status === "ok" && row && !row.empresa_id) return BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
-  if (status === "empty" && mustChangePassword) return BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
   return null;
 }

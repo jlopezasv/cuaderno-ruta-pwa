@@ -127,7 +127,6 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     canDrive: account.canDrive,
     isEmpresaOwner,
     linkState,
-    mustChangePassword: profileMustChangePassword(profile),
   });
 
   const admin = isSuperadminUser(uid, getSession()?.user?.email);
