@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { BrandHeader } from "../ui/BrandHeader";
 import { UI_TOKENS } from "../ui/visualTokens";
-import { getStoredAuthSession } from "../data/authContext";
-import { isHybridCapabilities } from "../auth/accountModel.js";
+import { getStoredAuthSession, switchActiveMode } from "../data/authContext";
+import { ACCOUNT_TYPES, isHybridCapabilities } from "../auth/accountModel.js";
 import { bootstrapAuthSession } from "../auth/resolveAccountCapabilities.js";
 import { bootstrapErrorMessage } from "../auth/officeBootstrap.js";
 import { ModeSwitchButton } from "../ui/ModeSwitchButton.jsx";
@@ -36,6 +36,7 @@ export default function EmpresaLayout({
   const [loaded, setLoaded] = useState(false);
   const [empresaId, setEmpresaId] = useState(null);
   const [empresaRecord, setEmpresaRecord] = useState(null);
+  const [tenantReady, setTenantReady] = useState(false);
   const [capabilities, setCapabilities] = useState(
     () => getStoredAuthSession(getUserId())?.capabilities || null,
   );
@@ -58,6 +59,7 @@ export default function EmpresaLayout({
     const uid = getUserId();
     if (!uid) {
       setLoaded(true);
+      setTenantReady(true);
       return;
     }
     let cancelled = false;
@@ -122,12 +124,14 @@ export default function EmpresaLayout({
     const uid = getUserId();
     if (!uid) {
       setEmpresaId(null);
+      setTenantReady(true);
       return;
     }
     const session = getStoredAuthSession(uid);
     const officeUser = capabilities?.officeUser || session?.capabilities?.officeUser || null;
     if (officeUser?.empresaId) {
       setEmpresaId(officeUser.empresaId);
+      setTenantReady(true);
       return;
     }
     try {
@@ -135,6 +139,8 @@ export default function EmpresaLayout({
       setEmpresaId(emp?.id || null);
     } catch {
       setEmpresaId(null);
+    } finally {
+      setTenantReady(true);
     }
   }, [capabilities?.officeUser, getUserId, sbSelect]);
 
@@ -208,7 +214,7 @@ export default function EmpresaLayout({
       .catch(() => {});
   }
 
-  if (!loaded) {
+  if (!loaded || !tenantReady) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f1f5f9" }}>
         <div style={{ fontSize: 14, color: "#64748B" }}>Cargando...</div>
@@ -252,6 +258,20 @@ export default function EmpresaLayout({
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  const needsEmpresaOnboarding =
+    !empresaId &&
+    !capabilities?.officeUser?.empresaId &&
+    (capabilities?.accountType === ACCOUNT_TYPES.EMPRESA ||
+      prof.tipo_cuenta === ACCOUNT_TYPES.EMPRESA);
+
+  if (needsEmpresaOnboarding) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#f1f5f9" }}>
+        <EmpresaPanelSeccion seccion="servicios" prof={prof} showToast={showToast} />
       </div>
     );
   }
