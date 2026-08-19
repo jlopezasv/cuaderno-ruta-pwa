@@ -1,13 +1,16 @@
 import { useState } from "react";
+import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
 import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
 import { getServiceNumberForDisplay } from "../../../domain/service/serviceIdentity.js";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
+import { useServiceMessagesUnread } from "../hooks/useServiceMessagesUnread.js";
 import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
+import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
 import { DriverQuickActionsBar } from "./ServiceQuickActionsBar.jsx";
 
 /**
- * Acceso DeCA del viaje en la lista de paradas (sin abrir una parada).
+ * Acceso DeCA + chat del viaje en la lista de paradas (sin abrir una parada).
  */
 export function ConductorTripDecaBar({
   servicio,
@@ -16,18 +19,26 @@ export function ConductorTripDecaBar({
   stops = [],
   showToast,
   tripLabel = null,
+  senderName = "Conductor",
 }) {
-  const [open, setOpen] = useState(false);
-  const applicable = !!servicio?.empresa_id && isDecaAplicable(servicio);
+  const [decaOpen, setDecaOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const showDeca = !!servicio?.empresa_id && isDecaAplicable(servicio);
+  const showChat = isServiceMessagesEnabled(servicio) && !!servicio?.id;
   const dcdtQuick = useConductorDcdtQuickStatus({
-    servicio: applicable ? servicio : null,
+    servicio: showDeca ? servicio : null,
     empresa,
     conductorUid,
     stops,
-    pollWhileIncomplete: applicable,
+    pollWhileIncomplete: showDeca,
+  });
+  const messagesUnread = useServiceMessagesUnread({
+    servicioId: servicio?.id,
+    userId: conductorUid,
+    enabled: showChat,
   });
 
-  if (!applicable) return null;
+  if (!showDeca && !showChat) return null;
 
   const label = tripLabel || getServiceNumberForDisplay(servicio) || "Viaje";
 
@@ -42,26 +53,48 @@ export function ConductorTripDecaBar({
         }}
       >
         <div style={{ fontSize: 11, fontWeight: 800, color: "#64748b", letterSpacing: 0.4, marginBottom: 8 }}>
-          {DECA_SHORT_LABEL} · {label}
+          {showDeca ? `${DECA_SHORT_LABEL} · ${label}` : label}
         </div>
         <DriverQuickActionsBar
-          showDcdt
+          showDcdt={showDeca}
           dcdtVisual={dcdtQuick.visual}
-          onDcdtClick={() => setOpen(true)}
+          onDcdtClick={() => setDecaOpen(true)}
+          showChat={showChat}
+          unreadCount={messagesUnread.unread}
+          onChatClick={() => {
+            setChatOpen(true);
+            void messagesUnread.markRead();
+          }}
         />
       </div>
-      <DriverDcdtActionModal
-        open={open}
-        onClose={() => {
-          setOpen(false);
-          void dcdtQuick.reload();
-        }}
-        servicio={servicio}
-        empresa={empresa}
-        conductorUid={conductorUid}
-        stops={stops}
-        showToast={showToast}
-      />
+      {showDeca ? (
+        <DriverDcdtActionModal
+          open={decaOpen}
+          onClose={() => {
+            setDecaOpen(false);
+            void dcdtQuick.reload();
+          }}
+          servicio={servicio}
+          empresa={empresa}
+          conductorUid={conductorUid}
+          stops={stops}
+          showToast={showToast}
+        />
+      ) : null}
+      {showChat ? (
+        <ServiceMessagesModal
+          open={chatOpen}
+          onClose={() => {
+            setChatOpen(false);
+            void messagesUnread.markRead();
+            void messagesUnread.refresh();
+          }}
+          servicio={servicio}
+          senderName={senderName}
+          showToast={showToast}
+          onMarkRead={messagesUnread.markRead}
+        />
+      ) : null}
     </>
   );
 }

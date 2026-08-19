@@ -12,6 +12,7 @@ import {
   canModificarDecaEnRuta,
   confirmDecaRouteModification,
 } from "../../domain/dcdt/decaRouteModification.js";
+import { generateDecaQrDataUrl } from "../../domain/dcdt/decaQrImage.js";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 import { DcdtReadonlyViewModal } from "./DcdtReadonlyViewModal.jsx";
 
@@ -55,6 +56,61 @@ function docBtnStyle(variant = "default") {
     cursor: "pointer",
     textAlign: "left",
   };
+}
+
+function ConductorDecaQrPreview({ downloadUrl }) {
+  const [dataUrl, setDataUrl] = useState("");
+
+  useEffect(() => {
+    if (!downloadUrl) {
+      setDataUrl("");
+      return;
+    }
+    let cancelled = false;
+    generateDecaQrDataUrl(downloadUrl)
+      .then((url) => {
+        if (!cancelled) setDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [downloadUrl]);
+
+  if (!downloadUrl) return null;
+
+  return (
+    <div
+      style={{
+        background: UI.surface,
+        border: `1px solid ${UI.border}`,
+        borderRadius: 12,
+        padding: "12px 12px 10px",
+        marginBottom: 10,
+        textAlign: "center",
+      }}
+    >
+      {dataUrl ? (
+        <img
+          src={dataUrl}
+          alt="Código QR DeCA"
+          style={{ width: 180, height: 180, margin: "0 auto 8px", display: "block", borderRadius: 8 }}
+        />
+      ) : (
+        <div style={{ padding: "28px 0", fontSize: 12, color: UI.su }}>Generando QR…</div>
+      )}
+      <a
+        href={downloadUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", wordBreak: "break-all", lineHeight: 1.4 }}
+      >
+        {downloadUrl}
+      </a>
+    </div>
+  );
 }
 
 function phaseHint(phase) {
@@ -197,19 +253,19 @@ export function ConductorDcdtPanel({
   }
 
   function openQr() {
-    if (!dcdt || !doc) {
-      showToast?.(`${DECA_SHORT_LABEL} no disponible.`);
-      return;
-    }
-    if (!hasPdf) {
-      showToast?.("Tráfico aún no ha generado el PDF DeCA.");
-      return;
-    }
-    if (!decaDownloadUrl) {
-      showToast?.("URL DeCA no disponible. Tráfico debe regenerar el PDF.");
+    if (!access.canShowQr) {
+      showToast?.("URL DeCA no disponible. Tráfico debe generar el PDF.");
       return;
     }
     setQrOpen(true);
+  }
+
+  function openWebLink() {
+    if (!decaDownloadUrl) {
+      showToast?.("URL DeCA no disponible.");
+      return;
+    }
+    window.open(decaDownloadUrl, "_blank", "noopener,noreferrer");
   }
 
   async function descargarPdf() {
@@ -348,9 +404,13 @@ export function ConductorDcdtPanel({
             Pendientes: {missing.map((m) => m.label).join(" · ")}
           </div>
         ) : null}
+        {access.canShowQr ? <ConductorDecaQrPreview downloadUrl={decaDownloadUrl} /> : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <button type="button" style={docBtnStyle(access.canShowQr ? "primary" : "default")} disabled={!access.canShowQr} onClick={openQr}>
-            Mostrar QR
+            Ampliar QR
+          </button>
+          <button type="button" style={docBtnStyle("default")} disabled={!decaDownloadUrl} onClick={openWebLink}>
+            Abrir enlace web
           </button>
           <button
             type="button"

@@ -72,7 +72,7 @@ export function DcdtQrModal({
         position: "fixed",
         inset: 0,
         background: UI.overlay,
-        zIndex: 600,
+        zIndex: 13050,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

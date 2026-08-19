@@ -7,17 +7,13 @@ import {
   DRIVER_STATUS_BADGE_FONT_SIZE,
 } from "./ActiveServicePanel.jsx";
 import { DriverLocationGateModal } from "./DriverLocationGateModal.jsx";
-import { DriverQuickActionsBar } from "./ServiceQuickActionsBar.jsx";
 import { DriverDcdtActionModal } from "./DriverDcdtActionModal.jsx";
-import { ServiceMessagesModal } from "./ServiceMessagesModal.jsx";
 import { ConductorFinalizarParticipacionAction } from "./ConductorFinalizarParticipacionAction.jsx";
 import { ConductorDropStopAction } from "./ConductorDropStopAction.jsx";
 import { useDriverFlatPendingStops } from "../hooks/useDriverFlatPendingStops.js";
 import { useDriverActionLocation } from "../hooks/useDriverActionLocation.js";
 import { useConductorDcdtQuickStatus } from "../hooks/useConductorDcdtQuickStatus.js";
-import { useServiceMessagesUnread } from "../hooks/useServiceMessagesUnread.js";
 import { useEmpresaOriginLookup } from "../../../hooks/useEmpresaOriginLookup.js";
-import { isServiceMessagesEnabled } from "../../../config/serviceMessages.js";
 import { fetchEvidenciasGroupedByStop } from "../../../domain/service/serviceDocuments.js";
 import { mergeEvidenciaIntoByStop } from "../../../domain/documents/operationalEvidenciaSync.js";
 import { stopsOperativaSig } from "../../../features/empresa/empresaFlotaRefresh.js";
@@ -35,7 +31,6 @@ import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
 import { ConductorPostDescargaModal } from "./ConductorPostDescargaModal.jsx";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
-import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
 import { ConductorTripDecaBar } from "./ConductorTripDecaBar.jsx";
 import {
   fetchParticipacionResumenServicio,
@@ -216,7 +211,6 @@ export function ConductorSimplifiedParadasTab({
   const [confirmMuelleSaving, setConfirmMuelleSaving] = useState(false);
   const [iniciarSaving, setIniciarSaving] = useState(false);
   const [dcdtModalOpen, setDcdtModalOpen] = useState(false);
-  const [chatModalOpen, setChatModalOpen] = useState(false);
   const [detailReadOnly, setDetailReadOnly] = useState(false);
   const [descargaFirma, setDescargaFirma] = useState(null);
   const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
@@ -232,7 +226,6 @@ export function ConductorSimplifiedParadasTab({
     for (const item of items) {
       const sv = item.servicio;
       if (!sv?.id || seen.has(sv.id)) continue;
-      if (!sv.empresa_id || !isDecaAplicable(sv)) continue;
       seen.set(sv.id, {
         servicio: sv,
         stops: item.stops || NO_STOPS,
@@ -256,18 +249,12 @@ export function ConductorSimplifiedParadasTab({
   }, [detailServicioForAlcance, items]);
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicioForAlcance?.empresa_id ? empresaById[detailServicioForAlcance.empresa_id] : null;
-  const showChatQuick = isServiceMessagesEnabled(detailServicio);
   const dcdtQuick = useConductorDcdtQuickStatus({
     servicio: detailServicioForAlcance,
     empresa: empresaServicio,
     conductorUid: uid,
     stops: detailStops,
     pollWhileIncomplete: !!active,
-  });
-  const messagesUnread = useServiceMessagesUnread({
-    servicioId: detailServicio?.id,
-    userId: uid,
-    enabled: !!active && showChatQuick && !!detailServicio?.id,
   });
 
   const firstDescargaStopIdByServicio = useMemo(() => {
@@ -317,7 +304,6 @@ export function ConductorSimplifiedParadasTab({
     setConfirmMuelleSaving(false);
     setOrderSkipConfirm(null);
     setDcdtModalOpen(false);
-    setChatModalOpen(false);
     setDetailReadOnly(false);
     setPostDescarga(null);
     setEvidenciasSeed(null);
@@ -608,20 +594,6 @@ export function ConductorSimplifiedParadasTab({
               ← Volver
             </button>
           </div>
-
-          {showChatQuick ? (
-            <div style={{ marginTop: 12 }}>
-              <DriverQuickActionsBar
-                showDcdt={false}
-                showChat
-                unreadCount={messagesUnread.unread}
-                onChatClick={() => {
-                  setChatModalOpen(true);
-                  void messagesUnread.markRead();
-                }}
-              />
-            </div>
-          ) : null}
         </div>
 
         <div style={{ padding: "14px" }}>
@@ -851,18 +823,6 @@ export function ConductorSimplifiedParadasTab({
           stops={localStops}
           showToast={showToast}
         />
-        <ServiceMessagesModal
-          open={chatModalOpen}
-          onClose={() => {
-            setChatModalOpen(false);
-            void messagesUnread.markRead();
-            void messagesUnread.refresh();
-          }}
-          servicio={localServicio}
-          senderName={conductorNombre}
-          showToast={showToast}
-          onMarkRead={messagesUnread.markRead}
-        />
       </div>
     );
   }
@@ -880,6 +840,7 @@ export function ConductorSimplifiedParadasTab({
               stops={trip.stops}
               showToast={showToast}
               tripLabel={trip.tripLabel}
+              senderName={conductorNombre}
             />
           ))}
         </div>

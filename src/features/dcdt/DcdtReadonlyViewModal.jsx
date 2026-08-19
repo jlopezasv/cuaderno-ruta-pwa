@@ -22,7 +22,7 @@ export function DcdtReadonlyViewModal({ servicio, doc, dcdt, missing = [], onClo
         position: "fixed",
         inset: 0,
         background: UI.overlay,
-        zIndex: 550,
+        zIndex: 13000,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
