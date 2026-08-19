@@ -259,7 +259,6 @@ export function ConductorSimplifiedParadasTab({
   }, [detailServicioForAlcance, items]);
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicioForAlcance?.empresa_id ? empresaById[detailServicioForAlcance.empresa_id] : null;
-  const showDcdtQuick = !!detailServicioForAlcance?.empresa_id && isDecaAplicable(detailServicioForAlcance);
   const showChatQuick = isServiceMessagesEnabled(detailServicio);
   const dcdtQuick = useConductorDcdtQuickStatus({
     servicio: detailServicioForAlcance,
@@ -626,13 +625,11 @@ export function ConductorSimplifiedParadasTab({
             </button>
           </div>
 
-          {showDcdtQuick || showChatQuick ? (
+          {showChatQuick ? (
             <div style={{ marginTop: 12 }}>
               <DriverQuickActionsBar
-                showDcdt={showDcdtQuick}
-                dcdtVisual={dcdtQuick.visual}
-                onDcdtClick={() => setDcdtModalOpen(true)}
-                showChat={showChatQuick}
+                showDcdt={false}
+                showChat
                 unreadCount={messagesUnread.unread}
                 onChatClick={() => {
                   setChatModalOpen(true);

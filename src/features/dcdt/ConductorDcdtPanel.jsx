@@ -6,6 +6,12 @@ import { decaSelectorLabel, resolveScopeStopsForDcdt } from "../../domain/dcdt/d
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
 import { downloadDcdtStoredPdf } from "../../domain/dcdt/dcdtPdfDocument.js";
 import { getServiceNumberForDisplay } from "../../domain/service/serviceIdentity.js";
+import { getUserId } from "../../data/supabaseClient.js";
+import {
+  buildRutaModFormFromDoc,
+  canModificarDecaEnRuta,
+  confirmDecaRouteModification,
+} from "../../domain/dcdt/decaRouteModification.js";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 import { DcdtReadonlyViewModal } from "./DcdtReadonlyViewModal.jsx";
 
@@ -52,16 +58,13 @@ function docBtnStyle(variant = "default") {
 }
 
 function phaseHint(phase) {
-  if (phase === "validated") {
-    return "Documento listo para inspección. Puedes mostrarlo sin depender de tráfico.";
-  }
-  if (phase === "pdf_ready") {
-    return "PDF DeCA generado. Puedes descargarlo o mostrar el QR; tráfico puede validar después.";
+  if (phase === "validated" || phase === "pdf_ready") {
+    return "Documento vigente. Puedes mostrarlo en un control o corregir matrícula y mercancía.";
   }
   if (phase === "pending_validation") {
-    return "Datos completos. Tráfico debe generar el PDF DeCA antes o durante el viaje.";
+    return "Datos listos. Tráfico puede validar después; el PDF ya se puede mostrar.";
   }
-  return "Tráfico está completando los datos del DeCA.";
+  return "Tráfico está completando el DeCA de este viaje.";
 }
 
 export function ConductorDcdtPanel({
@@ -78,6 +81,9 @@ export function ConductorDcdtPanel({
   const [busy, setBusy] = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
+  const [modifyOpen, setModifyOpen] = useState(false);
+  const [rutaModForm, setRutaModForm] = useState(null);
+  const [rutaModMotivo, setRutaModMotivo] = useState("");
   const [resolveCtx, setResolveCtx] = useState({
     stops: stopsProp,
     empresa,
@@ -187,6 +193,7 @@ export function ConductorDcdtPanel({
     setSelectedDcdtId(id);
     setViewOpen(false);
     setQrOpen(false);
+    setModifyOpen(false);
   }
 
   function openQr() {
@@ -222,6 +229,49 @@ export function ConductorDcdtPanel({
     }
   }
 
+  const canModify = canModificarDecaEnRuta({ servicio, dcdt });
+
+  function openModify() {
+    if (!doc) {
+      showToast?.("No hay DeCA para modificar.");
+      return;
+    }
+    if (!canModify) {
+      showToast?.("El DeCA se puede modificar cuando hay PDF y el viaje está activo.");
+      return;
+    }
+    setRutaModForm(buildRutaModFormFromDoc(doc));
+    setRutaModMotivo("");
+    setModifyOpen(true);
+  }
+
+  async function confirmModify() {
+    if (!dcdt || !doc || !rutaModForm) return;
+    setBusy("ruta-mod");
+    try {
+      await confirmDecaRouteModification({
+        dcdt,
+        servicio,
+        docBefore: doc,
+        form: rutaModForm,
+        motivo: rutaModMotivo,
+        userId: conductorUid || getUserId(),
+        stops: scopeStops,
+        masterById: resolveCtx.masterById,
+        empresa: resolveCtx.empresa,
+        empresaOwnerProfile: resolveCtx.empresaOwnerProfile,
+        conductor: resolveCtx.conductor,
+      });
+      setModifyOpen(false);
+      showToast?.("DeCA actualizado");
+      await load();
+    } catch (e) {
+      showToast?.(e?.message || "No se pudo modificar el DeCA");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!servicio?.id) return null;
 
   if (loading && !dcdt) {
@@ -243,10 +293,6 @@ export function ConductorDcdtPanel({
   const boxStyle = documentReady
     ? { border: "1px solid #bbf7d0", background: UI.greenSoft }
     : { border: `1px solid ${UI.amberBorder}`, background: UI.amberSoft };
-
-  const pdfBtnLabel = access.canDownloadPdf
-    ? "Descargar PDF"
-    : "Descargar PDF (pendiente de generar)";
 
   return (
     <>
@@ -297,15 +343,18 @@ export function ConductorDcdtPanel({
           </div>
         ) : null}
         <div style={{ fontSize: 11, color: UI.su, marginBottom: 10, lineHeight: 1.4 }}>{phaseHint(phase)}</div>
-        {!validated && missing.length ? (
+        {!documentReady && missing.length ? (
           <div style={{ fontSize: 10, color: UI.amberTx, marginBottom: 10, lineHeight: 1.35 }}>
             Pendientes: {missing.map((m) => m.label).join(" · ")}
           </div>
         ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button type="button" style={docBtnStyle(access.canShowQr ? "primary" : "default")} disabled={!access.canShowQr} onClick={openQr}>
+            Mostrar QR
+          </button>
           <button
             type="button"
-            style={docBtnStyle(access.canViewDocument && doc ? "primary" : "default")}
+            style={docBtnStyle("default")}
             onClick={() => setViewOpen(true)}
             disabled={!access.canViewDocument || !doc}
           >
@@ -317,12 +366,98 @@ export function ConductorDcdtPanel({
             onClick={descargarPdf}
             disabled={!access.canDownloadPdf || busy === "pdf"}
           >
-            {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
+            {busy === "pdf" ? "Obteniendo PDF…" : "Descargar PDF"}
           </button>
-          <button type="button" disabled={!access.canShowQr} style={docBtnStyle("default")} onClick={openQr}>
-            Mostrar QR {DECA_SHORT_LABEL}
+          <button
+            type="button"
+            style={docBtnStyle("default")}
+            onClick={openModify}
+            disabled={!canModify || !!busy}
+          >
+            Modificar DeCA actual
           </button>
         </div>
+        {modifyOpen && rutaModForm ? (
+          <div
+            style={{
+              marginTop: 12,
+              background: UI.amberSoft,
+              border: `1px solid ${UI.amberBorder}`,
+              borderRadius: 12,
+              padding: "12px 12px 10px",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 800, color: UI.amberTx, marginBottom: 8 }}>Modificar DeCA actual</div>
+            <div style={{ fontSize: 11, color: UI.amberTx, marginBottom: 10, lineHeight: 1.4 }}>
+              Matrícula y mercancía. El motivo es obligatorio; el PDF se regenera con el mismo QR.
+            </div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Matrícula tractora</label>
+            <input
+              value={rutaModForm.matricula}
+              onChange={(e) => setRutaModForm((p) => ({ ...p, matricula: e.target.value }))}
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }}
+            />
+            <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Matrícula remolque</label>
+            <input
+              value={rutaModForm.remolque}
+              onChange={(e) => setRutaModForm((p) => ({ ...p, remolque: e.target.value }))}
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }}
+            />
+            <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Mercancía</label>
+            <input
+              value={rutaModForm.descripcion}
+              onChange={(e) => setRutaModForm((p) => ({ ...p, descripcion: e.target.value }))}
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 8, boxSizing: "border-box" }}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Peso kg</label>
+                <input
+                  value={rutaModForm.peso_kg}
+                  onChange={(e) => setRutaModForm((p) => ({ ...p, peso_kg: e.target.value }))}
+                  style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Bultos</label>
+                <input
+                  value={rutaModForm.bultos}
+                  onChange={(e) => setRutaModForm((p) => ({ ...p, bultos: e.target.value }))}
+                  style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Palets</label>
+                <input
+                  value={rutaModForm.palets}
+                  onChange={(e) => setRutaModForm((p) => ({ ...p, palets: e.target.value }))}
+                  style={{ width: "100%", padding: "8px", borderRadius: 8, border: `1px solid ${UI.border}`, boxSizing: "border-box" }}
+                />
+              </div>
+            </div>
+            <label style={{ display: "block", fontSize: 10, fontWeight: 800, color: UI.su, marginBottom: 4 }}>Motivo *</label>
+            <textarea
+              value={rutaModMotivo}
+              onChange={(e) => setRutaModMotivo(e.target.value)}
+              rows={2}
+              placeholder="Ej. cambio de vehículo"
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${UI.border}`, marginBottom: 10, boxSizing: "border-box", resize: "vertical" }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                disabled={!!busy}
+                onClick={confirmModify}
+                style={{ ...docBtnStyle("primary"), flex: 1, textAlign: "center" }}
+              >
+                {busy === "ruta-mod" ? "Guardando…" : "Guardar y regenerar PDF"}
+              </button>
+              <button type="button" disabled={!!busy} onClick={() => setModifyOpen(false)} style={{ ...docBtnStyle("default"), flex: 1, textAlign: "center" }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {viewOpen ? (
