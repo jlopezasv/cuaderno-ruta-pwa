@@ -66,7 +66,7 @@ export default function EmpresaLayout({
 
     async function load() {
       let session = getStoredAuthSession(uid);
-      if (!session?.capabilities?.empresa) {
+      if (!session?.capabilities?.empresa || session?.capabilities?.bootstrapError) {
         try {
           await bootstrapAuthSession(uid, sbSelect);
           session = getStoredAuthSession(uid);
