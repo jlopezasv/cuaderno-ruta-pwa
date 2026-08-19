@@ -17,8 +17,9 @@ import {
 } from "../domain/empresa/officeUserLinkage.js";
 import {
   BOOTSTRAP_ERRORS,
-  fetchOfficeUserContext,
-} from "./officeBootstrap.js";
+  resolveOfficeAccessBootstrapError,
+} from "./officeAccessBootstrap.js";
+import { fetchOfficeUserContext } from "./officeBootstrap.js";
 import { profileMustChangePassword } from "../domain/auth/mustChangePassword.js";
 
 export { isHybridCapabilities as isHybridAccount };
@@ -103,30 +104,31 @@ export async function resolveAccountCapabilities(uid, sbSelect, prefetched = {})
     }
   }
 
-  let bootstrapError = null;
-  if (!profile) {
-    bootstrapError = BOOTSTRAP_ERRORS.NO_PROFILE;
-  } else if (officeUser && officeUser.activo === false) {
-    bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
-  } else if (officeUser?.empresaId) {
-    // RPC/REST ya resolvieron el vínculo; no exigir una segunda lectura REST
-    // (eu_sel puede fallar por RLS y se interpretaba como enlace roto).
-    bootstrapError = null;
-  } else if (
+  let isEmpresaOwner = false;
+  let linkState = null;
+  const needsEmpresaLinkCheck =
+    !(officeUser?.empresaId && officeUser.activo !== false) &&
     account.accountType === ACCOUNT_TYPES.EMPRESA &&
-    !account.canDrive &&
-    !(await userIsEmpresaOwner(uid, sbSelect))
-  ) {
-    const linkState = await fetchOfficeUserLinkState(uid).catch(() => ({
-      status: "error",
-      row: null,
-    }));
-    if (linkState.status === "ok" && linkState.row?.activo === false) {
-      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_INACTIVE;
-    } else if (linkState.status === "empty") {
-      bootstrapError = BOOTSTRAP_ERRORS.OFFICE_LINK_BROKEN;
+    !account.canDrive;
+  if (needsEmpresaLinkCheck) {
+    isEmpresaOwner = await userIsEmpresaOwner(uid, sbSelect);
+    if (!isEmpresaOwner) {
+      linkState = await fetchOfficeUserLinkState(uid).catch(() => ({
+        status: "error",
+        row: null,
+      }));
     }
   }
+
+  const bootstrapError = resolveOfficeAccessBootstrapError({
+    hasProfile: !!profile,
+    officeUser,
+    accountType: account.accountType,
+    canDrive: account.canDrive,
+    isEmpresaOwner,
+    linkState,
+    mustChangePassword: profileMustChangePassword(profile),
+  });
 
   const admin = isSuperadminUser(uid, getSession()?.user?.email);
 

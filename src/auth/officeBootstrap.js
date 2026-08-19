@@ -2,6 +2,9 @@ import { isDemoApp } from "../config/appEnvironment.js";
 import { sbFetch } from "../data/supabaseClient.js";
 import { buildOfficeUserCapabilities } from "../domain/empresa/empresaOfficeContext.js";
 import { fetchOfficeUserContextRest } from "../domain/empresa/officeUserLinkage.js";
+import { BOOTSTRAP_ERRORS } from "./officeAccessBootstrap.js";
+
+export { BOOTSTRAP_ERRORS, resolveOfficeAccessBootstrapError } from "./officeAccessBootstrap.js";
 
 /** RPC: contexto oficina del usuario autenticado (solo filas activas). */
 export async function fetchOfficeUserContextRpc() {
@@ -34,13 +37,6 @@ export async function fetchOfficeUserContext(uid = null) {
   if (fromRest?.activo && fromRest.empresaId) return fromRest;
   return fromRpc || fromRest || null;
 }
-
-export const BOOTSTRAP_ERRORS = Object.freeze({
-  NO_PROFILE: "NO_PROFILE",
-  NO_EMPRESA_SHELL: "NO_EMPRESA_SHELL",
-  OFFICE_INACTIVE: "OFFICE_INACTIVE",
-  OFFICE_LINK_BROKEN: "OFFICE_LINK_BROKEN",
-});
 
 export function bootstrapErrorMessage(code) {
   switch (code) {
