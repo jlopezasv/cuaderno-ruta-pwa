@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ensureDcdtForServicio,
-  fetchAllDcdtByServicio,
-  filterDcdtRowsForUiSelector,
-} from "../../domain/dcdt/dcdtModel.js";
+import { fetchAllDcdtByServicio, filterDcdtRowsForUiSelector } from "../../domain/dcdt/dcdtModel.js";
+import { resolveConductorDecaAccess } from "../../domain/dcdt/conductorDecaAccess.js";
 import { DECA_SHORT_LABEL } from "../../domain/dcdt/decaBranding.js";
 import { decaSelectorLabel, resolveScopeStopsForDcdt } from "../../domain/dcdt/dcdtMultiDeCaUi.js";
 import { fetchDcdtResolveContext, validateDcdtReadiness } from "../../domain/dcdt/dcdtReadiness.js";
@@ -108,19 +105,7 @@ export function ConductorDcdtPanel({
     setLoading(true);
     try {
       const [rows, ctx] = await Promise.all([
-        fetchAllDcdtByServicio(servicio.id).then(async (all) => {
-          let list = filterDcdtRowsForUiSelector(all);
-          if (!list.length) {
-            const created = await ensureDcdtForServicio({
-              servicioId: servicio.id,
-              empresaId,
-              stops: stopsProp,
-              servicio,
-            });
-            list = filterDcdtRowsForUiSelector(created ? [created] : []);
-          }
-          return list;
-        }),
+        fetchAllDcdtByServicio(servicio.id).then((all) => filterDcdtRowsForUiSelector(all)),
         fetchDcdtResolveContext({
           servicio,
           stops: stopsProp,
@@ -171,25 +156,32 @@ export function ConductorDcdtPanel({
   const { doc, missing } = readiness;
   const validated = readiness.isValidated;
   const hasPdf = readiness.hasPdfStorage;
+  const decaPublicId = dcdt?.decaPublicId || dcdt?.datos?.deca_public_id || null;
+  const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
+  const access = resolveConductorDecaAccess({
+    hasDcdt: !!dcdt,
+    isValidated: validated,
+    hasPdfStorage: hasPdf,
+    downloadUrl: decaDownloadUrl,
+  });
   const phase = validated
     ? "validated"
-    : hasPdf
+    : access.hasPdf
       ? "pdf_ready"
       : missing.length === 0 && String(dcdt?.estado || "").toLowerCase() === "pendiente_validacion"
         ? "pending_validation"
         : "incomplete";
   const statusLabel = readiness.statusLabel;
-  const decaPublicId = dcdt?.decaPublicId || dcdt?.datos?.deca_public_id || null;
-  const decaDownloadUrl = dcdt?.datos?.deca_download_url || null;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
+  const documentReady = access.hasPdf || validated;
 
   useEffect(() => {
-    if (!servicio?.id || validated) return;
+    if (!servicio?.id || access.hasPdf) return;
     const t = setInterval(() => {
       void load();
     }, 20000);
     return () => clearInterval(t);
-  }, [servicio?.id, validated, load]);
+  }, [servicio?.id, access.hasPdf, load]);
 
   function selectDcdt(id) {
     setSelectedDcdtId(id);
@@ -203,11 +195,11 @@ export function ConductorDcdtPanel({
       return;
     }
     if (!hasPdf) {
-      showToast?.("Genera el PDF DeCA antes de mostrar el QR.");
+      showToast?.("Tráfico aún no ha generado el PDF DeCA.");
       return;
     }
     if (!decaDownloadUrl) {
-      showToast?.("URL DeCA no disponible — regenera el PDF.");
+      showToast?.("URL DeCA no disponible. Tráfico debe regenerar el PDF.");
       return;
     }
     setQrOpen(true);
@@ -215,7 +207,7 @@ export function ConductorDcdtPanel({
 
   async function descargarPdf() {
     if (!hasPdf) {
-      showToast?.("Genera el PDF DeCA antes de descargarlo.");
+      showToast?.("Tráfico aún no ha generado el PDF DeCA.");
       return;
     }
     setBusy("pdf");
@@ -240,17 +232,21 @@ export function ConductorDcdtPanel({
     );
   }
 
-  if (!dcdt) return null;
+  if (!dcdt) {
+    return (
+      <div style={{ padding: compact ? "10px 0" : "12px 14px", fontSize: 13, color: UI.su, lineHeight: 1.45 }}>
+        Tráfico aún no ha creado el {DECA_SHORT_LABEL} de este viaje. Cuando lo genere, podrás verlo y mostrarlo aquí.
+      </div>
+    );
+  }
 
-  const boxStyle = validated
+  const boxStyle = documentReady
     ? { border: "1px solid #bbf7d0", background: UI.greenSoft }
     : { border: `1px solid ${UI.amberBorder}`, background: UI.amberSoft };
 
-  const pdfBtnLabel = readiness.canDownloadPdf || decaDownloadUrl
+  const pdfBtnLabel = access.canDownloadPdf
     ? "Descargar PDF"
-    : validated
-      ? "Descargar PDF (pendiente de generar)"
-      : "Descargar PDF";
+    : "Descargar PDF (pendiente de generar)";
 
   return (
     <>
@@ -263,7 +259,7 @@ export function ConductorDcdtPanel({
           ...(compact ? { border: "none", background: "transparent", padding: "10px 0 4px" } : {}),
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 800, color: validated ? "#166534" : UI.amberTx, marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: documentReady ? "#166534" : UI.amberTx, marginBottom: 6 }}>
           {statusLabel}
         </div>
         {visibleDcdts.length > 1 ? (
@@ -282,9 +278,9 @@ export function ConductorDcdtPanel({
                     onClick={() => selectDcdt(row.id)}
                     style={{
                       width: "100%",
-                      background: active ? (validated ? "#bbf7d0" : "#fde68a") : UI.surface,
+                      background: active ? (documentReady ? "#bbf7d0" : "#fde68a") : UI.surface,
                       color: active ? UI.tx : UI.doc,
-                      border: `1px solid ${active ? (validated ? "#86efac" : UI.amberBorder) : UI.border}`,
+                      border: `1px solid ${active ? (documentReady ? "#86efac" : UI.amberBorder) : UI.border}`,
                       borderRadius: 10,
                       padding: "9px 12px",
                       fontSize: 12,
@@ -307,28 +303,25 @@ export function ConductorDcdtPanel({
           </div>
         ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {validated ? (
-            <>
-              <button type="button" style={docBtnStyle("primary")} onClick={() => setViewOpen(true)} disabled={!doc}>
-                Ver {DECA_SHORT_LABEL}
-              </button>
-              <button
-                type="button"
-                style={docBtnStyle("default")}
-                onClick={descargarPdf}
-                disabled={!doc || busy === "pdf" || (!readiness.canDownloadPdf && !decaDownloadUrl)}
-              >
-                {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
-              </button>
-              <button type="button" disabled={!decaDownloadUrl} style={docBtnStyle("default")} onClick={openQr}>
-                Mostrar QR {DECA_SHORT_LABEL}
-              </button>
-            </>
-          ) : (
-            <button type="button" style={docBtnStyle("default")} onClick={() => setViewOpen(true)}>
-              Ver estado
-            </button>
-          )}
+          <button
+            type="button"
+            style={docBtnStyle(access.canViewDocument && doc ? "primary" : "default")}
+            onClick={() => setViewOpen(true)}
+            disabled={!access.canViewDocument || !doc}
+          >
+            Ver {DECA_SHORT_LABEL}
+          </button>
+          <button
+            type="button"
+            style={docBtnStyle("default")}
+            onClick={descargarPdf}
+            disabled={!access.canDownloadPdf || busy === "pdf"}
+          >
+            {busy === "pdf" ? "Obteniendo PDF…" : pdfBtnLabel}
+          </button>
+          <button type="button" disabled={!access.canShowQr} style={docBtnStyle("default")} onClick={openQr}>
+            Mostrar QR {DECA_SHORT_LABEL}
+          </button>
         </div>
       </div>
 

@@ -38,6 +38,7 @@ import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
+import { ConductorTripDecaBar } from "./ConductorTripDecaBar.jsx";
 import {
   fetchParticipacionResumenServicio,
   isConductorUltimoActivoEnServicio,
@@ -229,6 +230,21 @@ export function ConductorSimplifiedParadasTab({
   const muelleGpsRef = useRef(null);
   const { gate, acquireLocation, retry, continueWithout, cancelGate } = useDriverActionLocation();
 
+  const tripsForDeca = useMemo(() => {
+    const seen = new Map();
+    for (const item of items) {
+      const sv = item.servicio;
+      if (!sv?.id || seen.has(sv.id)) continue;
+      if (!sv.empresa_id || !isDecaAplicable(sv)) continue;
+      seen.set(sv.id, {
+        servicio: sv,
+        stops: item.stops || NO_STOPS,
+        tripLabel: item.tripServiceRef || null,
+      });
+    }
+    return [...seen.values()];
+  }, [items]);
+
   const detailServicio = active ? localServicio : null;
   const detailServicioForAlcance = active?.servicio ?? detailServicio;
   const detailStops = active ? localStops : NO_STOPS;
@@ -238,7 +254,8 @@ export function ConductorSimplifiedParadasTab({
     for (const it of items) {
       if (it.servicio?.id) byId.set(it.servicio.id, it.servicio);
     }
-    return [...byId.values()];
+    const list = [...byId.values()];
+    return list.length ? list : NO_SERVICIOS;
   }, [detailServicioForAlcance, items]);
   const empresaById = useEmpresaOriginLookup(serviciosForEmpresaLookup);
   const empresaServicio = detailServicioForAlcance?.empresa_id ? empresaById[detailServicioForAlcance.empresa_id] : null;
@@ -893,6 +910,22 @@ export function ConductorSimplifiedParadasTab({
 
   return (
     <div style={{ padding: "14px 14px 88px", background: PAGE, minHeight: "70vh" }}>
+      {tripsForDeca.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          {tripsForDeca.map((trip) => (
+            <ConductorTripDecaBar
+              key={trip.servicio.id}
+              servicio={trip.servicio}
+              empresa={trip.servicio.empresa_id ? empresaById[trip.servicio.empresa_id] : null}
+              conductorUid={uid}
+              stops={trip.stops}
+              showToast={showToast}
+              tripLabel={trip.tripLabel}
+            />
+          ))}
+        </div>
+      ) : null}
+
       <div style={{ fontSize: 11, fontWeight: 800, color: DRIVER_UI.su, letterSpacing: 1.2, marginBottom: 12 }}>
         PARADAS PENDIENTES
       </div>
