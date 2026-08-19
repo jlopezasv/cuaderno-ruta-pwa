@@ -15,6 +15,10 @@ import {
 import { generateDecaQrDataUrl } from "../../domain/dcdt/decaQrImage.js";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
 import { DcdtReadonlyViewModal } from "./DcdtReadonlyViewModal.jsx";
+import { AutonomoDecaFormModal } from "./AutonomoDecaFormModal.jsx";
+import { emitConductorServicioDeca } from "../../domain/dcdt/emitConductorServicioDeca.js";
+import { buildConductorDecaFormSeed, dcdtDatosToAutonomoSeed } from "../../domain/dcdt/autonomoDatosToDcdtDatos.js";
+import { isDecaAplicable } from "../../domain/service/servicioAlcance.js";
 
 const UI = {
   surface: "#ffffff",
@@ -138,6 +142,7 @@ export function ConductorDcdtPanel({
   const [viewOpen, setViewOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [modifyOpen, setModifyOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [rutaModForm, setRutaModForm] = useState(null);
   const [rutaModMotivo, setRutaModMotivo] = useState("");
   const [resolveCtx, setResolveCtx] = useState({
@@ -236,14 +241,42 @@ export function ConductorDcdtPanel({
   const statusLabel = readiness.statusLabel;
   const serviceLabel = getServiceNumberForDisplay(servicio) || "—";
   const documentReady = access.hasPdf || validated;
+  const canCreateTripDeca = !dcdt && isDecaAplicable(servicio) && !!empresaId;
+  const canCompleteOwnDraft = !!dcdt && !!dcdt.datos?.emitido_por_conductor && !hasPdf;
+
+  const formSeed = useMemo(() => {
+    if (dcdt?.datos?.emitido_por_conductor) {
+      return dcdtDatosToAutonomoSeed(dcdt.datos);
+    }
+    return buildConductorDecaFormSeed({
+      servicio,
+      stops: resolveCtx.stops,
+      empresa: resolveCtx.empresa,
+      conductor: resolveCtx.conductor,
+    });
+  }, [dcdt, servicio, resolveCtx.stops, resolveCtx.empresa, resolveCtx.conductor]);
+
+  const formProfile = useMemo(
+    () => ({
+      nombre: resolveCtx.conductor?.nombre || "",
+      matricula: resolveCtx.conductor?.matricula || "",
+      remolque: resolveCtx.conductor?.remolque || "",
+      empresa: resolveCtx.empresa?.nombre || "",
+      cif: resolveCtx.empresa?.cif || "",
+      direccion: resolveCtx.empresa?.direccion || resolveCtx.empresa?.domicilio_fiscal || "",
+      cp: resolveCtx.empresa?.cp || "",
+      ciudad: resolveCtx.empresa?.ciudad || "",
+    }),
+    [resolveCtx],
+  );
 
   useEffect(() => {
-    if (!servicio?.id || access.hasPdf) return;
+    if (!servicio?.id || access.hasPdf || createOpen) return;
     const t = setInterval(() => {
       void load();
     }, 20000);
     return () => clearInterval(t);
-  }, [servicio?.id, access.hasPdf, load]);
+  }, [servicio?.id, access.hasPdf, load, createOpen]);
 
   function selectDcdt(id) {
     setSelectedDcdtId(id);
@@ -283,6 +316,20 @@ export function ConductorDcdtPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function persistTripDeca(datos, { andPdf } = {}) {
+    const result = await emitConductorServicioDeca({
+      servicio,
+      empresa: resolveCtx.empresa,
+      stops: resolveCtx.stops,
+      autonomoDatos: datos,
+      conductorUid: conductorUid || getUserId(),
+      andPdf: andPdf !== false,
+      downloadAfter: !!andPdf,
+    });
+    await load();
+    return result?.dcdt || result;
   }
 
   const canModify = canModificarDecaEnRuta({ servicio, dcdt });
@@ -328,6 +375,24 @@ export function ConductorDcdtPanel({
     }
   }
 
+  const createFormModal = (
+    <AutonomoDecaFormModal
+      open={createOpen}
+      onClose={() => setCreateOpen(false)}
+      profile={formProfile}
+      seedDatos={formSeed}
+      onPersist={persistTripDeca}
+      title={
+        dcdt
+          ? `Completar ${DECA_SHORT_LABEL} de este viaje`
+          : `Crear ${DECA_SHORT_LABEL} de este viaje`
+      }
+      subtitle="Se guarda como documento de la empresa (PDF y QR del viaje)."
+      showToast={showToast}
+      onSaved={() => load()}
+    />
+  );
+
   if (!servicio?.id) return null;
 
   if (loading && !dcdt) {
@@ -339,10 +404,27 @@ export function ConductorDcdtPanel({
   }
 
   if (!dcdt) {
+    if (!isDecaAplicable(servicio)) {
+      return (
+        <div style={{ padding: compact ? "10px 0" : "12px 14px", fontSize: 13, color: UI.su, lineHeight: 1.45 }}>
+          Este viaje es internacional: no lleva DeCA de control nacional.
+        </div>
+      );
+    }
     return (
-      <div style={{ padding: compact ? "10px 0" : "12px 14px", fontSize: 13, color: UI.su, lineHeight: 1.45 }}>
-        Tráfico aún no ha creado el {DECA_SHORT_LABEL} de este viaje. Cuando lo genere, podrás verlo y mostrarlo aquí.
-      </div>
+      <>
+        <div style={{ padding: compact ? "10px 0" : "12px 14px" }}>
+          <div style={{ fontSize: 13, color: UI.su, lineHeight: 1.45, marginBottom: 12 }}>
+            Este viaje aún no tiene {DECA_SHORT_LABEL}. Puedes crearlo ahora; si Tráfico ya lo emite, no se duplicará.
+          </div>
+          {canCreateTripDeca ? (
+            <button type="button" onClick={() => setCreateOpen(true)} style={docBtnStyle("primary")}>
+              Crear {DECA_SHORT_LABEL} de este viaje
+            </button>
+          ) : null}
+        </div>
+        {createFormModal}
+      </>
     );
   }
 
@@ -428,6 +510,11 @@ export function ConductorDcdtPanel({
           >
             {busy === "pdf" ? "Obteniendo PDF…" : "Descargar PDF"}
           </button>
+          {canCompleteOwnDraft ? (
+            <button type="button" style={docBtnStyle("primary")} onClick={() => setCreateOpen(true)}>
+              Completar y generar PDF
+            </button>
+          ) : null}
           <button
             type="button"
             style={docBtnStyle("default")}
@@ -540,6 +627,7 @@ export function ConductorDcdtPanel({
           onClose={() => setQrOpen(false)}
         />
       ) : null}
+      {createFormModal}
     </>
   );
 }

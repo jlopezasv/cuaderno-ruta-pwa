@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { DECA_AUTONOMO_ESTADO, DECA_PORTES_OPTIONS } from "../../domain/dcdt/decaAutonomoConstants.js";
+import { DECA_PORTES_OPTIONS } from "../../domain/dcdt/decaAutonomoConstants.js";
 import {
   canEditAutonomoDeca,
   createAutonomoDeca,
@@ -90,18 +90,40 @@ function patchPath(datos, path, value) {
   return next;
 }
 
+function mergeSeed(profile, seedDatos) {
+  const fromProfile = autonomoDecaDatosFromProfile(profile);
+  return mergeAutonomoDecaDatos({
+    ...fromProfile,
+    ...(seedDatos || {}),
+    vehiculo: { ...fromProfile.vehiculo, ...(seedDatos?.vehiculo || {}) },
+    origen: { ...fromProfile.origen, ...(seedDatos?.origen || {}) },
+    destino: { ...fromProfile.destino, ...(seedDatos?.destino || {}) },
+    partes: {
+      cargador: { ...fromProfile.partes.cargador, ...(seedDatos?.partes?.cargador || {}) },
+      transportista: { ...fromProfile.partes.transportista, ...(seedDatos?.partes?.transportista || {}) },
+      destinatario: { ...fromProfile.partes.destinatario, ...(seedDatos?.partes?.destinatario || {}) },
+    },
+    mercancia: { ...fromProfile.mercancia, ...(seedDatos?.mercancia || {}) },
+    conductor: { ...fromProfile.conductor, ...(seedDatos?.conductor || {}) },
+  });
+}
+
 export function AutonomoDecaFormModal({
   open,
   onClose,
   deca = null,
   profile = {},
+  seedDatos = null,
+  onPersist = null,
+  title = null,
+  subtitle = null,
   showToast,
   onSaved,
 }) {
   const isNew = !deca?.id;
-  const readOnly = deca && !canEditAutonomoDeca(deca);
+  const readOnly = !onPersist && deca && !canEditAutonomoDeca(deca);
   const [datos, setDatos] = useState(() =>
-    deca?.datos ? mergeAutonomoDecaDatos(deca.datos) : autonomoDecaDatosFromProfile(profile),
+    deca?.datos ? mergeAutonomoDecaDatos(deca.datos) : mergeSeed(profile, seedDatos),
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -110,9 +132,9 @@ export function AutonomoDecaFormModal({
     if (!open) return;
     setError("");
     setDatos(
-      deca?.datos ? mergeAutonomoDecaDatos(deca.datos) : autonomoDecaDatosFromProfile(profile),
+      deca?.datos ? mergeAutonomoDecaDatos(deca.datos) : mergeSeed(profile, seedDatos),
     );
-  }, [open, deca?.id, profile]);
+  }, [open, deca?.id, profile, seedDatos]);
 
   const set = useCallback((path, value) => {
     setDatos((prev) => patchPath(prev, path, value));
@@ -130,6 +152,13 @@ export function AutonomoDecaFormModal({
     }
     setSaving(true);
     try {
+      if (onPersist) {
+        const row = await onPersist(datos, { andPdf });
+        showToast?.(andPdf ? "DeCA del viaje generado" : "DeCA del viaje guardado");
+        onSaved?.(row);
+        onClose?.();
+        return;
+      }
       let row = deca;
       if (isNew) {
         row = await createAutonomoDeca({ datos, profile });
@@ -159,7 +188,7 @@ export function AutonomoDecaFormModal({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 12000,
+        zIndex: 13100,
         background: "rgba(15,23,42,.45)",
         display: "flex",
         alignItems: "flex-end",
@@ -192,10 +221,10 @@ export function AutonomoDecaFormModal({
         >
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: UI.tx }}>
-              {isNew ? "Crear DeCA" : readOnly ? "Ver DeCA" : "Editar DeCA"}
+              {title || (isNew ? "Crear DeCA" : readOnly ? "Ver DeCA" : "Editar DeCA")}
             </div>
             <div style={{ fontSize: 11, color: UI.muted, marginTop: 2 }}>
-              Documento de Control del Transporte
+              {subtitle || "Documento de Control del Transporte"}
             </div>
           </div>
           <button
@@ -482,7 +511,7 @@ export function AutonomoDecaFormModal({
                 opacity: saving ? 0.7 : 1,
               }}
             >
-              {saving ? "Generando…" : "Guardar y descargar PDF"}
+              {saving ? "Generando…" : onPersist ? "Crear DeCA del viaje y generar PDF" : "Guardar y descargar PDF"}
             </button>
             <button
               type="button"
@@ -500,7 +529,7 @@ export function AutonomoDecaFormModal({
                 cursor: saving ? "default" : "pointer",
               }}
             >
-              Guardar borrador
+              {onPersist ? "Guardar sin PDF" : "Guardar borrador"}
             </button>
           </div>
         ) : null}

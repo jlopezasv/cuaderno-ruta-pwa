@@ -27,6 +27,7 @@ import {
 } from "./decaPdfStale.js";
 import { mercanciaDatosFromCargaStops } from "./stopMercanciaMeta.js";
 import { isDecaAplicable } from "../service/servicioAlcance.js";
+import { pickDcdtRoutePlace } from "./dcdtRoutePlace.js";
 
 export { buildMercanciaDatosPatch, mercanciaEditFromDatos } from "./mercanciaPatch.js";
 
@@ -471,8 +472,8 @@ export function resolveDcdtDocument({
       nif: formatDcdtDisplayValue(transportista.nif),
       domicilio: formatDcdtDisplayValue(transportista.domicilio),
     },
-    origen: formatDcdtDisplayValue(routeEndpoints.origen) || "—",
-    destino: formatDcdtDisplayValue(routeEndpoints.destino) || "—",
+    origen: formatDcdtDisplayValue(pickDcdtRoutePlace(routeEndpoints.origen, datos.origen_lugar_override)) || "—",
+    destino: formatDcdtDisplayValue(pickDcdtRoutePlace(routeEndpoints.destino, datos.destino_lugar_override)) || "—",
     mercancia: {
       descripcion: formatDcdtDisplayValue(datos.mercancia?.descripcion) || null,
       peso_kg: datos.mercancia?.peso_kg ?? null,

@@ -17,7 +17,9 @@ import {
 } from "../../domain/dcdt/decaAutonomoPdf.js";
 import { buildDecaDownloadUrl } from "../../domain/dcdt/decaUrl.js";
 import { AutonomoDecaFormModal } from "./AutonomoDecaFormModal.jsx";
+import { VincularDecaAServicioModal } from "./VincularDecaAServicioModal.jsx";
 import { DcdtQrModal } from "./DcdtQrModal.jsx";
+import { canLinkAutonomoDecaToServicio, isAutonomoDecaLinkedToServicio } from "../../domain/dcdt/autonomoDatosToDcdtDatos.js";
 
 const UI = {
   page: "#f8fafc",
@@ -82,6 +84,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editDeca, setEditDeca] = useState(null);
   const [qrDeca, setQrDeca] = useState(null);
+  const [linkDeca, setLinkDeca] = useState(null);
 
   const reload = useCallback(async () => {
     if (!uid) {
@@ -132,7 +135,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
         <div>
           <div style={{ fontSize: 11, fontWeight: 800, color: UI.su, letterSpacing: 1.1 }}>MIS DECA</div>
           <div style={{ fontSize: 13, color: UI.su, marginTop: 4, lineHeight: 1.45 }}>
-            Documentos de control con QR y descarga pública.
+            Documentos sueltos con QR. Si el viaje de empresa no tiene DeCA, puedes copiar uno aquí.
           </div>
         </div>
         <button type="button" onClick={openCreate} style={actionBtn("primary")}>
@@ -166,6 +169,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
             const chip = estadoChip(sum.estado);
             const busy = busyId === deca.id;
             const hasQr = decaHasPublicQr(deca);
+            const linked = isAutonomoDecaLinkedToServicio(deca);
             const pdfLabel =
               sum.estado === DECA_AUTONOMO_ESTADO.BORRADOR
                 ? `Generar PDF ${DECA_SHORT_LABEL}`
@@ -201,6 +205,7 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
                 </div>
                 <div style={{ fontSize: 12, color: UI.su, lineHeight: 1.5, marginBottom: 10 }}>
                   {sum.fecha} · {sum.matricula}
+                  {linked ? " · Usado en un servicio" : ""}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   <button
@@ -233,6 +238,11 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
                   {canEditAutonomoDeca(deca) ? (
                     <button type="button" disabled={busy} style={actionBtn()} onClick={() => openEdit(deca)}>
                       Editar
+                    </button>
+                  ) : null}
+                  {canLinkAutonomoDecaToServicio(deca) ? (
+                    <button type="button" disabled={busy} style={actionBtn()} onClick={() => setLinkDeca(deca)}>
+                      Usar en un servicio
                     </button>
                   ) : null}
                   <button
@@ -307,6 +317,15 @@ export function AutonomoDecaPanel({ uid, profile = {}, showToast }) {
           onClose={() => setQrDeca(null)}
         />
       ) : null}
+
+      <VincularDecaAServicioModal
+        open={!!linkDeca}
+        onClose={() => setLinkDeca(null)}
+        deca={linkDeca}
+        uid={uid}
+        showToast={showToast}
+        onLinked={() => reload()}
+      />
     </div>
   );
 }

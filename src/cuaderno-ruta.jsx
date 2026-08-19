@@ -259,8 +259,6 @@ import { OperationalEtaSnapshotBlock } from "./features/services/components/Oper
 import { EmpresaFlotaServiciosList } from "./features/empresa/EmpresaFlotaServiciosList.jsx";
 import { EmpresaEditarServicioModal } from "./features/empresa/EmpresaEditarServicioModal.jsx";
 import { AsignarConductorServicioModal } from "./features/empresa/AsignarConductorServicioModal.jsx";
-import { EmpresaTransportObligationsPanel } from "./features/empresa/EmpresaTransportObligationsPanel.jsx";
-import { CentroLogisticoPanel } from "./features/centro-logistico/CentroLogisticoPanel.jsx";
 import { EmpresaPlanificadorPanel } from "./features/empresa/EmpresaPlanificadorPanel.jsx";
 import { OperationalEvidenciasStop } from "./features/documents/OperationalEvidenciasStop.jsx";
 import {
@@ -382,7 +380,6 @@ import { AutonomoDecaPanel } from "./features/dcdt/AutonomoDecaPanel.jsx";
 import { resolveCanUseAutonomoDeca } from "./domain/dcdt/decaAutonomoVisibility.js";
 import { ConductorMasServicioTab } from "./features/services/components/ConductorMasServicioTab.jsx";
 import { AutonomoExpedienteScreen } from "./features/autonomo-expediente/AutonomoExpedienteScreen.jsx";
-import { AutonomoExpedienteHistoricoPanel } from "./features/autonomo-expediente/AutonomoExpedienteHistoricoPanel.jsx";
 import { useDriverFlatPendingStops } from "./features/services/hooks/useDriverFlatPendingStops.js";
 import { fetchServiciosForMasTripPicker } from "./domain/service/driverFlatStopList.js";
 import { STATE_TONES, UI_TOKENS } from "./ui/visualTokens.js";
@@ -2245,7 +2242,7 @@ function AppInner(){
     const uid=getUserId();
     if(!uid||!authChecked){setShowAutonomoDeca(false);return;}
     const caps=getStoredAuthSession(uid)?.capabilities;
-    resolveCanUseAutonomoDeca(uid,{accountType:caps?.accountType||prof.tipo_cuenta})
+    resolveCanUseAutonomoDeca(uid,{accountType:caps?.accountType||prof.tipo_cuenta,canDrive:!!prof.canDrive})
       .then(setShowAutonomoDeca)
       .catch(()=>setShowAutonomoDeca(false));
   },[user,authChecked,prof.tipo_cuenta]);
@@ -3255,7 +3252,7 @@ function AppInner(){
   const showAutonomoHubFeatures=canCreateServices||canViewOperationalLite;
   const showAutonomoExpedienteFlow=
     isAutonomoExpedienteFlowEnabled()&&isAutonomoPro&&canViewOperationalLite;
-  const showAutonomoDecaHub=isAutonomoPro||showAutonomoDeca;
+  const showAutonomoDecaHub=(isAutonomoPro||showAutonomoDeca)&&!showAutonomoExpedienteFlow;
   const showEmpresaPendingBanner=
     authSession?.capabilities?.accountType===ACCOUNT_TYPES.EMPRESA&&
     authSession?.capabilities?.empresaStatus==="pending"&&
@@ -3265,9 +3262,8 @@ function AppInner(){
   const showMasHub=conductorSimplified&&tab==="mas"&&!masSub;
   const showExpediente=conductorSimplified&&tab==="expediente"&&showAutonomoExpedienteFlow;
   const showMasDeca=conductorSimplified&&tab==="mas"&&masSub==="deca"&&showAutonomoDecaHub;
-  const showMasExpedienteHistorico=conductorSimplified&&tab==="mas"&&masSub==="expediente-historico"&&showAutonomoExpedienteFlow;
-  const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures&&!showAutonomoExpedienteFlow;
-  const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio"&&!showAutonomoExpedienteFlow;
+  const showMasOperacion=conductorSimplified&&tab==="mas"&&masSub==="operacion"&&showAutonomoHubFeatures;
+  const showMasServicio=conductorSimplified&&tab==="mas"&&masSub==="servicio";
   const showHoy=tab==="hoy"||(conductorSimplified&&tab==="mas"&&masSub==="hoy");
   const showResumen=tab==="resumen"||(conductorSimplified&&tab==="mas"&&masSub==="resumen");
   const showRuta=tab==="ruta"||(conductorSimplified&&tab==="mas"&&masSub==="ruta");
@@ -3275,7 +3271,7 @@ function AppInner(){
   const showPerfil=tab==="perfil"||(conductorSimplified&&tab==="mas"&&masSub==="perfil");
   const showServicio=tab==="servicio"&&!conductorSimplified;
   const masBack=conductorSimplified&&tab==="mas"&&!!masSub?()=>setMasSub(null):null;
-  const masTitles={operacion:"Operación",servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil","expediente-historico":"Expedientes"};
+  const masTitles={operacion:"Operación",servicio:"Servicio",deca:"Mis DeCA",hoy:"Hoy",resumen:"Resumen",ruta:"Ruta",docs:"Documentos",perfil:"Perfil"};
 
   return(
     <div style={{...s.app,background:dark?"#0F172A":"#F0F4F8",minHeight:"100vh"}}>
@@ -3367,35 +3363,14 @@ function AppInner(){
             profile={prof}
             conductorNombre={prof.nombre?.trim()||"Conductor"}
             showToast={showToast}
-            onProfileUpdate={(next) => setProf((p) => ({ ...p, ...next }))}
           />
-        )}
-
-        {showMasExpedienteHistorico&&(
-          <>
-            <ConductorMasBackBar title={masTitles["expediente-historico"]} onBack={masBack}/>
-            <AutonomoExpedienteHistoricoPanel
-              uid={getUserId()}
-              showToast={showToast}
-              onOpenExpediente={(id)=>{
-                setMasSub(null);
-                setTab("expediente");
-                window.dispatchEvent(new CustomEvent("autonomo-expediente-open",{detail:{id,view:"workspace"}}));
-              }}
-              onOpenResumen={(id)=>{
-                setMasSub(null);
-                setTab("expediente");
-                window.dispatchEvent(new CustomEvent("autonomo-expediente-open",{detail:{id,view:"resumen"}}));
-              }}
-            />
-          </>
         )}
 
         {conductorSimplified&&tab==="paradas"&&(
           <TabParadasSimplificado uid={getUserId()} norma={norma} conductorNombre={prof.nombre?.trim()||"Conductor"} showToast={showToast} onOpenMasServicio={openMasServicio}/>
         )}
 
-        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures} showAutonomoExpedienteHistorico={showAutonomoExpedienteFlow} autonomoExpedienteMode={showAutonomoExpedienteFlow}/>}
+        {showMasHub&&<ConductorMasHub onSelect={setMasSub} uid={getUserId()} showToast={showToast} showAutonomoDeca={showAutonomoDecaHub} showAutonomoOperacion={showAutonomoHubFeatures}/>}
 
         {showMasOperacion&&(
           <>
@@ -7695,16 +7670,11 @@ function ProfView({prof,authUid,onSave,norma,db,showToast,onFleetJoinSuccess}){
 
   // ── PERFIL CONDUCTOR ──
   const isInt=p.tipoServicio==="internacional"||p.abroadNow;
-  const isAutonomoPro=normalizeAccountType(p.tipo_cuenta)===ACCOUNT_TYPES.AUTONOMO_PRO;
   const TT=useT(p.lang||"es");
   return(
     <div style={{padding:"14px 14px 80px",maxWidth:580,margin:"0 auto"}}>
-      <div style={{fontSize:15,fontWeight:800,color:"#0F172A",marginBottom:3}}>{isAutonomoPro?"PERFIL AUTÓNOMO PRO":"PERFIL DEL CONDUCTOR"}</div>
-      <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>
-        {isAutonomoPro
-          ? "Transportista, conductor y matrículas se usan en DeCA y expediente operacional."
-          : "Aparece en todos los PDFs exportados"}
-      </div>
+      <div style={{fontSize:15,fontWeight:800,color:"#0F172A",marginBottom:3}}>PERFIL DEL CONDUCTOR</div>
+      <div style={{fontSize:12,color:"#64748B",marginBottom:16}}>Aparece en todos los PDFs exportados</div>
 
       {/* IDIOMA */}
       <div style={{background:"white",borderRadius:14,padding:"16px",boxShadow:"0 2px 6px rgba(0,0,0,.05)",marginBottom:12}}>
@@ -13028,7 +12998,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
   const[loading,setLoading]=useState(true);
   const[toast,setToast]=useState("");
   const[flotaTab,setFlotaTab]=useState(initialTab||"conductores"); // conductores | servicios | documentos (+ planificador por acceso principal)
-  const[serviciosOfficeSubVista,setServiciosOfficeSubVista]=useState("servicios"); // servicios | obligaciones
   useEffect(()=>{if(initialTab)setFlotaTab(initialTab);},[initialTab]);
   const[asignarModal,setAsignarModal]=useState(null);
   const[asignarConductorServicio,setAsignarConductorServicio]=useState(null);
@@ -14805,37 +14774,6 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
       {/* ── SERVICIOS — centro operacional (PR-26/27) ── */}
       {flotaTab==="servicios"&&(
         <div style={{padding:"6px 12px 72px"}}>
-          <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto"}}>
-            {[{id:"servicios",label:"Servicios"},{id:"obligaciones",label:"Obligaciones"}].map(tab=>(
-              <button key={tab.id} type="button" onClick={()=>setServiciosOfficeSubVista(tab.id)}
-                style={{
-                  flexShrink:0,
-                  background:serviciosOfficeSubVista===tab.id?EMPRESA_UI.accentSoft:"#f8fafc",
-                  border:`1px solid ${serviciosOfficeSubVista===tab.id?"#93c5fd":EMPRESA_UI.border}`,
-                  borderRadius:20,
-                  padding:"8px 14px",
-                  fontSize:12,
-                  fontWeight:serviciosOfficeSubVista===tab.id?700:550,
-                  color:serviciosOfficeSubVista===tab.id?"#1d4ed8":EMPRESA_UI.subtle,
-                  cursor:"pointer",
-                }}>
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          {serviciosOfficeSubVista==="obligaciones"?(
-            <EmpresaTransportObligationsPanel
-              empresaId={officeUserPanel?.empresaId||empresa?.id||null}
-              authUid={getUserId?.()||null}
-              conductores={conductores}
-              showToast={showToast}
-              onFlotaRefresh={()=>{void loadFlotaServicios({force:true});}}
-              onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
-              responsableUserId={officeUserPanel?.userId||getUserId?.()||null}
-              responsableNombre={officeUserPanel?.nombre||null}
-            />
-          ):(
-          <>
           {!flotaBootstrapped&&flotaLoading?(
             <div style={{padding:40,textAlign:"center",color:su,fontSize:13}}>Cargando servicios...</div>
           ):flotaServicios.length===0?(
@@ -15007,23 +14945,7 @@ function EmpresaPanel({prof,dark,onRoleChange,initialTab=null,onAsignar=null}){
               </div>
             </>
           )}
-          </>
-          )}
         </div>
-      )}
-
-      {/* ── CENTRO LOGÍSTICO MVP (Sprint 6) ── */}
-      {flotaTab==="centro_logistico"&&(
-        <CentroLogisticoPanel
-          empresaId={officeUserPanel?.empresaId||empresa?.id||null}
-          authUid={getUserId?.()||null}
-          conductores={conductores}
-          showToast={showToast}
-          onFlotaRefresh={()=>{void loadFlotaServicios({force:true});}}
-          onNotifyAssignment={(payload)=>{void sendAssignmentPush(payload);}}
-          responsableUserId={officeUserPanel?.userId||getUserId?.()||null}
-          responsableNombre={officeUserPanel?.nombre||null}
-        />
       )}
 
       {/* ── PLANIFICADOR EMPRESA — acceso principal ── */}
@@ -17527,23 +17449,9 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
     });
     const now=new Date().toISOString();
     const stopSalidaRow=stops.find(s=>s.id===stopId);
-    let llegadaBackfill = stopSalidaRow?.hora_llegada_real || null;
-    if (!llegadaBackfill) {
-      const inicioMs = getInicioOperacionMs(stopSalidaRow);
-      llegadaBackfill = inicioMs ? new Date(inicioMs).toISOString() : now;
-    }
     const notasSalida=mergeStopOperacionMeta(stopSalidaRow?.notas,{salida_geo:geoSalida});
-    const patchBody = {
-      estado: "completado",
-      hora_salida_real: now,
-      notas: notasSalida,
-    };
-    if (!stopSalidaRow?.hora_llegada_real) {
-      patchBody.hora_llegada_real = llegadaBackfill;
-      if (stopSalidaRow?.estado === "pendiente") patchBody.estado = "completado";
-    }
     const res = await withOperationTimeout(
-      sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "PATCH", body: JSON.stringify(patchBody) }),
+      sbFetch(`/rest/v1/stops?id=eq.${stopId}`, { method: "PATCH", body: JSON.stringify({ estado: "completado", hora_salida_real: now, notas: notasSalida }) }),
       25000,
       "No se pudo contactar con el servidor. Comprueba tu conexión e inténtalo de nuevo.",
     );
@@ -17564,13 +17472,7 @@ function useServicioActivo(uid,norma=null,showToast=null,conductorNombre=null){
       });
       throw new Error("No se pudo guardar la salida de muelle");
     }
-    let updated=stops.map(s=>s.id===stopId?{
-      ...s,
-      estado:"completado",
-      hora_salida_real:now,
-      hora_llegada_real: s.hora_llegada_real || llegadaBackfill,
-      notas:notasSalida,
-    }:s);
+    let updated=stops.map(s=>s.id===stopId?{...s,estado:"completado",hora_salida_real:now,notas:notasSalida}:s);
 
     const stop=stopSalidaRow;
     await autoTacografoTramoMuelle({ alEntrada: false, stop });
