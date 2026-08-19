@@ -13,7 +13,6 @@ import {
   getVisibleEmpresaTabs,
 } from "../domain/empresa/officeUserFilters.js";
 import { EmpresaConfigDashboard } from "../features/empresa/EmpresaConfigDashboard.jsx";
-import { EmpresaEstadisticasPanel } from "../features/empresa/EmpresaEstadisticasPanel.jsx";
 import { resolveEmpresaRecordForUser } from "../domain/empresa/empresaOfficeContext.js";
 import {
   enrichEmpresaRecordFromOffice,
@@ -472,10 +471,6 @@ export default function EmpresaLayout({
         {/* SERVICIOS */}
         {tab === "servicios" && <EmpresaPanelSeccion seccion="servicios" prof={prof} showToast={showToast} />}
 
-        {tab === "centro_logistico" && (
-          <EmpresaPanelSeccion seccion="centro_logistico" prof={prof} showToast={showToast} />
-        )}
-
         {/* CONDUCTORES */}
         {tab === "conductores" && <EmpresaPanelSeccion seccion="conductores" prof={prof} showToast={showToast} />}
 
@@ -484,17 +479,6 @@ export default function EmpresaLayout({
 
         {/* PLANIFICADOR */}
         {tab === "planificador" && <EmpresaPanelSeccion seccion="planificador" prof={prof} showToast={showToast} />}
-
-        {/* ESTADÍSTICAS */}
-        {tab === "estadisticas" && (
-          <EmpresaEstadisticasPanel
-            empresaId={empresaId}
-            capabilities={capabilities}
-            getUserId={getUserId}
-            sbSelect={sbSelect}
-            showToast={showToast}
-          />
-        )}
 
         {/* CONFIGURACIÓN */}
         {tab === "config" && canUseConfig && canAccessEmpresaConfigTab(capabilities) ? (
