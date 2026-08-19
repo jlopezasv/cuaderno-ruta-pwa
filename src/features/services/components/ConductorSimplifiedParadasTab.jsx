@@ -33,8 +33,6 @@ import { resolveEtaVisual } from "../../../domain/service/operationalEtaPresenta
 import { useEtaVisualClockMs } from "../../../domain/service/useEtaVisualClock.js";
 import { DescargaEntregaFirmaModal } from "./DescargaEntregaFirmaModal.jsx";
 import { ConductorPostDescargaModal } from "./ConductorPostDescargaModal.jsx";
-import { DecaVivoPanel } from "../../dcdt/DecaVivoPanel.jsx";
-import { DECA_SHORT_LABEL } from "../../../domain/dcdt/decaBranding.js";
 import { persistDescargaEntregaFirma } from "../../../domain/service/persistDescargaEntregaFirma.js";
 import { isDescargaStopTipo } from "../../../domain/fleet/stopTypes.js";
 import { isDecaAplicable } from "../../../domain/service/servicioAlcance.js";
@@ -224,7 +222,6 @@ export function ConductorSimplifiedParadasTab({
   const [descargaFirmaSaving, setDescargaFirmaSaving] = useState(false);
   const [postDescarga, setPostDescarga] = useState(null);
   const [evidenciasSeed, setEvidenciasSeed] = useState(null);
-  const [listDcdtServicioId, setListDcdtServicioId] = useState(null);
   const [orderSkipConfirm, setOrderSkipConfirm] = useState(null);
   const [participacionResumen, setParticipacionResumen] = useState(null);
   const muelleGpsRef = useRef(null);
@@ -311,19 +308,6 @@ export function ConductorSimplifiedParadasTab({
     },
     [openItem],
   );
-
-  const listDcdtItem = useMemo(
-    () => items.find((it) => it.servicio?.id === listDcdtServicioId) || null,
-    [items, listDcdtServicioId],
-  );
-  const listDcdtEmpresa = listDcdtItem?.servicio?.empresa_id ? empresaById[listDcdtItem.servicio.empresa_id] : null;
-  const listDcdtQuick = useConductorDcdtQuickStatus({
-    servicio: listDcdtItem?.servicio ?? null,
-    empresa: listDcdtEmpresa,
-    conductorUid: uid,
-    stops: listDcdtItem?.stops ?? NO_STOPS,
-    pollWhileIncomplete: !!listDcdtServicioId,
-  });
 
   const closeDetail = useCallback(() => {
     setActive(null);
@@ -532,7 +516,7 @@ export function ConductorSimplifiedParadasTab({
       setPostDescarga({
         stopId: stop.id,
         stopLabel: active?.tipoOrdenLabel || active?.tipoLabel || stop?.nombre || "Descarga",
-        showDeca: showDcdtQuick,
+        showDeca: false,
       });
       if (completedStop) {
         setActive((prev) => (prev ? { ...prev, stop: completedStop } : prev));
@@ -635,28 +619,6 @@ export function ConductorSimplifiedParadasTab({
                   setChatModalOpen(true);
                   void messagesUnread.markRead();
                 }}
-              />
-            </div>
-          ) : null}
-
-          {showDcdtQuick ? (
-            <div
-              style={{
-                marginTop: 12,
-                padding: "12px 14px",
-                borderRadius: 12,
-                border: `1px solid ${DRIVER_UI.line}`,
-                background: "#fff",
-              }}
-            >
-              <div style={{ fontSize: 11, fontWeight: 800, color: DRIVER_UI.su, letterSpacing: 0.5, marginBottom: 8 }}>
-                CARGA ACTUAL / DeCA ACTUAL
-              </div>
-              <DecaVivoPanel
-                servicio={localServicio}
-                stops={localStops}
-                showToast={showToast}
-                compact
               />
             </div>
           ) : null}
@@ -959,7 +921,6 @@ export function ConductorSimplifiedParadasTab({
                 : etaVisual?.tier === "plan"
                   ? etaVisual.etaLabel
                   : null;
-            const cardShowDeca = !!item.servicio?.empresa_id && isDecaAplicable(item.servicio);
             return (
             <article
               key={`${item.servicio?.id}-${item.stop?.id}`}
@@ -1003,16 +964,6 @@ export function ConductorSimplifiedParadasTab({
                   {showEtaToFirstDescarga && etaLabel ? (
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", marginTop: 8 }}>
                       ETA primera descarga: {etaLabel}
-                    </div>
-                  ) : null}
-                  {cardShowDeca ? (
-                    <div style={{ marginTop: 10 }}>
-                      <DriverQuickActionsBar
-                        showDcdt
-                        dcdtVisual="none"
-                        onDcdtClick={() => setListDcdtServicioId(item.servicio.id)}
-                        showChat={false}
-                      />
                     </div>
                   ) : null}
                 </div>
@@ -1060,19 +1011,6 @@ export function ConductorSimplifiedParadasTab({
           })}
         </div>
       )}
-
-      <DriverDcdtActionModal
-        open={!!listDcdtServicioId && !active}
-        onClose={() => {
-          setListDcdtServicioId(null);
-          void listDcdtQuick.reload();
-        }}
-        servicio={listDcdtItem?.servicio ?? null}
-        empresa={listDcdtEmpresa}
-        conductorUid={uid}
-        stops={listDcdtItem?.stops ?? NO_STOPS}
-        showToast={showToast}
-      />
 
       {orderSkipConfirm ? (
         <div
